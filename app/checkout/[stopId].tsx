@@ -51,7 +51,7 @@ export default function CheckoutScreen() {
   if (!stop) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)' as never)} />
+        <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)/route' as never)} />
         <View style={styles.center}>
           <Text style={typography.dim}>Parada no encontrada</Text>
         </View>
@@ -76,7 +76,11 @@ export default function CheckoutScreen() {
       router.replace(`/stop/${nextStop.id}` as never);
       return;
     }
-    router.replace('/(tabs)' as never);
+    // BLD-20260427-P0-POST-SALE-RETURN-TO-ROUTE: post-cierre, regresar a Ruta
+    // (no a Inicio). El vendedor mantiene el contexto del día y sus stops.
+    // Alinea con el camino offroute (app/sale/[stopId].tsx L209) que ya iba a
+    // /(tabs)/route. Antes: '/(tabs)' caía en (tabs)/index.tsx (Inicio).
+    router.replace('/(tabs)/route' as never);
   }
 
   async function handleCheckout(shouldNavigateToNextStop: boolean) {
@@ -164,7 +168,7 @@ export default function CheckoutScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)' as never)} />
+      <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)/route' as never)} />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Success header */}
@@ -253,7 +257,7 @@ export default function CheckoutScreen() {
           />
           {nextStop && (
             <Button
-              label="Ir al inicio sin navegar"
+              label="Cerrar visita y volver a Ruta"
               variant="secondary"
               onPress={() => handleCheckout(false)}
               fullWidth

@@ -35,7 +35,7 @@
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -48,6 +48,10 @@ import {
   GFLiquidationSummary,
 } from '../src/services/gfLogistics';
 import { formatCurrency } from '../src/utils/time';
+import {
+  canConfirmLiquidation,
+  describeBlockingReason,
+} from '../src/services/cashcloseGuard';
 
 interface SummaryLine {
   label: string;
@@ -92,6 +96,16 @@ export default function CashCloseScreen() {
   // Sync queue
   const pendingCount = useSyncStore((s) => s.pendingCount);
   const totalItems = useSyncStore((s) => s.queue.length);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const isSyncing = useSyncStore((s) => s.isSyncing);
+  const processQueue = useSyncStore((s) => s.processQueue);
+  const errorCount = useSyncStore((s) => s.errorCount);
+
+  // BLD-20260505-CLOSESYNC: Sincronización local de UI. NO emite alerts
+  // automáticas; sólo se levanta una alerta si el usuario presionó
+  // "Sincronizar" y el resultado quedó con pendientes.
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [postSyncMessage, setPostSyncMessage] = useState<string | null>(null);
 
   // Resumen de venta del día (sale.order vía /sales/summary)
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
@@ -135,9 +149,56 @@ export default function CashCloseScreen() {
     }, [loadTodaySales, loadLiquidation]),
   );
 
+  // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
+  // corte. La app SIEMPRE intenta auto-procesar la cola al reconectar
+  // (useSyncStore.setOnline), pero el vendedor que regresa al CEDIS
+  // necesita un punto explícito antes de "cerrar caja" donde:
+  //  1. ve cuántas operaciones quedan,
+  //  2. dispara el ciclo de sync,
+  //  3. confirma que efectivamente bajó a 0 antes de revisar liquidación.
+  // No agrega ningún botón mutante nuevo (Confirmar Liquidación queda
+  // pendiente). Sólo encadena processQueue() + recarga de liquidación.
+  const handleSyncPending = useCallback(async () => {
+    if (syncBusy) return;
+    setSyncBusy(true);
+    setPostSyncMessage(null);
+    try {
+      await processQueue();
+      // Releer estado fresh del store post-sync.
+      const after = useSyncStore.getState().pendingCount;
+      // Refrescar liquidación porque pudo cambiar tras drenar pagos.
+      await loadLiquidation();
+      if (after === 0) {
+        setPostSyncMessage('Todo sincronizado.');
+      } else {
+        Alert.alert(
+          'Quedan pendientes',
+          'No se pudo sincronizar todo. Revisa tu conexión e intenta de nuevo.',
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      Alert.alert('Error al sincronizar', message);
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [syncBusy, processQueue, loadLiquidation]);
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const liquidationAvailable = liquidation !== null && !liquidationError;
   const hasLiquidationData = liquidationAvailable && liquidation;
+
+  // BLD-20260505-CLOSESYNC: helper exportado/puro (cashcloseGuard.ts).
+  // Cuando se agregue el botón "Confirmar Liquidación", debe permanecer
+  // DESHABILITADO si pendingCount > 0 — vendedor no puede cerrar mientras
+  // queden ventas/pagos sin emitir al backend, eso falsea el corte.
+  const guardInput = {
+    pendingCount,
+    isSyncing: isSyncing || syncBusy,
+    liquidationAvailable: !!hasLiquidationData,
+  };
+  const _canConfirm = canConfirmLiquidation(guardInput); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const blockingReason = describeBlockingReason(guardInput);
 
   const cashCaptured = useMemo(() => parseCashInput(cashInHand), [cashInHand]);
   const cashExpected = hasLiquidationData ? liquidation.payments.cash.total : 0;
@@ -227,6 +288,63 @@ export default function CashCloseScreen() {
             Resumen informativo. Confirmacion de liquidacion pendiente de validar deploy backend.
           </Text>
         </View>
+
+        {/* BLD-20260505-CLOSESYNC: card de sincronización antes de cerrar.
+            Visible siempre — refleja el estado real de la cola y guía al
+            vendedor a sincronizar con WiFi del CEDIS antes de revisar
+            cobranza. NO añade botón "Confirmar Liquidación" todavía. */}
+        {pendingCount > 0 ? (
+          <View style={[styles.syncCard, styles.syncCardPending]}>
+            <View style={styles.syncHeader}>
+              <Text style={styles.syncIcon}>📡</Text>
+              <Text style={styles.syncTitle}>Operaciones pendientes por sincronizar</Text>
+            </View>
+            <Text style={styles.syncBody}>
+              Antes de cerrar o liquidar, conéctate al WiFi de la sucursal y sincroniza todo lo pendiente.
+            </Text>
+            <Text style={styles.syncMetric}>
+              Pendientes: {pendingCount}
+              {errorCount > 0 ? `  ·  Con error: ${errorCount}` : ''}
+            </Text>
+            <TouchableOpacity
+              style={[
+                styles.syncBtn,
+                (syncBusy || isSyncing || !isOnline) && styles.syncBtnDisabled,
+              ]}
+              onPress={handleSyncPending}
+              disabled={syncBusy || isSyncing || !isOnline}
+              accessibilityRole="button"
+              accessibilityLabel="Sincronizar operaciones pendientes"
+            >
+              {syncBusy || isSyncing ? (
+                <View style={styles.syncBtnInner}>
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <Text style={styles.syncBtnText}>Sincronizando…</Text>
+                </View>
+              ) : (
+                <Text style={styles.syncBtnText}>Sincronizar pendientes</Text>
+              )}
+            </TouchableOpacity>
+            {!isOnline && (
+              <Text style={styles.syncHint}>
+                Sin conexión: conéctate al WiFi del CEDIS para sincronizar.
+              </Text>
+            )}
+            {blockingReason && (
+              <Text style={styles.syncHint}>{blockingReason}</Text>
+            )}
+          </View>
+        ) : (
+          <View style={[styles.syncCard, styles.syncCardOk]}>
+            <View style={styles.syncHeader}>
+              <Text style={styles.syncIcon}>✅</Text>
+              <Text style={styles.syncTitle}>Todo sincronizado</Text>
+            </View>
+            <Text style={styles.syncBody}>
+              {postSyncMessage || 'Puedes revisar tu liquidación.'}
+            </Text>
+          </View>
+        )}
 
         {/* Estados de carga / error de Sales */}
         {isSalesLoading && (
@@ -390,6 +508,72 @@ const styles = StyleSheet.create({
     borderRadius: radii.button,
     padding: spacing.lg,
     marginBottom: spacing.lg,
+  },
+  // BLD-20260505-CLOSESYNC: sync-pending card styles.
+  syncCard: {
+    borderRadius: radii.button,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+  },
+  syncCardPending: {
+    backgroundColor: 'rgba(234,179,8,0.07)',
+    borderColor: 'rgba(234,179,8,0.4)',
+  },
+  syncCardOk: {
+    backgroundColor: 'rgba(34,197,94,0.06)',
+    borderColor: 'rgba(34,197,94,0.3)',
+  },
+  syncHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  syncIcon: { fontSize: 18 },
+  syncTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  syncBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textDim,
+    marginBottom: 8,
+  },
+  syncMetric: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 10,
+  },
+  syncBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radii.button,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  syncBtnDisabled: { opacity: 0.5 },
+  syncBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  syncBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  syncHint: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginTop: 8,
+    textAlign: 'center',
   },
   sectionHeaderRow: {
     flexDirection: 'row',

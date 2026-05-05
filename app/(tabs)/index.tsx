@@ -12,6 +12,7 @@ import { SyncBar } from '../../src/components/ui/SyncBar';
 import { KPICard } from '../../src/components/ui/KPICard';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { StopCard } from '../../src/components/domain/StopCard';
+import { RoutePreparationCard } from '../../src/components/domain/RoutePreparationCard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -193,6 +194,12 @@ export default function HomeScreen() {
           </View>
         ) : (
           <>
+            {/* BLD-20260505-ROUTEPREP: card "Preparar ruta" — invita al
+                vendedor a precargar plan/productos/precios con WiFi en
+                CEDIS antes de salir. No bloquea otras acciones; sólo
+                informa el estado. */}
+            <RoutePreparationCard />
+
             {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
             <View style={styles.weatherCard}>
               <Text style={{ fontSize: 22 }}>🌤️</Text>

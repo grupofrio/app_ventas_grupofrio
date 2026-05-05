@@ -10,6 +10,8 @@ interface OffrouteSearchModule {
       phone?: string;
       mobile?: string;
       vat?: string;
+      pricelist_id?: [number, string] | false;
+      property_product_pricelist?: [number, string] | false;
     }>,
     leads: Array<{
       id: number;
@@ -28,6 +30,8 @@ interface OffrouteSearchModule {
     subtitle: string;
     contact: string;
     partnerId: number | null;
+    pricelistId: number | null;
+    pricelistName: string | null;
   }>;
 }
 
@@ -42,6 +46,23 @@ function testCustomerMapping(module: OffrouteSearchModule) {
   assert.equal(result.subtitle, 'Centro, Puebla');
   assert.equal(result.contact, '555');
   assert.equal(result.partnerId, 10);
+  assert.equal(result.pricelistId, null);
+}
+
+function testCustomerCarriesPricelist(module: OffrouteSearchModule) {
+  const [result] = module.buildOffrouteResults(
+    [{
+      id: 55251,
+      name: 'Abarrotes May',
+      pricelist_id: [90, 'IGUALA LOCAL (MXN)'],
+      property_product_pricelist: [1, 'Predeterminado (MXN)'],
+    }],
+    [],
+  );
+
+  assert.equal(result.partnerId, 55251);
+  assert.equal(result.pricelistId, 90);
+  assert.equal(result.pricelistName, 'IGUALA LOCAL (MXN)');
 }
 
 function testLeadMapping(module: OffrouteSearchModule) {
@@ -55,6 +76,7 @@ function testLeadMapping(module: OffrouteSearchModule) {
   assert.equal(result.subtitle, 'Plaza Norte, CDMX');
   assert.equal(result.contact, '777');
   assert.equal(result.partnerId, null);
+  assert.equal(result.pricelistId, null);
 }
 
 function testMixedResultsKeepTypes(module: OffrouteSearchModule) {
@@ -81,6 +103,7 @@ async function main() {
   ) as OffrouteSearchModule;
 
   testCustomerMapping(module);
+  testCustomerCarriesPricelist(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
   console.log('offroute search tests: ok');

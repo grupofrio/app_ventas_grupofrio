@@ -31,6 +31,7 @@
     },
     "android": {
       "package": "mx.grupofrio.koldfield",
+      "versionCode": 2,
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"

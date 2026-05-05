@@ -21,17 +21,7 @@ import { checkOut, closeOffrouteVisit, reportIncident } from '../../src/services
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
-
-const NO_SALE_REASONS = [
-  { id: 1, label: '🚪 Cerrado', code: 'closed' },
-  { id: 2, label: '📦 Sin stock', code: 'no_stock' },
-  { id: 3, label: '💰 Cobranza', code: 'collection' },
-  { id: 4, label: '🏪 Ya tiene', code: 'has_stock' },
-  { id: 5, label: '🥊 Competidor', code: 'competitor' },
-  { id: 6, label: '👤 Sin encargado', code: 'no_contact' },
-  { id: 7, label: '🔧 Servicio', code: 'service' },
-  { id: 8, label: '💲 Precio', code: 'price' },
-];
+import { NO_SALE_REASONS } from '../../src/services/noSaleReasons';
 
 const COMPETITORS = ['Crystal', 'Ice Factory', 'Pureza', 'Generico'];
 

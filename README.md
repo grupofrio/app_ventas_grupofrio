@@ -18,6 +18,21 @@ El campo `engines.node` en `package.json` deja documentada esta restricción.
 | **preview** | `npm run build:preview:android` | Vendedores, pilotos, pruebas internas | NO | SÍ |
 | **production** | `npm run build:prod:android` | Distribución formal (Play Store) | NO | SÍ |
 
+## Continuidad de update en campo
+
+Existe un caso temporal distinto al flujo normal de EAS: los teléfonos de vendedores que ya tienen instalado el APK firmado con `CN=Android Debug`.
+
+Para actualizar **encima** de esa instalación sin reinstalar, usa:
+
+```bash
+npm run build:field-update:android
+npm run verify:field-update:android
+```
+
+Ese flujo genera un `release` local de Gradle con bundle JS embebido y la misma firma actual del repo. La documentación completa está en [docs/android-update-continuity.md](docs/android-update-continuity.md).
+
+> Esto es una solución operativa de continuidad, no la estrategia final de producción. Migrar a keystore release formal o EAS-managed credentials requerirá plan de transición porque cambiar la firma rompe update in-place.
+
 ### APK que SÍ se puede compartir con vendedores
 
 - **preview** — APK release firmado con bundle JS embebido. **Confirmar el endpoint correcto antes de distribuir** revisando que el login se conecte al Odoo de producción esperado (la base URL es configurable en runtime, no asumas).
@@ -53,6 +68,8 @@ npm run build:preview:android   # genera APK preview en EAS Cloud
 
 EAS te devuelve un link de descarga (`.apk`) cuando termina (~10–15 minutos en cloud).
 
+Si el objetivo es **actualizar encima del APK ya instalado en vendedores**, no uses este flujo hasta confirmar que EAS firma con el mismo certificado. En ese caso usa el flujo temporal de continuidad local documentado arriba.
+
 ## Cómo instalar el APK en un Android físico
 
 1. Descarga el `.apk` al teléfono (link directo, Drive privado, etc.).
@@ -70,7 +87,8 @@ EAS te devuelve un link de descarga (`.apk`) cuando termina (~10–15 minutos en
 ## Versionado
 
 - `expo.version` en `app.json` y `version` en `package.json` deben coincidir antes de cualquier release.
-- `android.versionCode` actualmente **NO está definido** en `app.json`. Antes de distribuir un nuevo APK sobre una instalación existente, **confirmar el `versionCode` del último APK productivo y decidir si se fija explícitamente en `app.json`**. No inventar `versionCode` sin verificar el release anterior. Una vez fijado, debe incrementarse en cada release distribuible.
+- `android.versionCode` está fijado en `app.json` y debe incrementarse en cada APK distribuible Android.
+- Para continuidad de update sobre vendedores, además de incrementar `versionCode`, la firma debe mantenerse idéntica al APK ya instalado.
 
 ## Checklist mínimo antes de mandar un APK a un vendedor
 
@@ -79,7 +97,8 @@ Lista corta. La completa está en [docs/release-checklist.md](docs/release-check
 - [ ] El APK es del perfil `preview` o `production`, nunca `development`
 - [ ] La app abre con Metro apagado
 - [ ] Login funciona contra el endpoint correcto (verificar antes de distribuir)
-- [ ] `versionCode` del APK es coherente con el release anterior
+- [ ] `versionCode` del APK es estrictamente mayor que el release anterior
+- [ ] La firma del APK coincide con la del APK ya instalado si se va a actualizar in-place
 - [ ] Versión visible en la app coincide con la que se compartió
 - [ ] Nombre del archivo sigue la convención (ver abajo)
 - [ ] Registrado a quién se mandó
@@ -106,7 +125,7 @@ Cada APK que se mande a un vendedor debe quedar registrado. Mantén una hoja con
 
 | Fecha | Vendedor | Versión | versionCode | Perfil | Quién envió | Confirmación instalación |
 |-------|----------|---------|-------------|--------|-------------|--------------------------|
-| 2026-04-29 | Juan Pérez | 1.3.1 | (pendiente) | preview | Yamil | OK 2026-04-29 18:30 |
+| 2026-04-29 | Juan Pérez | 1.3.1 | 2 | continuity-local | Yamil | OK 2026-04-29 18:30 |
 
 La hoja vive en (canal definido por dirección — Drive privado, Notion, Sheets).
 
@@ -116,7 +135,7 @@ La hoja vive en (canal definido por dirección — Drive privado, Notion, Sheets
 
 **Causa**: el APK instalado es una development build. No incluye el bundle JavaScript — espera que Metro esté corriendo en una PC accesible vía USB o red local. En un teléfono de vendedor en ruta, Metro nunca está disponible y la app no puede arrancar.
 
-**Solución**: desinstala el APK del teléfono y reemplázalo por uno de perfil `preview` (`npm run build:preview:android`). Nunca distribuyas APKs generados con `expo run:android`, `npm run android` o perfil `development`.
+**Solución**: desinstala el APK del teléfono y reemplázalo por uno de perfil `preview` (`npm run build:preview:android`) o por el APK de continuidad local (`npm run build:field-update:android`) según el canal que toque. Nunca distribuyas APKs generados con `expo run:android`, `npm run android` o perfil `development`.
 
 ### Login dice "No se pudo conectar"
 

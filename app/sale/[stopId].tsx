@@ -24,8 +24,8 @@ import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import {
-  getCompanyFallbackPricelistId,
   getEffectiveSalesCompanyId,
+  getPartnerPricelistId,
   peekResolvedPartnerPricelistId,
 } from '../../src/services/pricelist';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
@@ -104,8 +104,9 @@ export default function SaleScreen() {
     employeeAnalyticPlazaId,
   });
   const hasAnalyticSelection = !!implicitAnalytics.analytic_plaza_id && !!implicitAnalytics.analytic_un_id;
+  const hasWarehouse = typeof warehouseId === 'number' && warehouseId > 0;
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
-                     && hasAnalyticSelection && hasStock && !saleConfirmed;
+                     && hasAnalyticSelection && hasWarehouse && hasStock && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
   async function handleConfirm() {
@@ -127,6 +128,7 @@ export default function SaleScreen() {
       if (!salePhotoTaken) missing.push('foto de entrega');
       if (!salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
+      if (!hasWarehouse) missing.push('almacén del empleado');
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
       return;
     }
@@ -144,10 +146,18 @@ export default function SaleScreen() {
     const isOffRoute = stop.id < 0;
     const effectiveCompanyId = getEffectiveSalesCompanyId(companyId);
     // Only send a pricelist_id when we have one confirmed from the partner's own
-    // data (source: partner_field or get_records). Company fallback (pricelist 81)
+    // data (source: partner_field or get_records). Company fallback
     // is cached as null to prevent "Empresas incompatibles" when the partner
     // belongs to a different Odoo company — Odoo assigns its default server-side.
-    const pricelistId = peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+    const stopPricelistId = typeof stop._pricelistId === 'number' && stop._pricelistId > 0
+      ? stop._pricelistId
+      : null;
+    if (!stopPricelistId) {
+      await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+    }
+    const pricelistId =
+      stopPricelistId ??
+      peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
 
     // Create sale order payload with idempotency key
     const payload = {
@@ -161,7 +171,6 @@ export default function SaleScreen() {
       lines: saleLines.map((l) => ({
         product_id: l.productId,
         quantity: l.qty,
-        price_unit: l.price,
         discount: 0,
       })),
     };
@@ -288,6 +297,7 @@ export default function SaleScreen() {
           onClose={() => setPickerVisible(false)}
           existingProductIds={saleLines.map((l) => l.productId)}
           partnerId={salePartnerId}
+          pricelistId={stop._pricelistId}
         />
 
         {/* Totals card */}
@@ -392,7 +402,7 @@ export default function SaleScreen() {
           label={saleConfirmed ? '✓ Pedido Guardado' : '✓ Confirmar Pedido'}
           onPress={handleConfirm}
           fullWidth
-          disabled={!canConfirm}
+          disabled={saleConfirmed}
           loading={false}
           style={{ marginTop: saleConfirmed ? 0 : 14 }}
         />
@@ -404,6 +414,7 @@ export default function SaleScreen() {
             {hasStock && !salePhotoTaken ? '📸 Toma la foto' : ''}
             {hasStock && salePhotoTaken && !salePaymentMethod ? '💰 Selecciona pago' : ''}
             {hasStock && salePhotoTaken && salePaymentMethod && !implicitAnalytics.analytic_plaza_id ? '📍 Configura la plaza del empleado' : ''}
+            {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && !hasWarehouse ? '🏬 Configura el almacén del empleado' : ''}
           </Text>
         )}
       </ScrollView>

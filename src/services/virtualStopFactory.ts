@@ -29,6 +29,8 @@ export interface CreateVirtualStopInput {
   leadId?: number | null;
   partnerId?: number | null;
   offrouteVisitId?: number | null;
+  pricelistId?: number | null;
+  pricelistName?: string | null;
   /** Only overridden by tests — production always uses Date.now(). */
   now?: number;
 }
@@ -50,6 +52,8 @@ export function createVirtualStop(input: CreateVirtualStopInput): GFStop {
     _leadId: input.leadId ?? null,
     _partnerId: input.partnerId ?? null,
     _offrouteVisitId: input.offrouteVisitId ?? null,
+    _pricelistId: input.pricelistId ?? null,
+    _pricelistName: input.pricelistName ?? null,
     _virtualCreatedAt: now,
   };
 }

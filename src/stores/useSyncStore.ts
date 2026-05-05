@@ -26,7 +26,7 @@ import {
   SYNC_PRIORITY_MAP,
 } from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
-import { postRpc } from '../services/api';
+import { postRest, postRpc } from '../services/api';
 import {
   readPhotoAsBase64,
   deletePhoto,
@@ -59,7 +59,6 @@ import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 const MAX_RETRIES = 3;
 const MAX_ITEMS_PER_CYCLE = 200;
 const GPS_BATCH_SIZE = 50;
-const GPS_CONCURRENCY = 5;
 
 // Backoff: 2s, 8s, 30s with ±20% jitter
 const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
@@ -576,40 +575,20 @@ async function processGpsBatch(
     );
     set({ queue: updatedQueue });
 
-    // Try batch endpoint first, fallback to concurrent individual calls
-    let batchSuccess = false;
     try {
-      batchSuccess = await tryGpsBatchCreate(chunk);
-    } catch (e: unknown) {
-      // If batch endpoint returns 404 or similar, try fallback
-      const errMsg = e instanceof Error ? e.message : '';
-      if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('Not Found')) {
-        logInfo('sync', 'gps_batch_fallback', { reason: 'endpoint_not_found', count: chunk.length });
-        batchSuccess = false;
-      } else {
-        // Real error — mark all as error
-        for (const item of chunk) {
-          handleGpsItemError(item, errMsg, get, set);
-          failed++;
-        }
-        processed += chunk.length;
-        continue;
-      }
-    }
-
-    if (batchSuccess) {
-      // All succeeded
+      await tryGpsBatchCreate(chunk);
       for (const item of chunk) {
         get().markDone(item.id);
         succeeded++;
       }
       processed += chunk.length;
-    } else {
-      // Fallback: concurrent individual calls (GPS_CONCURRENCY at a time)
-      const fallbackResult = await processGpsConcurrent(chunk, get, set);
-      processed += fallbackResult.processed;
-      succeeded += fallbackResult.succeeded;
-      failed += fallbackResult.failed;
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : 'GPS sync error';
+      for (const item of chunk) {
+        handleGpsItemError(item, errMsg, get, set);
+        failed++;
+      }
+      processed += chunk.length;
     }
   }
 
@@ -620,64 +599,20 @@ async function processGpsBatch(
   return { processed, succeeded, failed };
 }
 
-/** Try the batch_create endpoint. Returns true if all succeeded. Throws on error. */
+/** Try the dedicated GPS batch endpoint. Returns true if all succeeded. Throws on error. */
 async function tryGpsBatchCreate(items: SyncQueueItem[]): Promise<boolean> {
   const records = items.map((i) => ({
-    employee_id: i.payload.employee_id,
     latitude: i.payload.latitude,
     longitude: i.payload.longitude,
     accuracy: i.payload.accuracy,
     timestamp: i.payload.timestamp,
   }));
 
-  await postRpc('/api/create_update', {
-    model: 'os.employee.gps.history',
-    method: 'batch_create',
+  await postRest('/pwa-ruta/gps-batch', {
     records,
   });
 
   return true;
-}
-
-/** Fallback: process GPS items concurrently in groups of GPS_CONCURRENCY. */
-async function processGpsConcurrent(
-  items: SyncQueueItem[],
-  get: () => SyncState,
-  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
-): Promise<{ processed: number; succeeded: number; failed: number }> {
-  let succeeded = 0;
-  let failed = 0;
-
-  const concurrentChunks = chunkArray(items, GPS_CONCURRENCY);
-  for (const chunk of concurrentChunks) {
-    const results = await Promise.allSettled(
-      chunk.map((item) =>
-        postRpc('/api/create_update', {
-          model: 'os.employee.gps.history',
-          method: 'create',
-          dict: {
-            employee_id: item.payload.employee_id,
-            latitude: item.payload.latitude,
-            longitude: item.payload.longitude,
-          },
-        }).then(() => item.id)
-      )
-    );
-
-    for (let idx = 0; idx < results.length; idx++) {
-      const result = results[idx];
-      if (result.status === 'fulfilled') {
-        get().markDone(result.value);
-        succeeded++;
-      } else {
-        const errMsg = result.reason instanceof Error ? result.reason.message : 'GPS sync error';
-        handleGpsItemError(chunk[idx], errMsg, get, set);
-        failed++;
-      }
-    }
-  }
-
-  return { processed: items.length, succeeded, failed };
 }
 
 function handleGpsItemError(
@@ -813,15 +748,15 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     }
 
     case 'gps':
-      // Individual GPS — used only when NOT processed via batch
-      await postRpc('/api/create_update', {
-        model: 'os.employee.gps.history',
-        method: 'create',
-        dict: {
-          employee_id: payload.employee_id,
+      // Individual GPS should still use the dedicated endpoint. Backend resolves
+      // employee identity from the token and ignores any client employee_id.
+      await postRest('/pwa-ruta/gps-batch', {
+        records: [{
           latitude: payload.latitude,
           longitude: payload.longitude,
-        },
+          accuracy: payload.accuracy,
+          timestamp: payload.timestamp,
+        }],
       });
       break;
 

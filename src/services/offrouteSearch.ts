@@ -6,7 +6,17 @@ import {
   buildOffrouteResults,
 } from './offrouteSearchLogic';
 
-const CUSTOMER_FIELDS = ['id', 'name', 'street', 'city', 'phone', 'mobile', 'vat'];
+const CUSTOMER_FIELDS = [
+  'id',
+  'name',
+  'street',
+  'city',
+  'phone',
+  'mobile',
+  'vat',
+  'pricelist_id',
+  'property_product_pricelist',
+];
 const LEAD_FIELDS = ['id', 'name', 'partner_name', 'phone', 'mobile', 'email_from', 'street', 'city', 'partner_id'];
 
 export type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult };

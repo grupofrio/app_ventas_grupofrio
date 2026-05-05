@@ -114,6 +114,8 @@ export default function OffRouteScreen() {
         leadId: result.entityType === 'lead' ? result.id : null,
         partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
         offrouteVisitId,
+        pricelistId: result.pricelistId,
+        pricelistName: result.pricelistName,
       },
     );
     updateStopState(virtualStopId, 'in_progress');
@@ -133,6 +135,8 @@ export default function OffRouteScreen() {
         _leadId: result.entityType === 'lead' ? result.id : null,
         _partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
         _offrouteVisitId: offrouteVisitId,
+        _pricelistId: result.pricelistId,
+        _pricelistName: result.pricelistName,
       },
       0, 0, // lat/lon — GPS will provide real values if available
     );

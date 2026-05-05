@@ -55,7 +55,7 @@ function main() {
   );
 
   // Legacy writes must stay out of the sale_order / payment branches.
-  // Other cases (gps, prospection, unload...) still use /api/create_update,
+  // Some other cases (refill, unload...) still use /api/create_update,
   // so we scope the assertion to the two migrated branches.
   const saleBlock = syncStore.match(/case 'sale_order':[\s\S]*?break;/)?.[0] ?? '';
   const paymentBlock = syncStore.match(/case 'payment':[\s\S]*?break;/)?.[0] ?? '';

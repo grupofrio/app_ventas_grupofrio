@@ -41,7 +41,29 @@ function testSalesPayloadMatchesRealContract(module: ContractsModule) {
       864: 100,
     },
     lines: [
-      { product_id: 987, quantity: 2, price_unit: 50, discount: 0 },
+      { product_id: 987, quantity: 2, discount: 0 },
+    ],
+  });
+}
+
+function testSalesPayloadLetsBackendComputePricelistPrice(module: ContractsModule) {
+  const actual = module.buildSalesCreatePayload({
+    _operationId: 'sale-uuid-125',
+    partner_id: 55251,
+    warehouse_id: 8,
+    pricelist_id: 90,
+    lines: [
+      { product_id: 758, quantity: 1, price_unit: 999, discount: 0 },
+    ],
+  });
+
+  assert.deepEqual(actual, {
+    operation_id: 'sale-uuid-125',
+    partner_id: 55251,
+    warehouse_id: 8,
+    pricelist_id: 90,
+    lines: [
+      { product_id: 758, quantity: 1, discount: 0 },
     ],
   });
 }
@@ -115,6 +137,7 @@ async function main() {
   ) as ContractsModule;
 
   testSalesPayloadMatchesRealContract(module);
+  testSalesPayloadLetsBackendComputePricelistPrice(module);
   testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module);
   testPaymentPayloadMatchesKnownContractFields(module);
   testPaymentPayloadKeepsJournalWhenMethodLineIsUnavailable(module);

@@ -45,6 +45,8 @@ interface RouteState {
       leadId?: number | null;
       partnerId?: number | null;
       offrouteVisitId?: number | null;
+      pricelistId?: number | null;
+      pricelistName?: string | null;
     },
   ) => number;
   patchStop: (stopId: number, patch: Partial<GFStop>) => void;
@@ -161,6 +163,8 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       leadId: opts?.leadId,
       partnerId: opts?.partnerId,
       offrouteVisitId: opts?.offrouteVisitId,
+      pricelistId: opts?.pricelistId,
+      pricelistName: opts?.pricelistName,
     });
     const virtualId = virtualStop.id;
     const stops = [...get().stops, virtualStop];

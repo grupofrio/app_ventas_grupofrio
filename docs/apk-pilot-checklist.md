@@ -13,7 +13,7 @@
 | Fecha del piloto | YYYY-MM-DD |
 | Versión APK (`expo.version`) | ____________________________ |
 | `versionCode` Android | ____________________________ |
-| Perfil EAS | preview |
+| Canal de build | continuity-local / preview / production |
 | Device (marca + modelo) | ____________________________ |
 | Versión Android | ____________________________ |
 | Quién instaló | ____________________________ |
@@ -23,11 +23,11 @@
 
 ## 2. Pre-instalación
 
-- [ ] El APK es perfil **`preview` o `production`**. **Nunca** `development` ni el output de `npm run android:dev`.
+- [ ] El APK es canal **`continuity-local`**, **`preview`** o **`production`**. **Nunca** `development` ni el output de `npm run android:dev`.
 - [ ] El nombre del archivo sigue la convención: `KOLD-Field-preview-v{versión}-{YYYYMMDD}.apk`
 - [ ] El `versionCode` del APK nuevo es **estrictamente mayor** que el del APK previo distribuido. (Si `versionCode` es igual o menor, Android puede rechazar la instalación o instalar una versión incorrecta.)
 - [ ] El `package name` coincide con `mx.grupofrio.koldfield` (verificable con `aapt dump badging` o `apksigner verify --print-certs`).
-- [ ] La **firma del APK** coincide con la firma del APK anterior (mismo keystore EAS). Si no coincide, Android rechazará la instalación encima del existente.
+- [ ] La **firma del APK** coincide con la firma del APK anterior. Si no coincide, Android rechazará la instalación encima del existente.
 - [ ] El vendedor tiene credenciales válidas en Odoo (barcode + PIN), confirmadas con dirección.
 - [ ] El vendedor tiene un plan asignado para el día del piloto en Odoo.
 - [ ] El vendedor tiene un warehouse / camión asignado en Odoo con stock cargado (truck_stock).

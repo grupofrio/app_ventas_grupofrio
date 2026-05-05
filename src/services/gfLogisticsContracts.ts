@@ -44,10 +44,6 @@ function normalizeSaleLine(line: Record<string, unknown>): Record<string, unknow
     discount: typeof line.discount === 'number' ? line.discount : 0,
   };
 
-  if (typeof line.price_unit === 'number' && Number.isFinite(line.price_unit)) {
-    normalized.price_unit = line.price_unit;
-  }
-
   return normalized;
 }
 

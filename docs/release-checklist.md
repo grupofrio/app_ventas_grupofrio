@@ -13,8 +13,8 @@
 - [ ] `expo.version` en `app.json` corresponde al release que voy a sacar (semver: MAYOR.MENOR.PATCH).
 - [ ] `package.json` `version` está alineado con `app.json` `expo.version` (deben coincidir).
 - [ ] **`android.versionCode` verificado contra el release anterior**:
-  - Si NO está fijado en `app.json`, **confirmar el `versionCode` del último APK productivo distribuido** antes de generar uno nuevo. Decidir explícitamente si se fija en `app.json` para este release.
-  - Si SÍ está fijado en `app.json`, debe ser **estrictamente mayor** que el del release anterior.
+  - Debe ser **estrictamente mayor** que el del release anterior distribuido.
+  - Para continuidad sobre teléfonos de vendedores, la fuente de verdad actual es el APK firmado con `CN=Android Debug` documentado en `docs/android-update-continuity.md`.
   - **No inventar `versionCode`** sin verificar el release anterior — si Android instala un APK con `versionCode` igual o menor al instalado, falla.
   - Comando para ver el actual del repo: `node -e "console.log(require('./app.json').expo.android?.versionCode ?? '(no definido)')"`
 - [ ] Si voy a subir a Play Store, `versionCode` es obligatorio y debe incrementarse.
@@ -28,14 +28,18 @@
 ## 4. Build
 
 - [ ] Build correcto generado:
-  - Para vendedores: `npm run build:preview:android`
+  - Para continuidad sobre APK ya instalado en vendedores: `npm run build:field-update:android`
+  - Verificación de continuidad: `npm run verify:field-update:android`
+  - Para vendedores por flujo EAS: `npm run build:preview:android`
   - Para Play Store: `npm run build:prod:android`
   - **Nunca** `expo run:android`, `npm run android` ni `npm run android:dev` para distribución.
-- [ ] EAS reportó éxito y tengo el link de descarga del APK / AAB.
+- [ ] Si usé EAS, EAS reportó éxito y tengo el link de descarga del APK / AAB.
+- [ ] Si usé continuidad local, confirmé package, versionCode, versionName y firma del APK generado.
 
 ## 5. Validación en device físico
 
 - [ ] APK instalado en un Android real (no emulador).
+- [ ] Si el teléfono ya tenía KOLD Field, el APK nuevo se instaló **encima** sin pedir desinstalación.
 - [ ] App abre con Metro **APAGADO** en mi PC. No aparece la pantalla roja "Could not connect to development server".
 - [ ] **Endpoint correcto confirmado**: el login se conecta al Odoo esperado para este release (no a otro entorno) — verificar revisando los logs de la pantalla de Sync o haciendo un check-in y validando que llegue al backend correcto.
 - [ ] Login funciona.
@@ -66,6 +70,6 @@
 
 ## Pendientes técnicos del proceso (no del checklist por release)
 
-- Recuperar el `versionCode` del último APK productivo distribuido a vendedores. **Acción**: coordinar con Sebastián / equipo técnico para identificar el APK previo y su `versionCode`. Hasta que se tenga ese dato, evitar distribuir un nuevo APK sobre instalaciones existentes.
 - Definir el canal único de distribución (Drive privado / Firebase App Distribution / link interno) para evitar confusión entre versiones enviadas por chat.
 - Definir y documentar el SHA-1 del keystore de release usado por EAS (se obtiene con `eas credentials` después del primer build).
+- Diseñar la migración desde la firma actual `CN=Android Debug` hacia un keystore release formal sin romper operación de vendedores.

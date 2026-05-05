@@ -42,6 +42,7 @@ interface ProductPickerProps {
   onClose: () => void;
   existingProductIds: number[];
   partnerId?: number;
+  pricelistId?: number | null;
 }
 
 const CATEGORIES = [
@@ -99,7 +100,7 @@ type EnrichedProduct = TruckProduct & {
 
 // ═══ Component ═══
 
-export function ProductPicker({ visible, onClose, existingProductIds, partnerId }: ProductPickerProps) {
+export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
   const inventorySource = useProductStore((s) => s.inventorySource);
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
@@ -138,7 +139,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       setPriceLoading(false);
       return;
     }
-    const cached = peekCachedCustomerPrices(partnerId, products, { companyId });
+    const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
+    const cached = peekCachedCustomerPrices(partnerId, products, pricingOptions);
     if (cached) {
       setPriceMap(cached);
       setPriceLoading(false);
@@ -146,7 +148,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     }
     let cancelled = false;
     setPriceLoading(true);
-    computeCustomerPrices(partnerId, products, { companyId }).then((map) => {
+    computeCustomerPrices(partnerId, products, pricingOptions).then((map) => {
       if (!cancelled) {
         setPriceMap(map);
         setPriceLoading(false);
@@ -155,7 +157,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (!cancelled) setPriceLoading(false);
     });
     return () => { cancelled = true; };
-  }, [visible, partnerId, products, companyId]);
+  }, [visible, partnerId, products, companyId, pricelistId]);
 
   const toggleView = useCallback(() => {
     const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';

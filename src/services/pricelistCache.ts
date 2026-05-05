@@ -28,6 +28,19 @@ type CacheOptions = {
   fallbackPricelistId?: number | null;
 };
 
+/**
+ * Shape of a product as it participates in pricing cache keys.
+ * Only fields that *affect price computation* must be in the hash.
+ * Volatile fields (qty_available, image, ordering) MUST NOT be included or
+ * cache keys would change on every catalog refresh, defeating the cache.
+ */
+export type PricingProductLike = {
+  id: number;
+  list_price?: number | null;
+  product_tmpl_id?: any;
+  categ_id?: any;
+};
+
 function normalizeFallbackPricelistId(options?: CacheOptions): number | null {
   if (typeof options?.fallbackPricelistId === 'number' && options.fallbackPricelistId > 0) {
     return options.fallbackPricelistId;
@@ -35,23 +48,41 @@ function normalizeFallbackPricelistId(options?: CacheOptions): number | null {
   return getCompanyFallbackPricelistId(options?.companyId);
 }
 
-function buildProductsKey(products: Array<{ id: number }>): string {
-  return products
-    .map((product) => product.id)
-    .filter((id) => typeof id === 'number' && id > 0)
-    .sort((a, b) => a - b)
-    .join(',');
+function extractIdLike(value: any): number | null {
+  if (typeof value === 'number' && value > 0) return value;
+  if (Array.isArray(value) && typeof value[0] === 'number' && value[0] > 0) return value[0];
+  return null;
 }
 
-function buildPartnerCacheKey(
+/**
+ * Build a deterministic semantic hash for the product list used in pricing.
+ * Only includes id, list_price, product_tmpl_id, categ_id. Sorted by id so
+ * the input order does NOT affect the cache key.
+ */
+export function buildProductsSemanticHash(products: Array<PricingProductLike>): string {
+  const normalized = products
+    .filter((p) => p && typeof p.id === 'number' && p.id > 0)
+    .map((p) => {
+      const list = typeof p.list_price === 'number' && Number.isFinite(p.list_price)
+        ? Math.round(p.list_price * 100) / 100
+        : 0;
+      const tmpl = extractIdLike(p.product_tmpl_id) ?? 0;
+      const categ = extractIdLike(p.categ_id) ?? 0;
+      return `${p.id}:${list}:${tmpl}:${categ}`;
+    })
+    .sort();
+  return normalized.join(',');
+}
+
+export function buildPartnerCacheKey(
   partnerId: number,
-  products: Array<{ id: number }>,
+  products: Array<PricingProductLike>,
   options?: CacheOptions,
 ): string {
   return [
     partnerId,
     normalizeFallbackPricelistId(options) ?? 0,
-    buildProductsKey(products),
+    buildProductsSemanticHash(products),
   ].join('|');
 }
 
@@ -60,7 +91,7 @@ const partnerPricelistIdCache = new Map<string, number | null>();
 
 export function peekCachedCustomerPrices(
   partnerId: number,
-  products: Array<{ id: number }>,
+  products: Array<PricingProductLike>,
   options?: CacheOptions,
 ): Map<number, number> | null {
   const key = buildPartnerCacheKey(partnerId, products, options);
@@ -70,7 +101,7 @@ export function peekCachedCustomerPrices(
 
 export function cacheCustomerPrices(
   partnerId: number,
-  products: Array<{ id: number }>,
+  products: Array<PricingProductLike>,
   prices: Map<number, number>,
   options?: CacheOptions,
 ): void {
@@ -103,7 +134,7 @@ export function peekResolvedPartnerPricelistId(
 
 export function primeCustomerPriceCacheForTests(
   partnerId: number,
-  products: Array<{ id: number }>,
+  products: Array<PricingProductLike>,
   prices: Array<[number, number]>,
   options?: CacheOptions,
 ): void {

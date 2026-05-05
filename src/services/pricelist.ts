@@ -26,6 +26,7 @@ import {
 } from './pricelistLogic';
 import {
   DEFAULT_SALES_COMPANY_ID,
+  buildPartnerCacheKey,
   cacheResolvedPartnerPricelistId,
   cacheCustomerPrices,
   getEffectiveSalesCompanyId,
@@ -35,6 +36,16 @@ import {
   peekCachedCustomerPrices,
   clearPricelistCaches as clearPartnerPricelistCaches,
 } from './pricelistCache';
+
+// ── Dev-only logging helper (D) ─────────────────────────────────────────────
+// Pricing/pricelist logs are noisy on devices in production. Wrap with
+// __DEV__ so production builds drop them entirely. console.warn is preserved
+// (real errors must remain visible).
+declare const __DEV__: boolean | undefined;
+const isDev = typeof __DEV__ !== 'undefined' ? !!__DEV__ : true;
+function pricelistDebug(...args: unknown[]): void {
+  if (isDev) console.log(...args);
+}
 
 export {
   DEFAULT_SALES_COMPANY_ID,
@@ -50,6 +61,7 @@ export function clearPricelistCaches(): void {
   partnerPricelistResolutionCache.clear();
   pricelistItemsCache.clear();
   pricelistCompanyCache.clear();
+  inFlightCustomerPrices.clear();
   clearPartnerPricelistCaches();
 }
 
@@ -223,7 +235,7 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
     candidatePartnerIds = buildPartnerPricelistCandidates(initialPartner || { id: partnerId });
 
     if (candidatePartnerIds.length > 0) {
-      console.log(`[pricelist] Candidate partners for ${partnerId}:`, JSON.stringify(candidatePartnerIds));
+      pricelistDebug(`[pricelist] Candidate partners for ${partnerId}:`, JSON.stringify(candidatePartnerIds));
       const candidatePartnersMap = await readPartnersForPricelist(candidatePartnerIds);
 
       for (const candidateId of candidatePartnerIds) {
@@ -235,7 +247,7 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
           effectiveCompanyId,
         );
         if (pricelistId) {
-          console.log(`[pricelist] Partner ${candidateId} pricelist: ${pricelistId}`);
+          pricelistDebug(`[pricelist] Partner ${candidateId} pricelist: ${pricelistId}`);
           const resolution: PartnerPricelistResolution = {
             candidatePartnerIds,
             resolvedPartnerId: candidateId,
@@ -258,7 +270,7 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
       ['id', '=', partnerId],
     ], ['pricelist_id', 'property_product_pricelist'], 1);
 
-    console.log(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
+    pricelistDebug(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
 
     if (partners && partners.length > 0) {
       const rawPricelistId = getPreferredPartnerPricelistId(partners[0]);
@@ -293,7 +305,7 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
     // "Empresas incompatibles" errors in Odoo. The internal resolution cache
     // still holds the fallback so computeCustomerPrices can display prices.
     cacheResolvedPartnerPricelistId(partnerId, null, options);
-    console.log(
+    pricelistDebug(
       `[pricelist] Using company fallback pricelist ${fallbackPricelistId} for partner ${partnerId} (not sent to backend)`,
     );
     partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
@@ -323,7 +335,7 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
 export async function getPartnerPricelistId(partnerId: number, options?: PricingOptions): Promise<number | null> {
   const resolution = await resolvePartnerPricelist(partnerId, options);
   if (!resolution.pricelistId) {
-    console.log(`[pricelist] No pricelist found for partner ${partnerId}, using public prices`);
+    pricelistDebug(`[pricelist] No pricelist found for partner ${partnerId}, using public prices`);
   }
   return resolution.pricelistId;
 }
@@ -346,7 +358,7 @@ async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]>
     });
 
     if (items && items.length > 0) {
-      console.log(`[pricelist] Loaded ${items.length} pricelist items via search_read for pricelist ${pricelistId}`);
+      pricelistDebug(`[pricelist] Loaded ${items.length} pricelist items via search_read for pricelist ${pricelistId}`);
       pricelistItemsCache.set(pricelistId, items);
       return items;
     }
@@ -359,7 +371,7 @@ async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]>
     const items = await odooRead<PricelistItem>('product.pricelist.item', [
       ['pricelist_id', '=', pricelistId],
     ], PRICELIST_ITEM_FIELDS, 500);
-    console.log(`[pricelist] Loaded ${items?.length ?? 0} pricelist items via /get_records for pricelist ${pricelistId}`);
+    pricelistDebug(`[pricelist] Loaded ${items?.length ?? 0} pricelist items via /get_records for pricelist ${pricelistId}`);
     pricelistItemsCache.set(pricelistId, items || []);
     return items || [];
   } catch (error) {
@@ -443,17 +455,69 @@ async function fetchServerSidePrices(
  * Returns Map<productId, finalPrice> — only products with price
  * overrides are in the map. Products NOT in the map use list_price.
  */
+// ── In-flight dedupe (A) ──────────────────────────────────────────────────
+// Multiple concurrent callers (Home preload + ProductPicker open) for the
+// same {partner, product set} would each kick a full RPC chain. Track the
+// in-flight Promise keyed on the same semantic cache key and return it.
+// We DO NOT cache rejected promises — the entry is removed in finally so the
+// next caller can retry cleanly.
+const inFlightCustomerPrices = new Map<string, Promise<Map<number, number>>>();
+
+export function _peekInFlightCustomerPricesForTests(
+  partnerId: number,
+  products: Array<{ id: number; list_price?: number | null; product_tmpl_id?: any; categ_id?: any }>,
+  options?: PricingOptions,
+): boolean {
+  return inFlightCustomerPrices.has(buildPartnerCacheKey(partnerId, products, options));
+}
+
 export async function computeCustomerPrices(
   partnerId: number,
   products: Array<{ id: number; list_price: number; product_tmpl_id?: any; categ_id?: any; standard_price?: number }>,
   options?: PricingOptions,
 ): Promise<Map<number, number>> {
-  console.log(`[pricelist] Computing prices for partner ${partnerId}, ${products.length} products`);
+  // Cache hit short-circuit — sync, no in-flight needed.
   const cachedPrices = peekCachedCustomerPrices(partnerId, products, options);
   if (cachedPrices) {
+    pricelistDebug(`[pricelist] cache HIT partner=${partnerId} products=${products.length}`);
     return cachedPrices;
   }
 
+  // In-flight dedupe — return the same Promise to all concurrent callers.
+  const inFlightKey = buildPartnerCacheKey(partnerId, products, options);
+  const existing = inFlightCustomerPrices.get(inFlightKey);
+  if (existing) {
+    pricelistDebug(`[pricelist] in-flight HIT partner=${partnerId}`);
+    return existing.then((m) => new Map(m));
+  }
+
+  const startMs = isDev ? Date.now() : 0;
+  pricelistDebug(`[pricelist] cache MISS partner=${partnerId} products=${products.length}`);
+
+  const promise = _computeCustomerPricesUncached(partnerId, products, options)
+    .then((result) => {
+      if (isDev) {
+        pricelistDebug(
+          `[pricelist] computed partner=${partnerId} products=${products.length} overrides=${result.size} duration=${Date.now() - startMs}ms`,
+        );
+      }
+      return result;
+    })
+    .finally(() => {
+      // Always clean — never cache a rejected/in-flight entry.
+      inFlightCustomerPrices.delete(inFlightKey);
+    });
+
+  inFlightCustomerPrices.set(inFlightKey, promise);
+  // Return a defensive copy so callers cannot mutate the in-flight Map.
+  return promise.then((m) => new Map(m));
+}
+
+async function _computeCustomerPricesUncached(
+  partnerId: number,
+  products: Array<{ id: number; list_price: number; product_tmpl_id?: any; categ_id?: any; standard_price?: number }>,
+  options?: PricingOptions,
+): Promise<Map<number, number>> {
   // ── Strategy 1: Server-side (preferred — Odoo native pricelist engine) ──
   const serverPrices = await fetchServerSidePrices(partnerId, products);
   if (serverPrices !== null) {
@@ -473,7 +537,7 @@ export async function computeCustomerPrices(
 
   const items = await loadPricelistItems(pricelistId);
   if (items.length === 0) {
-    console.log(`[pricelist] Pricelist ${pricelistId} has no items`);
+    pricelistDebug(`[pricelist] Pricelist ${pricelistId} has no items`);
     cacheCustomerPrices(partnerId, products, priceMap, options);
     return priceMap;
   }
@@ -519,10 +583,27 @@ export async function computeCustomerPrices(
     }
   }
 
-  console.log(`[pricelist] Client-side: ${priceMap.size} custom prices for partner ${partnerId} (pricelist ${pricelistId})`);
+  pricelistDebug(`[pricelist] Client-side: ${priceMap.size} custom prices for partner ${partnerId} (pricelist ${pricelistId})`);
   cacheCustomerPrices(partnerId, products, priceMap, options);
   return priceMap;
 }
+
+/**
+ * Preload customer-specific prices for a route, with bounded concurrency.
+ *
+ * Why a concurrency cap: each partner triggers up to ~3-5 RPCs (search_read
+ * partner → read pricelist company → search_read pricelist items, possibly
+ * nested). Firing 20+ in parallel saturates the network and makes the
+ * ProductPicker's own request queue behind them. A small cap keeps each
+ * individual request fast and leaves headroom for foreground work.
+ *
+ * Skips:
+ *   - duplicate partnerIds
+ *   - non-positive ids
+ *   - partners already cached (peekCachedCustomerPrices)
+ *   - partners already in-flight (computeCustomerPrices reuses the promise)
+ */
+const PRELOAD_CONCURRENCY = 4;
 
 export async function preloadRouteCustomerPrices(
   partnerIds: number[],
@@ -532,7 +613,35 @@ export async function preloadRouteCustomerPrices(
   const uniquePartnerIds = [...new Set(partnerIds.filter((id) => typeof id === 'number' && id > 0))];
   if (uniquePartnerIds.length === 0 || products.length === 0) return;
 
-  await Promise.allSettled(
-    uniquePartnerIds.map((partnerId) => computeCustomerPrices(partnerId, products, options)),
+  // Skip partners already cached or already in-flight — preload should never
+  // duplicate work the foreground (or another preload) is already doing.
+  const pending = uniquePartnerIds.filter((partnerId) => {
+    if (peekCachedCustomerPrices(partnerId, products, options)) return false;
+    if (_peekInFlightCustomerPricesForTests(partnerId, products, options)) return false;
+    return true;
+  });
+
+  if (pending.length === 0) return;
+  pricelistDebug(
+    `[pricelist] preload pending=${pending.length}/${uniquePartnerIds.length} concurrency=${PRELOAD_CONCURRENCY}`,
   );
+
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < pending.length) {
+      const idx = cursor++;
+      const partnerId = pending[idx];
+      try {
+        await computeCustomerPrices(partnerId, products, options);
+      } catch {
+        // Swallow — preload is best-effort. Real failures surface when
+        // ProductPicker does its own (now in-flight-deduped) fetch.
+      }
+    }
+  }
+
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(PRELOAD_CONCURRENCY, pending.length);
+  for (let i = 0; i < workerCount; i++) workers.push(worker());
+  await Promise.all(workers);
 }

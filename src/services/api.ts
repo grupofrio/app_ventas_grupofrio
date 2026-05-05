@@ -9,6 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
+import { detectFunctionalErrorMessage } from '../utils/rpcEnvelope';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
@@ -276,9 +277,18 @@ export async function postRpc<T = any>(
     const text = await response.text();
     const parsed = safeParseJson(text);
     const durationMs = Date.now() - startedAt;
-    const errMsg = !response.ok
+    // Native Odoo error channel (parsed.error.*) — surfaces ORM/server crashes.
+    const odooErrMsg = !response.ok
       ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
       : (parsed?.error?.data?.message || parsed?.error?.message);
+    // BLD-20260505-RPCENVELOPE: detect functional failure carried inside
+    // result envelope ({ ok:false, status>=400, case<0, error:"..." }).
+    // Without this the GPS batch (and any other postRpc('/api/create_update'))
+    // would treat HTTP 200 + ok:false as success and silently mark items done.
+    const functionalErr = !odooErrMsg
+      ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })
+      : null;
+    const errMsg = odooErrMsg || functionalErr;
 
     const trace = buildHttpTraceData({
       phase: errMsg ? 'error' : 'response',
@@ -289,7 +299,7 @@ export async function postRpc<T = any>(
       status: response.status,
       durationMs,
       responseBody: parsed,
-      errorMessage: errMsg,
+      errorMessage: errMsg ?? undefined,
     });
 
     if (errMsg) {
@@ -354,9 +364,14 @@ export async function postJsonRpc<T = any>(
     const text = await response.text();
     const parsed = safeParseJson(text);
     const durationMs = Date.now() - startedAt;
-    const errMsg = !response.ok
+    const odooErrMsg = !response.ok
       ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
       : (parsed?.error?.data?.message || parsed?.error?.message);
+    // Same envelope detection as postRpc — see BLD-20260505-RPCENVELOPE.
+    const functionalErr = !odooErrMsg
+      ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })
+      : null;
+    const errMsg = odooErrMsg || functionalErr;
 
     const trace = buildHttpTraceData({
       phase: errMsg ? 'error' : 'response',
@@ -367,7 +382,7 @@ export async function postJsonRpc<T = any>(
       status: response.status,
       durationMs,
       responseBody: parsed,
-      errorMessage: errMsg,
+      errorMessage: errMsg ?? undefined,
     });
 
     if (errMsg) {

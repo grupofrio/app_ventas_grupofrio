@@ -72,6 +72,56 @@ export interface GFExchangeResponse {
   data: GFExchangeResult;
 }
 
+// ─── Liquidation summary (BLD-20260427-P1-CASHCLOSE-LIQUIDATION) ─────────────
+// Backend: gf_logistics_ops controllers/gf_api.py POST /pwa-ruta/liquidation
+//          (handler _handle_liquidation → gf.route.plan.build_liquidation_summary)
+// El endpoint suma account.payment por bucket (cash/credit/transfer) sobre el
+// plan del día. Es la fuente de verdad para Cash Close porque /sales/summary
+// devuelve cash_amount_total y credit_amount_total HARDCODED a 0.0
+// (ver sale_order.py L256-257 en el snapshot de gf_logistics_ops).
+
+export interface GFLiquidationPaymentBucket {
+  count: number;
+  total: number;
+}
+
+export interface GFLiquidationPaymentDetail {
+  payment_id: number;
+  stop_id: number | null;
+  stop_name: string;
+  amount: number;
+  method: string; // 'cash' | 'credit' | 'transfer' | otros si Sebas agrega
+  state: string;
+}
+
+export interface GFLiquidationSummary {
+  plan_id: number;
+  plan_name: string;
+  payments: {
+    cash: GFLiquidationPaymentBucket;
+    credit: GFLiquidationPaymentBucket;
+    transfer: GFLiquidationPaymentBucket;
+  };
+  total_collected: number;
+  total_expected: number;
+  payment_details: GFLiquidationPaymentDetail[];
+  include_draft: boolean;
+}
+
+const EMPTY_LIQUIDATION_SUMMARY: GFLiquidationSummary = {
+  plan_id: 0,
+  plan_name: '',
+  payments: {
+    cash: { count: 0, total: 0 },
+    credit: { count: 0, total: 0 },
+    transfer: { count: 0, total: 0 },
+  },
+  total_collected: 0,
+  total_expected: 0,
+  payment_details: [],
+  include_draft: false,
+};
+
 const EMPTY_SALES_SUMMARY: GFSalesSummary = {
   date: '',
   orders_count: 0,
@@ -420,6 +470,84 @@ export async function fetchSalesList(
 
   const result = await postRest<any>(`${GF_BASE}/sales/list`, body);
   return normalizeSalesList(result);
+}
+
+// ─── Liquidation summary (read-only) ────────────────────────────────────────
+//
+// Endpoint:    POST /pwa-ruta/liquidation
+// Backend:     gf_logistics_ops controllers/gf_api.py L3241
+// Handler:     _handle_liquidation → gf.route.plan.build_liquidation_summary
+// Auth:        public + employee_token (resuelto por _run_with_session_employee)
+//
+// Por qué este endpoint y no /sales/summary:
+//   /sales/summary devuelve cash_amount_total y credit_amount_total HARDCODED
+//   a 0.0 (sale_order.py L256-257 en snapshot gf_logistics_ops). Para Cash
+//   Close necesitamos los buckets reales sumados desde account.payment, que
+//   solo provee build_liquidation_summary().
+//
+// IMPORTANTE: este wrapper es SÓLO LECTURA. NO mutar.
+//   Para confirmar liquidación se usaría /pwa-ruta/liquidacion-confirm,
+//   pero eso queda fuera de scope hasta verificar deploy en producción.
+function normalizeLiquidationBucket(value: unknown): GFLiquidationPaymentBucket {
+  if (!value || typeof value !== 'object') return { count: 0, total: 0 };
+  const bucket = value as Record<string, unknown>;
+  return {
+    count: toNumber(bucket.count),
+    total: toNumber(bucket.total),
+  };
+}
+
+function normalizeLiquidationSummary(result: unknown): GFLiquidationSummary {
+  const data = unwrapEnvelope<Record<string, unknown>>(result);
+  if (!data) return EMPTY_LIQUIDATION_SUMMARY;
+
+  const paymentsRaw = data.payments && typeof data.payments === 'object'
+    ? data.payments as Record<string, unknown>
+    : {};
+
+  const detailsRaw = Array.isArray(data.payment_details) ? data.payment_details : [];
+
+  return {
+    plan_id: toNumber(data.plan_id),
+    plan_name: typeof data.plan_name === 'string' ? data.plan_name : '',
+    payments: {
+      cash: normalizeLiquidationBucket(paymentsRaw.cash),
+      credit: normalizeLiquidationBucket(paymentsRaw.credit),
+      transfer: normalizeLiquidationBucket(paymentsRaw.transfer),
+    },
+    total_collected: toNumber(data.total_collected),
+    total_expected: toNumber(data.total_expected),
+    payment_details: detailsRaw.map((row) => {
+      const detail = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      return {
+        payment_id: toNumber(detail.payment_id),
+        stop_id: toNullablePositiveNumber(detail.stop_id),
+        stop_name: typeof detail.stop_name === 'string' ? detail.stop_name : '',
+        amount: toNumber(detail.amount),
+        method: typeof detail.method === 'string' ? detail.method : '',
+        state: typeof detail.state === 'string' ? detail.state : '',
+      };
+    }),
+    include_draft: Boolean(data.include_draft),
+  };
+}
+
+export async function fetchLiquidationSummary(
+  payload: { plan_id?: number; include_draft?: boolean } = {},
+): Promise<GFLiquidationSummary> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+  if (typeof payload.include_draft === 'boolean') {
+    body.include_draft = payload.include_draft;
+  }
+
+  // pwa-ruta/liquidation usa base distinta a GF_BASE (gf/logistics/api/employee).
+  // postRest acepta path relativo desde base URL — la slash inicial NO aplica
+  // porque buildAbsoluteUrl ya la limpia.
+  const result = await postRest<unknown>('pwa-ruta/liquidation', body);
+  return normalizeLiquidationSummary(result);
 }
 
 export async function fetchAnalyticsOptions(

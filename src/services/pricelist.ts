@@ -12,8 +12,7 @@
  *
  * Strategy:
  *   1. Try odooRpc search_read on res.partner for pricelist_id / property_product_pricelist
- *   2. If that fails, try /get_records as fallback
- *   3. Load pricelist items and compute prices client-side
+ *   2. Load pricelist items and compute prices client-side
  */
 
 import { odooRead, odooRpc } from './odooRpc';
@@ -105,7 +104,7 @@ interface PartnerPricelistResolution {
   candidatePartnerIds: number[];
   resolvedPartnerId: number | null;
   pricelistId: number | null;
-  source: 'partner_field' | 'get_records' | 'company_fallback' | 'none';
+  source: 'partner_field' | 'company_fallback' | 'none';
 }
 
 interface PricingOptions {
@@ -203,19 +202,6 @@ async function readPartnersForPricelist(partnerIds: number[]): Promise<Map<numbe
     }
   } catch { /* session not available */ }
 
-  // Strategy 2: /get_records via API key (no session needed)
-  try {
-    const partners = await odooRead<PartnerPricelistRecord>(
-      'res.partner',
-      [['id', 'in', uniqueIds]],
-      FIELDS,
-      uniqueIds.length,
-    );
-    if (partners && partners.length > 0) {
-      return new Map(partners.map((p) => [p.id, p]));
-    }
-  } catch { /* /get_records also unavailable for res.partner */ }
-
   return new Map();
 }
 
@@ -262,33 +248,6 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
     }
   } catch (err) {
     console.warn('[pricelist] search_read failed:', err);
-  }
-
-  // ── Attempt 2: /get_records as last resort ──
-  try {
-    const partners = await odooRead<any>('res.partner', [
-      ['id', '=', partnerId],
-    ], ['pricelist_id', 'property_product_pricelist'], 1);
-
-    pricelistDebug(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
-
-    if (partners && partners.length > 0) {
-      const rawPricelistId = getPreferredPartnerPricelistId(partners[0]);
-      const plId = await pickCompatiblePricelistId(partnerId, rawPricelistId, effectiveCompanyId);
-      if (plId) {
-        const resolution: PartnerPricelistResolution = {
-          candidatePartnerIds,
-          resolvedPartnerId: partnerId,
-          pricelistId: plId,
-          source: 'get_records',
-        };
-        cacheResolvedPartnerPricelistId(partnerId, plId, options);
-        partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
-        return resolution;
-      }
-    }
-  } catch (err) {
-    console.warn('[pricelist] /get_records fallback failed:', err);
   }
 
   const fallbackPricelistId = resolveFallbackPricelistId(options);

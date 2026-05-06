@@ -51,6 +51,7 @@ const GPS_MODE_CONFIG: Record<GpsMode, GpsModeConfig> = {
 let _currentMode: GpsMode = 'in_transit';
 let _watchSubscription: Location.LocationSubscription | null = null;
 let _periodicTimer: ReturnType<typeof setInterval> | null = null;
+const GPS_POSITION_TIMEOUT_MS = 8000;
 
 /** Get current GPS mode. */
 export function getGpsMode(): GpsMode {
@@ -270,9 +271,20 @@ export async function getCurrentPosition(): Promise<{
     const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') return null;
 
-    const position = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
+    const currentPositionPromise = Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
     });
+    const timeoutPromise = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), GPS_POSITION_TIMEOUT_MS);
+    });
+
+    const position = await Promise.race([currentPositionPromise, timeoutPromise])
+      || await Location.getLastKnownPositionAsync({
+        maxAge: 10 * 60 * 1000,
+        requiredAccuracy: 1000,
+      });
+
+    if (!position) return null;
 
     const result = {
       latitude: position.coords.latitude,

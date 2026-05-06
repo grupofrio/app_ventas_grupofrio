@@ -28,6 +28,8 @@ type CacheOptions = {
   fallbackPricelistId?: number | null;
 };
 
+const CUSTOMER_PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
+
 /**
  * Shape of a product as it participates in pricing cache keys.
  * Only fields that *affect price computation* must be in the hash.
@@ -86,7 +88,12 @@ export function buildPartnerCacheKey(
   ].join('|');
 }
 
-const partnerPriceCache = new Map<string, Map<number, number>>();
+type CustomerPriceCacheEntry = {
+  prices: Map<number, number>;
+  cachedAtMs: number;
+};
+
+const partnerPriceCache = new Map<string, CustomerPriceCacheEntry>();
 const partnerPricelistIdCache = new Map<string, number | null>();
 
 export function peekCachedCustomerPrices(
@@ -96,7 +103,12 @@ export function peekCachedCustomerPrices(
 ): Map<number, number> | null {
   const key = buildPartnerCacheKey(partnerId, products, options);
   const cached = partnerPriceCache.get(key);
-  return cached ? new Map(cached) : null;
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAtMs > CUSTOMER_PRICE_CACHE_TTL_MS) {
+    partnerPriceCache.delete(key);
+    return null;
+  }
+  return new Map(cached.prices);
 }
 
 export function cacheCustomerPrices(
@@ -106,7 +118,10 @@ export function cacheCustomerPrices(
   options?: CacheOptions,
 ): void {
   const key = buildPartnerCacheKey(partnerId, products, options);
-  partnerPriceCache.set(key, new Map(prices));
+  partnerPriceCache.set(key, {
+    prices: new Map(prices),
+    cachedAtMs: Date.now(),
+  });
 }
 
 function buildPartnerPricelistKey(partnerId: number, options?: CacheOptions): string {

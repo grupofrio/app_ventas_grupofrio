@@ -21,6 +21,7 @@ import { CheckoutResultStatus } from './checkoutResult';
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
+import { normalizePlanStopPayload } from './planStopPayload';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -297,13 +298,17 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
           _leadId: s?._leadId,
           _partnerId: s?._partnerId,
           customer_id: s?.customer_id,
+          pricelist_id: s?.pricelist_id,
+          _pricelistId: s?._pricelistId,
         })),
       });
     } catch {
       // logger defensivo: nunca debe romper el plan
     }
 
-    return rawStops as GFStop[];
+    return rawStops
+      .filter((stop): stop is Record<string, unknown> => !!stop && typeof stop === 'object')
+      .map(normalizePlanStopPayload);
   } catch (error) {
     // BLD-20260425-NOPLAN: log estructurado del fallo de red/servidor
     // para que aparezca en el export del operador. Mantenemos el return []

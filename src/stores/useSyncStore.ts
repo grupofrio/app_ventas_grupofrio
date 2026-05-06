@@ -53,6 +53,7 @@ import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
+import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 
 // ═══ Constants ═══
 
@@ -605,7 +606,7 @@ async function tryGpsBatchCreate(items: SyncQueueItem[]): Promise<boolean> {
     latitude: i.payload.latitude,
     longitude: i.payload.longitude,
     accuracy: i.payload.accuracy,
-    timestamp: i.payload.timestamp,
+    timestamp: normalizeGpsTimestamp(i.payload.timestamp),
   }));
 
   await postRest('/pwa-ruta/gps-batch', {
@@ -755,7 +756,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
           latitude: payload.latitude,
           longitude: payload.longitude,
           accuracy: payload.accuracy,
-          timestamp: payload.timestamp,
+          timestamp: normalizeGpsTimestamp(payload.timestamp),
         }],
       });
       break;

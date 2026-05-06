@@ -76,14 +76,12 @@ export default function RootLayout() {
 
             // 3. GPS Initialization
             console.log('[Init] Initializing GPS...');
-            await initializeGPS().catch(e => console.error('GPS init failed', e));
-            startLocationWatch();
-
-            try {
-              await startBackgroundTracking();
-            } catch (e) {
-              console.log('[gps] Background tracking not available');
-            }
+            void initializeGPS()
+              .then(() => {
+                startLocationWatch();
+                return startBackgroundTracking();
+              })
+              .catch(e => console.log('[gps] GPS startup not available', e));
           }
         }
 

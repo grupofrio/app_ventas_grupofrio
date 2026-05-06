@@ -30,6 +30,17 @@ interface CacheModule {
     products: any[],
     options?: { companyId?: number | null; fallbackPricelistId?: number | null },
   ) => string;
+  cacheCustomerPrices: (
+    partnerId: number,
+    products: any[],
+    prices: Map<number, number>,
+    options?: { companyId?: number | null; fallbackPricelistId?: number | null },
+  ) => void;
+  peekCachedCustomerPrices: (
+    partnerId: number,
+    products: any[],
+    options?: { companyId?: number | null; fallbackPricelistId?: number | null },
+  ) => Map<number, number> | null;
   resetPricelistCachesForTests: () => void;
 }
 
@@ -137,6 +148,33 @@ function testHashIsCompanyAndFallbackAware(cache: CacheModule) {
   assert.notEqual(k1, k2);
 }
 
+function testCustomerPriceCacheExpiresAfterFiveMinutes(cache: CacheModule) {
+  const originalNow = Date.now;
+  const products = [{ id: 10, list_price: 100, product_tmpl_id: 5, categ_id: 1 }];
+
+  try {
+    Date.now = () => 1_000;
+    cache.cacheCustomerPrices(99, products, new Map([[10, 80]]), { companyId: 34 });
+
+    Date.now = () => 1_000 + (5 * 60 * 1000) - 1;
+    assert.deepEqual(
+      [...(cache.peekCachedCustomerPrices(99, products, { companyId: 34 }) ?? new Map()).entries()],
+      [[10, 80]],
+      'price cache should remain valid inside the five minute TTL',
+    );
+
+    Date.now = () => 1_000 + (5 * 60 * 1000) + 1;
+    assert.equal(
+      cache.peekCachedCustomerPrices(99, products, { companyId: 34 }),
+      null,
+      'price cache should expire after five minutes so changed Odoo pricelists refresh',
+    );
+  } finally {
+    Date.now = originalNow;
+    cache.resetPricelistCachesForTests();
+  }
+}
+
 async function main() {
   const cache = await import(
     // @ts-ignore -- import.meta only used in test runtime.
@@ -152,6 +190,7 @@ async function main() {
   testPartnerCacheKeyAcceptsMany2oneArrays(cache);
   testHashRoundsListPriceToCents(cache);
   testHashIsCompanyAndFallbackAware(cache);
+  testCustomerPriceCacheExpiresAfterFiveMinutes(cache);
 
   console.log('pricelist cache stability tests: ok');
 }

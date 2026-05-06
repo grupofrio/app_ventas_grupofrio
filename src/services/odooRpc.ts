@@ -26,6 +26,11 @@ export async function odooRead<T = unknown>(
     // BLD-20260404-007: Backend may return either a plain array or
     // a wrapped object { status, count, response: [...], message }.
     const result = await postRpc<any>('/get_records', { model, domain, fields, limit, offset, order });
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      if (result.ok === false || typeof result.error === 'string' || (typeof result.case === 'number' && result.case < 0)) {
+        throw new Error(result.error || `Odoo read rejected for ${model}`);
+      }
+    }
     if (Array.isArray(result)) return result as T[];
     if (result && Array.isArray(result.response)) return result.response as T[];
     return [];

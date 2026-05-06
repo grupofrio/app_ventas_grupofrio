@@ -21,7 +21,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
 import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
-import { initializeGPS, getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import { getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
@@ -104,15 +104,10 @@ export default function CheckinScreen() {
     // Set geofence target
     setTarget(stop.customer_latitude, stop.customer_longitude);
 
-    // Request GPS
+    // Request GPS. Do not run the full GPS initialization here; check-in must
+    // never hang on a fresh high-accuracy location request.
     (async () => {
       setGpsLoading(true);
-      const gpsStatus = await initializeGPS();
-      if (gpsStatus === 'denied') {
-        setStatus('denied', 'Permiso de ubicacion denegado');
-        setGpsLoading(false);
-        return;
-      }
       try {
         const pos = await getCurrentPosition();
         if (pos) {

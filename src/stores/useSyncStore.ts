@@ -48,6 +48,7 @@ import {
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
+import { areSyncDependenciesSatisfied } from '../services/syncDependencies';
 import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -510,6 +511,11 @@ async function processOneItem(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): Promise<boolean> {
+  if (!areSyncDependenciesSatisfied(item, get().queue)) {
+    logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
+    return false;
+  }
+
   // Mark as syncing
   const updatedQueue = get().queue.map((i) =>
     i.id === item.id ? { ...i, status: 'syncing' as SyncItemStatus } : i

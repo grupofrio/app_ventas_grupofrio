@@ -27,12 +27,10 @@ let _uid: number | null = null;
 let _authenticated = false;
 let _authenticating: Promise<boolean> | null = null;
 
-const DEFAULT_DB = 'grupofrio-grupofrio-31972140';
-
 // Service account credentials — set once at app startup
 let _serviceLogin: string | null = null;
 let _servicePassword: string | null = null;
-let _configuredDb = DEFAULT_DB;
+let _configuredDb: string | null = null;
 let _authenticatedDb: string | null = null;
 
 function makeRequestId(): string {
@@ -43,11 +41,11 @@ function makeRequestId(): string {
  * Configure service account credentials for Odoo session auth.
  * Call this once during app initialization.
  */
-export function setServiceCredentials(login: string, password: string, databaseName = DEFAULT_DB) {
+export function setServiceCredentials(login: string, password: string, databaseName?: string | null) {
   if (
     _serviceLogin === login &&
     _servicePassword === password &&
-    _configuredDb === databaseName &&
+    _configuredDb === (databaseName ?? null) &&
     _authenticated
   ) {
     return;
@@ -55,7 +53,7 @@ export function setServiceCredentials(login: string, password: string, databaseN
 
   _serviceLogin = login;
   _servicePassword = password;
-  _configuredDb = databaseName;
+  _configuredDb = databaseName ?? null;
   _authenticated = false;
   _uid = null;
   _authenticatedDb = null;

@@ -11,6 +11,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
 import { clearOdooSession } from '../services/odooSession';
+import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
@@ -54,7 +55,7 @@ interface AuthState {
   customerIds: number[];
 
   // Actions
-  login: (baseUrl: string, barcode: string, pin: string, db: string) => Promise<boolean>;
+  login: (baseUrl: string, barcode: string, pin: string, db?: string | null) => Promise<boolean>;
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   rehydrateAuth: () => Promise<boolean>;
@@ -253,12 +254,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await setBaseUrl(baseUrl);
 
+      const dbName = await resolveOdooDatabase(baseUrl, db);
+      if (!dbName) {
+        set({ error: 'No se pudo resolver la base de datos de Odoo', isLoading: false });
+        return false;
+      }
+
       const loginUrl = `${baseUrl}/api/employee-sign-in`;
       const netState = await NetInfo.fetch();
       const isOnline = !!(netState.isConnected && netState.isInternetReachable !== false);
       console.log('[login] start', {
         url: loginUrl,
-        db,
+        db: dbName,
         isOnline,
         isConnected: netState.isConnected,
         isInternetReachable: netState.isInternetReachable,
@@ -276,7 +283,7 @@ export const useAuthStore = create<AuthState>((set) => ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0',
-            params: { barcode, pin, db },
+            params: { barcode, pin, db: dbName },
           }),
         });
       } catch (netErr) {

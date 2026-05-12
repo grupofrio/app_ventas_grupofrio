@@ -46,3 +46,14 @@ export async function fetchOdooDatabaseNames(baseUrl: string): Promise<string[]>
     return [];
   }
 }
+
+export async function resolveOdooDatabase(
+  baseUrl: string,
+  configuredDb?: string | null,
+  fetcher: (baseUrl: string) => Promise<string[]> = fetchOdooDatabaseNames,
+): Promise<string | null> {
+  const listedDbs = await fetcher(baseUrl);
+  const [listedDb] = listedDbs;
+  if (listedDb) return listedDb;
+  return candidateOdooDatabases(baseUrl, configuredDb, [])[0] ?? null;
+}

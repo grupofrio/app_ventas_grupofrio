@@ -15,9 +15,6 @@ import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 
-// Default values — configurable in settings (F8)
-const DEFAULT_DB = 'grupofrio-grupofrio-31972140';
-
 export default function LoginScreen() {
   const [barcode, setBarcode] = useState('');
   const [pin, setPin] = useState('');
@@ -28,7 +25,7 @@ export default function LoginScreen() {
       Alert.alert('Error', 'Ingresa codigo y PIN');
       return;
     }
-    await login(DEFAULT_BASE_URL, barcode.trim(), pin.trim(), DEFAULT_DB);
+    await login(DEFAULT_BASE_URL, barcode.trim(), pin.trim());
   }
 
   return (

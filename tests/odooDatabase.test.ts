@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 interface OdooDatabaseModule {
   candidateOdooDatabases: (baseUrl: string, configuredDb?: string | null, listedDbs?: string[]) => string[];
   extractOdooDatabaseNames: (payload: unknown) => string[];
+  resolveOdooDatabase: (
+    baseUrl: string,
+    configuredDb?: string | null,
+    fetcher?: (baseUrl: string) => Promise<string[]>,
+  ) => Promise<string | null>;
 }
 
 async function main() {
@@ -38,6 +43,24 @@ async function main() {
       result: ['grupofrio-grupofrio-31972140'],
     }),
     ['grupofrio-grupofrio-31972140'],
+  );
+
+  assert.equal(
+    await module.resolveOdooDatabase(
+      'https://grupofrio.odoo.com',
+      'grupofrio-grupofrio-20239580',
+      async () => ['grupofrio-grupofrio-31972140'],
+    ),
+    'grupofrio-grupofrio-31972140',
+  );
+
+  assert.equal(
+    await module.resolveOdooDatabase(
+      'https://grupofrio.odoo.com',
+      null,
+      async () => [],
+    ),
+    'grupofrio',
   );
 
   console.log('odoo database tests: ok');

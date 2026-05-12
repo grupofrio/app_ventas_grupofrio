@@ -5,6 +5,7 @@ export interface OffrouteCustomerRecord {
   city?: string;
   phone?: string;
   mobile?: string;
+  email?: string;
   vat?: string;
   pricelist_id?: [number, string] | number | false | null;
   property_product_pricelist?: [number, string] | number | false | null;
@@ -31,6 +32,64 @@ export interface OffrouteSearchResult {
   partnerId: number | null;
   pricelistId: number | null;
   pricelistName: string | null;
+}
+
+export const BASIC_CUSTOMER_FIELDS = [
+  'id',
+  'name',
+  'street',
+  'city',
+  'phone',
+  'mobile',
+  'email',
+  'vat',
+];
+
+export const CUSTOMER_PRICELIST_FIELDS = [
+  'pricelist_id',
+  'property_product_pricelist',
+];
+
+export const CUSTOMER_FIELDS = [
+  ...BASIC_CUSTOMER_FIELDS,
+  ...CUSTOMER_PRICELIST_FIELDS,
+];
+
+export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
+  const q = query.trim();
+  const domain: unknown[] = [
+    '&',
+    ['customer_rank', '>', 0],
+    '|', '|', '|', '|',
+    ['name', 'ilike', q],
+    ['phone', 'ilike', q],
+    ['mobile', 'ilike', q],
+    ['vat', 'ilike', q],
+    ['email', 'ilike', q],
+  ];
+
+  if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
+    return domain;
+  }
+
+  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...domain];
+}
+
+export async function readCustomersWithFieldFallback(
+  readers: {
+    rpc: (fields: string[]) => Promise<OffrouteCustomerRecord[]>;
+    read: (fields: string[]) => Promise<OffrouteCustomerRecord[]>;
+  },
+): Promise<OffrouteCustomerRecord[]> {
+  try {
+    return await readers.rpc(CUSTOMER_FIELDS);
+  } catch {
+    try {
+      return await readers.rpc(BASIC_CUSTOMER_FIELDS);
+    } catch {
+      return await readers.read(BASIC_CUSTOMER_FIELDS);
+    }
+  }
 }
 
 function joinParts(...parts: Array<string | undefined>): string {
@@ -73,7 +132,7 @@ export function buildOffrouteResults(
         entityType: 'customer' as const,
         name: customer.name,
         subtitle: joinParts(customer.street, customer.city),
-        contact: customer.phone || customer.mobile || customer.vat || '',
+        contact: customer.phone || customer.mobile || customer.email || customer.vat || '',
         partnerId: customer.id,
         pricelistId,
         pricelistName,

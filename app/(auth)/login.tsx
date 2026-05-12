@@ -16,7 +16,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 
 // Default values — configurable in settings (F8)
-const DEFAULT_DB = 'grupofrio-grupofrio-20239580';
+const DEFAULT_DB = 'grupofrio-grupofrio-31972140';
 
 export default function LoginScreen() {
   const [barcode, setBarcode] = useState('');

@@ -17,6 +17,7 @@
  */
 
 import { getBaseUrl } from './api';
+import { candidateOdooDatabases, fetchOdooDatabaseNames } from './odooDatabase';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { logError, logInfo, logWarn } from '../utils/logger';
 
@@ -26,11 +27,13 @@ let _uid: number | null = null;
 let _authenticated = false;
 let _authenticating: Promise<boolean> | null = null;
 
-const DEFAULT_DB = 'grupofrio-grupofrio-20239580';
+const DEFAULT_DB = 'grupofrio-grupofrio-31972140';
 
 // Service account credentials — set once at app startup
 let _serviceLogin: string | null = null;
 let _servicePassword: string | null = null;
+let _configuredDb = DEFAULT_DB;
+let _authenticatedDb: string | null = null;
 
 function makeRequestId(): string {
   return `odoo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -40,11 +43,22 @@ function makeRequestId(): string {
  * Configure service account credentials for Odoo session auth.
  * Call this once during app initialization.
  */
-export function setServiceCredentials(login: string, password: string) {
+export function setServiceCredentials(login: string, password: string, databaseName = DEFAULT_DB) {
+  if (
+    _serviceLogin === login &&
+    _servicePassword === password &&
+    _configuredDb === databaseName &&
+    _authenticated
+  ) {
+    return;
+  }
+
   _serviceLogin = login;
   _servicePassword = password;
+  _configuredDb = databaseName;
   _authenticated = false;
   _uid = null;
+  _authenticatedDb = null;
 }
 
 /**
@@ -71,52 +85,62 @@ async function authenticate(): Promise<boolean> {
     try {
       const baseUrl = await getBaseUrl();
       console.log('[odooSession] Authenticating...');
-      const requestId = makeRequestId();
-      const startedAt = Date.now();
-      const requestBody = {
-        jsonrpc: '2.0',
-        params: {
-          db: DEFAULT_DB,
-          login: _serviceLogin,
-          password: _servicePassword,
-        },
-      };
+      const listedDbs = await fetchOdooDatabaseNames(baseUrl);
+      const dbCandidates = candidateOdooDatabases(baseUrl, _configuredDb, listedDbs);
 
-      logInfo('api', 'http_request', buildHttpTraceData({
-        phase: 'request',
-        channel: 'odoo_auth',
-        method: 'POST',
-        url: `${baseUrl}/web/session/authenticate`,
-        requestId,
-        requestHeaders: { 'Content-Type': 'application/json' },
-        requestBody,
-      }));
+      for (const db of dbCandidates) {
+        const requestId = makeRequestId();
+        const startedAt = Date.now();
+        const requestBody = {
+          jsonrpc: '2.0',
+          params: {
+            db,
+            login: _serviceLogin,
+            password: _servicePassword,
+          },
+        };
 
-      const response = await fetch(`${baseUrl}/web/session/authenticate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include', // ← tells RN to store & send cookies
-        body: JSON.stringify(requestBody),
-      });
-
-      const text = await response.text();
-      let parsed: any;
-      try { parsed = JSON.parse(text); } catch { parsed = null; }
-      const durationMs = Date.now() - startedAt;
-      const authError = parsed?.error?.data?.message || parsed?.error?.message;
-
-      if (response.ok && !authError && parsed?.result?.uid) {
-        logInfo('api', 'http_response', buildHttpTraceData({
-          phase: 'response',
+        logInfo('api', 'http_request', buildHttpTraceData({
+          phase: 'request',
           channel: 'odoo_auth',
           method: 'POST',
           url: `${baseUrl}/web/session/authenticate`,
           requestId,
-          status: response.status,
-          durationMs,
-          responseBody: parsed,
+          requestHeaders: { 'Content-Type': 'application/json' },
+          requestBody,
         }));
-      } else {
+
+        const response = await fetch(`${baseUrl}/web/session/authenticate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // ← tells RN to store & send cookies
+          body: JSON.stringify(requestBody),
+        });
+
+        const text = await response.text();
+        let parsed: any;
+        try { parsed = JSON.parse(text); } catch { parsed = null; }
+        const durationMs = Date.now() - startedAt;
+        const authError = parsed?.error?.data?.message || parsed?.error?.message;
+
+        if (response.ok && !authError && parsed?.result?.uid) {
+          logInfo('api', 'http_response', buildHttpTraceData({
+            phase: 'response',
+            channel: 'odoo_auth',
+            method: 'POST',
+            url: `${baseUrl}/web/session/authenticate`,
+            requestId,
+            status: response.status,
+            durationMs,
+            responseBody: parsed,
+          }));
+          _uid = parsed.result.uid;
+          _authenticated = true;
+          _authenticatedDb = db;
+          console.log(`[odooSession] Authenticated as uid=${_uid}`);
+          return true;
+        }
+
         logWarn('api', 'http_error', buildHttpTraceData({
           phase: 'error',
           channel: 'odoo_auth',
@@ -128,18 +152,13 @@ async function authenticate(): Promise<boolean> {
           responseBody: parsed,
           errorMessage: authError || 'Authentication failed',
         }));
-      }
 
-      if (parsed?.error) {
-        console.warn('[odooSession] Auth error:', parsed.error?.data?.message || parsed.error?.message);
-        return false;
-      }
+        if (authError !== 'Database not found.') {
+          console.warn('[odooSession] Auth error:', authError);
+          return false;
+        }
 
-      if (parsed?.result?.uid) {
-        _uid = parsed.result.uid;
-        _authenticated = true;
-        console.log(`[odooSession] Authenticated as uid=${_uid}`);
-        return true;
+        console.warn(`[odooSession] Auth database not found: ${db}`);
       }
 
       console.warn('[odooSession] Auth failed: no uid in response');
@@ -338,7 +357,7 @@ export async function sessionRpc<T = unknown>(
         params: {
           service: 'object',
           method: 'execute_kw',
-          args: [DEFAULT_DB, _uid, _servicePassword, model, method, args, kwargs],
+          args: [_authenticatedDb || _configuredDb, _uid, _servicePassword, model, method, args, kwargs],
         },
       };
 
@@ -406,4 +425,5 @@ export function clearOdooSession() {
   _authenticated = false;
   _uid = null;
   _authenticating = null;
+  _authenticatedDb = null;
 }

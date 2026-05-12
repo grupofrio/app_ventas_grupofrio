@@ -16,7 +16,12 @@
  */
 
 import { odooRead, odooRpc } from './odooRpc';
-import { postRpc } from './api';
+import { postRest } from './api';
+import {
+  disableServerPricingEndpointIfMissing,
+  markServerPricingEndpointAvailable,
+  shouldTryServerPricingEndpoint,
+} from './serverPricingEndpoint';
 import {
   buildPartnerPricelistCandidates,
   computeRulePrice,
@@ -111,6 +116,8 @@ interface PricingOptions {
   companyId?: number | null;
   fallbackPricelistId?: number | null;
 }
+
+const GF_BASE = 'gf/logistics/api/employee';
 
 function resolveFallbackPricelistId(options?: PricingOptions): number | null {
   if (typeof options?.fallbackPricelistId === 'number' && options.fallbackPricelistId > 0) {
@@ -394,14 +401,58 @@ function findMatchingRule(
  * Returns Map<productId, customerPrice> or null if the endpoint is unavailable.
  */
 async function fetchServerSidePrices(
-  _partnerId: number,
-  _products: Array<{ id: number; list_price: number }>,
+  partnerId: number,
+  products: Array<{ id: number; list_price: number }>,
 ): Promise<Map<number, number> | null> {
-  // truck_stock returns warehouse-level catalog prices, not partner-specific
-  // prices, so it can't replace a customer pricing endpoint. Falls through to
-  // client-side pricelist computation, which correctly uses
-  // property_product_pricelist fetched via search_read.
-  return null;
+  if (!shouldTryServerPricingEndpoint()) return null;
+
+  const productIds = products
+    .map((product) => product.id)
+    .filter((id) => typeof id === 'number' && Number.isFinite(id) && id > 0);
+  if (partnerId <= 0 || productIds.length === 0) return null;
+
+  try {
+    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, {
+      partner_id: partnerId,
+      product_ids: productIds,
+    });
+    const data = result?.data !== undefined ? result.data : result;
+    const rawPrices = data?.prices ?? data?.price_map ?? data?.items ?? data;
+    const productById = new Map(products.map((product) => [product.id, product]));
+    const priceMap = new Map<number, number>();
+
+    function addPrice(productId: unknown, price: unknown): void {
+      if (typeof productId !== 'number' || !Number.isFinite(productId) || productId <= 0) return;
+      if (typeof price !== 'number' || !Number.isFinite(price)) return;
+      const product = productById.get(productId);
+      if (!product) return;
+      if (Math.abs(price - product.list_price) > 0.01) {
+        priceMap.set(productId, price);
+      }
+    }
+
+    if (Array.isArray(rawPrices)) {
+      rawPrices.forEach((row) => {
+        addPrice(
+          row?.product_id ?? row?.id,
+          row?.price ?? row?.price_unit ?? row?.unit_price,
+        );
+      });
+    } else if (rawPrices && typeof rawPrices === 'object') {
+      Object.entries(rawPrices).forEach(([productId, price]) => {
+        addPrice(Number(productId), price);
+      });
+    } else {
+      return null;
+    }
+
+    markServerPricingEndpointAvailable();
+    return priceMap;
+  } catch (error) {
+    if (__DEV__) console.warn('[pricelist] pricing/by_partner unavailable, falling back:', error);
+    disableServerPricingEndpointIfMissing(error);
+    return null;
+  }
 }
 
 /**

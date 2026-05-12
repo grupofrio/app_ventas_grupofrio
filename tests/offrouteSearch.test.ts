@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict';
 
 interface OffrouteSearchModule {
+  BASIC_CUSTOMER_FIELDS: string[];
+  CUSTOMER_FIELDS: string[];
+  buildCustomerSearchDomain: (query: string, analyticPlazaId?: number | null) => unknown[];
+  readCustomersWithFieldFallback: (
+    readers: {
+      rpc: (fields: string[]) => Promise<Array<{
+        id: number;
+        name: string;
+        phone?: string;
+      }>>;
+      read: (fields: string[]) => Promise<Array<{
+        id: number;
+        name: string;
+        phone?: string;
+      }>>;
+    },
+  ) => Promise<Array<{
+    id: number;
+    name: string;
+    phone?: string;
+  }>>;
   buildOffrouteResults: (
     customers: Array<{
       id: number;
@@ -95,6 +116,43 @@ function testMixedResultsKeepTypes(module: OffrouteSearchModule) {
   );
 }
 
+async function testCustomerFieldFallbackKeepsResults(module: OffrouteSearchModule) {
+  const calls: string[][] = [];
+  const rows = await module.readCustomersWithFieldFallback({
+    rpc: async (fields) => {
+      calls.push(fields);
+      if (fields.includes('property_product_pricelist')) {
+        throw new Error('Invalid field property_product_pricelist');
+      }
+      return [{ id: 20, name: 'Cliente fallback', phone: '555' }];
+    },
+    read: async () => {
+      throw new Error('should not need /get_records when basic rpc works');
+    },
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].name, 'Cliente fallback');
+  assert.deepEqual(calls, [module.CUSTOMER_FIELDS, module.BASIC_CUSTOMER_FIELDS]);
+}
+
+function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) {
+  const domain = module.buildCustomerSearchDomain('demo', 820);
+
+  assert.deepEqual(domain, [
+    '&',
+    ['x_analytic_un_id', '=', 820],
+    '&',
+    ['customer_rank', '>', 0],
+    '|', '|', '|', '|',
+    ['name', 'ilike', 'demo'],
+    ['phone', 'ilike', 'demo'],
+    ['mobile', 'ilike', 'demo'],
+    ['vat', 'ilike', 'demo'],
+    ['email', 'ilike', 'demo'],
+  ]);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -106,6 +164,8 @@ async function main() {
   testCustomerCarriesPricelist(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
+  await testCustomerFieldFallbackKeepsResults(module);
+  testCustomerDomainSearchesMobileAndEmail(module);
   console.log('offroute search tests: ok');
 }
 

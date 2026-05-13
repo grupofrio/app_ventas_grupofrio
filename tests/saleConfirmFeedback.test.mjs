@@ -50,6 +50,11 @@ function main() {
     /defaultPaymentJournalId/,
     'La venta debe leer el diario de pago configurado para el empleado/CEDIS',
   );
+  assert.doesNotMatch(
+    saleScreen,
+    /hasCashPaymentJournal|diario de efectivo del CEDIS|Configura el diario de efectivo/,
+    'La venta en efectivo no debe bloquearse si el login no incluyo default_payment_journal_id; backend resuelve el diario del empleado',
+  );
   assert.match(
     saleScreen,
     /salePaymentMethod === 'cash'[\s\S]*?enqueue\('payment'/,

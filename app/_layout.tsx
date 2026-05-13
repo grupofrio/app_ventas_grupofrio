@@ -21,6 +21,7 @@ import { useAuthStore } from '../src/stores/useAuthStore';
 import { hasAuthTokens } from '../src/services/api';
 import { setServiceCredentials } from '../src/services/odooSession';
 import { colors } from '../src/theme/tokens';
+import { GlobalHomeButton } from '../src/components/ui/GlobalHomeButton';
 // Importamos con cuidado estos servicios
 import { rehydrateAppState } from '../src/services/rehydrate';
 import { startConnectivityMonitor, checkConnectivity } from '../src/services/connectivity';
@@ -139,6 +140,7 @@ export default function RootLayout() {
     <>
       <StatusBar style="light" backgroundColor={colors?.bg || '#000'} />
       <Slot />
+      <GlobalHomeButton />
     </>
   );
 }

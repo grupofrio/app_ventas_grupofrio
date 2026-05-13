@@ -10,7 +10,7 @@ import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { typography, fonts } from '../src/theme/typography';
+import { fonts } from '../src/theme/typography';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
@@ -61,6 +61,20 @@ export default function RefillScreen() {
         return [...prev, { productId, productName, qty: delta }];
       }
       return prev;
+    });
+  }
+
+  function setRefillQty(productId: number, productName: string, qtyText: string) {
+    const qty = Number(qtyText.replace(/\D/g, ''));
+    setLines((prev) => {
+      const existing = prev.find((l) => l.productId === productId);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return existing ? prev.filter((l) => l.productId !== productId) : prev;
+      }
+      if (existing) {
+        return prev.map((l) => l.productId === productId ? { ...l, qty } : l);
+      }
+      return [...prev, { productId, productName, qty }];
     });
   }
 
@@ -144,7 +158,16 @@ export default function RefillScreen() {
                   onPress={() => updateQty(p.id, p.name, -1)}
                   style={styles.qtyBtn}
                 />
-                <Text style={styles.qtyValue}>{line?.qty || 0}</Text>
+                <TextInput
+                  accessibilityLabel={`Cantidad a cargar de ${p.name}`}
+                  style={styles.qtyValue}
+                  value={String(line?.qty || 0)}
+                  onChangeText={(text) => setRefillQty(p.id, p.name, text)}
+                  keyboardType="number-pad"
+                  inputMode="numeric"
+                  selectTextOnFocus
+                  maxLength={4}
+                />
                 <Button
                   label="+"
                   variant="secondary"
@@ -203,7 +226,9 @@ const styles = StyleSheet.create({
   qtyBtn: { width: 30, minHeight: 30, paddingHorizontal: 0 },
   qtyValue: {
     fontFamily: fonts.monoBold, fontSize: 15, fontWeight: '700',
-    color: colors.text, minWidth: 24, textAlign: 'center',
+    color: colors.text, minWidth: 48, height: 34, textAlign: 'center',
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.borderLight,
+    borderRadius: radii.button, paddingHorizontal: 6, paddingVertical: 0,
   },
   textArea: {
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,

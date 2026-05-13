@@ -106,10 +106,8 @@ export default function SaleScreen() {
   });
   const hasAnalyticSelection = !!implicitAnalytics.analytic_plaza_id && !!implicitAnalytics.analytic_un_id;
   const hasWarehouse = typeof warehouseId === 'number' && warehouseId > 0;
-  const hasCashPaymentJournal = salePaymentMethod !== 'cash'
-    || (typeof defaultPaymentJournalId === 'number' && defaultPaymentJournalId > 0);
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
-                     && hasAnalyticSelection && hasWarehouse && hasCashPaymentJournal
+                     && hasAnalyticSelection && hasWarehouse
                      && hasStock && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
@@ -133,7 +131,6 @@ export default function SaleScreen() {
       if (!salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       if (!hasWarehouse) missing.push('almacén del empleado');
-      if (!hasCashPaymentJournal) missing.push('diario de efectivo del CEDIS');
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
       return;
     }
@@ -430,7 +427,6 @@ export default function SaleScreen() {
             {hasStock && salePhotoTaken && !salePaymentMethod ? '💰 Selecciona pago' : ''}
             {hasStock && salePhotoTaken && salePaymentMethod && !implicitAnalytics.analytic_plaza_id ? '📍 Configura la plaza del empleado' : ''}
             {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && !hasWarehouse ? '🏬 Configura el almacén del empleado' : ''}
-            {hasStock && salePhotoTaken && salePaymentMethod === 'cash' && implicitAnalytics.analytic_plaza_id && hasWarehouse && !hasCashPaymentJournal ? '💵 Configura el diario de efectivo del CEDIS' : ''}
           </Text>
         )}
       </ScrollView>

@@ -64,20 +64,6 @@ export default function RefillScreen() {
     });
   }
 
-  function setRefillQty(productId: number, productName: string, qtyText: string) {
-    const qty = Number(qtyText.replace(/\D/g, ''));
-    setLines((prev) => {
-      const existing = prev.find((l) => l.productId === productId);
-      if (!Number.isFinite(qty) || qty <= 0) {
-        return existing ? prev.filter((l) => l.productId !== productId) : prev;
-      }
-      if (existing) {
-        return prev.map((l) => l.productId === productId ? { ...l, qty } : l);
-      }
-      return [...prev, { productId, productName, qty }];
-    });
-  }
-
   function handleSubmit() {
     if (lines.length === 0) {
       Alert.alert('Sin productos', 'Agrega al menos un producto');
@@ -158,16 +144,7 @@ export default function RefillScreen() {
                   onPress={() => updateQty(p.id, p.name, -1)}
                   style={styles.qtyBtn}
                 />
-                <TextInput
-                  accessibilityLabel={`Cantidad a cargar de ${p.name}`}
-                  style={styles.qtyValue}
-                  value={String(line?.qty || 0)}
-                  onChangeText={(text) => setRefillQty(p.id, p.name, text)}
-                  keyboardType="number-pad"
-                  inputMode="numeric"
-                  selectTextOnFocus
-                  maxLength={4}
-                />
+                <Text style={styles.qtyValue}>{line?.qty || 0}</Text>
                 <Button
                   label="+"
                   variant="secondary"
@@ -226,9 +203,7 @@ const styles = StyleSheet.create({
   qtyBtn: { width: 30, minHeight: 30, paddingHorizontal: 0 },
   qtyValue: {
     fontFamily: fonts.monoBold, fontSize: 15, fontWeight: '700',
-    color: colors.text, minWidth: 48, height: 34, textAlign: 'center',
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.borderLight,
-    borderRadius: radii.button, paddingHorizontal: 6, paddingVertical: 0,
+    color: colors.text, minWidth: 24, textAlign: 'center',
   },
   textArea: {
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,

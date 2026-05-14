@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -110,6 +110,11 @@ export default function SaleScreen() {
                      && hasAnalyticSelection && hasWarehouse
                      && hasStock && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
+
+  function setSaleQtyFromText(productId: number, qtyText: string) {
+    const digits = qtyText.replace(/\D/g, '');
+    updateSaleQty(productId, digits ? Number(digits) : 0);
+  }
 
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
@@ -271,7 +276,16 @@ export default function SaleScreen() {
                 >
                   <Text style={styles.qtyBtnText}>−</Text>
                 </TouchableOpacity>
-                <Text style={styles.qtyValue}>{line.qty}</Text>
+                <TextInput
+                  accessibilityLabel={`Piezas de ${line.productName}`}
+                  style={styles.qtyValue}
+                  value={String(line.qty)}
+                  onChangeText={(text) => setSaleQtyFromText(line.productId, text)}
+                  keyboardType="number-pad"
+                  inputMode="numeric"
+                  selectTextOnFocus
+                  maxLength={4}
+                />
                 <TouchableOpacity
                   style={styles.qtyBtn}
                   onPress={() => updateSaleQty(line.productId, line.qty + 1)}
@@ -471,7 +485,11 @@ const styles = StyleSheet.create({
   qtyValue: {
     fontFamily: fonts.monoBold,
     fontSize: 15, fontWeight: '700', color: colors.text,
-    minWidth: 24, textAlign: 'center',
+    minWidth: 48, height: 34, textAlign: 'center',
+    backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.borderLight,
+    borderRadius: radii.button,
+    paddingHorizontal: 6, paddingVertical: 0,
   },
   // Totals
   totalsCard: {

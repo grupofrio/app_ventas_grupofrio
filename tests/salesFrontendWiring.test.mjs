@@ -24,6 +24,10 @@ const analyticsScreen = readFileSync(
   resolve(REPO_ROOT, 'app/analytics.tsx'),
   'utf8',
 );
+const saleScreen = readFileSync(
+  resolve(REPO_ROOT, 'app/sale/[stopId].tsx'),
+  'utf8',
+);
 
 function main() {
   assert.match(
@@ -61,6 +65,22 @@ function main() {
     analyticsScreen,
     /label="VENTAS" value="\$0"/,
     'analytics no debe seguir pintando VENTAS en $0 fijo',
+  );
+
+  assert.match(
+    saleScreen,
+    /TextInput/,
+    'la pantalla de venta debe permitir capturar directamente la cantidad de piezas',
+  );
+  assert.match(
+    saleScreen,
+    /keyboardType="number-pad"/,
+    'el campo de piezas en venta debe abrir teclado numerico',
+  );
+  assert.match(
+    saleScreen,
+    /onChangeText=\{\(text\) => setSaleQtyFromText\(line\.productId, text\)\}/,
+    'la cantidad capturada debe actualizar la linea de venta',
   );
 
   console.log('sales frontend wiring tests: ok');

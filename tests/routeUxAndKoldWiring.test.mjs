@@ -8,6 +8,10 @@ const mapScreen = readFileSync(
   resolve(REPO_ROOT, 'app/map.tsx'),
   'utf8',
 );
+const routeScreen = readFileSync(
+  resolve(REPO_ROOT, 'app/(tabs)/route.tsx'),
+  'utf8',
+);
 const topBar = readFileSync(
   resolve(REPO_ROOT, 'src/components/ui/TopBar.tsx'),
   'utf8',
@@ -57,6 +61,17 @@ function main() {
     offrouteSearch,
     /x_analytic_un_id/,
     'la búsqueda de visita especial debe filtrar por plaza analítica',
+  );
+
+  assert.match(
+    routeScreen,
+    /Buscar cliente planificado/,
+    'la pantalla de ruta debe tener buscador de clientes planificados',
+  );
+  assert.match(
+    routeScreen,
+    /filterPlannedStopsBySearch\(sorted,\s*trimmedSearchQuery\)/,
+    'el buscador de ruta debe filtrar con el helper de clientes planificados',
   );
 
   assert.match(

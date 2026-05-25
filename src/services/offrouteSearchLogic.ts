@@ -58,8 +58,6 @@ export const CUSTOMER_FIELDS = [
 export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
   const q = query.trim();
   const domain: unknown[] = [
-    '&',
-    ['customer_rank', '>', 0],
     '|', '|', '|', '|',
     ['name', 'ilike', q],
     ['phone', 'ilike', q],

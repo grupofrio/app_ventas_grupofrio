@@ -17,7 +17,8 @@ import {
   mergeBackendStopsWithDrafts,
   stampMissingCreatedAt,
 } from '../services/offrouteDrafts';
-import { logInfo } from '../utils/logger';
+import { shouldKeepCachedStopsAfterEmptyRefresh } from '../services/routeRefreshPolicy';
+import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
 
@@ -75,8 +76,27 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const visitStore = useVisitStore.getState();
+      const cachedPlan = get().plan;
+      const cachedStops = get().stops;
       const plan = await getMyPlan();
       if (!plan) {
+        if (shouldKeepCachedStopsAfterEmptyRefresh({
+          cachedPlan,
+          cachedStops,
+          nextPlan: null,
+          nextStops: [],
+        })) {
+          logWarn('general', 'route_refresh_kept_cached_stops', {
+            reason: 'my_plan_empty',
+            cached_plan_id: cachedPlan?.plan_id ?? null,
+            cached_stop_count: cachedStops.length,
+          });
+          set({
+            isLoading: false,
+            error: 'No se pudo actualizar la ruta; mostrando ruta guardada',
+          });
+          return;
+        }
         if (visitStore.currentStopId !== null) {
           visitStore.resetVisit();
         }
@@ -85,12 +105,28 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       }
 
       const backendStops = await getPlanStops(plan.plan_id);
+      const keepCachedStops = shouldKeepCachedStopsAfterEmptyRefresh({
+        cachedPlan,
+        cachedStops,
+        nextPlan: plan,
+        nextStops: backendStops,
+      });
 
       // Preserve in-flight offroute drafts across refresh. Without this
       // merge, a backend refresh in the middle of an offroute sale would
       // wipe the virtual stop the user is currently operating on.
       // Stale drafts (TTL in offrouteDrafts.ts) are dropped here.
-      const rawStops = mergeBackendStopsWithDrafts(backendStops, get().stops);
+      const rawStops = keepCachedStops
+        ? cachedStops
+        : mergeBackendStopsWithDrafts(backendStops, cachedStops);
+
+      if (keepCachedStops) {
+        logWarn('general', 'route_refresh_kept_cached_stops', {
+          reason: 'plan_stops_empty',
+          plan_id: plan.plan_id,
+          cached_stop_count: cachedStops.length,
+        });
+      }
 
       // F5: Load KOLD intelligence for all route partners
       const partnerIds = [...new Set(rawStops.map((s) => s.customer_id).filter(Boolean))];
@@ -135,6 +171,9 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         plan,
         stops,
         isLoading: false,
+        error: keepCachedStops
+          ? 'No se pudo actualizar paradas; mostrando ruta guardada'
+          : null,
         lastSync: Date.now(),
         stopsCompleted: completed,
         stopsTotal: total,

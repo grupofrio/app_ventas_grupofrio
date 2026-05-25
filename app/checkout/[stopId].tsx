@@ -35,7 +35,7 @@ export default function CheckoutScreen() {
   const removeStop = useRouteStore((s) => s.removeStop);
 
   const {
-    elapsedSeconds, saleTotal, saleTotalKg, salePhotoTaken,
+    elapsedSeconds, saleTotal, saleTotalKg, salePhotoTaken, salePhotoUris,
     noSaleReasonId, saleOperationId, resetVisit,
   } = useVisitStore();
 
@@ -263,9 +263,9 @@ export default function CheckoutScreen() {
             </View>
           )}
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Foto de entrega</Text>
+            <Text style={styles.metricLabel}>Fotos de entrega</Text>
             {salePhotoTaken ? (
-              <Badge label="✓ Capturada" variant="green" />
+              <Badge label={`${salePhotoUris.length} capturada${salePhotoUris.length === 1 ? '' : 's'}`} variant="green" />
             ) : (
               <Badge label="Sin foto" variant="dim" />
             )}

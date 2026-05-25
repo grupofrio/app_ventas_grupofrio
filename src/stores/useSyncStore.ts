@@ -55,6 +55,7 @@ import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
+import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 
 // ═══ Constants ═══
 
@@ -821,12 +822,15 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'customer_create':
-    case 'customer_update':
       await postRpc('/api/create_update', {
         model: 'res.partner',
-        method: type === 'customer_create' ? 'create' : 'write',
+        method: 'create',
         dict: payload,
       });
+      break;
+
+    case 'customer_update':
+      await syncCustomerContactUpdate(payload as Record<string, unknown>);
       break;
 
     default:

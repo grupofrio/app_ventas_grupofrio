@@ -401,7 +401,8 @@ export async function uploadStopImage(
 // Backend contract (already deployed):
 //   POST /gf/logistics/api/employee/sales/create
 //     Body:  { operation_id|x_operation_id, partner_id, lines,
-//              stop_id?, warehouse_id?, pricelist_id?, note?, _client_meta? }
+//              stop_id?, warehouse_id?, pricelist_id?, create_invoice?,
+//              note?, _client_meta? }
 //     Line:  { product_id, quantity, price_unit?, discount? }
 //
 //   POST /gf/logistics/api/employee/payments/create

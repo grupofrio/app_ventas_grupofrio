@@ -94,6 +94,8 @@ export function buildSalesCreatePayload(payload: Record<string, unknown>): Recor
       : buildAnalyticDistribution(analyticPlazaId, analyticUnId);
   if (analyticDistribution) contractPayload.analytic_distribution = analyticDistribution;
 
+  if (payload.create_invoice === true) contractPayload.create_invoice = true;
+
   const note = asNonEmptyString(payload.note);
   if (note) contractPayload.note = note;
 

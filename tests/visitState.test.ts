@@ -30,12 +30,14 @@ interface VisitStateModule {
     analyticUnId: null;
     salePhotoTaken: false;
     salePhotoUri: null;
+    salePhotoUris: [];
     noSaleReasonId: null;
     noSaleReasonLabel: '';
     noSaleCompetitor: null;
     noSaleNotes: '';
     noSalePhotoTaken: false;
     noSalePhotoUri: null;
+    noSalePhotoUris: [];
     saleConfirmed: false;
     saleOperationId: null;
   };
@@ -64,12 +66,14 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.equal(started.analyticUnId, null);
   assert.equal(started.salePhotoTaken, false);
   assert.equal(started.salePhotoUri, null);
+  assert.deepEqual(started.salePhotoUris, []);
   assert.equal(started.noSaleReasonId, null);
   assert.equal(started.noSaleReasonLabel, '');
   assert.equal(started.noSaleCompetitor, null);
   assert.equal(started.noSaleNotes, '');
   assert.equal(started.noSalePhotoTaken, false);
   assert.equal(started.noSalePhotoUri, null);
+  assert.deepEqual(started.noSalePhotoUris, []);
   assert.equal(started.saleConfirmed, false);
   assert.equal(started.saleOperationId, null);
 }

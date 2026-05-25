@@ -22,6 +22,7 @@ import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { NO_SALE_REASONS } from '../../src/services/noSaleReasons';
+import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 
 const COMPETITORS = ['Crystal', 'Ice Factory', 'Pureza', 'Generico'];
 
@@ -34,7 +35,7 @@ export default function NoSaleScreen() {
   const removeStop = useRouteStore((s) => s.removeStop);
 
   const {
-    noSaleReasonId, noSaleCompetitor, noSaleNotes, noSalePhotoTaken,
+    noSaleReasonId, noSaleCompetitor, noSaleNotes, noSalePhotoTaken, noSalePhotoUris,
     setNoSaleReason, setNoSaleCompetitor, setNoSaleNotes, setNoSalePhoto,
     setPhase, resetVisit, offrouteVisitId,
   } = useVisitStore();
@@ -80,6 +81,15 @@ export default function NoSaleScreen() {
     router.replace('/(tabs)' as never);
   }
 
+  async function handleAddNoSalePhoto() {
+    const photo = await takePhoto();
+    if (photo) {
+      setNoSalePhoto(photo.localUri);
+    } else {
+      Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
+    }
+  }
+
   async function handleSave() {
     if (!canSave) {
       const missing = [];
@@ -106,23 +116,31 @@ export default function NoSaleScreen() {
         : null;
 
       if (!isOnline) {
+        let closeSyncId: string | null = null;
         if (closePayload) {
-          enqueue('offroute_visit_close', {
+          closeSyncId = enqueue('offroute_visit_close', {
             ...closePayload,
             timestamp: Date.now(),
           });
         }
+        enqueueVisitPhotos({
+          stopId: stop.id,
+          photoUris: noSalePhotoUris,
+          enqueue,
+          dependsOn: closeSyncId ? [closeSyncId] : undefined,
+        });
         finalizeNoSaleLocally();
         return;
       }
 
+      let closeSyncId: string | null = null;
       if (closePayload) {
         try {
           await closeOffrouteVisit(closePayload);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
           if (isRetryableSyncErrorMessage(message)) {
-            enqueue('offroute_visit_close', {
+            closeSyncId = enqueue('offroute_visit_close', {
               ...closePayload,
               timestamp: Date.now(),
             });
@@ -135,19 +153,15 @@ export default function NoSaleScreen() {
         }
       }
 
+      enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: noSalePhotoUris,
+        enqueue,
+        dependsOn: closeSyncId ? [closeSyncId] : undefined,
+      });
       finalizeNoSaleLocally();
       return;
     }
-
-    const noSaleId = enqueue('no_sale', {
-      stop_id: stop.id,
-      partner_id: partnerId,
-      reason_id: selectedReasonId,
-      reason_code: reason?.code,
-      competitor: selectedCompetitor,
-      notes,
-      timestamp: Date.now(),
-    });
 
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
@@ -176,6 +190,12 @@ export default function NoSaleScreen() {
         },
         { dependsOn: [noSaleId] },
       );
+      enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: noSalePhotoUris,
+        enqueue,
+        dependsOn: [noSaleId],
+      });
     };
 
     if (!isOnline) {
@@ -190,6 +210,11 @@ export default function NoSaleScreen() {
         (selectedReasonId as number) || 1,
         `No-venta: ${reason?.code || ''} ${notes || ''}`.trim(),
       );
+      enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: noSalePhotoUris,
+        enqueue,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo registrar la no-venta.';
       if (isRetryableSyncErrorMessage(message)) {
@@ -312,20 +337,16 @@ export default function NoSaleScreen() {
           <View style={styles.photoDone}>
             <Text style={{ fontSize: 28 }}>📸</Text>
             <Text style={{ fontSize: 12, color: colors.success, fontWeight: '600' }}>
-              ✓ Foto capturada
+              {noSalePhotoUris.length} {noSalePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
+            <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddNoSalePhoto}>
+              <Text style={styles.addPhotoText}>Agregar otra foto</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
             style={styles.photoReq}
-            onPress={async () => {
-              const photo = await takePhoto();
-              if (photo) {
-                setNoSalePhoto(photo.localUri);
-              } else {
-                Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
-              }
-            }}
+            onPress={handleAddNoSalePhoto}
           >
             <Text style={{ fontSize: 32 }}>📸</Text>
             <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
@@ -392,5 +413,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardLighter,
     borderWidth: 2, borderColor: colors.success,
     borderRadius: radii.card, padding: 14, alignItems: 'center', gap: 4,
+  },
+  addPhotoBtn: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.button,
+    backgroundColor: colors.primaryAlpha12,
+  },
+  addPhotoText: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '700',
   },
 });

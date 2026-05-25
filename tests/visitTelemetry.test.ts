@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const REPO_ROOT = process.cwd();
+const REPO_ROOT = resolve();
 
 interface VisitTelemetryModule {
   visitTelemetryCounters: {

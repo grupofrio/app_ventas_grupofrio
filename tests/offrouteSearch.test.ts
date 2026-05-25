@@ -142,8 +142,6 @@ function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) 
   assert.deepEqual(domain, [
     '&',
     ['x_analytic_un_id', '=', 820],
-    '&',
-    ['customer_rank', '>', 0],
     '|', '|', '|', '|',
     ['name', 'ilike', 'demo'],
     ['phone', 'ilike', 'demo'],

@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -19,6 +19,7 @@ import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePresentation';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
+import { filterPlannedStopsBySearch } from '../../src/services/routeStops';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -37,6 +38,7 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
 
 export default function RouteScreen() {
   const router = useRouter();
+  const [searchQuery, setSearchQuery] = React.useState('');
   const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
@@ -60,6 +62,12 @@ export default function RouteScreen() {
     if (da !== db) return da - db;
     return (a.route_sequence || 0) - (b.route_sequence || 0);
   });
+  const trimmedSearchQuery = searchQuery.trim();
+  const hasSearchQuery = trimmedSearchQuery.length > 0;
+  const plannedStops = filterPlannedStopsBySearch(sorted, '');
+  const visibleStops = hasSearchQuery
+    ? filterPlannedStopsBySearch(sorted, trimmedSearchQuery)
+    : sorted;
   const planTypeLabel = getPlanTypeLabel(plan?.generation_mode);
 
   return (
@@ -128,13 +136,46 @@ export default function RouteScreen() {
           ))}
         </View>
 
+        <View style={styles.searchBox}>
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Buscar cliente planificado"
+            placeholderTextColor={colors.textDim}
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+            style={styles.searchInput}
+          />
+          {hasSearchQuery ? (
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              style={styles.clearSearchButton}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Limpiar busqueda"
+            >
+              <Text style={styles.clearSearchText}>×</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        {hasSearchQuery ? (
+          <Text style={styles.searchCount}>
+            {visibleStops.length} de {plannedStops.length} planificados
+          </Text>
+        ) : null}
+
         {/* Stop list */}
-        {sorted.length === 0 ? (
+        {visibleStops.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={typography.dim}>Sin paradas asignadas</Text>
+            <Text style={typography.dim}>
+              {hasSearchQuery
+                ? 'Sin clientes planificados que coincidan'
+                : 'Sin paradas asignadas'}
+            </Text>
           </View>
         ) : (
-          sorted.map((stop, idx) => {
+          visibleStops.map((stop, idx) => {
             const isDone = ['done', 'not_visited', 'closed'].includes(stop.state);
             const badge = getStopBadge(stop);
             const stopTypeLabel = getStopTypeLabel(stop);
@@ -182,6 +223,34 @@ const styles = StyleSheet.create({
   statItem: { alignItems: 'center' },
   statLabel: { fontSize: 10, color: colors.textDim, marginBottom: 2 },
   statValue: { fontFamily: fonts.monoBold, fontSize: 14, fontWeight: '700', color: colors.text },
+  searchBox: {
+    backgroundColor: colors.card,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 44,
+    color: colors.text,
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  clearSearchButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+  },
+  clearSearchText: { color: colors.textDim, fontSize: 20, lineHeight: 22, fontWeight: '700' },
+  searchCount: { color: colors.textDim, fontSize: 12, marginBottom: 8 },
   card: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 12, paddingHorizontal: 14, marginBottom: 8, borderLeftWidth: 4,

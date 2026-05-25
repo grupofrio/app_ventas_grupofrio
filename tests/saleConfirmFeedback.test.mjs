@@ -62,6 +62,11 @@ function main() {
   );
   assert.match(
     saleScreen,
+    /create_invoice:\s*salePaymentMethod === 'cash'/,
+    'Una venta en efectivo debe pedir al backend generar el account.move',
+  );
+  assert.match(
+    saleScreen,
     /enqueue\('payment'[\s\S]*?amount: total[\s\S]*?journal_id: defaultPaymentJournalId[\s\S]*?\{ dependsOn: \[saleSyncId\] \}/,
     'El pago automatico debe usar el total de la venta, el diario del CEDIS y depender de la venta',
   );

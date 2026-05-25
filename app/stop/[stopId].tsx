@@ -32,7 +32,7 @@ import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { getStopTypeLabel } from '../../src/services/routePresentation';
 import { logInfo } from '../../src/utils/logger';
 import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
-import { getLeadActionVisibility } from '../../src/services/leadVisit';
+import { getLeadActionVisibility, getLeadPartnerId } from '../../src/services/leadVisit';
 
 export default function StopDetailScreen() {
   const { stopId, giftSuccess } = useLocalSearchParams<{ stopId: string; giftSuccess?: string }>();
@@ -116,6 +116,9 @@ export default function StopDetailScreen() {
     : visitGuard.primaryActionLabel;
   const stopTypeLabel = getStopTypeLabel(stop);
   const actionVisibility = getLeadActionVisibility(stop);
+  const editablePartnerId = stop._entityType === 'lead'
+    ? getLeadPartnerId(stop)
+    : stop.customer_id;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -132,27 +135,49 @@ export default function StopDetailScreen() {
           />
         ) : null}
 
+        <Card>
+          <View style={styles.customerHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={typography.screenTitle}>{stop.customer_name}</Text>
+              {stop.customer_ref && (
+                <Text style={typography.dim}>Ref: {stop.customer_ref}</Text>
+              )}
+              <Button
+                label="Editar cliente"
+                variant="secondary"
+                small
+                onPress={() => {
+                  if (!editablePartnerId) {
+                    Alert.alert('Cliente no disponible', 'Primero completa Datos para crear o enlazar el contacto.');
+                    return;
+                  }
+                  router.push({
+                    pathname: '/customer/[partnerId]',
+                    params: {
+                      partnerId: String(editablePartnerId),
+                      stopId: String(stop.id),
+                    },
+                  } as never);
+                }}
+                style={{ alignSelf: 'flex-start', marginTop: 10 }}
+              />
+            </View>
+          </View>
+          {stopTypeLabel && (
+            <View style={{ marginTop: 2 }}>
+              <Badge
+                label={stopTypeLabel}
+                variant={stop._entityType === 'lead' ? 'orange' : 'dim'}
+              />
+            </View>
+          )}
+        </Card>
+
         {/* KoldScore card — actionable intelligence */}
         {hasScore ? (
           <ScoreCard score={stop._koldScore!} />
         ) : (
           <Card>
-            <View style={styles.customerHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={typography.screenTitle}>{stop.customer_name}</Text>
-                {stop.customer_ref && (
-                  <Text style={typography.dim}>Ref: {stop.customer_ref}</Text>
-                )}
-              </View>
-            </View>
-            {stopTypeLabel && (
-              <View style={{ marginBottom: 8 }}>
-                <Badge
-                  label={stopTypeLabel}
-                  variant={stop._entityType === 'lead' ? 'orange' : 'dim'}
-                />
-              </View>
-            )}
             {!scoreModuleAvailable && (
               <Text style={styles.moduleNote}>
                 KoldScore no disponible. Instala el modulo para ver inteligencia comercial.

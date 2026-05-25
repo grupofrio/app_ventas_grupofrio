@@ -32,6 +32,7 @@ import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -55,7 +56,7 @@ export default function SaleScreen() {
   const productsLastSync = useProductStore((s) => s.lastSync);
 
   const {
-    saleLines, salePaymentMethod, salePhotoTaken,
+    saleLines, salePaymentMethod, salePhotoTaken, salePhotoUris,
     updateSaleQty, setSalePayment,
     saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit, offrouteVisitId,
   } = useVisitStore();
@@ -114,6 +115,15 @@ export default function SaleScreen() {
   function setSaleQtyFromText(productId: number, qtyText: string) {
     const digits = qtyText.replace(/\D/g, '');
     updateSaleQty(productId, digits ? Number(digits) : 0);
+  }
+
+  async function handleAddSalePhoto() {
+    const photo = await takePhoto();
+    if (photo) {
+      useVisitStore.getState().setSalePhoto(photo.localUri);
+    } else {
+      Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
+    }
   }
 
   async function handleConfirm() {
@@ -175,6 +185,7 @@ export default function SaleScreen() {
       analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
       analytic_un_id: implicitAnalytics.analytic_un_id,
       analytic_distribution: implicitAnalytics.analytic_distribution,
+      create_invoice: salePaymentMethod === 'cash',
       lines: saleLines.map((l) => ({
         product_id: l.productId,
         quantity: l.qty,
@@ -201,6 +212,12 @@ export default function SaleScreen() {
     // the stop before the sale exists server-side.
     const saleSyncId = enqueue('sale_order', payload);
     useVisitStore.setState({ saleOperationId: saleSyncId });
+    enqueueVisitPhotos({
+      stopId: stop.id,
+      photoUris: salePhotoUris,
+      enqueue,
+      dependsOn: [saleSyncId],
+    });
 
     if (salePaymentMethod === 'cash') {
       enqueue('payment', {
@@ -381,20 +398,16 @@ export default function SaleScreen() {
           <View style={styles.photoDone}>
             <Text style={{ fontSize: 28 }}>📸</Text>
             <Text style={{ fontSize: 12, color: colors.success, fontWeight: '600' }}>
-              ✓ Foto capturada
+              {salePhotoUris.length} {salePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
+            <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddSalePhoto}>
+              <Text style={styles.addPhotoText}>Agregar otra foto</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
             style={styles.photoReq}
-            onPress={async () => {
-              const photo = await takePhoto();
-              if (photo) {
-                useVisitStore.getState().setSalePhoto(photo.localUri);
-              } else {
-                Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
-              }
-            }}
+            onPress={handleAddSalePhoto}
           >
             <Text style={{ fontSize: 32 }}>📸</Text>
             <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
@@ -538,6 +551,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardLighter,
     borderWidth: 2, borderColor: colors.success,
     borderRadius: radii.card, padding: 14, alignItems: 'center', gap: 4,
+  },
+  addPhotoBtn: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.button,
+    backgroundColor: colors.primaryAlpha12,
+  },
+  addPhotoText: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '700',
   },
   validationHint: {
     fontSize: 11, color: colors.warning, textAlign: 'center', marginTop: 8,

@@ -11,6 +11,7 @@ import { GFStop } from '../types/plan';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { PersistedVisitSnapshot, buildVisitSnapshot } from '../services/visitPersistence';
 import { buildStartedVisitState, createInitialVisitState } from '../services/visitState';
+import { appendVisitPhotoUri } from '../services/visitPhotos';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -43,6 +44,7 @@ interface VisitState {
   analyticUnId: number | null;
   salePhotoTaken: boolean;
   salePhotoUri: string | null;
+  salePhotoUris: string[];
 
   // No-sale data
   noSaleReasonId: number | null;
@@ -51,6 +53,7 @@ interface VisitState {
   noSaleNotes: string;
   noSalePhotoTaken: boolean;
   noSalePhotoUri: string | null;
+  noSalePhotoUris: string[];
 
   // Actions
   startVisit: (stop: GFStop, lat: number, lon: number) => void;
@@ -181,13 +184,21 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   setSalePayment: (method) => set({ salePaymentMethod: method }),
   setSaleAnalyticPlaza: (analyticPlazaId) => set({ analyticPlazaId }),
   setSaleAnalyticUn: (analyticUnId) => set({ analyticUnId }),
-  setSalePhoto: (uri) => set({ salePhotoTaken: true, salePhotoUri: uri }),
+  setSalePhoto: (uri) => set((state) => ({
+    salePhotoTaken: true,
+    salePhotoUri: uri,
+    salePhotoUris: appendVisitPhotoUri(state.salePhotoUris, uri),
+  })),
 
   // No-sale
   setNoSaleReason: (id, label) => set({ noSaleReasonId: id, noSaleReasonLabel: label }),
   setNoSaleCompetitor: (brand) => set({ noSaleCompetitor: brand }),
   setNoSaleNotes: (notes) => set({ noSaleNotes: notes }),
-  setNoSalePhoto: (uri) => set({ noSalePhotoTaken: true, noSalePhotoUri: uri }),
+  setNoSalePhoto: (uri) => set((state) => ({
+    noSalePhotoTaken: true,
+    noSalePhotoUri: uri,
+    noSalePhotoUris: appendVisitPhotoUri(state.noSalePhotoUris, uri),
+  })),
 
   // Timer
   tickTimer: () => {

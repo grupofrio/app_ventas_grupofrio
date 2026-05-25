@@ -15,12 +15,14 @@ export interface VisitDataState {
   analyticUnId: number | null;
   salePhotoTaken: boolean;
   salePhotoUri: string | null;
+  salePhotoUris: string[];
   noSaleReasonId: number | null;
   noSaleReasonLabel: string;
   noSaleCompetitor: string | null;
   noSaleNotes: string;
   noSalePhotoTaken: boolean;
   noSalePhotoUri: string | null;
+  noSalePhotoUris: string[];
   saleConfirmed: boolean;
   saleOperationId: string | null;
 }
@@ -41,12 +43,14 @@ export function createInitialVisitState(): VisitDataState {
     analyticUnId: null,
     salePhotoTaken: false,
     salePhotoUri: null,
+    salePhotoUris: [],
     noSaleReasonId: null,
     noSaleReasonLabel: '',
     noSaleCompetitor: null,
     noSaleNotes: '',
     noSalePhotoTaken: false,
     noSalePhotoUri: null,
+    noSalePhotoUris: [],
     saleConfirmed: false,
     saleOperationId: null,
   };

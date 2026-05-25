@@ -45,6 +45,10 @@ export interface GFStop {
   visit_line_id?: number | null;
   partner_id?: [number, string] | number | false | null;
   customer_ref?: string;
+  contact_name?: string;
+  phone?: string;
+  mobile?: string;
+  email?: string;
   customer_latitude?: number;
   customer_longitude?: number;
   google_maps_url?: string;

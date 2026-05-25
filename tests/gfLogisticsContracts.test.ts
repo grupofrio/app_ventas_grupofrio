@@ -68,6 +68,28 @@ function testSalesPayloadLetsBackendComputePricelistPrice(module: ContractsModul
   });
 }
 
+function testSalesPayloadCanRequestAccountMoveCreation(module: ContractsModule) {
+  const actual = module.buildSalesCreatePayload({
+    _operationId: 'sale-uuid-126',
+    partner_id: 55251,
+    warehouse_id: 8,
+    create_invoice: true,
+    lines: [
+      { product_id: 758, quantity: 1, discount: 0 },
+    ],
+  });
+
+  assert.deepEqual(actual, {
+    operation_id: 'sale-uuid-126',
+    partner_id: 55251,
+    warehouse_id: 8,
+    create_invoice: true,
+    lines: [
+      { product_id: 758, quantity: 1, discount: 0 },
+    ],
+  });
+}
+
 function testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module: ContractsModule) {
   const actual = module.buildSalesCreatePayload({
     operation_id: 'sale-uuid-124',
@@ -138,6 +160,7 @@ async function main() {
 
   testSalesPayloadMatchesRealContract(module);
   testSalesPayloadLetsBackendComputePricelistPrice(module);
+  testSalesPayloadCanRequestAccountMoveCreation(module);
   testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module);
   testPaymentPayloadMatchesKnownContractFields(module);
   testPaymentPayloadKeepsJournalWhenMethodLineIsUnavailable(module);

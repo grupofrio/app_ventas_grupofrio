@@ -25,11 +25,14 @@ import { useRouteStore } from '../src/stores/useRouteStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
+import { useProductStore } from '../src/stores/useProductStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
 import { startOffrouteVisit } from '../src/services/gfLogistics';
 import { extractOffrouteVisitId } from '../src/services/offrouteVisit';
+import { warmOffrouteCustomerPrices } from '../src/services/offroutePricing';
+import { computeCustomerPrices } from '../src/services/pricelist';
 import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
 
 const DEFAULT_OFFROUTE_COMPANY_ID = 34;
@@ -45,6 +48,7 @@ export default function OffRouteScreen() {
   const patchStop = useRouteStore((s) => s.patchStop);
   const isOnline = useSyncStore((s) => s.isOnline);
   const companyId = useAuthStore((s) => s.companyId);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
   const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
   const latitude = useLocationStore((s) => s.latitude);
@@ -142,6 +146,21 @@ export default function OffRouteScreen() {
     );
     visitStore.setOffrouteVisitId(offrouteVisitId);
     patchStop(virtualStopId, { _offrouteVisitId: offrouteVisitId });
+
+    if (isOnline) {
+      const priceWarmup = await warmOffrouteCustomerPrices(
+        result,
+        { companyId, warehouseId },
+        {
+          getProducts: () => useProductStore.getState().products,
+          loadProducts: (targetWarehouseId) => useProductStore.getState().loadProducts(targetWarehouseId),
+          computeCustomerPrices,
+        },
+      );
+      if (priceWarmup.status === 'failed') {
+        console.warn('[offroute] Price warmup failed:', priceWarmup.reason);
+      }
+    }
 
     // BLD-20260424-BUGC: TODOS los leads pasan por /checkin (igual que
     // customers). Antes, los leads sin partner_id se enrutaban directo

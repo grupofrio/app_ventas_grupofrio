@@ -47,28 +47,28 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /defaultPaymentJournalId/,
-    'La venta debe leer el diario de pago configurado para el empleado/CEDIS',
+    /const saleOffrouteVisitId = offrouteVisitId \?\? stop\._offrouteVisitId \?\? null;[\s\S]*?offroute_visit_id:\s*isOffRoute\s*\?\s*saleOffrouteVisitId\s*:\s*null/,
+    'La venta de visita especial debe mandar offroute_visit_id para que el corte incluya sus salidas',
   );
   assert.doesNotMatch(
     saleScreen,
-    /hasCashPaymentJournal|diario de efectivo del CEDIS|Configura el diario de efectivo/,
+    /defaultPaymentJournalId|hasCashPaymentJournal|diario de efectivo del CEDIS|Configura el diario de efectivo/,
     'La venta en efectivo no debe bloquearse si el login no incluyo default_payment_journal_id; backend resuelve el diario del empleado',
   );
   assert.match(
     saleScreen,
-    /salePaymentMethod === 'cash'[\s\S]*?enqueue\('payment'/,
-    'Una venta en efectivo debe encolar automaticamente un pago',
+    /payment_method:\s*salePaymentMethod/,
+    'La venta debe enviar al backend el metodo seleccionado para que efectivo cree pago atomico',
   );
   assert.match(
     saleScreen,
     /create_invoice:\s*salePaymentMethod === 'cash'/,
     'Una venta en efectivo debe pedir al backend generar el account.move',
   );
-  assert.match(
+  assert.doesNotMatch(
     saleScreen,
-    /enqueue\('payment'[\s\S]*?amount: total[\s\S]*?journal_id: defaultPaymentJournalId[\s\S]*?\{ dependsOn: \[saleSyncId\] \}/,
-    'El pago automatico debe usar el total de la venta, el diario del CEDIS y depender de la venta',
+    /salePaymentMethod === 'cash'[\s\S]*?enqueue\('payment'/,
+    'El efectivo no debe depender de un segundo item de sync; el backend crea el pago con la venta',
   );
 
   console.log('sale confirm feedback tests: ok');

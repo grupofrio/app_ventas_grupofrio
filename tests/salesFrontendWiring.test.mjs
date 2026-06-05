@@ -82,6 +82,26 @@ function main() {
     /onChangeText=\{\(text\) => setSaleQtyFromText\(line\.productId, text\)\}/,
     'la cantidad capturada debe actualizar la linea de venta',
   );
+  assert.match(
+    salesTab,
+    /TouchableOpacity/,
+    'cada venta de la tab Ventas debe ser tocable para abrir su ticket PDF',
+  );
+  assert.match(
+    salesTab,
+    /openTicketForOrder/,
+    'la tab Ventas debe tener un handler para abrir el ticket de una venta',
+  );
+  assert.match(
+    salesTab,
+    /buildSaleTicketSnapshotFromOrder/,
+    'si no existe snapshot local, la tab Ventas debe crear un ticket imprimible desde la fila de venta',
+  );
+  assert.match(
+    salesTab,
+    /router\.push\(`\/print\/\$\{ticketId\}`/,
+    'al tocar una venta debe navegar a la pantalla de PDF del ticket',
+  );
 
   console.log('sales frontend wiring tests: ok');
 }

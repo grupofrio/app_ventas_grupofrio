@@ -1,5 +1,5 @@
 /**
- * Cash Close screen — End-of-day cash settlement (Corte de Caja).
+ * Cash Close screen — route corte + end-of-day liquidation.
  *
  * BLD-20260427-P1-CASHCLOSE-LIQUIDATION (sucesor de BLD-20260427-P1-CASHCLOSE-REAL-TOTALS):
  *
@@ -18,15 +18,21 @@
  *   /sales/summary devuelve esos campos HARDCODED a 0.0 en el backend
  *   (gf_logistics_ops/models/sale_order.py L256-257). Nunca son reales.
  *
- *   3. Diferencia de efectivo físico = efectivoCapturado − payments.cash.total
+ *   3. /gf/logistics/api/employee/reconciliation + /pwa-ruta/validate-corte
+ *      → "Corte de unidades"
+ *      - Muestra cargado, entregado, devuelto, merma y diferencia por producto.
+ *      - El backend valida que el corte cuadre a cero antes de liquidar.
+ *
+ *   4. Diferencia de efectivo físico = efectivoCapturado − expected_payments.cash.total
  *      (sólo si liquidation está disponible)
  *
- *   4. Devoluciones: NO existe endpoint backend (returns_summary). Se muestra
+ *   5. Devoluciones: NO existe endpoint backend (returns_summary). Se muestra
  *      "Pendiente backend".
  *
- *   5. Confirmación de liquidación: NO se agrega botón. Endpoint
- *      /pwa-ruta/liquidacion-confirm existe pero requiere validar deploy en
- *      producción antes de exponer en UI.
+ *   6. Confirmación de liquidación: usa
+ *      /gf/logistics/api/employee/liquidacion/confirm. Si backend devuelve
+ *      difference_warning, la app pide confirmación explícita y reintenta con
+ *      force=true.
  *
  *   Fallback si /pwa-ruta/liquidation falla (404, network, sin plan):
  *   - Mostrar "No disponible" en Efectivo / Crédito / Transferencia / Total a
@@ -34,7 +40,7 @@
  *   - NO usar campos hardcoded de /sales/summary como fallback (sería falso).
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -44,8 +50,14 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { useSalesStore } from '../src/stores/useSalesStore';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import {
+  confirmRouteLiquidation,
+  fetchRouteReconciliation,
   fetchLiquidationSummary,
+  getLiquidationExpectedCashTotal,
+  GFRouteReconciliation,
   GFLiquidationSummary,
+  saveRouteCorteAdjustments,
+  validateRouteCorte,
 } from '../src/services/gfLogistics';
 import { formatCurrency } from '../src/utils/time';
 import {
@@ -59,6 +71,11 @@ interface SummaryLine {
   highlight?: boolean;
   pending?: boolean;     // estilo "Pendiente backend"
   unavailable?: boolean; // estilo "No disponible"
+}
+
+interface CorteAdjustmentInput {
+  returnQty: string;
+  scrapQty: string;
 }
 
 /**
@@ -92,6 +109,7 @@ function colorForDiff(diff: number): string {
 
 export default function CashCloseScreen() {
   const [cashInHand, setCashInHand] = useState('');
+  const [notes, setNotes] = useState('');
 
   // Sync queue
   const pendingCount = useSyncStore((s) => s.pendingCount);
@@ -115,12 +133,22 @@ export default function CashCloseScreen() {
 
   // Plan del día (para resolver plan_id en liquidation)
   const plan = useRouteStore((s) => s.plan);
+  const loadPlan = useRouteStore((s) => s.loadPlan);
   const planId = plan?.plan_id ?? null;
 
   // Liquidation summary (account.payment vía /pwa-ruta/liquidation)
   const [liquidation, setLiquidation] = useState<GFLiquidationSummary | null>(null);
   const [liquidationLoading, setLiquidationLoading] = useState(false);
   const [liquidationError, setLiquidationError] = useState<string | null>(null);
+  const [reconciliation, setReconciliation] = useState<GFRouteReconciliation | null>(null);
+  const [reconciliationLoading, setReconciliationLoading] = useState(false);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const [corteBusy, setCorteBusy] = useState(false);
+  const [liquidationBusy, setLiquidationBusy] = useState(false);
+  const [corteConfirmed, setCorteConfirmed] = useState(false);
+  const [liquidationConfirmedAt, setLiquidationConfirmedAt] = useState<string | null>(null);
+  const [corteAdjustments, setCorteAdjustments] = useState<Record<number, CorteAdjustmentInput>>({});
+  const [adjustmentsBusy, setAdjustmentsBusy] = useState(false);
 
   const loadLiquidation = useCallback(async () => {
     setLiquidationLoading(true);
@@ -141,13 +169,48 @@ export default function CashCloseScreen() {
     }
   }, [planId]);
 
+  const loadReconciliation = useCallback(async () => {
+    setReconciliationLoading(true);
+    setReconciliationError(null);
+    try {
+      const data = await fetchRouteReconciliation(
+        planId ? { plan_id: planId, action: 'recompute' } : { action: 'recompute' },
+      );
+      setReconciliation(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      setReconciliationError(message);
+      setReconciliation(null);
+    } finally {
+      setReconciliationLoading(false);
+    }
+  }, [planId]);
+
   // Refrescar ambas fuentes al enfocar la pantalla
   useFocusEffect(
     useCallback(() => {
       void loadTodaySales();
       void loadLiquidation();
-    }, [loadTodaySales, loadLiquidation]),
+      void loadReconciliation();
+      setCorteConfirmed(Boolean(plan?.corte_validated));
+      setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
+    }, [loadTodaySales, loadLiquidation, loadReconciliation, plan?.corte_validated, plan?.liquidacion_done_at]),
   );
+
+  useEffect(() => {
+    if (!reconciliation) return;
+    setCorteAdjustments((current) => {
+      const next = { ...current };
+      reconciliation.lines.forEach((line) => {
+        if (!line.product_id || next[line.product_id]) return;
+        next[line.product_id] = {
+          returnQty: line.qty_returned > 0 ? String(line.qty_returned) : '',
+          scrapQty: line.qty_scrap > 0 ? String(line.qty_scrap) : '',
+        };
+      });
+      return next;
+    });
+  }, [reconciliation]);
 
   // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
   // corte. La app SIEMPRE intenta auto-procesar la cola al reconectar
@@ -168,6 +231,7 @@ export default function CashCloseScreen() {
       const after = useSyncStore.getState().pendingCount;
       // Refrescar liquidación porque pudo cambiar tras drenar pagos.
       await loadLiquidation();
+      await loadReconciliation();
       if (after === 0) {
         setPostSyncMessage('Todo sincronizado.');
       } else {
@@ -182,7 +246,7 @@ export default function CashCloseScreen() {
     } finally {
       setSyncBusy(false);
     }
-  }, [syncBusy, processQueue, loadLiquidation]);
+  }, [syncBusy, processQueue, loadLiquidation, loadReconciliation]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const liquidationAvailable = liquidation !== null && !liquidationError;
@@ -197,16 +261,14 @@ export default function CashCloseScreen() {
     isSyncing: isSyncing || syncBusy,
     liquidationAvailable: !!hasLiquidationData,
   };
-  const _canConfirm = canConfirmLiquidation(guardInput); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const canConfirm = canConfirmLiquidation(guardInput);
   const blockingReason = describeBlockingReason(guardInput);
 
   const cashCaptured = useMemo(() => parseCashInput(cashInHand), [cashInHand]);
-  const cashExpected = hasLiquidationData ? liquidation.payments.cash.total : 0;
+  const cashExpected = hasLiquidationData ? getLiquidationExpectedCashTotal(liquidation) : 0;
   const physicalDiff = cashCaptured - cashExpected;
   const hasInput = cashInHand.trim().length > 0;
-  const collectionDiff = hasLiquidationData
-    ? liquidation.total_collected - liquidation.total_expected
-    : 0;
+  const collectionDiff = hasLiquidationData ? physicalDiff : 0;
 
   const noOrdersToday =
     !isSalesLoading && !salesError && summary.orders_count === 0;
@@ -222,18 +284,17 @@ export default function CashCloseScreen() {
   // Sección 2: Cobranza / Liquidación (account.payment)
   const cobranzaLines: SummaryLine[] = hasLiquidationData
     ? [
-        { label: 'Efectivo esperado', value: formatCurrency(liquidation.payments.cash.total) },
-        { label: 'Crédito', value: formatCurrency(liquidation.payments.credit.total) },
-        { label: 'Transferencia', value: formatCurrency(liquidation.payments.transfer.total) },
-        { label: 'Total cobrado', value: formatCurrency(liquidation.total_collected) },
-        { label: 'Total esperado', value: formatCurrency(liquidation.total_expected) },
+        { label: 'Efectivo esperado', value: formatCurrency(cashExpected) },
+        { label: 'Crédito', value: formatCurrency(liquidation.expected_payments.credit.total) },
+        { label: 'Transferencia', value: formatCurrency(liquidation.expected_payments.transfer.total) },
+        { label: 'Efectivo capturado', value: hasInput ? formatCurrency(cashCaptured) : 'Captura efectivo' },
         {
-          label: 'Diferencia cobranza',
-          value: formatSignedDiff(collectionDiff),
+          label: 'Diferencia efectivo',
+          value: hasInput ? formatSignedDiff(collectionDiff) : 'Captura efectivo',
         },
         {
           label: 'Total a Liquidar',
-          value: formatCurrency(liquidation.payments.cash.total),
+          value: formatCurrency(cashExpected),
           highlight: true,
         },
       ]
@@ -241,9 +302,8 @@ export default function CashCloseScreen() {
         { label: 'Efectivo esperado', value: 'No disponible', unavailable: true },
         { label: 'Crédito', value: 'No disponible', unavailable: true },
         { label: 'Transferencia', value: 'No disponible', unavailable: true },
-        { label: 'Total cobrado', value: 'No disponible', unavailable: true },
-        { label: 'Total esperado', value: 'No disponible', unavailable: true },
-        { label: 'Diferencia cobranza', value: 'No disponible', unavailable: true },
+        { label: 'Efectivo capturado', value: 'No disponible', unavailable: true },
+        { label: 'Diferencia efectivo', value: 'No disponible', unavailable: true },
         {
           label: 'Total a Liquidar',
           value: 'No disponible',
@@ -258,7 +318,7 @@ export default function CashCloseScreen() {
     { label: 'Ops. sincronizadas', value: `${totalItems - pendingCount}/${totalItems}` },
   ];
 
-  // Color del valor de Diferencia cobranza (sólo si liquidation está)
+  // Color del valor de Diferencia efectivo (sólo si liquidation está)
   const collectionDiffColor = hasLiquidationData
     ? colorForDiff(collectionDiff)
     : colors.textDim;
@@ -276,6 +336,148 @@ export default function CashCloseScreen() {
       ? colors.textDim
       : colorForDiff(physicalDiff);
 
+  const corteAlreadyConfirmed = corteConfirmed || Boolean(plan?.corte_validated);
+  const liquidationAlreadyConfirmed = Boolean(liquidationConfirmedAt || plan?.liquidacion_done_at);
+  const canValidateCorte = !corteBusy
+    && !corteAlreadyConfirmed
+    && pendingCount === 0
+    && !isSyncing
+    && !syncBusy
+    && !!reconciliation
+    && !reconciliationLoading;
+  const canConfirmFinalLiquidation = canConfirm
+    && !liquidationBusy
+    && !liquidationAlreadyConfirmed
+    && corteAlreadyConfirmed;
+  const canSaveCorteAdjustments = !adjustmentsBusy
+    && !corteAlreadyConfirmed
+    && pendingCount === 0
+    && !isSyncing
+    && !syncBusy
+    && !!reconciliation
+    && !reconciliationLoading;
+
+  const setCorteAdjustmentValue = useCallback((
+    productId: number,
+    field: keyof CorteAdjustmentInput,
+    value: string,
+  ) => {
+    setCorteAdjustments((current) => ({
+      ...current,
+      [productId]: {
+        returnQty: current[productId]?.returnQty ?? '',
+        scrapQty: current[productId]?.scrapQty ?? '',
+        [field]: value,
+      },
+    }));
+  }, []);
+
+  const handleSaveCorteAdjustments = useCallback(async () => {
+    if (!canSaveCorteAdjustments || !reconciliation) return;
+    setAdjustmentsBusy(true);
+    try {
+      const lines = reconciliation.lines
+        .filter((line) => line.product_id > 0)
+        .map((line) => {
+          const input = corteAdjustments[line.product_id] ?? { returnQty: '', scrapQty: '' };
+          return {
+            product_id: line.product_id,
+            return_qty: parseCashInput(input.returnQty),
+            scrap_qty: parseCashInput(input.scrapQty),
+          };
+        });
+      const result = await saveRouteCorteAdjustments({
+        ...(planId ? { plan_id: planId } : {}),
+        lines,
+      });
+      await loadReconciliation();
+      if (result.ok) {
+        Alert.alert('Ajustes guardados', result.message || 'Devolucion y merma guardadas.');
+        return;
+      }
+      Alert.alert('No se guardaron ajustes', result.message || 'Backend rechazo los ajustes.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      Alert.alert('Error al guardar corte', message);
+    } finally {
+      setAdjustmentsBusy(false);
+    }
+  }, [canSaveCorteAdjustments, corteAdjustments, loadReconciliation, planId, reconciliation]);
+
+  const handleValidateCorte = useCallback(async () => {
+    if (!canValidateCorte) return;
+    setCorteBusy(true);
+    try {
+      const result = await validateRouteCorte({
+        ...(planId ? { plan_id: planId } : {}),
+        notes,
+      });
+      await loadReconciliation();
+      if (result.ok && result.success) {
+        setCorteConfirmed(true);
+        await loadPlan();
+        Alert.alert('Corte validado', result.message || 'El corte quedo confirmado.');
+        return;
+      }
+      Alert.alert('El corte no cuadra', result.message || 'Revisa las diferencias por producto.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      Alert.alert('Error al validar corte', message);
+    } finally {
+      setCorteBusy(false);
+    }
+  }, [canValidateCorte, loadPlan, loadReconciliation, notes, planId]);
+
+  const submitLiquidation = useCallback(async (force: boolean) => {
+    setLiquidationBusy(true);
+    try {
+      const result = await confirmRouteLiquidation({
+        ...(planId ? { plan_id: planId } : {}),
+        cash_collected: cashCaptured,
+        notes,
+        force,
+      });
+      if (result.ok) {
+        const confirmedAt = result.data?.liquidacion_done_at ?? new Date().toISOString();
+        setLiquidationConfirmedAt(confirmedAt);
+        await loadLiquidation();
+        await loadPlan();
+        Alert.alert('Liquidacion confirmada', result.message || 'La liquidacion quedo guardada en Odoo.');
+        return;
+      }
+      if (result.code === 'difference_warning' && !force) {
+        Alert.alert(
+          'Hay diferencia en liquidacion',
+          result.message,
+          [
+            { text: 'Revisar', style: 'cancel' },
+            {
+              text: 'Confirmar con diferencia',
+              style: 'destructive',
+              onPress: () => { void submitLiquidation(true); },
+            },
+          ],
+        );
+        return;
+      }
+      Alert.alert('No se pudo liquidar', result.message || 'Backend rechazo la liquidacion.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      Alert.alert('Error al liquidar', message);
+    } finally {
+      setLiquidationBusy(false);
+    }
+  }, [cashCaptured, loadLiquidation, loadPlan, notes, planId]);
+
+  const handleConfirmLiquidation = useCallback(async () => {
+    if (!canConfirmFinalLiquidation) return;
+    if (!hasInput) {
+      Alert.alert('Captura efectivo', 'Cuenta el efectivo fisico antes de confirmar la liquidacion.');
+      return;
+    }
+    await submitLiquidation(false);
+  }, [canConfirmFinalLiquidation, hasInput, submitLiquidation]);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <TopBar title="Corte de Caja" showBack />
@@ -285,7 +487,7 @@ export default function CashCloseScreen() {
         <View style={styles.infoBanner}>
           <Text style={styles.infoIcon}>ℹ️</Text>
           <Text style={styles.infoText}>
-            Resumen informativo. Confirmacion de liquidacion pendiente de validar deploy backend.
+            Corte y liquidacion operativos. Primero valida unidades, despues confirma el efectivo fisico.
           </Text>
         </View>
 
@@ -345,6 +547,149 @@ export default function CashCloseScreen() {
             </Text>
           </View>
         )}
+
+        {/* Corte de unidades */}
+        <View style={styles.summaryCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Corte de unidades</Text>
+            {reconciliationLoading && (
+              <Text style={styles.sectionSubText}>Cargando...</Text>
+            )}
+          </View>
+
+          {!reconciliationLoading && reconciliationError && (
+            <View style={[styles.statusCard, styles.statusErrorInline]}>
+              <Text style={styles.statusErrorText}>Corte no disponible en backend</Text>
+              <Text style={styles.statusSubText}>{reconciliationError}</Text>
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={() => { void loadReconciliation(); }}
+                accessibilityRole="button"
+                accessibilityLabel="Reintentar carga de corte"
+              >
+                <Text style={styles.retryButtonText}>Reintentar</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {reconciliation ? (
+            <>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Cargado</Text>
+                <Text style={styles.summaryValue}>{reconciliation.qty_loaded.toFixed(1)} u</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Entregado</Text>
+                <Text style={styles.summaryValue}>{reconciliation.qty_delivered.toFixed(1)} u</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Devuelto</Text>
+                <Text style={styles.summaryValue}>{reconciliation.qty_returned.toFixed(1)} u</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Merma</Text>
+                <Text style={styles.summaryValue}>{reconciliation.qty_scrap.toFixed(1)} u</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.highlightLabel}>Diferencia</Text>
+                <Text style={[
+                  styles.highlightValue,
+                  { color: colorForDiff(reconciliation.qty_difference) },
+                ]}>
+                  {reconciliation.qty_difference.toFixed(1)} u
+                </Text>
+              </View>
+
+              <Text style={styles.subsectionTitle}>Desglose por producto</Text>
+              {reconciliation.lines.length === 0 ? (
+                <Text style={styles.statusText}>Sin lineas de conciliacion</Text>
+              ) : (
+                reconciliation.lines.map((line) => (
+                  <View key={line.id || line.product_id} style={styles.productRow}>
+                    <Text style={styles.productName} numberOfLines={2}>{line.product_name}</Text>
+                    <Text style={styles.productMeta}>
+                      Cargado {line.qty_loaded.toFixed(1)} · Entregado {line.qty_delivered.toFixed(1)} · Devuelto {line.qty_returned.toFixed(1)} · Merma {line.qty_scrap.toFixed(1)}
+                    </Text>
+                    <View style={styles.adjustmentGrid}>
+                      <View style={styles.adjustmentField}>
+                        <Text style={styles.adjustmentLabel}>Regresa a stock</Text>
+                        <TextInput
+                          style={styles.adjustmentInput}
+                          placeholder="0"
+                          placeholderTextColor={colors.textDim}
+                          keyboardType="decimal-pad"
+                          value={corteAdjustments[line.product_id]?.returnQty ?? ''}
+                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'returnQty', value)}
+                          editable={!corteAlreadyConfirmed}
+                          accessibilityLabel={`Regresa a stock ${line.product_name}`}
+                        />
+                      </View>
+                      <View style={styles.adjustmentField}>
+                        <Text style={styles.adjustmentLabel}>Merma</Text>
+                        <TextInput
+                          style={styles.adjustmentInput}
+                          placeholder="0"
+                          placeholderTextColor={colors.textDim}
+                          keyboardType="decimal-pad"
+                          value={corteAdjustments[line.product_id]?.scrapQty ?? ''}
+                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'scrapQty', value)}
+                          editable={!corteAlreadyConfirmed}
+                          accessibilityLabel={`Merma ${line.product_name}`}
+                        />
+                      </View>
+                    </View>
+                    <Text style={[styles.productDiff, { color: colorForDiff(line.qty_difference) }]}>
+                      Dif. {line.qty_difference.toFixed(1)}
+                    </Text>
+                  </View>
+                ))
+              )}
+
+              {corteAlreadyConfirmed ? (
+                <View style={styles.confirmedBadge}>
+                  <Text style={styles.confirmedBadgeText}>Corte confirmado en Odoo</Text>
+                </View>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.secondaryAction,
+                      !canSaveCorteAdjustments && styles.actionDisabled,
+                    ]}
+                    onPress={handleSaveCorteAdjustments}
+                    disabled={!canSaveCorteAdjustments}
+                    accessibilityRole="button"
+                    accessibilityLabel="Guardar devolución y merma"
+                  >
+                    {adjustmentsBusy ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : (
+                      <Text style={styles.secondaryActionText}>Guardar devolución / merma</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryAction,
+                      !canValidateCorte && styles.actionDisabled,
+                    ]}
+                    onPress={handleValidateCorte}
+                    disabled={!canValidateCorte}
+                    accessibilityRole="button"
+                    accessibilityLabel="Confirmar corte"
+                  >
+                    {corteBusy ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.primaryActionText}>Confirmar corte</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </>
+          ) : (
+            <Text style={styles.statusText}>Sin datos de corte disponibles</Text>
+          )}
+        </View>
 
         {/* Estados de carga / error de Sales */}
         {isSalesLoading && (
@@ -412,8 +757,8 @@ export default function CashCloseScreen() {
           )}
 
           {cobranzaLines.map((line) => {
-            // Color especial para "Diferencia cobranza" cuando está disponible
-            const isCollectionDiff = line.label === 'Diferencia cobranza';
+            // Color especial para "Diferencia efectivo" cuando está disponible
+            const isCollectionDiff = line.label === 'Diferencia efectivo';
             const valueStyle = [
               styles.summaryValue,
               line.highlight && styles.highlightValue,
@@ -472,6 +817,19 @@ export default function CashCloseScreen() {
           />
         </View>
 
+        <View style={styles.inputCard}>
+          <Text style={styles.sectionTitle}>Notas</Text>
+          <TextInput
+            style={[styles.cashInput, styles.notesInput]}
+            placeholder="Notas de corte o liquidacion"
+            placeholderTextColor={colors.textDim}
+            value={notes}
+            onChangeText={setNotes}
+            multiline
+            accessibilityLabel="Notas de corte y liquidacion"
+          />
+        </View>
+
         <View style={styles.differenceCard}>
           <Text style={styles.differenceLabel}>Diferencia física vs Efectivo esperado</Text>
           <Text style={[styles.differenceValue, { color: physicalDiffColor }]}>
@@ -482,10 +840,35 @@ export default function CashCloseScreen() {
           </Text>
         </View>
 
+        {liquidationAlreadyConfirmed ? (
+          <View style={styles.confirmedBadge}>
+            <Text style={styles.confirmedBadgeText}>
+              Liquidacion confirmada{liquidationConfirmedAt || plan?.liquidacion_done_at ? `: ${liquidationConfirmedAt || plan?.liquidacion_done_at}` : ''}
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.primaryAction,
+              !canConfirmFinalLiquidation && styles.actionDisabled,
+            ]}
+            onPress={handleConfirmLiquidation}
+            disabled={!canConfirmFinalLiquidation}
+            accessibilityRole="button"
+            accessibilityLabel="Confirmar liquidacion"
+          >
+            {liquidationBusy ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.primaryActionText}>Confirmar liquidacion</Text>
+            )}
+          </TouchableOpacity>
+        )}
+
         <Text style={styles.footerNote}>
           Fuente de cobranza: /pwa-ruta/liquidation (account.payment por bucket).
-          La confirmacion final se habilitara cuando se valide el deploy backend.
-          El supervisor revisara las diferencias mayores a $50.
+          Corte: /pwa-ruta/validate-corte. Liquidacion:
+          /gf/logistics/api/employee/liquidacion/confirm.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -671,6 +1054,121 @@ const styles = StyleSheet.create({
   differenceHint: {
     fontSize: 11,
     color: colors.textDim,
+  },
+  subsectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textDim,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  productRow: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: spacing.sm,
+  },
+  productName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 3,
+  },
+  productMeta: {
+    fontSize: 11,
+    color: colors.textDim,
+    lineHeight: 16,
+  },
+  adjustmentGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  adjustmentField: {
+    flex: 1,
+  },
+  adjustmentLabel: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginBottom: 4,
+    fontWeight: '700',
+  },
+  adjustmentInput: {
+    backgroundColor: colors.bg,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    color: colors.text,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 9,
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  productDiff: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  primaryAction: {
+    backgroundColor: colors.primary,
+    borderRadius: radii.button,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    marginTop: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  primaryActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  secondaryAction: {
+    backgroundColor: 'rgba(37,99,235,0.10)',
+    borderColor: 'rgba(37,99,235,0.35)',
+    borderWidth: 1,
+    borderRadius: radii.button,
+    paddingVertical: 13,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    marginTop: spacing.lg,
+  },
+  secondaryActionText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  actionDisabled: {
+    opacity: 0.45,
+  },
+  confirmedBadge: {
+    backgroundColor: 'rgba(34,197,94,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.3)',
+    borderRadius: radii.button,
+    padding: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  confirmedBadgeText: {
+    fontSize: 13,
+    color: colors.success,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  notesInput: {
+    minHeight: 92,
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'left',
+    textAlignVertical: 'top',
   },
   footerNote: {
     fontSize: 12,

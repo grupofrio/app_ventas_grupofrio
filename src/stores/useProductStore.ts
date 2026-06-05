@@ -6,7 +6,7 @@
  * - qty_display: available - reserved (what vendor sees)
  * - _isGlobalFallback: flag when loaded from legacy global path
  * - inventorySource: tracks which fallback level loaded the data
- * - 3-level fallback chain: truck_stock → stock.quant → global_legacy
+ * - 3-level fallback chain when truck_stock has no catalog: stock.quant → global_legacy
  * - restoreStock: explicit restore for rollback
  * - refreshInventory preserves qty_reserved from pending operations
  *
@@ -16,9 +16,10 @@
 import { create } from 'zustand';
 import { Product } from '../types/product';
 import { odooRead } from '../services/odooRpc';
-import { storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { fetchTruckStock } from '../services/gfLogistics';
 import { logInfo, logWarn } from '../utils/logger';
+import { useAuthStore } from './useAuthStore';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
 
@@ -136,31 +137,36 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // sincronizado en el almacén" ahora la determina el backend vía el
       // flag `has_stock_data` (commit dd78489 de Sebastián). El cliente
       // solo lo lee y lo expone al store; ProductPicker decide la UI.
-      const scoped = await fetchTruckStock(warehouseId);
+      const mobileLocationId = useAuthStore.getState().mobileLocationId;
+      const scoped = await fetchTruckStock(warehouseId, mobileLocationId);
       if (scoped && scoped.products.length > 0) {
         rawProducts = scoped.products as Product[];
         source = 'truck_stock';
         hasStockData = scoped.hasStockData;
-        if (hasStockData) {
-          logInfo('inventory', 'loaded_truck_stock', {
-            warehouse: warehouseId,
-            count: rawProducts.length,
-          });
-        } else {
-          logWarn('inventory', 'truck_stock_no_stock_data', {
-            warehouse: warehouseId,
-            count: rawProducts.length,
-            message:
-              'Backend reporta has_stock_data=false: catálogo existe pero el almacén aún no tiene stock sincronizado. Mostrando como referencia.',
-          });
-        }
+        logInfo('inventory', scoped.hasStockData === false ? 'loaded_truck_stock_reference' : 'loaded_truck_stock', {
+          warehouse: warehouseId,
+          mobileLocationId,
+          count: rawProducts.length,
+          hasStockData: scoped.hasStockData,
+        });
+      } else if (scoped && scoped.products.length === 0) {
+        logWarn('inventory', 'truck_stock_empty_fallback', {
+          warehouse: warehouseId,
+          mobileLocationId,
+          count: 0,
+          message:
+            'truck_stock no devolvio productos; intentando stock.quant por ubicacion movil.',
+        });
       }
 
-      // ── LEVEL 2: stock.quant query by warehouse ──
+      // ── LEVEL 2: stock.quant query by mobile location / warehouse ──
       if (!rawProducts) {
         try {
+          const locationDomain = mobileLocationId && mobileLocationId > 0
+            ? ['location_id', 'child_of', mobileLocationId]
+            : ['location_id.warehouse_id', '=', warehouseId];
           const quants = await odooRead<any>('stock.quant', [
-            ['location_id.warehouse_id', '=', warehouseId],
+            locationDomain,
             ['quantity', '>', 0],
             ['product_id.sale_ok', '=', true],
             ['product_id.active', '=', true],
@@ -192,14 +198,17 @@ export const useProductStore = create<ProductState>((set, get) => ({
               qty_available: quantMap.get(p.id) ?? p.qty_available,
             }));
             source = 'stock_quant';
+            hasStockData = null;
             logInfo('inventory', 'loaded_stock_quant', {
               warehouse: warehouseId,
+              mobileLocationId,
               count: rawProducts.length,
             });
           }
         } catch (e) {
           logWarn('inventory', 'stock_quant_fallback', {
             warehouse: warehouseId,
+            mobileLocationId,
             error: String(e),
           });
         }
@@ -275,9 +284,10 @@ export const useProductStore = create<ProductState>((set, get) => ({
         withStock,
         totalKg: Math.round(totalKg),
         warehouseId,
+        mobileLocationId,
       });
 
-      storeSave(STORAGE_KEYS.PRODUCTS, products);
+      void storeRemove(STORAGE_KEYS.PRODUCTS);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
       set({ error: msg, isLoading: false });
@@ -313,7 +323,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
     });
     const totalKg = products.reduce((sum, p) => sum + p._totalKg, 0);
     set({ products, totalStockKg: Math.round(totalKg) });
-    storeSave(STORAGE_KEYS.PRODUCTS, products);
+    void storeRemove(STORAGE_KEYS.PRODUCTS);
   },
 
   getProduct: (productId) => get().products.find((p) => p.id === productId),

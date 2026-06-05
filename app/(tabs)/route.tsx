@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -20,6 +20,7 @@ import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePres
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { filterPlannedStopsBySearch } from '../../src/services/routeStops';
+import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -55,6 +56,24 @@ export default function RouteScreen() {
       void loadTodaySales();
     }, [loadTodaySales]),
   );
+
+  const handleOpenLocation = useCallback((stop: GFStop) => {
+    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
+    if (!primaryUrl) {
+      Alert.alert('Sin ubicación', 'Este cliente no tiene ubicación disponible.');
+      return;
+    }
+
+    Linking.openURL(primaryUrl).catch(() => {
+      if (fallbackUrl) {
+        Linking.openURL(fallbackUrl).catch(() => {
+          Alert.alert('Error', 'No se pudo abrir la ubicación.');
+        });
+        return;
+      }
+      Alert.alert('Error', 'No se pudo abrir la ubicación.');
+    });
+  }, []);
 
   const sorted = [...stops].sort((a, b) => {
     const da = ['done', 'not_visited', 'closed'].includes(a.state) ? 0 : 1;
@@ -180,7 +199,7 @@ export default function RouteScreen() {
             const badge = getStopBadge(stop);
             const stopTypeLabel = getStopTypeLabel(stop);
             return (
-              <TouchableOpacity
+              <View
                 key={stop.id}
                 style={[
                   styles.card,
@@ -188,23 +207,35 @@ export default function RouteScreen() {
                   isDone && { opacity: 0.65 },
                   stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
                 ]}
-                onPress={() => router.push(`/stop/${stop.id}` as never)}
-                activeOpacity={0.7}
               >
-                <View style={styles.cardRow}>
-                  <Text style={styles.cardName} numberOfLines={1}>
-                    {isDone ? '✅ ' : `${stop.route_sequence || idx + 1}. `}
-                    {stop.state === 'in_progress' ? '🔵 ' : ''}
-                    {stop.customer_name}
-                  </Text>
-                  {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
-                </View>
-                {stopTypeLabel && (
-                  <View style={{ marginTop: 6 }}>
-                    <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+                <TouchableOpacity
+                  onPress={() => router.push(`/stop/${stop.id}` as never)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.cardRow}>
+                    <Text style={styles.cardName} numberOfLines={1}>
+                      {isDone ? '✅ ' : `${stop.route_sequence || idx + 1}. `}
+                      {stop.state === 'in_progress' ? '🔵 ' : ''}
+                      {stop.customer_name}
+                    </Text>
+                    {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
                   </View>
-                )}
-              </TouchableOpacity>
+                  {stopTypeLabel && (
+                    <View style={{ marginTop: 6 }}>
+                      <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <View style={styles.cardActions}>
+                  <Button
+                    label="📍 Maps"
+                    variant="secondary"
+                    small
+                    onPress={() => handleOpenLocation(stop)}
+                    style={styles.mapsButton}
+                  />
+                </View>
+              </View>
             );
           })
         )}
@@ -257,5 +288,7 @@ const styles = StyleSheet.create({
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardName: { flex: 1, fontWeight: '700', fontSize: 14, color: colors.text, marginRight: 8 },
+  cardActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
+  mapsButton: { minWidth: 104 },
   empty: { backgroundColor: colors.card, borderRadius: radii.card, padding: 20, alignItems: 'center' },
 });

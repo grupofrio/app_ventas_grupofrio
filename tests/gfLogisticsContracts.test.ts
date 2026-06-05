@@ -40,6 +40,7 @@ function testSalesPayloadMatchesRealContract(module: ContractsModule) {
       820: 100,
       864: 100,
     },
+    payment_method: 'cash',
     lines: [
       { product_id: 987, quantity: 2, discount: 0 },
     ],
@@ -74,6 +75,7 @@ function testSalesPayloadCanRequestAccountMoveCreation(module: ContractsModule) 
     partner_id: 55251,
     warehouse_id: 8,
     create_invoice: true,
+    payment_method: 'cash',
     lines: [
       { product_id: 758, quantity: 1, discount: 0 },
     ],
@@ -84,6 +86,7 @@ function testSalesPayloadCanRequestAccountMoveCreation(module: ContractsModule) 
     partner_id: 55251,
     warehouse_id: 8,
     create_invoice: true,
+    payment_method: 'cash',
     lines: [
       { product_id: 758, quantity: 1, discount: 0 },
     ],
@@ -104,6 +107,29 @@ function testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module: ContractsModu
   assert.deepEqual(actual, {
     operation_id: 'sale-uuid-124',
     partner_id: 52738,
+    lines: [
+      { product_id: 987, quantity: 2, discount: 0 },
+    ],
+  });
+}
+
+function testSalesPayloadKeepsOffrouteVisitIdForCorte(module: ContractsModule) {
+  const actual = module.buildSalesCreatePayload({
+    operation_id: 'sale-uuid-127',
+    partner_id: 52738,
+    stop_id: null,
+    offroute_visit_id: 9981,
+    warehouse_id: 8,
+    lines: [
+      { product_id: 987, quantity: 2 },
+    ],
+  });
+
+  assert.deepEqual(actual, {
+    operation_id: 'sale-uuid-127',
+    partner_id: 52738,
+    offroute_visit_id: 9981,
+    warehouse_id: 8,
     lines: [
       { product_id: 987, quantity: 2, discount: 0 },
     ],
@@ -162,6 +188,7 @@ async function main() {
   testSalesPayloadLetsBackendComputePricelistPrice(module);
   testSalesPayloadCanRequestAccountMoveCreation(module);
   testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module);
+  testSalesPayloadKeepsOffrouteVisitIdForCorte(module);
   testPaymentPayloadMatchesKnownContractFields(module);
   testPaymentPayloadKeepsJournalWhenMethodLineIsUnavailable(module);
   console.log('gf logistics contracts tests: ok');

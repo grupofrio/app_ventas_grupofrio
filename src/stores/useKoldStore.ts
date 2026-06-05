@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import { KoldScoreData, KoldForecastData, KoldCategory } from '../types/kold';
 import { koldRead } from '../services/odooRpc';
 import { logInfo } from '../utils/logger';
+import { todayLocalISO } from '../utils/localDate';
 
 interface KoldState {
   // Data maps (partnerId → data)
@@ -109,7 +110,7 @@ export const useKoldStore = create<KoldState>((set, get) => ({
       }
 
       // Load KoldDemand forecasts (defensive)
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayLocalISO();
       const forecastData = skipDemand
         ? null
         : await koldRead<KoldForecastData>(

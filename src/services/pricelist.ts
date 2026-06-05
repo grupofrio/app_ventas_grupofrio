@@ -403,6 +403,7 @@ function findMatchingRule(
 async function fetchServerSidePrices(
   partnerId: number,
   products: Array<{ id: number; list_price: number }>,
+  options?: PricingOptions,
 ): Promise<Map<number, number> | null> {
   if (!shouldTryServerPricingEndpoint()) return null;
 
@@ -411,11 +412,20 @@ async function fetchServerSidePrices(
     .filter((id) => typeof id === 'number' && Number.isFinite(id) && id > 0);
   if (partnerId <= 0 || productIds.length === 0) return null;
 
+  const explicitPricelistId = typeof options?.fallbackPricelistId === 'number' && options.fallbackPricelistId > 0
+    ? options.fallbackPricelistId
+    : null;
+
   try {
-    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, {
+    const payload: Record<string, unknown> = {
       partner_id: partnerId,
       product_ids: productIds,
-    });
+    };
+    if (explicitPricelistId) {
+      payload.pricelist_id = explicitPricelistId;
+    }
+
+    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload);
     const data = result?.data !== undefined ? result.data : result;
     const rawPrices = data?.prices ?? data?.price_map ?? data?.items ?? data;
     const productById = new Map(products.map((product) => [product.id, product]));
@@ -529,7 +539,7 @@ async function _computeCustomerPricesUncached(
   options?: PricingOptions,
 ): Promise<Map<number, number>> {
   // ── Strategy 1: Server-side (preferred — Odoo native pricelist engine) ──
-  const serverPrices = await fetchServerSidePrices(partnerId, products);
+  const serverPrices = await fetchServerSidePrices(partnerId, products, options);
   if (serverPrices !== null) {
     cacheCustomerPrices(partnerId, products, serverPrices, options);
     return serverPrices;

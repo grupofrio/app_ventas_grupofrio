@@ -4,13 +4,13 @@
     "slug": "kold-field",
     "version": "1.3.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/grupofrio-icon.png",
     "userInterfaceStyle": "dark",
     "scheme": "kold-field",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/grupofrio-splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0F1419"
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "supportsTablet": false,
@@ -39,9 +39,9 @@
       },
       "adaptiveIcon": {
         "backgroundColor": "#0F1419",
-        "foregroundImage": "./assets/android-icon-foreground.png",
+        "foregroundImage": "./assets/grupofrio-adaptive-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "monochromeImage": "./assets/grupofrio-adaptive-monochrome.png"
       },
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
@@ -54,7 +54,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/grupofrio-favicon.png",
       "bundler": "metro"
     },
     "plugins": [

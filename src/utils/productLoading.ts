@@ -2,8 +2,15 @@ export function shouldAutoLoadProducts(
   warehouseId: number | null | undefined,
   productCount: number,
   isLoading: boolean,
+  lastSyncMs: number | null = null,
+  error: string | null = null,
 ): boolean {
-  return !!warehouseId && warehouseId > 0 && productCount === 0 && !isLoading;
+  return !!warehouseId
+    && warehouseId > 0
+    && productCount === 0
+    && !isLoading
+    && !lastSyncMs
+    && !error;
 }
 
 /**

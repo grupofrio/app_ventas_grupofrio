@@ -16,7 +16,6 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
-import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { formatCatalogPrice, formatCurrency } from '../../src/utils/time';
@@ -32,18 +31,26 @@ import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
-import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
+import {
+  buildRouteLoadAcceptanceState,
+  canStartSaleWithRouteLoad,
+} from '../../src/services/routeLoadAcceptance';
+import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
+import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
+import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
+import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
+  const plan = useRouteStore((s) => s.plan);
   const removeStop = useRouteStore((s) => s.removeStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const stop = stops.find((s) => s.id === Number(stopId));
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const defaultPaymentJournalId = useAuthStore((s) => s.defaultPaymentJournalId);
+  const employeeName = useAuthStore((s) => s.employeeName);
   const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
   const products = useProductStore((s) => s.products);
@@ -61,12 +68,13 @@ export default function SaleScreen() {
     saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit, offrouteVisitId,
   } = useVisitStore();
 
-  const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
   const [pickerVisible, setPickerVisible] = React.useState(false);
+  const [lastSaleTicketId, setLastSaleTicketId] = React.useState<string | null>(null);
+  const [afterSaleAction, setAfterSaleAction] = React.useState<'checkout' | 'route' | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -99,7 +107,7 @@ export default function SaleScreen() {
   const forecast = stop._koldForecast;
 
   // V1.2: Stock validation + anti-duplicate
-  const { saleConfirmed, hasStockIssues, getStockIssues, lockSaleConfirm } = useVisitStore();
+  const { saleConfirmed, hasStockIssues, getStockIssues, lockSaleConfirm, unlockSaleConfirm } = useVisitStore();
   const stockIssues = getStockIssues();
   const hasStock = !hasStockIssues();
   const implicitAnalytics = resolveImplicitSaleAnalytics({
@@ -107,9 +115,11 @@ export default function SaleScreen() {
   });
   const hasAnalyticSelection = !!implicitAnalytics.analytic_plaza_id && !!implicitAnalytics.analytic_un_id;
   const hasWarehouse = typeof warehouseId === 'number' && warehouseId > 0;
+  const routeLoadState = buildRouteLoadAcceptanceState(plan);
+  const canStartSale = canStartSaleWithRouteLoad(plan);
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasAnalyticSelection && hasWarehouse
-                     && hasStock && !saleConfirmed;
+                     && hasStock && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
   function setSaleQtyFromText(productId: number, qtyText: string) {
@@ -126,8 +136,34 @@ export default function SaleScreen() {
     }
   }
 
+  function handleOpenTicket() {
+    if (!lastSaleTicketId) return;
+    router.push(`/print/${lastSaleTicketId}` as never);
+  }
+
+  function handleContinueAfterSale() {
+    if (!stop || !afterSaleAction) return;
+    if (afterSaleAction === 'route') {
+      resetVisit();
+      router.replace('/(tabs)/route' as never);
+      return;
+    }
+    router.push(`/checkout/${stop.id}` as never);
+  }
+
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
+
+    if (!canStartSale) {
+      const pending = routeLoadState.nextPendingLoad;
+      Alert.alert(
+        pending?.isRefill ? 'Recarga pendiente' : 'Carga pendiente',
+        pending
+          ? `Acepta ${pending.name} antes de vender.`
+          : 'Acepta tu carga pendiente antes de vender.',
+      );
+      return;
+    }
 
     if (!hasStock) {
       Alert.alert(
@@ -151,16 +187,26 @@ export default function SaleScreen() {
     }
 
     if (!stop) return;
+    if (!isOnline) {
+      Alert.alert(
+        'Venta requiere conexion',
+        'Para mantener el inventario trazable, la venta debe confirmarse directamente en Odoo. Conecta el dispositivo e intenta de nuevo.',
+      );
+      return;
+    }
     if (stop._entityType === 'lead' && !getLeadPartnerId(stop)) {
       Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
       return;
     }
+    const confirmedPaymentMethod = salePaymentMethod;
+    if (!confirmedPaymentMethod) return;
 
     // V1.2: Lock to prevent duplicate
-    lockSaleConfirm();
+    const operationId = lockSaleConfirm();
 
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
     const isOffRoute = stop.id < 0;
+    const saleOffrouteVisitId = offrouteVisitId ?? stop._offrouteVisitId ?? null;
     const effectiveCompanyId = getEffectiveSalesCompanyId(companyId);
     // Only send a pricelist_id when we have one confirmed from the partner's own
     // data (source: partner_field or get_records). Company fallback
@@ -180,11 +226,14 @@ export default function SaleScreen() {
     const payload = {
       partner_id: salePartnerId,
       stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
+      offroute_visit_id: isOffRoute ? saleOffrouteVisitId : null,
       warehouse_id: warehouseId ?? null,
+      _operationId: operationId,
       pricelist_id: pricelistId ?? null,
       analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
       analytic_un_id: implicitAnalytics.analytic_un_id,
       analytic_distribution: implicitAnalytics.analytic_distribution,
+      payment_method: salePaymentMethod,
       create_invoice: salePaymentMethod === 'cash',
       lines: saleLines.map((l) => ({
         product_id: l.productId,
@@ -193,9 +242,10 @@ export default function SaleScreen() {
       })),
     };
 
-    logInfo('general', 'sale_enqueue_payload', {
+    logInfo('general', 'sale_confirm_payload', {
       partner_id: salePartnerId,
       stop_id: payload.stop_id,
+      offroute_visit_id: payload.offroute_visit_id,
       warehouse_id: payload.warehouse_id,
       pricelist_id: payload.pricelist_id,
       analytic_plaza_id: payload.analytic_plaza_id,
@@ -207,53 +257,48 @@ export default function SaleScreen() {
       effective_company_id: effectiveCompanyId,
     });
 
-    // Enqueue and remember the real queue item id. That same id becomes the
-    // operation_id sent to backend, and checkout can use it to avoid closing
-    // the stop before the sale exists server-side.
-    const saleSyncId = enqueue('sale_order', payload);
-    useVisitStore.setState({ saleOperationId: saleSyncId });
-    enqueueVisitPhotos({
-      stopId: stop.id,
-      photoUris: salePhotoUris,
-      enqueue,
-      dependsOn: [saleSyncId],
-    });
-
-    if (salePaymentMethod === 'cash') {
-      enqueue('payment', {
-        partner_id: salePartnerId,
-        stop_id: isOffRoute ? null : stop.id,
-        amount: total,
-        journal_id: defaultPaymentJournalId,
-        reference: 'Venta efectivo',
-      }, { dependsOn: [saleSyncId] });
-    }
-
-    // V1.2: Deduct local inventory immediately
-    const updateLocalStock = useProductStore.getState().updateLocalStock;
-    saleLines.forEach((l) => updateLocalStock(l.productId, -l.qty));
-
-    if (shouldSkipStopCheckout(stop.id)) {
-      if (offrouteVisitId) {
-        // Enqueue with dependency so the backend receives the close ONLY after
-        // the sale order is confirmed. Calling closeOffrouteVisit directly while
-        // the sale is still queued caused the order to stay as a quotation with
-        // inventory already decremented (partial action_confirm on backend).
-        enqueue('offroute_visit_close', {
-          visit_id: offrouteVisitId,
-          result_status: 'sale' as const,
-          latitude: latitude || 0,
-          longitude: longitude || 0,
-          timestamp: Date.now(),
-        }, { dependsOn: [saleSyncId] });
+    try {
+      await createSale(buildSalesCreatePayload(payload));
+      await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
+        saleId: operationId,
+        customerName: stop.customer_name,
+        sellerName: employeeName,
+        paymentMethod: confirmedPaymentMethod,
+        createdAt: new Date().toISOString(),
+        lines: saleLines,
+      }));
+      setLastSaleTicketId(operationId);
+      useVisitStore.setState({ saleOperationId: null });
+      if (warehouseId) {
+        void loadProducts(warehouseId);
       }
-      updateStopState(stop.id, 'done');
-      resetVisit();
-      router.replace('/(tabs)/route' as never);
+    } catch (error) {
+      unlockSaleConfirm();
+      const message = error instanceof Error ? error.message : 'No se pudo confirmar la venta en Odoo.';
+      Alert.alert('Venta rechazada', message);
       return;
     }
 
-    router.push(`/checkout/${stop.id}` as never);
+    if (shouldSkipStopCheckout(stop.id)) {
+      if (offrouteVisitId) {
+        try {
+          await closeOffrouteVisit({
+            visit_id: offrouteVisitId,
+            result_status: 'sale' as const,
+            latitude: latitude || 0,
+            longitude: longitude || 0,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'La venta se confirmó, pero no se pudo cerrar la visita especial.';
+          Alert.alert('Cierre pendiente en Odoo', message);
+        }
+      }
+      updateStopState(stop.id, 'done');
+      setAfterSaleAction('route');
+      return;
+    }
+
+    setAfterSaleAction('checkout');
   }
 
   return (
@@ -419,6 +464,17 @@ export default function SaleScreen() {
           </TouchableOpacity>
         )}
 
+        {routeLoadState.hasPendingLoad && routeLoadState.nextPendingLoad && (
+          <View style={styles.loadWarning}>
+            <Text style={styles.loadWarningTitle}>
+              {routeLoadState.nextPendingLoad.isRefill ? 'Recarga pendiente' : 'Carga pendiente'}
+            </Text>
+            <Text style={styles.loadWarningLine}>
+              Acepta {routeLoadState.nextPendingLoad.name} en Inicio antes de confirmar ventas.
+            </Text>
+          </View>
+        )}
+
         {/* V1.2: Stock issues warning */}
         {stockIssues.length > 0 && (
           <View style={styles.stockWarning}>
@@ -431,14 +487,27 @@ export default function SaleScreen() {
           </View>
         )}
 
-        {/* V1.2.1: Save status indicator */}
-        {saleConfirmed && (
-          <SaveIndicator status="saved_local" />
+        {saleConfirmed && afterSaleAction && (
+          <View style={styles.postSaleActions}>
+            {lastSaleTicketId ? (
+              <Button
+                label="Ver ticket PDF"
+                variant="secondary"
+                onPress={handleOpenTicket}
+                fullWidth
+              />
+            ) : null}
+            <Button
+              label={afterSaleAction === 'route' ? 'Volver a ruta' : 'Continuar a checkout'}
+              onPress={handleContinueAfterSale}
+              fullWidth
+            />
+          </View>
         )}
 
         {/* Confirm button */}
         <Button
-          label={saleConfirmed ? '✓ Pedido Guardado' : '✓ Confirmar Pedido'}
+          label={saleConfirmed ? '✓ Pedido confirmado' : '✓ Confirmar Pedido'}
           onPress={handleConfirm}
           fullWidth
           disabled={saleConfirmed}
@@ -454,6 +523,7 @@ export default function SaleScreen() {
             {hasStock && salePhotoTaken && !salePaymentMethod ? '💰 Selecciona pago' : ''}
             {hasStock && salePhotoTaken && salePaymentMethod && !implicitAnalytics.analytic_plaza_id ? '📍 Configura la plaza del empleado' : ''}
             {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && !hasWarehouse ? '🏬 Configura el almacén del empleado' : ''}
+            {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && hasWarehouse && !canStartSale ? '📦 Acepta la carga pendiente' : ''}
           </Text>
         )}
       </ScrollView>
@@ -566,6 +636,29 @@ const styles = StyleSheet.create({
   },
   validationHint: {
     fontSize: 11, color: colors.warning, textAlign: 'center', marginTop: 8,
+  },
+  postSaleActions: {
+    gap: 8,
+    marginTop: 12,
+  },
+  loadWarning: {
+    backgroundColor: colors.warningAlpha08,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.28)',
+    borderRadius: radii.button,
+    padding: 10,
+    marginTop: 8,
+  },
+  loadWarningTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.warning,
+    marginBottom: 4,
+  },
+  loadWarningLine: {
+    fontSize: 11,
+    color: colors.warning,
+    lineHeight: 16,
   },
   // V1.2
   stockWarning: {

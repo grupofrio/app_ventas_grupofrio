@@ -7,10 +7,11 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors, radii, spacing } from '../../theme/tokens';
-import { useSyncStore } from '../../stores/useSyncStore';
+import { hasUserVisibleSyncing, useSyncStore } from '../../stores/useSyncStore';
 
 export function SyncBar() {
-  const { isOnline, isSyncing, pendingCount } = useSyncStore();
+  const { isOnline, pendingCount, queue } = useSyncStore();
+  const isSyncing = hasUserVisibleSyncing(queue);
 
   if (isSyncing) {
     return (

@@ -143,11 +143,20 @@ interface QueueSummary {
   oldest_pending_age_ms: number | null;
 }
 
+export function isUserVisibleSyncItem(item: Pick<SyncQueueItem, 'type'>): boolean {
+  return item.type !== 'gps';
+}
+
+export function hasUserVisibleSyncing(queue: SyncQueueItem[]): boolean {
+  return queue.some((item) => isUserVisibleSyncItem(item) && item.status === 'syncing');
+}
+
 function computeCounts(queue: SyncQueueItem[]) {
+  const visibleQueue = queue.filter(isUserVisibleSyncItem);
   return {
-    pendingCount: queue.filter((i) => i.status === 'pending').length,
-    errorCount: queue.filter((i) => i.status === 'error').length,
-    deadCount: queue.filter((i) => i.status === 'dead').length,
+    pendingCount: visibleQueue.filter((i) => i.status === 'pending').length,
+    errorCount: visibleQueue.filter((i) => i.status === 'error').length,
+    deadCount: visibleQueue.filter((i) => i.status === 'dead').length,
   };
 }
 
@@ -287,8 +296,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   setOnline: (online) => {
     set({ isOnline: online });
-    if (online && get().pendingCount > 0) {
-      logInfo('sync', 'reconnect_trigger', { pending: get().pendingCount });
+    const pendingQueueCount = get().queue.filter((i) => i.status === 'pending').length;
+    if (online && pendingQueueCount > 0) {
+      logInfo('sync', 'reconnect_trigger', { pending: pendingQueueCount });
       get().processQueue();
     }
   },

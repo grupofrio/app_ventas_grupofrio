@@ -21,7 +21,9 @@ import { CheckoutResultStatus } from './checkoutResult';
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
+import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
 import { normalizePlanStopPayload } from './planStopPayload';
+import { todayLocalISO } from '../utils/localDate';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -39,6 +41,15 @@ export interface GFSalesSummary {
   credit_amount_total: number;
 }
 
+export interface GFSalesOrderLine {
+  product_id: number;
+  product_name: string;
+  quantity: number;
+  price_unit: number;
+  price_subtotal: number;
+  kg_total: number;
+}
+
 export interface GFSalesOrder {
   id: number;
   name: string;
@@ -53,6 +64,10 @@ export interface GFSalesOrder {
   confirmation_date: string;
   stop_id: number | null;
   operation_id: string;
+  payment_method: string;
+  payment_method_label: string;
+  employee_name: string;
+  lines: GFSalesOrderLine[];
 }
 
 export interface GFSalesListResult {
@@ -98,6 +113,11 @@ export interface GFLiquidationPaymentDetail {
 export interface GFLiquidationSummary {
   plan_id: number;
   plan_name: string;
+  expected_payments: {
+    cash: GFLiquidationPaymentBucket;
+    credit: GFLiquidationPaymentBucket;
+    transfer: GFLiquidationPaymentBucket;
+  };
   payments: {
     cash: GFLiquidationPaymentBucket;
     credit: GFLiquidationPaymentBucket;
@@ -109,9 +129,72 @@ export interface GFLiquidationSummary {
   include_draft: boolean;
 }
 
+export interface GFRouteReconciliationLine {
+  id: number;
+  product_id: number;
+  product_name: string;
+  qty_loaded: number;
+  qty_delivered: number;
+  qty_returned: number;
+  qty_scrap: number;
+  qty_difference: number;
+}
+
+export interface GFRouteReconciliation {
+  reconciliation_id: number;
+  state: string;
+  qty_loaded: number;
+  qty_delivered: number;
+  qty_returned: number;
+  qty_scrap: number;
+  qty_difference: number;
+  lines: GFRouteReconciliationLine[];
+}
+
+export interface GFRouteCorteResult {
+  ok: boolean;
+  success: boolean;
+  code?: string;
+  message: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface GFRouteCorteAdjustmentLine {
+  product_id: number;
+  return_qty: number;
+  scrap_qty: number;
+}
+
+export interface GFRouteCorteAdjustmentResult {
+  ok: boolean;
+  message: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface GFRouteLiquidationConfirmResult {
+  ok: boolean;
+  code?: string;
+  message: string;
+  data?: {
+    plan_id?: number;
+    liquidacion_done_at?: string;
+    liquidacion_done_by?: string;
+    liquidacion_notes?: string;
+    total_collected?: number;
+    total_expected?: number;
+    difference?: number;
+    force?: boolean;
+  } | null;
+}
+
 const EMPTY_LIQUIDATION_SUMMARY: GFLiquidationSummary = {
   plan_id: 0,
   plan_name: '',
+  expected_payments: {
+    cash: { count: 0, total: 0 },
+    credit: { count: 0, total: 0 },
+    transfer: { count: 0, total: 0 },
+  },
   payments: {
     cash: { count: 0, total: 0 },
     credit: { count: 0, total: 0 },
@@ -121,6 +204,17 @@ const EMPTY_LIQUIDATION_SUMMARY: GFLiquidationSummary = {
   total_expected: 0,
   payment_details: [],
   include_draft: false,
+};
+
+const EMPTY_ROUTE_RECONCILIATION: GFRouteReconciliation = {
+  reconciliation_id: 0,
+  state: '',
+  qty_loaded: 0,
+  qty_delivered: 0,
+  qty_returned: 0,
+  qty_scrap: 0,
+  qty_difference: 0,
+  lines: [],
 };
 
 const EMPTY_SALES_SUMMARY: GFSalesSummary = {
@@ -176,6 +270,7 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
     count: toNumber(data.count),
     orders: ordersRaw.map((row) => {
       const order = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      const linesRaw = Array.isArray(order.lines) ? order.lines : [];
       return {
         id: toNumber(order.id),
         name: typeof order.name === 'string' ? order.name : '',
@@ -190,6 +285,20 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
         confirmation_date: typeof order.confirmation_date === 'string' ? order.confirmation_date : '',
         stop_id: toNullablePositiveNumber(order.stop_id),
         operation_id: typeof order.operation_id === 'string' ? order.operation_id : '',
+        payment_method: typeof order.payment_method === 'string' ? order.payment_method : '',
+        payment_method_label: typeof order.payment_method_label === 'string' ? order.payment_method_label : '',
+        employee_name: typeof order.employee_name === 'string' ? order.employee_name : '',
+        lines: linesRaw.map((row) => {
+          const line = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+          return {
+            product_id: toNumber(line.product_id),
+            product_name: typeof line.product_name === 'string' ? line.product_name : '',
+            quantity: toNumber(line.quantity ?? line.qty),
+            price_unit: toNumber(line.price_unit),
+            price_subtotal: toNumber(line.price_subtotal ?? line.subtotal),
+            kg_total: toNumber(line.kg_total ?? line.weight_total),
+          };
+        }),
       };
     }),
   };
@@ -221,7 +330,9 @@ export async function getMyPlan(): Promise<GFPlan | null> {
   try {
     // BLD-20260404-007: Backend wraps response in { ok, message, data }.
     // When found=false, the employee has no plan assigned for today.
-    const result = await postRest<any>(`${GF_BASE}/my_plan`);
+    const result = await postRest<any>(`${GF_BASE}/my_plan`, {
+      date: todayLocalISO(),
+    });
     if (!result || typeof result !== 'object') return null;
     if (result.ok === false) {
       console.warn('[gfLogistics] my_plan returned ok=false:', result.message);
@@ -422,6 +533,14 @@ export async function createSale(
   return !!result;
 }
 
+export async function acceptRouteLoad(routePlanId: number, pickingId: number): Promise<boolean> {
+  const result = await postRest<{ ok?: boolean; success?: boolean }>(
+    `${GF_BASE}/route_plan/seal_load`,
+    buildRouteLoadAcceptPayload(routePlanId, pickingId),
+  );
+  return result?.ok === true || result?.success === true || !!result;
+}
+
 export async function createPayment(
   payload: Record<string, unknown>,
   meta?: ClientEventMeta | null,
@@ -507,6 +626,9 @@ function normalizeLiquidationSummary(result: unknown): GFLiquidationSummary {
   const data = unwrapEnvelope<Record<string, unknown>>(result);
   if (!data) return EMPTY_LIQUIDATION_SUMMARY;
 
+  const expectedRaw = data.expected_payments && typeof data.expected_payments === 'object'
+    ? data.expected_payments as Record<string, unknown>
+    : {};
   const paymentsRaw = data.payments && typeof data.payments === 'object'
     ? data.payments as Record<string, unknown>
     : {};
@@ -516,6 +638,11 @@ function normalizeLiquidationSummary(result: unknown): GFLiquidationSummary {
   return {
     plan_id: toNumber(data.plan_id),
     plan_name: typeof data.plan_name === 'string' ? data.plan_name : '',
+    expected_payments: {
+      cash: normalizeLiquidationBucket(expectedRaw.cash),
+      credit: normalizeLiquidationBucket(expectedRaw.credit),
+      transfer: normalizeLiquidationBucket(expectedRaw.transfer),
+    },
     payments: {
       cash: normalizeLiquidationBucket(paymentsRaw.cash),
       credit: normalizeLiquidationBucket(paymentsRaw.credit),
@@ -554,6 +681,198 @@ export async function fetchLiquidationSummary(
   // porque buildAbsoluteUrl ya la limpia.
   const result = await postRest<unknown>('pwa-ruta/liquidation', body);
   return normalizeLiquidationSummary(result);
+}
+
+export function getLiquidationExpectedCashTotal(summary: GFLiquidationSummary | null | undefined): number {
+  if (!summary) return 0;
+  return summary.expected_payments.cash.total;
+}
+
+function normalizeRouteReconciliation(result: unknown): GFRouteReconciliation {
+  const data = unwrapEnvelope<Record<string, unknown>>(result);
+  if (!data) return EMPTY_ROUTE_RECONCILIATION;
+
+  const linesRaw = Array.isArray(data.lines) ? data.lines : [];
+  return {
+    reconciliation_id: toNumber(data.reconciliation_id),
+    state: typeof data.state === 'string' ? data.state : '',
+    qty_loaded: toNumber(data.qty_loaded),
+    qty_delivered: toNumber(data.qty_delivered),
+    qty_returned: toNumber(data.qty_returned),
+    qty_scrap: toNumber(data.qty_scrap),
+    qty_difference: toNumber(data.qty_difference),
+    lines: linesRaw.map((row) => {
+      const line = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      return {
+        id: toNumber(line.id),
+        product_id: toNumber(line.product_id),
+        product_name: typeof line.product_name === 'string' ? line.product_name : '',
+        qty_loaded: toNumber(line.qty_loaded),
+        qty_delivered: toNumber(line.qty_delivered),
+        qty_returned: toNumber(line.qty_returned),
+        qty_scrap: toNumber(line.qty_scrap),
+        qty_difference: toNumber(line.qty_difference),
+      };
+    }),
+  };
+}
+
+function resultFromUnknown(result: unknown): Record<string, unknown> {
+  const payload = result && typeof result === 'object'
+    ? result as Record<string, unknown>
+    : {};
+  return payload;
+}
+
+function errorResult(error: unknown): {
+  code: string;
+  message: string;
+} {
+  const err = error as Error & { code?: string };
+  return {
+    code: typeof err?.code === 'string' && err.code.length > 0 ? err.code : 'error',
+    message: err instanceof Error ? err.message : 'Error desconocido',
+  };
+}
+
+export async function fetchRouteReconciliation(
+  payload: { plan_id?: number; action?: 'get' | 'compute' | 'recompute' | 'done' } = {},
+): Promise<GFRouteReconciliation> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+  if (payload.action) {
+    body.action = payload.action;
+  }
+
+  const result = await postRest<unknown>(`${GF_BASE}/reconciliation`, body);
+  return normalizeRouteReconciliation(result);
+}
+
+export async function validateRouteCorte(
+  payload: { plan_id?: number; notes?: string } = {},
+): Promise<GFRouteCorteResult> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+  if (typeof payload.notes === 'string') {
+    body.notes = payload.notes;
+  }
+
+  try {
+    const result = await postRest<unknown>('pwa-ruta/validate-corte', body);
+    const data = resultFromUnknown(result);
+    return {
+      ok: data.ok !== false,
+      success: data.success !== false,
+      code: typeof data.code === 'string' ? data.code : undefined,
+      message: typeof data.message === 'string' ? data.message : 'Corte validado',
+      data: data.data && typeof data.data === 'object'
+        ? data.data as Record<string, unknown>
+        : null,
+    };
+  } catch (error) {
+    const err = errorResult(error);
+    return {
+      ok: false,
+      success: false,
+      code: err.code,
+      message: err.message,
+      data: null,
+    };
+  }
+}
+
+export async function saveRouteCorteAdjustments(
+  payload: { plan_id?: number; lines: GFRouteCorteAdjustmentLine[] },
+): Promise<GFRouteCorteAdjustmentResult> {
+  const body: Record<string, unknown> = {
+    lines: payload.lines,
+  };
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+
+  try {
+    const result = await postRest<unknown>(`${GF_BASE}/corte/adjustments`, body);
+    const data = resultFromUnknown(result);
+    return {
+      ok: data.ok !== false,
+      message: typeof data.message === 'string' ? data.message : 'Ajustes de corte guardados',
+      data: data.data && typeof data.data === 'object'
+        ? data.data as Record<string, unknown>
+        : null,
+    };
+  } catch (error) {
+    const err = errorResult(error);
+    return {
+      ok: false,
+      message: err.message,
+      data: null,
+    };
+  }
+}
+
+export async function confirmRouteLiquidation(
+  payload: {
+    plan_id?: number;
+    cash_collected?: number;
+    notes?: string;
+    force?: boolean;
+  } = {},
+): Promise<GFRouteLiquidationConfirmResult> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+  if (typeof payload.cash_collected === 'number' && Number.isFinite(payload.cash_collected)) {
+    body.cash_collected = payload.cash_collected;
+  }
+  if (typeof payload.notes === 'string') {
+    body.notes = payload.notes;
+  }
+  if (payload.force === true) {
+    body.force = true;
+  }
+
+  try {
+    const result = await postRest<unknown>(`${GF_BASE}/liquidacion/confirm`, body);
+    const data = resultFromUnknown(result);
+    const rawData = data.data && typeof data.data === 'object'
+      ? data.data as Record<string, unknown>
+      : {};
+    return {
+      ok: data.ok !== false,
+      code: typeof data.code === 'string' ? data.code : undefined,
+      message: typeof data.message === 'string' ? data.message : 'Liquidacion confirmada',
+      data: {
+        plan_id: toNullablePositiveNumber(rawData.plan_id) ?? undefined,
+        liquidacion_done_at: typeof rawData.liquidacion_done_at === 'string'
+          ? rawData.liquidacion_done_at
+          : undefined,
+        liquidacion_done_by: typeof rawData.liquidacion_done_by === 'string'
+          ? rawData.liquidacion_done_by
+          : undefined,
+        liquidacion_notes: typeof rawData.liquidacion_notes === 'string'
+          ? rawData.liquidacion_notes
+          : undefined,
+        total_collected: toNumber(rawData.total_collected),
+        total_expected: toNumber(rawData.total_expected),
+        difference: toNumber(rawData.difference),
+        force: Boolean(rawData.force),
+      },
+    };
+  } catch (error) {
+    const err = errorResult(error);
+    return {
+      ok: false,
+      code: err.code,
+      message: err.message,
+      data: null,
+    };
+  }
 }
 
 export async function fetchAnalyticsOptions(
@@ -818,7 +1137,7 @@ export async function signOut(): Promise<void> {
 //
 // Contract (expected from Sprint 3 P4, still not deployed in backend):
 //   POST /gf/logistics/api/employee/truck_stock
-//   Body: { warehouse_id?: number }
+//   Body: { warehouse_id?: number, mobile_location_id?: number }
 //   Response: {
 //     ok: true,
 //     data: {
@@ -853,10 +1172,12 @@ export interface TruckStockResponse {
 
 export async function fetchTruckStock(
   warehouseId: number | null | undefined,
+  mobileLocationId: number | null | undefined,
 ): Promise<TruckStockResponse | null> {
   try {
     const body: Record<string, unknown> = {};
     if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
+    if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
     const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
     if (!result || typeof result !== 'object') return null;
     if (result.ok === false) return null;

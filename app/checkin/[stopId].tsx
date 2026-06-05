@@ -374,25 +374,32 @@ export default function CheckinScreen() {
             </View>
           )}
 
-          {/* Check-in button */}
-          <Button
-            label={
-              !visitGuard.canStartVisit
-                ? visitGuard.primaryActionLabel
-                : gpsLoading
-                ? 'Obteniendo GPS...'
-                : canCheckIn
-                  ? canSkipGeofence && !isWithinFence
-                    ? '🟠 Hacer Check-in (permiso especial)'
-                    : '📍 Hacer Check-in'
-                  : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`
-            }
-            onPress={handleCheckIn}
-            fullWidth
-            disabled={!canCheckIn || checkingIn}
-            loading={gpsLoading}
-            style={{ marginTop: 16 }}
-          />
+          {/* Check-in actions */}
+          <View style={styles.checkInActionRow}>
+            <Button
+              label={
+                !visitGuard.canStartVisit
+                  ? visitGuard.primaryActionLabel
+                  : gpsLoading
+                  ? 'Obteniendo GPS...'
+                  : canCheckIn
+                    ? canSkipGeofence && !isWithinFence
+                      ? '🟠 Hacer Check-in (permiso especial)'
+                      : '📍 Hacer Check-in'
+                    : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`
+              }
+              onPress={handleCheckIn}
+              disabled={!canCheckIn || checkingIn}
+              loading={gpsLoading}
+              style={styles.checkInButton}
+            />
+            <Button
+              label="📍 Maps"
+              variant="secondary"
+              onPress={handleOpenLocation}
+              style={styles.checkInMapsButton}
+            />
+          </View>
 
           {/* Retry GPS button */}
           {!gpsLoading && !isWithinFence && hasCustomerCoords && (
@@ -597,6 +604,14 @@ const styles = StyleSheet.create({
   },
   distanceFill: { height: 6, borderRadius: 3 },
   distanceLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center', marginTop: 4 },
+  checkInActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    marginTop: 16,
+  },
+  checkInButton: { flex: 1 },
+  checkInMapsButton: { flexBasis: 112, paddingHorizontal: 12 },
   retryBtn: {
     alignItems: 'center', paddingVertical: 12, marginTop: 8,
   },

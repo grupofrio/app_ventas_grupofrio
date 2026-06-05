@@ -6,30 +6,39 @@
 import React, { useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
-import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
+import { RouteLoadAcceptanceCard } from '../../src/components/domain/RouteLoadAcceptanceCard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { useRouteStore } from '../../src/stores/useRouteStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 
 export default function InventoryScreen() {
-  const router = useRouter();
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const { plan, loadPlan } = useRouteStore();
   const {
     products, totalStockKg, isLoading, error, loadProducts,
     productCount, lastSync: productsLastSync,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
-    if (!warehouseId) return;
-    await loadProducts(warehouseId);
-  }, [warehouseId, loadProducts]);
+    const tasks: Promise<void>[] = [];
+    if (warehouseId) {
+      tasks.push(Promise.resolve(loadProducts(warehouseId)));
+    }
+    if (isOnline) {
+      tasks.push(loadPlan());
+    }
+    await Promise.all(tasks);
+  }, [isOnline, loadPlan, warehouseId, loadProducts]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
   // BLD-20260424-LOOP: ver nota en productLoading.ts. Pasamos productCount
@@ -41,7 +50,10 @@ export default function InventoryScreen() {
       )) {
         void loadProducts(warehouseId!);
       }
-    }, [warehouseId, isLoading, productCount, productsLastSync, loadProducts])
+      if (isOnline) {
+        void loadPlan();
+      }
+    }, [warehouseId, isLoading, productCount, productsLastSync, loadProducts, isOnline, loadPlan])
   );
 
   // Forecast total for route (F5: real aggregation)
@@ -102,8 +114,18 @@ export default function InventoryScreen() {
           )}
         </Card>
 
+        <RouteLoadAcceptanceCard
+          plan={plan}
+          isOnline={isOnline}
+          warehouseId={warehouseId}
+          loadPlan={loadPlan}
+          loadProducts={loadProducts}
+          showLoadLines
+          showAcceptedLoads
+        />
+
         {/* Product list */}
-        <Text style={styles.sectionTitle}>DETALLE DE CARGA</Text>
+        <Text style={styles.sectionTitle}>INVENTARIO FÍSICO REAL</Text>
         {isLoading ? (
           <Card><Text style={typography.dim}>Cargando productos...</Text></Card>
         ) : error ? (
@@ -112,7 +134,7 @@ export default function InventoryScreen() {
           <Card>
             <Text style={typography.dim}>Sin productos en camioneta</Text>
             <Text style={[typography.dimSmall, { marginTop: 4 }]}>
-              Carga productos con "Solicitar Carga"
+              Acepta la carga o recarga asignada para reflejar inventario.
             </Text>
           </Card>
         ) : (
@@ -136,27 +158,6 @@ export default function InventoryScreen() {
               </View>
             ))
         )}
-
-        {/* Action buttons */}
-        <View style={styles.actionRow}>
-          <Button
-            label="📥 Solicitar Carga"
-            onPress={() => router.push('/refill' as never)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="📤 Devolucion"
-            variant="secondary"
-            onPress={() => router.push('/unload' as never)}
-            style={{ flex: 1 }}
-          />
-        </View>
-        <Button
-          label="🔄 Transferencias"
-          variant="secondary"
-          fullWidth
-          onPress={() => router.push('/transfer' as never)}
-        />
       </ScrollView>
     </SafeAreaView>
   );
@@ -204,6 +205,4 @@ const styles = StyleSheet.create({
     fontFamily: fonts.monoBold, fontSize: 11, fontWeight: '500', color: colors.textDim,
     marginTop: 1,
   },
-  // Actions
-  actionRow: { flexDirection: 'row', gap: 6, marginTop: 10, marginBottom: 8 },
 });

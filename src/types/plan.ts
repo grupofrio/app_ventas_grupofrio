@@ -6,7 +6,38 @@
 import { OdooId } from './odoo';
 import { KoldScoreData, KoldForecastData } from './kold';
 
-export type PlanState = 'draft' | 'confirmed' | 'in_progress' | 'done';
+export type PlanState = 'draft' | 'confirmed' | 'published' | 'in_progress' | 'closed' | 'reconciled' | 'done';
+
+export interface GFRouteLoadPicking {
+  id?: number;
+  picking_id?: number;
+  name?: string;
+  state?: string;
+  origin?: string;
+  scheduled_date?: string;
+  location_id?: number;
+  location_name?: string;
+  location_dest_id?: number;
+  location_dest_name?: string;
+  accepted?: boolean;
+  gf_route_load_accepted?: boolean;
+  load_kind?: 'initial' | 'refill' | string;
+  gf_route_load_kind?: 'initial' | 'refill' | string;
+  lines?: GFRouteLoadLine[];
+}
+
+export interface GFRouteLoadLine {
+  move_id?: number;
+  product_id?: number;
+  product_name?: string;
+  requested_qty?: number;
+  done_qty?: number;
+  quantity?: number;
+  display_qty?: number;
+  uom_id?: number;
+  uom_name?: string;
+  state?: string;
+}
 
 export interface GFPlan {
   plan_id: OdooId;
@@ -27,6 +58,16 @@ export interface GFPlan {
   // NOT the same as warehouse_id (which is stock.warehouse).
   mobile_location_id?: number | null;
   mobile_location_name?: string | null;
+  load_sealed?: boolean;
+  load_picking_id?: number | false | null;
+  load_pickings?: GFRouteLoadPicking[];
+  pending_loads?: GFRouteLoadPicking[];
+  pending_load_count?: number;
+  has_pending_load?: boolean;
+  corte_validated?: boolean;
+  corte_validated_at?: string | null;
+  liquidacion_done_at?: string | null;
+  liquidacion_done_by?: string | null;
 }
 
 export type StopState =

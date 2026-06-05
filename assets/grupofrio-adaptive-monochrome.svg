@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Grupo Frio">
+  <rect width="1024" height="1024" fill="none"/>
+  <g transform="translate(118 304) scale(2.88)" fill="#000">
+    <g transform="translate(39 56)">
+      <path d="M45 0 0 26v52l45 26 45-26V26Z"/>
+      <path d="M0 78 45 104V66L17 50 17 88Z"/>
+      <path d="M90 78 45 104V66l28-16v38Z"/>
+      <path d="M45 66 17 50l28-17 28 17Z"/>
+    </g>
+    <g font-family="Arial, Helvetica, sans-serif">
+      <text x="137" y="101" font-size="29" font-weight="300" letter-spacing="1.5">GRUPO</text>
+      <text x="137" y="136" font-size="34" font-weight="700" letter-spacing="3">FRIO</text>
+    </g>
+  </g>
+</svg>

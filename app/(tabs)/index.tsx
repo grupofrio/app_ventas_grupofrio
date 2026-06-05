@@ -13,6 +13,7 @@ import { KPICard } from '../../src/components/ui/KPICard';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { StopCard } from '../../src/components/domain/StopCard';
 import { RoutePreparationCard } from '../../src/components/domain/RoutePreparationCard';
+import { RouteLoadAcceptanceCard } from '../../src/components/domain/RouteLoadAcceptanceCard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -24,6 +25,7 @@ import { useProductStore } from '../../src/stores/useProductStore';
 import { preloadRouteCustomerPrices } from '../../src/services/pricelist';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
+import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -40,7 +42,10 @@ export default function HomeScreen() {
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const products = useProductStore((s) => s.products);
+  const productCount = useProductStore((s) => s.productCount);
   const isLoadingProducts = useProductStore((s) => s.isLoading);
+  const productsLastSync = useProductStore((s) => s.lastSync);
+  const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
 
   // Reload on auth identity changes so a previous employee's in-memory state is not reused.
@@ -58,11 +63,28 @@ export default function HomeScreen() {
   );
 
   useEffect(() => {
-    if (!isAuthenticated || !isOnline || !warehouseId || products.length > 0 || isLoadingProducts) {
+    if (!isAuthenticated || !isOnline) {
       return;
     }
-    void loadProducts(warehouseId);
-  }, [isAuthenticated, isOnline, warehouseId, products.length, isLoadingProducts, loadProducts]);
+    if (shouldAutoLoadProducts(
+      warehouseId,
+      productCount,
+      isLoadingProducts,
+      productsLastSync,
+      productError,
+    )) {
+      void loadProducts(warehouseId!);
+    }
+  }, [
+    isAuthenticated,
+    isOnline,
+    warehouseId,
+    productCount,
+    isLoadingProducts,
+    productsLastSync,
+    productError,
+    loadProducts,
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated || !isOnline || stops.length === 0 || products.length === 0) {
@@ -199,6 +221,14 @@ export default function HomeScreen() {
                 CEDIS antes de salir. No bloquea otras acciones; sólo
                 informa el estado. */}
             <RoutePreparationCard />
+
+            <RouteLoadAcceptanceCard
+              plan={plan}
+              isOnline={isOnline}
+              warehouseId={warehouseId}
+              loadPlan={loadPlan}
+              loadProducts={loadProducts}
+            />
 
             {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
             <View style={styles.weatherCard}>

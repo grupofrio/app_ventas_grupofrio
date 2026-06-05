@@ -4,70 +4,142 @@
  */
 
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
+import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
+import { loadSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+import {
+  SALE_TICKET_CREDIT_NOTE,
+  SALE_TICKET_LEGAL_NAME,
+  SALE_TICKET_RFC,
+  SaleTicketSnapshot,
+} from '../../src/services/saleTicket';
+import { openSaleTicketPdf } from '../../src/services/saleTicketPdf';
+import { formatCurrency } from '../../src/utils/time';
 
 export default function PrintTicketScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
+  const [ticket, setTicket] = React.useState<SaleTicketSnapshot | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isOpening, setIsOpening] = React.useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadTicket() {
+      setIsLoading(true);
+      const snapshot = orderId ? await loadSaleTicketSnapshot(orderId) : null;
+      if (mounted) {
+        setTicket(snapshot);
+        setIsLoading(false);
+      }
+    }
+
+    void loadTicket();
+    return () => {
+      mounted = false;
+    };
+  }, [orderId]);
+
+  async function handleOpenPdf() {
+    if (!ticket) return;
+    setIsOpening(true);
+    try {
+      await openSaleTicketPdf(ticket);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo abrir el PDF del ticket.';
+      Alert.alert('Ticket PDF', message);
+    } finally {
+      setIsOpening(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <TopBar title="Imprimir Ticket" showBack />
       <View style={styles.container}>
-        <View style={styles.ticketPreview}>
-          <Text style={styles.ticketHeader}>KOLD FIELD</Text>
-          <View style={styles.divider} />
-          <View style={styles.ticketRow}>
-            <Text style={styles.ticketLabel}>Pedido</Text>
-            <Text style={styles.ticketValue}>#{orderId ?? '---'}</Text>
+        {isLoading ? (
+          <View style={styles.center}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.loadingText}>Cargando ticket...</Text>
           </View>
-          <View style={styles.ticketRow}>
-            <Text style={styles.ticketLabel}>Fecha</Text>
-            <Text style={styles.ticketValue}>--/--/----</Text>
+        ) : ticket ? (
+          <>
+            <View style={styles.ticketPreview}>
+              <Text style={styles.ticketHeader}>GRUPO FRIO</Text>
+              <Text style={styles.ticketLegalName}>{SALE_TICKET_LEGAL_NAME}</Text>
+              <Text style={styles.ticketTaxId}>RFC: {SALE_TICKET_RFC}</Text>
+              <View style={styles.divider} />
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Pedido</Text>
+                <Text style={styles.ticketValue}>#{ticket.saleId}</Text>
+              </View>
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Cliente</Text>
+                <Text style={styles.ticketValue}>{ticket.customerName}</Text>
+              </View>
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Vendedor</Text>
+                <Text style={styles.ticketValue}>{ticket.sellerName}</Text>
+              </View>
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Pago</Text>
+                <Text style={styles.ticketValue}>{ticket.paymentLabel}</Text>
+              </View>
+              <View style={styles.divider} />
+              {ticket.lines.map((line) => (
+                <View key={line.productId} style={styles.ticketLine}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.productName}>{line.productName}</Text>
+                    <Text style={styles.productMeta}>
+                      {line.qty} x {formatCurrency(line.unitPrice)}
+                    </Text>
+                  </View>
+                  <Text style={styles.ticketValue}>{formatCurrency(line.lineTotal)}</Text>
+                </View>
+              ))}
+              <View style={styles.divider} />
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Kg</Text>
+                <Text style={styles.ticketValue}>{ticket.totalKg.toFixed(1)} kg</Text>
+              </View>
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Total</Text>
+                <Text style={styles.ticketTotal}>{formatCurrency(ticket.total)}</Text>
+              </View>
+              {ticket.paymentMethod === 'credit' ? (
+                <>
+                  <View style={styles.divider} />
+                  <Text style={styles.creditNote}>{SALE_TICKET_CREDIT_NOTE}</Text>
+                </>
+              ) : null}
+            </View>
+
+            <Button
+              label="Abrir PDF"
+              onPress={handleOpenPdf}
+              loading={isOpening}
+              fullWidth
+              style={{ marginBottom: spacing.lg }}
+            />
+          </>
+        ) : (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Ticket no encontrado</Text>
+            <Text style={styles.noticeText}>
+              No se encontro el ticket local para el pedido #{orderId ?? '---'}.
+            </Text>
           </View>
-          <View style={styles.ticketRow}>
-            <Text style={styles.ticketLabel}>Cliente</Text>
-            <Text style={styles.ticketValue}>---</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.ticketRow}>
-            <Text style={styles.ticketLabel}>Total</Text>
-            <Text style={styles.ticketTotal}>$0.00</Text>
-          </View>
-        </View>
+        )}
 
         <View style={styles.notice}>
-          <Text style={styles.noticeTitle}>🖨️ Impresora Bluetooth</Text>
+          <Text style={styles.noticeTitle}>Impresion Bluetooth</Text>
           <Text style={styles.noticeText}>
-            La impresion ESC/POS por Bluetooth requiere un custom dev client.
-            No disponible en Expo Go. Librerias sugeridas:
-            react-native-esc-pos-printer o react-native-thermal-receipt-printer.
+            El PDF se abre con el visor del sistema. Desde ahi puedes elegir
+            imprimir con una impresora Bluetooth compatible con tu dispositivo.
           </Text>
-        </View>
-
-        <View style={styles.actionsCard}>
-          <Text style={styles.actionsTitle}>Acciones disponibles</Text>
-          <View style={styles.actionRow}>
-            <Text style={styles.bullet}>•</Text>
-            <Text style={styles.actionText}>
-              Compartir ticket como imagen (Share API)
-            </Text>
-          </View>
-          <View style={styles.actionRow}>
-            <Text style={styles.bullet}>•</Text>
-            <Text style={styles.actionText}>
-              Enviar por WhatsApp al cliente
-            </Text>
-          </View>
-          <View style={styles.actionRow}>
-            <Text style={styles.bullet}>•</Text>
-            <Text style={styles.actionText}>
-              Imprimir via Bluetooth (requiere dev client)
-            </Text>
-          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -83,6 +155,16 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: spacing.lg,
   },
+  center: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  loadingText: {
+    color: colors.textDim,
+    fontSize: 13,
+    marginTop: spacing.sm,
+  },
   ticketPreview: {
     backgroundColor: '#FAFAFA',
     borderRadius: radii.button,
@@ -94,6 +176,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1A1A1A',
     textAlign: 'center',
+    marginBottom: 4,
+  },
+  ticketLegalName: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    textAlign: 'center',
+  },
+  ticketTaxId: {
+    fontSize: 11,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 2,
     marginBottom: spacing.sm,
   },
   divider: {
@@ -121,6 +216,26 @@ const styles = StyleSheet.create({
     color: '#1A1A1A',
     fontWeight: '700',
   },
+  ticketLine: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingVertical: 5,
+  },
+  creditNote: {
+    fontSize: 11,
+    color: '#1A1A1A',
+    lineHeight: 16,
+    textAlign: 'justify',
+  },
+  productName: {
+    fontSize: 12,
+    color: '#1A1A1A',
+    fontWeight: '600',
+  },
+  productMeta: {
+    fontSize: 11,
+    color: '#666',
+  },
   notice: {
     backgroundColor: 'rgba(37,99,235,0.08)',
     borderRadius: radii.button,
@@ -137,32 +252,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textDim,
     lineHeight: 20,
-  },
-  actionsCard: {
-    backgroundColor: colors.card,
-    borderRadius: radii.button,
-    padding: spacing.lg,
-  },
-  actionsTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    marginBottom: spacing.sm,
-  },
-  bullet: {
-    color: colors.primary,
-    fontSize: 14,
-    marginRight: spacing.sm,
-    lineHeight: 20,
-  },
-  actionText: {
-    fontSize: 14,
-    color: colors.textDim,
-    lineHeight: 20,
-    flex: 1,
   },
 });

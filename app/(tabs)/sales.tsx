@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -14,6 +14,9 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
+import { GFSalesOrder } from '../../src/services/gfLogistics';
+import { buildSaleTicketSnapshotFromOrder } from '../../src/services/saleTicket';
+import { loadSaleTicketSnapshot, saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
 export default function SalesScreen() {
   const router = useRouter();
@@ -35,6 +38,16 @@ export default function SalesScreen() {
   const progressPct = monthlyTarget > 0
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
+  async function openTicketForOrder(order: GFSalesOrder) {
+    const ticket = buildSaleTicketSnapshotFromOrder(order);
+    const ticketId = ticket.saleId;
+    const existingTicket = await loadSaleTicketSnapshot(ticketId);
+    if (!existingTicket) {
+      await saveSaleTicketSnapshot(ticket);
+    }
+    router.push(`/print/${ticketId}` as never);
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar
@@ -48,8 +61,8 @@ export default function SalesScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Action buttons */}
         <View style={styles.actionRow}>
-          <Button label="🏆 Ranking" variant="secondary" small
-            onPress={() => router.push('/ranking' as never)} style={{ flex: 1 }} />
+          <Button label="💰 Corte y Liquidacion" variant="primary" small
+            onPress={() => router.push('/cashclose' as never)} style={{ flex: 1.4 }} />
           <Button label="📈 Analiticas" variant="secondary" small
             onPress={() => router.push('/analytics' as never)} style={{ flex: 1 }} />
         </View>
@@ -82,7 +95,12 @@ export default function SalesScreen() {
         ) : (
           <View style={styles.list}>
             {orders.map((order) => (
-              <View key={order.id} style={styles.orderCard}>
+              <TouchableOpacity
+                key={order.id}
+                style={styles.orderCard}
+                onPress={() => void openTicketForOrder(order)}
+                activeOpacity={0.82}
+              >
                 <View style={styles.orderRow}>
                   <Text style={styles.orderName}>{order.name}</Text>
                   <Text style={styles.orderAmount}>{formatCurrency(order.amount_total)}</Text>
@@ -90,7 +108,8 @@ export default function SalesScreen() {
                 <Text style={styles.orderMeta}>
                   {order.partner_name} · {order.kg_total.toFixed(0)} kg
                 </Text>
-              </View>
+                <Text style={styles.orderHint}>Toca para abrir PDF</Text>
+              </TouchableOpacity>
             ))}
           </View>
         )}
@@ -147,5 +166,11 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 12,
     color: colors.textDim,
+  },
+  orderHint: {
+    marginTop: 8,
+    fontSize: 11,
+    color: colors.primary,
+    fontWeight: '700',
   },
 });

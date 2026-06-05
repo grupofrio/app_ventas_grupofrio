@@ -45,6 +45,11 @@ function testPricelistUsesSecureBackendPricingEndpoint() {
     /postRest<|postRest\(/,
     'fetchServerSidePrices debe usar postRest con tokens de empleado, no odooSession',
   );
+  assert.match(
+    body,
+    /pricelist_id/,
+    'fetchServerSidePrices debe enviar pricelist_id cuando la parada trae una lista explicita',
+  );
   assert.doesNotMatch(
     body,
     /return\s+null\s*;\s*$/,

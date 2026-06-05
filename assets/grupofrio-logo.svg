@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 274 194" role="img" aria-label="Grupo Frio">
+  <rect width="274" height="194" fill="#fff"/>
+  <g transform="translate(39 56)">
+    <path d="M45 0 0 26v52l45 26 45-26V26Z" fill="#d8dce1"/>
+    <path d="M45 0v33L17 49V17Z" fill="#cfd3d8"/>
+    <path d="M45 0 73 17v32L45 33Z" fill="#bfc4ca"/>
+    <path d="M17 49 45 33l28 16-28 17Z" fill="#edf0f2"/>
+    <path d="M0 78V26l17 10v52Z" fill="#eef1f4"/>
+    <path d="M90 26v52L73 88V36Z" fill="#aeb4bd"/>
+    <path d="M0 78 45 104V66L17 50 17 88Z" fill="#0b4aa0"/>
+    <path d="M90 78 45 104V66l28-16v38Z" fill="#003c8f"/>
+    <path d="M45 66 17 50l28-17 28 17Z" fill="#f7f9fa"/>
+    <path d="M45 0v33" fill="none" stroke="#fff" stroke-width="3"/>
+    <path d="M17 17v33l28 16v38" fill="none" stroke="#fff" stroke-width="3"/>
+    <path d="M73 17v33L45 66" fill="none" stroke="#fff" stroke-width="3"/>
+  </g>
+  <g fill="#003c8f" font-family="Arial, Helvetica, sans-serif">
+    <text x="137" y="101" font-size="29" font-weight="300" letter-spacing="1.5">GRUPO</text>
+    <text x="137" y="136" font-size="34" font-weight="700" letter-spacing="3">FRIO</text>
+  </g>
+</svg>

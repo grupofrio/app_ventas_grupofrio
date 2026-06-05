@@ -26,7 +26,7 @@ import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { getBaseUrl } from '../../services/api';
-import { computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
+import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
@@ -106,9 +106,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
   // dd78489). Reemplaza la heurística client-side anterior.
   const hasStockData = useProductStore((s) => s.hasStockData);
+  const loadProducts = useProductStore((s) => s.loadProducts);
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
   const companyId = useAuthStore((s) => s.companyId);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
   const isGlobalFallback = inventorySource === 'global_legacy';
 
   const [search, setSearch] = useState('');
@@ -119,6 +121,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Customer pricelist
   const [priceMap, setPriceMap] = useState<Map<number, number>>(new Map());
   const [priceLoading, setPriceLoading] = useState(false);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
   // Load base URL for image URLs
   useEffect(() => {
@@ -164,6 +167,26 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setViewMode(next);
     AsyncStorage.setItem(VIEW_PREF_KEY, next).catch(() => {});
   }, [viewMode]);
+
+  const refreshCatalog = useCallback(async () => {
+    if (!warehouseId || refreshingCatalog) return;
+    setRefreshingCatalog(true);
+    setPriceLoading(true);
+    clearPricelistCaches();
+    try {
+      await loadProducts(warehouseId);
+      if (partnerId) {
+        const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
+        const map = await computeCustomerPrices(partnerId, useProductStore.getState().products, pricingOptions);
+        setPriceMap(map);
+      } else {
+        setPriceMap(new Map());
+      }
+    } finally {
+      setPriceLoading(false);
+      setRefreshingCatalog(false);
+    }
+  }, [companyId, loadProducts, partnerId, pricelistId, refreshingCatalog, warehouseId]);
 
   // Demand recommendations
   const recommendations = useMemo(() => {
@@ -422,17 +445,27 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         {/* Header */}
         <View style={styles.header}>
           <Text style={typography.screenTitle}>Agregar Producto</Text>
-          <View style={styles.headerRight}>
-            {/* View toggle — plain text, works on all devices */}
-            <TouchableOpacity style={styles.viewToggle} onPress={toggleView}>
-              <Text style={styles.viewToggleLabel}>
-                {viewMode === 'list' ? 'Ver Grid' : 'Ver Lista'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setSearch(''); setQuantities({}); onClose(); }}>
-              <Text style={styles.closeBtn}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={() => { setSearch(''); setQuantities({}); onClose(); }}>
+            <Text style={styles.closeBtn}>Cerrar</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.toolbarRow}>
+          <TouchableOpacity
+            style={[styles.refreshBtn, (!warehouseId || refreshingCatalog) && styles.refreshBtnDisabled]}
+            onPress={refreshCatalog}
+            disabled={!warehouseId || refreshingCatalog}
+          >
+            <Text style={styles.refreshBtnLabel}>
+              {refreshingCatalog ? 'Refrescando' : 'Refrescar'}
+            </Text>
+          </TouchableOpacity>
+          {/* View toggle — plain text, works on all devices */}
+          <TouchableOpacity style={styles.viewToggle} onPress={toggleView}>
+            <Text style={styles.viewToggleLabel}>
+              {viewMode === 'list' ? 'Ver Grid' : 'Ver Lista'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Banners */}
@@ -555,8 +588,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: spacing.screenPadding, paddingVertical: 12,
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   closeBtn: { fontSize: 14, color: colors.primary, fontWeight: '600' },
+
+  toolbarRow: {
+    flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8,
+    paddingHorizontal: spacing.screenPadding, marginTop: -4, marginBottom: 8,
+  },
+  refreshBtn: {
+    backgroundColor: colors.card, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  refreshBtnDisabled: { opacity: 0.65 },
+  refreshBtnLabel: { fontSize: 12, color: colors.primary, fontWeight: '600' },
 
   viewToggle: {
     backgroundColor: colors.card, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6,

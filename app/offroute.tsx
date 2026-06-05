@@ -6,7 +6,7 @@
  * 1. Driver searches by name / phone / RFC / email
  * 2. Selects a customer or lead from results
  * 3. Virtual stop is created in route store
- * 4. Customers route to sale; leads route to prospection
+ * 4. Customers choose location or sale; leads route to prospection
  *
  * Uses Odoo search with authenticated fallback to /get_records.
  */
@@ -14,7 +14,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, Alert, RefreshControl,
+  StyleSheet, ActivityIndicator, Alert, RefreshControl, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -33,6 +33,7 @@ import { startOffrouteVisit } from '../src/services/gfLogistics';
 import { extractOffrouteVisitId } from '../src/services/offrouteVisit';
 import { warmOffrouteCustomerPrices } from '../src/services/offroutePricing';
 import { computeCustomerPrices } from '../src/services/pricelist';
+import { buildStopNavigationUrls } from '../src/services/locationNavigation';
 import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
 
 const DEFAULT_OFFROUTE_COMPANY_ID = 34;
@@ -82,6 +83,34 @@ export default function OffRouteScreen() {
   }, [doSearch, hasSearched, search]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshSearch);
 
+  async function openSpecialVisitLocation(result: OffrouteSearchResult) {
+    const urls = buildStopNavigationUrls({
+      customer_name: result.name,
+      google_maps_url: result.googleMapsUrl ?? undefined,
+      customer_latitude: result.customerLatitude ?? undefined,
+      customer_longitude: result.customerLongitude ?? undefined,
+    });
+
+    if (!urls.primaryUrl) {
+      Alert.alert('Sin ubicacion', 'Este cliente no tiene ubicacion registrada.');
+      return;
+    }
+
+    try {
+      await Linking.openURL(urls.primaryUrl);
+    } catch {
+      if (urls.fallbackUrl) {
+        try {
+          await Linking.openURL(urls.fallbackUrl);
+          return;
+        } catch {
+          // Continue to the generic user-facing error below.
+        }
+      }
+      Alert.alert('Error', 'No se pudo abrir la ubicacion.');
+    }
+  }
+
   async function handleSelect(result: OffrouteSearchResult) {
     let offrouteVisitId: number | null = null;
 
@@ -120,6 +149,9 @@ export default function OffRouteScreen() {
         offrouteVisitId,
         pricelistId: result.pricelistId,
         pricelistName: result.pricelistName,
+        customerLatitude: result.customerLatitude,
+        customerLongitude: result.customerLongitude,
+        googleMapsUrl: result.googleMapsUrl,
       },
     );
     updateStopState(virtualStopId, 'in_progress');
@@ -141,6 +173,9 @@ export default function OffRouteScreen() {
         _offrouteVisitId: offrouteVisitId,
         _pricelistId: result.pricelistId,
         _pricelistName: result.pricelistName,
+        customer_latitude: result.customerLatitude ?? undefined,
+        customer_longitude: result.customerLongitude ?? undefined,
+        google_maps_url: result.googleMapsUrl ?? undefined,
       },
       0, 0, // lat/lon — GPS will provide real values if available
     );
@@ -175,7 +210,21 @@ export default function OffRouteScreen() {
       return;
     }
 
-    router.push(`/sale/${virtualStopId}` as never);
+    Alert.alert(
+      'Visita especial',
+      `¿Qué quieres hacer con ${result.name}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Ir a ubicacion',
+          onPress: () => { void openSpecialVisitLocation(result); },
+        },
+        {
+          text: 'Generar venta',
+          onPress: () => router.push(`/sale/${virtualStopId}` as never),
+        },
+      ],
+    );
   }
 
   function renderCustomer({ item }: { item: OffrouteSearchResult }) {
@@ -240,7 +289,7 @@ export default function OffRouteScreen() {
 
         {/* Info */}
         <Text style={styles.infoText}>
-          Busca clientes o leads fuera de tu ruta. Cliente abre venta; lead abre prospección.
+          Busca clientes o leads fuera de tu ruta. Cliente permite ubicacion o venta; lead abre prospección.
         </Text>
         {employeeAnalyticPlazaName ? (
           <Text style={styles.scopeText}>

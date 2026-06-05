@@ -31,6 +31,9 @@ export interface CreateVirtualStopInput {
   offrouteVisitId?: number | null;
   pricelistId?: number | null;
   pricelistName?: string | null;
+  customerLatitude?: number | null;
+  customerLongitude?: number | null;
+  googleMapsUrl?: string | null;
   /** Only overridden by tests — production always uses Date.now(). */
   now?: number;
 }
@@ -54,6 +57,9 @@ export function createVirtualStop(input: CreateVirtualStopInput): GFStop {
     _offrouteVisitId: input.offrouteVisitId ?? null,
     _pricelistId: input.pricelistId ?? null,
     _pricelistName: input.pricelistName ?? null,
+    customer_latitude: input.customerLatitude ?? undefined,
+    customer_longitude: input.customerLongitude ?? undefined,
+    google_maps_url: input.googleMapsUrl ?? undefined,
     _virtualCreatedAt: now,
   };
 }

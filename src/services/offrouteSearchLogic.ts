@@ -7,6 +7,9 @@ export interface OffrouteCustomerRecord {
   mobile?: string;
   email?: string;
   vat?: string;
+  partner_latitude?: number;
+  partner_longitude?: number;
+  google_maps_url?: string;
   pricelist_id?: [number, string] | number | false | null;
   property_product_pricelist?: [number, string] | number | false | null;
 }
@@ -32,6 +35,9 @@ export interface OffrouteSearchResult {
   partnerId: number | null;
   pricelistId: number | null;
   pricelistName: string | null;
+  customerLatitude: number | null;
+  customerLongitude: number | null;
+  googleMapsUrl: string | null;
 }
 
 export const BASIC_CUSTOMER_FIELDS = [
@@ -50,9 +56,15 @@ export const CUSTOMER_PRICELIST_FIELDS = [
   'property_product_pricelist',
 ];
 
+export const CUSTOMER_LOCATION_FIELDS = [
+  'partner_latitude',
+  'partner_longitude',
+];
+
 export const CUSTOMER_FIELDS = [
   ...BASIC_CUSTOMER_FIELDS,
   ...CUSTOMER_PRICELIST_FIELDS,
+  ...CUSTOMER_LOCATION_FIELDS,
 ];
 
 export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
@@ -134,6 +146,9 @@ export function buildOffrouteResults(
         partnerId: customer.id,
         pricelistId,
         pricelistName,
+        customerLatitude: typeof customer.partner_latitude === 'number' ? customer.partner_latitude : null,
+        customerLongitude: typeof customer.partner_longitude === 'number' ? customer.partner_longitude : null,
+        googleMapsUrl: customer.google_maps_url || null,
       };
     }),
     ...leads.map((lead) => ({
@@ -145,6 +160,9 @@ export function buildOffrouteResults(
       partnerId: lead.partner_id ? lead.partner_id[0] : null,
       pricelistId: null,
       pricelistName: null,
+      customerLatitude: null,
+      customerLongitude: null,
+      googleMapsUrl: null,
     })),
   ];
 }

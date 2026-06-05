@@ -15,7 +15,6 @@ import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
-import { useRouteStore } from './useRouteStore';
 import { useSalesStore } from './useSalesStore';
 
 interface AuthState {
@@ -103,6 +102,7 @@ interface EmployeePayload {
 }
 
 async function clearRouteCache(): Promise<void> {
+  const { useRouteStore } = await import('./useRouteStore');
   useRouteStore.getState().reset();
   await Promise.all([
     storeRemove(STORAGE_KEYS.PLAN),

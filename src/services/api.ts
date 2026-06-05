@@ -18,6 +18,7 @@ const STORE_KEYS = {
 } as const;
 
 export const DEFAULT_BASE_URL = 'https://grupofrio.odoo.com';
+export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
 
 let _baseUrl = DEFAULT_BASE_URL;
 
@@ -42,6 +43,42 @@ function makeLoggedHttpError(message: string): Error & { __alreadyLogged: true }
   const error = new Error(message) as Error & { __alreadyLogged: true };
   error.__alreadyLogged = true;
   return error;
+}
+
+function makeTimeoutError(timeoutMs: number): Error & { code: 'timeout' } {
+  const seconds = Math.round(timeoutMs / 1000);
+  const error = new Error(`Tiempo de espera agotado despues de ${seconds}s`) as Error & {
+    code: 'timeout';
+  };
+  error.code = 'timeout';
+  return error;
+}
+
+async function fetchWithTimeout(
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1] = {},
+  timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw makeTimeoutError(timeoutMs);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function buildAbsoluteUrl(url: string): Promise<string> {
@@ -160,7 +197,8 @@ export const api = createApiClient();
  */
 export async function postRest<T = any>(
   url: string,
-  data: Record<string, unknown> = {}
+  data: Record<string, unknown> = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const absoluteUrl = await buildAbsoluteUrl(url);
   const headers = await buildHeaders();
@@ -178,11 +216,11 @@ export async function postRest<T = any>(
   }));
 
   try {
-    const response = await fetch(absoluteUrl, {
+    const response = await fetchWithTimeout(absoluteUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
-    });
+    }, options.timeoutMs);
 
     const text = await response.text();
     const parsed = safeParseJson(text);
@@ -246,7 +284,8 @@ export async function postRest<T = any>(
  */
 export async function postRpc<T = any>(
   url: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  options: { timeoutMs?: number; allowFunctionalErrorResult?: boolean } = {},
 ): Promise<T> {
   const absoluteUrl = await buildAbsoluteUrl(url);
   const headers = await buildHeaders();
@@ -268,11 +307,11 @@ export async function postRpc<T = any>(
   }));
 
   try {
-    const response = await fetch(absoluteUrl, {
+    const response = await fetchWithTimeout(absoluteUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
-    });
+    }, options.timeoutMs);
 
     const text = await response.text();
     const parsed = safeParseJson(text);
@@ -288,7 +327,7 @@ export async function postRpc<T = any>(
     const functionalErr = !odooErrMsg
       ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })
       : null;
-    const errMsg = odooErrMsg || functionalErr;
+    const errMsg = odooErrMsg || (options.allowFunctionalErrorResult ? null : functionalErr);
 
     const trace = buildHttpTraceData({
       phase: errMsg ? 'error' : 'response',
@@ -332,7 +371,8 @@ export async function postRpc<T = any>(
  */
 export async function postJsonRpc<T = any>(
   url: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const absoluteUrl = await buildAbsoluteUrl(url);
   const headers = await buildHeaders();
@@ -355,11 +395,11 @@ export async function postJsonRpc<T = any>(
   }));
 
   try {
-    const response = await fetch(absoluteUrl, {
+    const response = await fetchWithTimeout(absoluteUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
-    });
+    }, options.timeoutMs);
 
     const text = await response.text();
     const parsed = safeParseJson(text);

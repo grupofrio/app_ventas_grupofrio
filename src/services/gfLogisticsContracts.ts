@@ -76,6 +76,9 @@ export function buildSalesCreatePayload(payload: Record<string, unknown>): Recor
   const stopId = asPositiveNumber(payload.stop_id);
   if (stopId) contractPayload.stop_id = stopId;
 
+  const offrouteVisitId = asPositiveNumber(payload.offroute_visit_id);
+  if (offrouteVisitId) contractPayload.offroute_visit_id = offrouteVisitId;
+
   const warehouseId = asPositiveNumber(payload.warehouse_id);
   if (warehouseId) contractPayload.warehouse_id = warehouseId;
 
@@ -95,6 +98,9 @@ export function buildSalesCreatePayload(payload: Record<string, unknown>): Recor
   if (analyticDistribution) contractPayload.analytic_distribution = analyticDistribution;
 
   if (payload.create_invoice === true) contractPayload.create_invoice = true;
+
+  const paymentMethod = asNonEmptyString(payload.payment_method);
+  if (paymentMethod) contractPayload.payment_method = paymentMethod;
 
   const note = asNonEmptyString(payload.note);
   if (note) contractPayload.note = note;

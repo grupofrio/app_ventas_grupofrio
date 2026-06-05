@@ -33,6 +33,9 @@ interface OffrouteSearchModule {
       vat?: string;
       pricelist_id?: [number, string] | false;
       property_product_pricelist?: [number, string] | false;
+      partner_latitude?: number;
+      partner_longitude?: number;
+      google_maps_url?: string;
     }>,
     leads: Array<{
       id: number;
@@ -53,6 +56,9 @@ interface OffrouteSearchModule {
     partnerId: number | null;
     pricelistId: number | null;
     pricelistName: string | null;
+    customerLatitude: number | null;
+    customerLongitude: number | null;
+    googleMapsUrl: string | null;
   }>;
 }
 
@@ -84,6 +90,23 @@ function testCustomerCarriesPricelist(module: OffrouteSearchModule) {
   assert.equal(result.partnerId, 55251);
   assert.equal(result.pricelistId, 90);
   assert.equal(result.pricelistName, 'IGUALA LOCAL (MXN)');
+}
+
+function testCustomerCarriesNavigationLocation(module: OffrouteSearchModule) {
+  const [result] = module.buildOffrouteResults(
+    [{
+      id: 55251,
+      name: 'Pozoleria Poczo',
+      partner_latitude: 18.3442,
+      partner_longitude: -99.5391,
+      google_maps_url: 'https://maps.google.com/?q=18.3442,-99.5391',
+    }],
+    [],
+  );
+
+  assert.equal(result.customerLatitude, 18.3442);
+  assert.equal(result.customerLongitude, -99.5391);
+  assert.equal(result.googleMapsUrl, 'https://maps.google.com/?q=18.3442,-99.5391');
 }
 
 function testLeadMapping(module: OffrouteSearchModule) {
@@ -160,6 +183,7 @@ async function main() {
 
   testCustomerMapping(module);
   testCustomerCarriesPricelist(module);
+  testCustomerCarriesNavigationLocation(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
   await testCustomerFieldFallbackKeepsResults(module);

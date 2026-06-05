@@ -100,6 +100,8 @@ export async function koldRead<T = unknown>(
     // Llamada cruda para inspeccionar el envelope del backend.
     const result = await postRpc<any>('/get_records', {
       model, domain, fields, limit, offset: 0,
+    }, {
+      allowFunctionalErrorResult: true,
     });
 
     // Caso ACL/módulo: backend responde 200 con `{ error, case: -3 }`

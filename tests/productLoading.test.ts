@@ -14,10 +14,29 @@ function testSkipsAutoloadWithoutWarehouse(
 }
 
 function testSkipsAutoloadWhenAlreadyLoadedOrLoading(
-  shouldAutoLoadProducts: (warehouseId: number | null | undefined, productCount: number, isLoading: boolean) => boolean,
+  shouldAutoLoadProducts: (
+    warehouseId: number | null | undefined,
+    productCount: number,
+    isLoading: boolean,
+    lastSyncMs?: number | null,
+    error?: string | null,
+  ) => boolean,
 ) {
   assert.equal(shouldAutoLoadProducts(12, 4, false), false);
   assert.equal(shouldAutoLoadProducts(12, 0, true), false);
+}
+
+function testSkipsAutoloadAfterAttemptOrError(
+  shouldAutoLoadProducts: (
+    warehouseId: number | null | undefined,
+    productCount: number,
+    isLoading: boolean,
+    lastSyncMs?: number | null,
+    error?: string | null,
+  ) => boolean,
+) {
+  assert.equal(shouldAutoLoadProducts(12, 0, false, Date.now() - 10_000, null), false);
+  assert.equal(shouldAutoLoadProducts(12, 0, false, null, 'Dominio no autorizado.'), false);
 }
 
 type RefreshOnFocusFn = (
@@ -65,6 +84,7 @@ async function main() {
   testAutoloadWhenWarehousePresentAndStoreEmpty(productLoading.shouldAutoLoadProducts);
   testSkipsAutoloadWithoutWarehouse(productLoading.shouldAutoLoadProducts);
   testSkipsAutoloadWhenAlreadyLoadedOrLoading(productLoading.shouldAutoLoadProducts);
+  testSkipsAutoloadAfterAttemptOrError(productLoading.shouldAutoLoadProducts);
   testRefreshesOnFocusWhenWarehousePresentAndIdle(productLoading.shouldRefreshProductsOnFocus);
   testSkipsFocusRefreshWithoutWarehouseOrWhileLoading(productLoading.shouldRefreshProductsOnFocus);
   testDoesNotRefreshWhenCacheIsFreshAndPopulated(productLoading.shouldRefreshProductsOnFocus);

@@ -13,11 +13,30 @@ function main() {
     resolve(REPO_ROOT, 'app/postvisit/[stopId].tsx'),
     'utf8',
   );
+  const routeScreen = readFileSync(
+    resolve(REPO_ROOT, 'app/(tabs)/route.tsx'),
+    'utf8',
+  );
 
   assert.match(
     checkinScreen,
     /Abrir ubicación/,
     'el botón debe existir en la pantalla de check-in',
+  );
+  assert.match(
+    checkinScreen,
+    /checkInActionRow/,
+    'el botón de ubicación debe estar junto al botón de check-in',
+  );
+  assert.match(
+    routeScreen,
+    /buildStopNavigationUrls/,
+    'la lista de ruta debe reutilizar el helper de URLs de Maps',
+  );
+  assert.match(
+    routeScreen,
+    /📍 Maps/,
+    'cada cliente en la lista de ruta debe ofrecer un botón directo a Maps',
   );
   assert.doesNotMatch(
     postvisitScreen,

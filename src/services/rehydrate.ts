@@ -7,22 +7,20 @@
  * Order matters:
  * 1. Sync queue (so pending ops aren't lost)
  * 2. Route plan + stops
- * 3. Products
- * 4. KOLD intelligence (if cached)
+ * 3. KOLD intelligence (if cached)
  */
 
 import { storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { useSyncStore } from '../stores/useSyncStore';
 import { useRouteStore } from '../stores/useRouteStore';
-import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useVisitStore } from '../stores/useVisitStore';
 import { GFPlan, GFStop } from '../types/plan';
-import { TruckProduct } from '../stores/useProductStore';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
 import { stampMissingCreatedAt, pruneStaleVirtualDrafts, extractVirtualDrafts } from './offrouteDrafts';
 // V2: Error persistence & periodic flush
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
+import { todayLocalISO } from '../utils/localDate';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -61,7 +59,7 @@ export async function rehydrateAppState(): Promise<{
     }
 
     if (plan && stops) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayLocalISO();
       const currentEmployeeId = useAuthStore.getState().employeeId;
       const isTodayPlan = plan.date === today;
       const isCurrentEmployeePlan = plan.driver_employee_id === currentEmployeeId;
@@ -99,21 +97,9 @@ export async function rehydrateAppState(): Promise<{
       await storeRemove(STORAGE_KEYS.VISIT_STATE);
     }
 
-    // 3. Products — also restore inventorySource if available
-    const products = await storeLoad<TruckProduct[]>(STORAGE_KEYS.PRODUCTS);
-    if (products && products.length > 0) {
-      const totalKg = products.reduce((sum, p) => sum + (p._totalKg || 0), 0);
-      // BLD-20260408-P0: Determine inventorySource from rehydrated data
-      const hasGlobalFallback = products.some((p) => p._isGlobalFallback);
-      useProductStore.setState({
-        products,
-        totalStockKg: Math.round(totalKg),
-        productCount: products.length,
-        lastSync: Date.now(),
-        inventorySource: hasGlobalFallback ? 'global_legacy' : 'truck_stock',
-      });
-      productCount = products.length;
-    }
+    // 3. Products are intentionally not rehydrated. Inventory must come from
+    // live Odoo stock so drivers do not sell against stale local quantities.
+    await storeRemove(STORAGE_KEYS.PRODUCTS);
 
     console.log(
       `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}`

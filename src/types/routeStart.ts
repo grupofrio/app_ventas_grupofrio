@@ -79,6 +79,9 @@ export interface GFKmResult {
   plan_id: number | null;
   type: KmType | null;
   km: number | null;
+  /** Stored values echoed by the backend (Sprint C.1). */
+  departure_km?: number | null;
+  arrival_km?: number | null;
 }
 
 // ── Readiness (Sprint A hub) ─────────────────────────────────────────────────

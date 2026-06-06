@@ -30,7 +30,7 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
-import { isValidKm } from '../src/services/routeStartLogic';
+import { isValidKm, calculateKmDriven, formatKm } from '../src/services/routeStartLogic';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -46,22 +46,37 @@ export default function RouteCloseScreen() {
   const planId = plan?.plan_id ?? null;
   const planState = plan?.state ?? null;
   const isOnline = useSyncStore((s) => s.isOnline);
-  const kmInitial = useRouteStartStore((s) => s.kmInitial);
+  const kmInitialStore = useRouteStartStore((s) => s.kmInitial);
 
   const [kmFinalInput, setKmFinalInput] = useState('');
   const [kmFinal, setKmFinal] = useState<number | null>(null);
+  const [kmInitialBackend, setKmInitialBackend] = useState<number | null>(null);
   const [savingKm, setSavingKm] = useState(false);
   const [closing, setClosing] = useState(false);
   const [closed, setClosed] = useState(false);
 
-  // If the plan already came back closed/reconciled, reflect it.
+  // KM inicial source of truth: local store (Sprint A) first, then whatever
+  // the backend echoed (km-update response) or the plan carries (rehydration).
+  const planDepartureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
+  const kmInitial = kmInitialStore ?? kmInitialBackend ?? planDepartureKm;
+
+  // Rehydrate KM final from the plan if the backend already stored arrival_km,
+  // so re-opening the hub doesn't make a saved KM look lost (Sprint C.1).
   useFocusEffect(
     useCallback(() => {
       if (planState === 'closed' || planState === 'reconciled' || planState === 'done') {
         setClosed(true);
       }
-    }, [planState]),
+      const planArrival = typeof plan?.arrival_km === 'number' && plan.arrival_km > 0
+        ? plan.arrival_km
+        : null;
+      if (planArrival != null) {
+        setKmFinal((prev) => (prev == null ? planArrival : prev));
+      }
+    }, [planState, plan?.arrival_km]),
   );
+
+  const kmDriven = calculateKmDriven(kmInitial, kmFinal);
 
   const kmStatus: StepStatus = kmFinal != null ? 'done' : 'pending';
 
@@ -87,8 +102,12 @@ export default function RouteCloseScreen() {
         onPress: async () => {
           setSavingKm(true);
           try {
-            await updateKm(planId, 'arrival', km);
-            setKmFinal(km);
+            const res = await updateKm(planId, 'arrival', km);
+            setKmFinal(res.arrival_km ?? km);
+            // Backfill KM inicial from the backend echo if the store lost it.
+            if (kmInitialStore == null && res.departure_km != null && res.departure_km > 0) {
+              setKmInitialBackend(res.departure_km);
+            }
             setKmFinalInput('');
           } catch (err) {
             // Backend validates arrival >= departure; show its message.
@@ -206,10 +225,30 @@ export default function RouteCloseScreen() {
             <StatusBadge status={kmStatus} />
           </View>
           {kmFinal != null ? (
-            <Text style={styles.stepBody}>
-              Registrado: <Text style={styles.kmValue}>{kmFinal} km</Text>
-              {kmInitial != null ? `  ·  Recorrido: ${kmFinal - kmInitial} km` : ''}
-            </Text>
+            <View style={styles.kmSummary}>
+              <View style={styles.kmSummaryRow}>
+                <Text style={styles.kmSummaryLabel}>KM final registrado</Text>
+                <Text style={styles.kmSummaryValue}>{formatKm(kmFinal)} km</Text>
+              </View>
+              {kmInitial != null ? (
+                <>
+                  <View style={styles.kmSummaryRow}>
+                    <Text style={styles.kmSummaryLabel}>KM inicial</Text>
+                    <Text style={styles.kmSummaryValue}>{formatKm(kmInitial)} km</Text>
+                  </View>
+                  <View style={[styles.kmSummaryRow, styles.kmDrivenRow]}>
+                    <Text style={styles.kmDrivenLabel}>Recorrido de la ruta</Text>
+                    <Text style={styles.kmDrivenValue}>
+                      {kmDriven != null ? `${formatKm(kmDriven)} km` : '—'}
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.kmWarn}>
+                  No se pudo calcular el recorrido porque falta el KM inicial.
+                </Text>
+              )}
+            </View>
           ) : (
             <>
               <Text style={styles.stepBody}>
@@ -301,6 +340,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card,
   },
   kmValue: { fontFamily: fonts.monoBold, fontWeight: '700', color: colors.text },
+  kmSummary: { gap: 6, marginBottom: 2 },
+  kmSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  kmSummaryLabel: { fontSize: 12, color: colors.textDim },
+  kmSummaryValue: { fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text },
+  kmDrivenRow: {
+    marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  kmDrivenLabel: { fontSize: 13, fontWeight: '700', color: colors.text },
+  kmDrivenValue: { fontFamily: fonts.monoBold, fontSize: 15, fontWeight: '700', color: colors.primary },
+  kmWarn: {
+    fontSize: 12, color: '#EAB308', marginTop: 6, lineHeight: 16,
+  },
   closeCard: {
     padding: 16, borderRadius: radii.card, borderWidth: 1,
     borderColor: 'rgba(34,197,94,0.3)', backgroundColor: 'rgba(34,197,94,0.05)', marginTop: 4,

@@ -68,6 +68,10 @@ export interface GFPlan {
   corte_validated_at?: string | null;
   liquidacion_done_at?: string | null;
   liquidacion_done_by?: string | null;
+  // KM (Sprint C.1). Optional: present only if /my_plan serializes them.
+  // Used to rehydrate the close hub's KM display across re-opens.
+  departure_km?: number | null;
+  arrival_km?: number | null;
 }
 
 export type StopState =

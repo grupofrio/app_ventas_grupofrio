@@ -43,6 +43,37 @@ export function isValidKm(km: unknown): boolean {
   return Number.isFinite(n) && n > 0;
 }
 
+function kmOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * KM recorridos = final - inicial. Returns null when it cannot be computed:
+ *   - either value missing / invalid
+ *   - final < inicial (would be a negative/incoherent distance)
+ * final === inicial → 0 (valid: zero km driven).
+ * Sprint C.1.
+ */
+export function calculateKmDriven(
+  initialKm: number | null | undefined,
+  finalKm: number | null | undefined,
+): number | null {
+  const i = kmOrNull(initialKm);
+  const f = kmOrNull(finalKm);
+  if (i === null || f === null) return null;
+  if (f < i) return null;
+  return Math.round(f - i);
+}
+
+/** Format a km number with thousands separators: 52428 → "52,428". */
+export function formatKm(n: number | null | undefined): string {
+  const v = kmOrNull(n);
+  if (v === null) return '—';
+  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 /**
  * Find the numeric "odómetro de salida" check inside a checklist, if present.
  * Used to feed the KM inicial from the checklist instead of asking twice

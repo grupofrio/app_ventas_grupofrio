@@ -14,6 +14,8 @@ interface LogicModule {
   };
   isChecklistComplete: (header: GFVehicleChecklist | null) => boolean;
   isValidKm: (km: unknown) => boolean;
+  calculateKmDriven: (initialKm: number | null | undefined, finalKm: number | null | undefined) => number | null;
+  formatKm: (n: number | null | undefined) => string;
   findOdometerCheck: (checks: GFVehicleCheck[]) => GFVehicleCheck | null;
   extractOdometerKm: (checks: GFVehicleCheck[]) => number | null;
   computeRouteStartReadiness: (input: {
@@ -139,6 +141,33 @@ function testExtractOdometerKm(m: LogicModule) {
   ]), null);
 }
 
+function testCalculateKmDriven(m: LogicModule) {
+  // final > initial → diff
+  assert.equal(m.calculateKmDriven(52300, 52428), 128);
+  // final === initial → 0
+  assert.equal(m.calculateKmDriven(52300, 52300), 0);
+  // final < initial → null (incoherent)
+  assert.equal(m.calculateKmDriven(52428, 52300), null);
+  // missing initial → null
+  assert.equal(m.calculateKmDriven(null, 52428), null);
+  assert.equal(m.calculateKmDriven(undefined, 52428), null);
+  // missing final → null
+  assert.equal(m.calculateKmDriven(52300, null), null);
+  // invalid values → null
+  assert.equal(m.calculateKmDriven(NaN as unknown as number, 52428), null);
+  // rounds the difference
+  assert.equal(m.calculateKmDriven(100.2, 250.9), 151);
+}
+
+function testFormatKm(m: LogicModule) {
+  assert.equal(m.formatKm(52428), '52,428');
+  assert.equal(m.formatKm(128), '128');
+  assert.equal(m.formatKm(1234567), '1,234,567');
+  assert.equal(m.formatKm(0), '0');
+  assert.equal(m.formatKm(null), '—');
+  assert.equal(m.formatKm(undefined), '—');
+}
+
 async function main() {
   const m = await import(
     // @ts-ignore -- import.meta only used in test runtime.
@@ -151,6 +180,8 @@ async function main() {
   testReadiness(m);
   testFindOdometerCheck(m);
   testExtractOdometerKm(m);
+  testCalculateKmDriven(m);
+  testFormatKm(m);
 
   console.log('route start logic tests: ok');
 }

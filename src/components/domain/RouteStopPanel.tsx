@@ -29,16 +29,14 @@ interface Props {
   onNavigate: (stop: GFStop) => void;
   /** Opens the FULL client hub (/stop/[id]) — same flow as the list. */
   onOpenClient: (stop: GFStop) => void;
+  /** Route-level close, shown ONLY in the "ruta completada" state. */
   onCloseRoute: () => void;
-  onRefill: () => void;
-  onIncident: () => void;
 }
 
 export function RouteStopPanel(props: Props) {
   const {
     progress, selectedStop, nextStop, distanceMeters, orderedStops, unlocatedStops,
-    expanded, onToggleExpand, onSelectStop, onNavigate, onOpenClient,
-    onCloseRoute, onRefill, onIncident,
+    expanded, onToggleExpand, onSelectStop, onNavigate, onOpenClient, onCloseRoute,
   } = props;
 
   // The focused stop is the user-selected one, else the next recommended.
@@ -55,7 +53,7 @@ export function RouteStopPanel(props: Props) {
           <Text style={styles.progressText}>
             {progress.visited}/{progress.total} visitados · {progress.pct}%
           </Text>
-          <Text style={styles.expandHint}>{expanded ? 'Ver mapa ▾' : 'Ver lista ▴'}</Text>
+          <Text style={styles.expandHint}>{expanded ? 'Ocultar ▾' : 'Ver paradas ▴'}</Text>
         </View>
       </TouchableOpacity>
 
@@ -142,15 +140,6 @@ export function RouteStopPanel(props: Props) {
               })}
             </>
           )}
-
-          <Text style={styles.sectionTitle}>ACCIONES DE RUTA</Text>
-          <View style={styles.routeActionsRow}>
-            <PanelButton label="🔄 Recarga" onPress={onRefill} />
-            <PanelButton label="🚩 Incidente" onPress={onIncident} />
-          </View>
-          <View style={styles.routeActionsRow}>
-            <PanelButton label="🏁 Cerrar ruta" onPress={onCloseRoute} />
-          </View>
         </ScrollView>
       )}
     </View>
@@ -220,5 +209,4 @@ const styles = StyleSheet.create({
   listName: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
   listState: { fontSize: 11, fontWeight: '700' },
   listMutedTag: { fontSize: 11, color: colors.textDim },
-  routeActionsRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
 });

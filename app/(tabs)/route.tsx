@@ -24,6 +24,7 @@ import { filterPlannedStopsBySearch } from '../../src/services/routeStops';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
 import { RouteMap, RouteMapHandle } from '../../src/components/domain/RouteMap';
 import { RouteStopPanel } from '../../src/components/domain/RouteStopPanel';
+import { RouteActionsMenu } from '../../src/components/domain/RouteActionsMenu';
 import {
   selectNextStop,
   splitStopsByLocation,
@@ -63,6 +64,7 @@ export default function RouteScreen() {
   const [viewMode, setViewMode] = React.useState<ViewMode | null>(null); // null until first decide
   const [selectedStopId, setSelectedStopId] = React.useState<number | null>(null);
   const [panelExpanded, setPanelExpanded] = React.useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = React.useState(false);
 
   const { located, unlocated } = React.useMemo(() => splitStopsByLocation(stops), [stops]);
   const nextStop = React.useMemo(() => selectNextStop(stops), [stops]);
@@ -178,6 +180,9 @@ export default function RouteScreen() {
             onSelectStop={handleSelectStop}
           />
           <View style={styles.mapFabs} pointerEvents="box-none">
+            <TouchableOpacity style={styles.fab} onPress={() => setActionsMenuOpen(true)} activeOpacity={0.85}>
+              <Text style={styles.fabText}>⋯</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.fab} onPress={() => mapRef.current?.fitAll()} activeOpacity={0.85}>
               <Text style={styles.fabText}>⤢</Text>
             </TouchableOpacity>
@@ -204,8 +209,12 @@ export default function RouteScreen() {
             onNavigate={handleOpenLocation}
             onOpenClient={handleOpenClient}
             onCloseRoute={() => router.push('/route-close' as never)}
-            onRefill={() => router.push('/refill-accept' as never)}
-            onIncident={() => router.push('/incident' as never)}
+          />
+          <RouteActionsMenu
+            visible={actionsMenuOpen}
+            onClose={() => setActionsMenuOpen(false)}
+            onNavigateRoute={(route) => router.push(route as never)}
+            onShowList={() => setViewMode('list')}
           />
         </View>
       ) : (

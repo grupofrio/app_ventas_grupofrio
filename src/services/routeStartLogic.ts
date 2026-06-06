@@ -12,6 +12,7 @@
 import type {
   RouteStartReadiness,
   GFVehicleChecklist,
+  GFVehicleCheck,
   ChecklistProgress,
 } from '../types/routeStart';
 
@@ -40,6 +41,33 @@ export function isChecklistComplete(header: GFVehicleChecklist | null): boolean 
 export function isValidKm(km: unknown): boolean {
   const n = typeof km === 'number' ? km : parseFloat(String(km ?? ''));
   return Number.isFinite(n) && n > 0;
+}
+
+/**
+ * Find the numeric "odómetro de salida" check inside a checklist, if present.
+ * Used to feed the KM inicial from the checklist instead of asking twice
+ * (Sprint A.1, Option A). Heuristic by name + numeric type. Returns the
+ * first matching numeric check, or null.
+ */
+export function findOdometerCheck(checks: GFVehicleCheck[]): GFVehicleCheck | null {
+  const ODO = /od[oó]metro|kil[oó]metr|\bkm\b/i;
+  for (const c of checks) {
+    if (c.check_type === 'numeric' && ODO.test(c.name)) return c;
+  }
+  return null;
+}
+
+/**
+ * Extract the captured odometer KM from a checklist's checks, if the
+ * odometer numeric check was answered with a value > 0. Returns null
+ * otherwise. Used to auto-register KM inicial on checklist completion.
+ */
+export function extractOdometerKm(checks: GFVehicleCheck[]): number | null {
+  const odo = findOdometerCheck(checks);
+  if (!odo) return null;
+  const v = odo.result_numeric;
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.round(v);
+  return null;
 }
 
 /**

@@ -1,17 +1,22 @@
 /**
- * Vehicle checklist screen — Sprint A.
+ * Vehicle checklist screen — Sprint A + A.1.
  *
  * Ports the PWA Colaboradores ScreenChecklistUnidad bootstrap + answer flow:
  *   ensureChecklistReady → render checks → submit each → complete.
  *
- * Sprint A supports yes_no / numeric / text checks. `photo` checks are shown
- * read-only with a notice (camera-in-checklist needs a dev client; deferred
- * to Sprint B). Most unit checks are yes_no, so this covers the daily flow.
+ * Supports yes_no / numeric / text / PHOTO checks (A.1). Photo capture reuses
+ * the existing camera.ts (takePhoto + readPhotoAsBase64). Online-first: the
+ * base64 is sent to /pwa-ruta/vehicle-check immediately (no offline queue for
+ * checklist photos in this sprint).
+ *
+ * On completion, if the checklist has a numeric odometer check, its value is
+ * auto-registered as KM inicial via /pwa-ruta/km-update (A.1, Option A) so the
+ * vendor doesn't capture KM twice.
  */
 
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
+  View, Text, Image, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -26,21 +31,34 @@ import {
   submitVehicleCheck,
   completeVehicleChecklist,
 } from '../../src/services/vehicleChecklist';
+import { updateKm } from '../../src/services/routeKm';
+import { extractOdometerKm } from '../../src/services/routeStartLogic';
+import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
+
+interface CheckDraft {
+  bool?: boolean;
+  numeric?: string;
+  text?: string;
+  reason?: string;
+  photoUri?: string; // local file URI of a freshly captured photo (not yet sent)
+}
 
 export default function ChecklistScreen() {
   const { planId } = useLocalSearchParams<{ planId: string }>();
   const planIdNum = Number(planId);
   const router = useRouter();
   const setChecklistComplete = useRouteStartStore((s) => s.setChecklistComplete);
+  const setKmInitialStore = useRouteStartStore((s) => s.setKmInitial);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [header, setHeader] = useState<GFVehicleChecklist | null>(null);
   const [checks, setChecks] = useState<GFVehicleCheck[]>([]);
-  const [drafts, setDrafts] = useState<Record<number, { bool?: boolean; numeric?: string; text?: string; reason?: string }>>({});
+  const [drafts, setDrafts] = useState<Record<number, CheckDraft>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [capturingId, setCapturingId] = useState<number | null>(null);
   const [completing, setCompleting] = useState(false);
 
   const bootstrap = useCallback(async () => {
@@ -77,6 +95,34 @@ export default function ChecklistScreen() {
     }
   }
 
+  // Capture (or re-capture) a photo for a photo-type check. Reuses camera.ts.
+  async function handleTakePhoto(check: GFVehicleCheck) {
+    if (capturingId) return;
+    setCapturingId(check.id);
+    try {
+      const perm = await getCameraPermissionStatus();
+      // takePhoto requests permission internally, but we pre-check to give a
+      // clear message when it was previously denied.
+      const photo = await takePhoto();
+      if (!photo) {
+        const after = await getCameraPermissionStatus();
+        if (perm === 'denied' || after === 'denied') {
+          Alert.alert(
+            'Permiso de cámara',
+            'KoldField necesita permiso de cámara para la foto del checklist. Actívalo en los ajustes del teléfono.',
+          );
+        }
+        // otherwise: user cancelled — no message needed
+        return;
+      }
+      setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: photo.localUri } }));
+    } catch {
+      Alert.alert('Error de cámara', 'No se pudo tomar la foto. Intenta de nuevo.');
+    } finally {
+      setCapturingId(null);
+    }
+  }
+
   async function handleAnswer(check: GFVehicleCheck) {
     if (savingId) return;
     const draft = drafts[check.id] || {};
@@ -110,18 +156,38 @@ export default function ChecklistScreen() {
         return;
       }
       payload = { result_text: t };
+    } else if (check.check_type === 'photo') {
+      if (!draft.photoUri) {
+        Alert.alert('Falta foto', 'Toma la foto antes de guardar este punto.');
+        return;
+      }
+      const base64 = await readPhotoAsBase64(draft.photoUri);
+      if (!base64) {
+        Alert.alert('Foto no disponible', 'No se pudo leer la foto. Tómala de nuevo.');
+        return;
+      }
+      payload = {
+        result_photo: base64, // base64 sin prefijo data: — contrato /pwa-ruta/vehicle-check
+        result_photo_filename: `odometro_${check.id}_${Date.now()}.jpg`,
+      };
     } else {
-      Alert.alert('No soportado en esta versión', 'Los checks con foto se capturarán en una próxima versión.');
+      Alert.alert('Tipo no soportado', `Este punto (${check.check_type}) no se puede responder en esta versión.`);
       return;
     }
 
     setSavingId(check.id);
     try {
       await submitVehicleCheck(check.id, payload);
+      // clear the local photo draft after a successful send
+      setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: undefined } }));
       await reloadChecks();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'No se pudo guardar la respuesta.';
-      if (/requires.?reason|motivo/i.test(msg)) {
+      if (/photo_too_large|too.?large|grande|tama/i.test(msg)) {
+        Alert.alert('Foto muy pesada', 'La foto es demasiado grande. Toma una nueva con menos detalle o mejor luz.');
+      } else if (/invalid_photo|formato/i.test(msg)) {
+        Alert.alert('Formato inválido', 'La foto no tiene un formato válido. Tómala de nuevo.');
+      } else if (/requires.?reason|motivo/i.test(msg)) {
         setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id] } }));
         Alert.alert('Motivo requerido', 'Esta respuesta requiere un motivo.');
       } else {
@@ -138,6 +204,20 @@ export default function ChecklistScreen() {
     try {
       await completeVehicleChecklist(header?.id ?? 0);
       setChecklistComplete(true);
+
+      // A.1 Option A: feed KM inicial from the checklist odometer numeric
+      // check so the vendor doesn't capture KM twice. Best-effort: a failure
+      // here does NOT fail the checklist — the hub keeps a manual KM fallback.
+      const odoKm = extractOdometerKm(checks);
+      if (odoKm != null && planIdNum > 0) {
+        try {
+          await updateKm(planIdNum, 'departure', odoKm);
+          setKmInitialStore(odoKm);
+        } catch {
+          // leave KM to the hub fallback; do not block completion
+        }
+      }
+
       Alert.alert('Checklist completado', 'La inspección de unidad quedó registrada.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -187,21 +267,6 @@ export default function ChecklistScreen() {
           <Text style={styles.progressText}>{answered}/{checks.length} respondidos</Text>
           {completed && <Badge label="✓ Completado" variant="green" />}
         </View>
-
-        {/* BLD-SPRINT-A: aviso honesto si hay checks foto OBLIGATORIOS sin
-            responder. La captura de foto en checklist no está en Sprint A,
-            así que estos puntos bloquearían "Completar". Lo hacemos visible
-            para que el chofer/soporte sepan el motivo y no quede atrapado. */}
-        {checks.some((c) => c.check_type === 'photo' && c.required && !c.answered) && !completed && (
-          <View style={styles.photoBlockBanner}>
-            <Text style={styles.photoBlockTitle}>⚠️ Puntos con foto pendientes</Text>
-            <Text style={styles.photoBlockBody}>
-              Este checklist incluye punto(s) obligatorios con foto que aún no se
-              capturan desde la app. No podrás completar hasta resolverlos.
-              Repórtalo a tu supervisor.
-            </Text>
-          </View>
-        )}
 
         {checks.map((check) => {
           const draft = drafts[check.id] || {};
@@ -274,19 +339,47 @@ export default function ChecklistScreen() {
               )}
 
               {check.check_type === 'photo' && (
-                <Text style={styles.photoNotice}>
-                  📷 Este punto requiere foto. Disponible en próxima versión — repórtalo a tu supervisor si es obligatorio hoy.
-                </Text>
+                <View>
+                  {/* Already-sent photo (from a previous answer) */}
+                  {!draft.photoUri && check.answered && check.result_photo_url ? (
+                    <View style={styles.photoSentRow}>
+                      <Text style={styles.photoSentText}>✓ Foto registrada</Text>
+                    </View>
+                  ) : null}
+
+                  {/* Freshly captured photo preview */}
+                  {draft.photoUri ? (
+                    <Image source={{ uri: draft.photoUri }} style={styles.photoPreview} resizeMode="cover" />
+                  ) : null}
+
+                  {!completed && (
+                    <Button
+                      label={
+                        capturingId === check.id
+                          ? 'Abriendo cámara…'
+                          : draft.photoUri
+                            ? '📷 Tomar de nuevo'
+                            : (check.answered ? '📷 Reemplazar foto' : '📷 Tomar foto')
+                      }
+                      variant="secondary"
+                      onPress={() => handleTakePhoto(check)}
+                      disabled={capturingId === check.id}
+                      loading={capturingId === check.id}
+                      small
+                    />
+                  )}
+                </View>
               )}
 
-              {check.check_type !== 'photo' && !completed && (
+              {!completed && (
                 <Button
                   label={check.answered ? 'Actualizar' : 'Guardar'}
                   variant={check.answered ? 'secondary' : 'primary'}
                   onPress={() => handleAnswer(check)}
-                  disabled={savingId === check.id}
+                  disabled={savingId === check.id || (check.check_type === 'photo' && !draft.photoUri)}
                   loading={savingId === check.id}
                   small
+                  style={check.check_type === 'photo' ? { marginTop: 8 } : undefined}
                 />
               )}
             </Card>
@@ -337,12 +430,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 8, color: colors.text, fontSize: 13, backgroundColor: colors.card,
     marginBottom: 8,
   },
-  photoNotice: { fontSize: 12, color: colors.textDim, fontStyle: 'italic', marginVertical: 6 },
-  photoBlockBanner: {
-    padding: 12, borderRadius: radii.button,
-    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
-    marginBottom: 4,
+  photoPreview: {
+    width: '100%', height: 180, borderRadius: radii.button, marginBottom: 8,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
   },
-  photoBlockTitle: { fontSize: 13, fontWeight: '700', color: colors.text, marginBottom: 4 },
-  photoBlockBody: { fontSize: 12, lineHeight: 17, color: colors.textDim },
+  photoSentRow: { marginBottom: 8 },
+  photoSentText: { fontSize: 13, color: colors.success, fontWeight: '600' },
 });

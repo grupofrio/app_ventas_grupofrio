@@ -261,7 +261,12 @@ export default function RouteStartScreen() {
           />
         </Card>
 
-        {/* Step 3: KM inicial */}
+        {/* Step 3: KM inicial.
+            A.1 Option A: el KM se captura UNA sola vez, en el checklist
+            (check numérico "Odómetro salida"), y se registra automáticamente
+            al completar. Aquí sólo se muestra el estado. El input manual es un
+            FALLBACK que aparece sólo si el checklist ya quedó completo pero no
+            alimentó el KM (p. ej. un template sin check de odómetro). */}
         <Card>
           <View style={styles.rowBetween}>
             <Text style={styles.stepTitle}>3 · KM inicial</Text>
@@ -271,9 +276,16 @@ export default function RouteStartScreen() {
             <Text style={styles.stepBody}>
               Registrado: <Text style={styles.kmValue}>{kmInitialStored} km</Text>
             </Text>
+          ) : checklistStatus !== 'done' ? (
+            <Text style={styles.stepBody}>
+              Se registra automáticamente al completar el checklist (odómetro de salida).
+              No necesitas capturarlo aquí.
+            </Text>
           ) : (
             <>
-              <Text style={styles.stepBody}>Captura el kilometraje de salida de la unidad.</Text>
+              <Text style={styles.stepBody}>
+                El checklist no registró el KM. Captúralo manualmente para continuar.
+              </Text>
               <View style={styles.kmRow}>
                 <TextInput
                   style={styles.kmInput}

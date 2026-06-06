@@ -14,6 +14,7 @@ import { colors, spacing, radii, stopStateColors } from '../../src/theme/tokens'
 import { fonts } from '../../src/theme/typography';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
+import { useLocationStore } from '../../src/stores/useLocationStore';
 import { GFStop } from '../../src/types/plan';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePresentation';
@@ -21,6 +22,15 @@ import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { filterPlannedStopsBySearch } from '../../src/services/routeStops';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { RouteMap, RouteMapHandle } from '../../src/components/domain/RouteMap';
+import { RouteStopPanel } from '../../src/components/domain/RouteStopPanel';
+import {
+  selectNextStop,
+  splitStopsByLocation,
+  computeRouteProgress,
+  orderedStops as orderStopsBySeq,
+  distanceToStop,
+} from '../../src/services/routeMapLogic';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -37,12 +47,65 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
   return { label: `${e.l}${kg ? ` · ${kg.toFixed(0)}kg` : ''}`, variant: e.v };
 }
 
+type ViewMode = 'map' | 'list';
+
 export default function RouteScreen() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = React.useState('');
   const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
+  const userLat = useLocationStore((s) => s.latitude);
+  const userLon = useLocationStore((s) => s.longitude);
+
+  // ── Map-first state (BLD-ROUTE-MAP) ──────────────────────────────────────
+  const mapRef = React.useRef<RouteMapHandle | null>(null);
+  const [viewMode, setViewMode] = React.useState<ViewMode | null>(null); // null until first decide
+  const [selectedStopId, setSelectedStopId] = React.useState<number | null>(null);
+  const [panelExpanded, setPanelExpanded] = React.useState(false);
+
+  const { located, unlocated } = React.useMemo(() => splitStopsByLocation(stops), [stops]);
+  const nextStop = React.useMemo(() => selectNextStop(stops), [stops]);
+  const progress = React.useMemo(() => computeRouteProgress(stops), [stops]);
+  const orderedForPanel = React.useMemo(() => orderStopsBySeq(stops), [stops]);
+
+  // Decide default view once we know whether there's a mappable plan.
+  React.useEffect(() => {
+    if (viewMode !== null) return;
+    if (stops.length > 0) setViewMode(located.length > 0 ? 'map' : 'list');
+  }, [viewMode, stops.length, located.length]);
+
+  const selectedStop = React.useMemo(
+    () => (selectedStopId != null ? stops.find((s) => s.id === selectedStopId) ?? null : null),
+    [selectedStopId, stops],
+  );
+  const focusStop = selectedStop ?? nextStop;
+  const focusDistance = focusStop ? distanceToStop(userLat, userLon, focusStop) : null;
+
+  // Auto-select the next pending stop when the screen regains focus (e.g. after
+  // returning from a sale/no-sale) IF the user hasn't manually picked one.
+  useFocusEffect(
+    useCallback(() => {
+      setSelectedStopId((prev) => {
+        if (prev != null && stops.some((s) => s.id === prev && (s.state === 'pending' || s.state === 'in_progress'))) {
+          return prev; // keep a still-pending manual selection
+        }
+        const next = selectNextStop(stops);
+        return next ? next.id : null;
+      });
+    }, [stops]),
+  );
+
+  const handleSelectStop = useCallback((stop: GFStop) => {
+    setSelectedStopId(stop.id);
+    if (typeof stop.customer_latitude === 'number' && typeof stop.customer_longitude === 'number') {
+      mapRef.current?.centerOn(stop.customer_latitude, stop.customer_longitude);
+    }
+  }, []);
+
+  const handleSell = useCallback((stop: GFStop) => router.push(`/sale/${stop.id}` as never), [router]);
+  const handleNoSale = useCallback((stop: GFStop) => router.push(`/nosale/${stop.id}` as never), [router]);
+  const handleViewClient = useCallback((stop: GFStop) => router.push(`/stop/${stop.id}` as never), [router]);
   const refreshPlan = useCallback(async () => {
     await Promise.all([
       loadPlan(),
@@ -89,12 +152,63 @@ export default function RouteScreen() {
     : sorted;
   const planTypeLabel = getPlanTypeLabel(plan?.generation_mode);
 
+  const showMap = viewMode === 'map';
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar
         title={plan?.route || plan?.name || 'Sin ruta'}
-        rightAction={{ label: '🗺 Mapa', onPress: () => router.push('/map' as never) }}
+        rightAction={
+          located.length > 0
+            ? { label: showMap ? '☰ Lista' : '🗺 Mapa', onPress: () => setViewMode(showMap ? 'list' : 'map') }
+            : undefined
+        }
       />
+
+      {showMap ? (
+        <View style={{ flex: 1 }}>
+          <RouteMap
+            ref={mapRef}
+            stops={stops}
+            selectedStopId={focusStop?.id ?? null}
+            userLat={userLat}
+            userLon={userLon}
+            onSelectStop={handleSelectStop}
+          />
+          <View style={styles.mapFabs} pointerEvents="box-none">
+            <TouchableOpacity style={styles.fab} onPress={() => mapRef.current?.fitAll()} activeOpacity={0.85}>
+              <Text style={styles.fabText}>⤢</Text>
+            </TouchableOpacity>
+            {userLat != null && userLon != null && (
+              <TouchableOpacity
+                style={styles.fab}
+                onPress={() => mapRef.current?.centerOn(userLat, userLon)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.fabText}>◎</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <RouteStopPanel
+            progress={progress}
+            selectedStop={selectedStop}
+            nextStop={nextStop}
+            distanceMeters={focusDistance}
+            orderedStops={orderedForPanel}
+            unlocatedStops={unlocated}
+            expanded={panelExpanded}
+            onToggleExpand={() => setPanelExpanded((v) => !v)}
+            onSelectStop={handleSelectStop}
+            onNavigate={handleOpenLocation}
+            onSell={handleSell}
+            onNoSale={handleNoSale}
+            onViewClient={handleViewClient}
+            onCloseRoute={() => router.push('/route-close' as never)}
+            onRefill={() => router.push('/refill-accept' as never)}
+            onIncident={() => router.push('/incident' as never)}
+          />
+        </View>
+      ) : (
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.content}
@@ -269,6 +383,7 @@ export default function RouteScreen() {
           })
         )}
       </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -276,6 +391,15 @@ export default function RouteScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
+  // Map-first floating buttons (BLD-ROUTE-MAP)
+  mapFabs: { position: 'absolute', top: 12, right: 12, gap: 8 },
+  fab: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.card,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: colors.border,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 4,
+  },
+  fabText: { fontSize: 20, color: colors.text },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   routeTypeRow: { marginBottom: 10 },

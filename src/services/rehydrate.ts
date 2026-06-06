@@ -15,6 +15,7 @@ import { useSyncStore } from '../stores/useSyncStore';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useVisitStore } from '../stores/useVisitStore';
+import { useRouteStartStore } from '../stores/useRouteStartStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
 import { stampMissingCreatedAt, pruneStaleVirtualDrafts, extractVirtualDrafts } from './offrouteDrafts';
@@ -39,6 +40,10 @@ export async function rehydrateAppState(): Promise<{
     // 1. Sync queue — CRITICAL: don't lose pending operations
     await useSyncStore.getState().rehydrateQueue();
     queueSize = useSyncStore.getState().pendingCount;
+
+    // 1b. Route start readiness (Sprint A): checklist/km/load flags so the
+    // hub doesn't show "no preparado" after an app restart.
+    await useRouteStartStore.getState().hydrate();
 
     // 2. Route plan
     const plan = await storeLoad<GFPlan>(STORAGE_KEYS.PLAN);

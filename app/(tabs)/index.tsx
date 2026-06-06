@@ -216,6 +216,23 @@ export default function HomeScreen() {
           </View>
         ) : (
           <>
+            {/* BLD-SPRINT-A: entrada única al ritual de inicio de operación
+                (checklist de unidad + KM inicial + aceptar carga). Lleva al
+                hub app/route-start.tsx. No reemplaza las cards existentes;
+                es el acceso ordenado y secuencial para el chofer. */}
+            <TouchableOpacity
+              style={styles.routeStartCta}
+              onPress={() => router.push('/route-start' as never)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.routeStartIcon}>🚚</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.routeStartTitle}>Iniciar operación</Text>
+                <Text style={styles.routeStartSub}>Checklist · KM inicial · Aceptar carga</Text>
+              </View>
+              <Text style={styles.routeStartChevron}>›</Text>
+            </TouchableOpacity>
+
             {/* BLD-20260505-ROUTEPREP: card "Preparar ruta" — invita al
                 vendedor a precargar plan/productos/precios con WiFi en
                 CEDIS antes de salir. No bloquea otras acciones; sólo
@@ -400,6 +417,22 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     backgroundColor: 'rgba(37,99,235,0.04)',
   },
+  // BLD-SPRINT-A: CTA "Iniciar operación"
+  routeStartCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: radii.card,
+    marginBottom: 14,
+    backgroundColor: 'rgba(37,99,235,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.3)',
+  },
+  routeStartIcon: { fontSize: 26 },
+  routeStartTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  routeStartSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+  routeStartChevron: { fontSize: 28, color: colors.primary, fontWeight: '300' },
   weatherTemp: {
     fontFamily: fonts.monoBold,
     fontSize: 18,

@@ -78,7 +78,9 @@ export default function NoSaleScreen() {
     }
     setPhase('checked_out');
     resetVisit();
-    router.replace('/(tabs)' as never);
+    // BLD-ROUTE-MAP: volver a Ruta (mapa), no a Inicio — el vendedor sigue
+    // en su recorrido y la app debe enfocar el siguiente cliente pendiente.
+    router.replace('/(tabs)/route' as never);
   }
 
   async function handleAddNoSalePhoto() {

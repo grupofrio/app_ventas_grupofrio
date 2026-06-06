@@ -235,7 +235,16 @@ export default function HomeScreen() {
                 la operación ya está lista o la ruta ya arrancó. */}
             <TouchableOpacity
               style={styles.routeStartCta}
-              onPress={() => router.push(routeStartCta.target as never)}
+              onPress={() => {
+                // BLD-ROUTE-MAP: "Ver ruta" / "Continuar a ruta" abren la
+                // pestaña Ruta forzando el mapa (?view=map). "Iniciar
+                // operación" va al hub normal.
+                if (routeStartCta.target === '/(tabs)/route') {
+                  router.push({ pathname: '/(tabs)/route', params: { view: 'map' } } as never);
+                } else {
+                  router.push(routeStartCta.target as never);
+                }
+              }}
               activeOpacity={0.85}
             >
               <Text style={styles.routeStartIcon}>{routeStartCta.icon}</Text>

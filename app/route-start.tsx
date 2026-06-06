@@ -350,10 +350,10 @@ export default function RouteStartScreen() {
             label="Iniciar ruta"
             variant="success"
             onPress={() => {
-              // BLD-SPRINT-A: "Iniciar ruta" queda PREPARADO. El wiring real
-              // (transición de estado de la ruta / navegación a mapa) es de un
-              // sprint posterior. Por ahora lleva al plan de paradas.
-              router.replace('/(tabs)/route' as never);
+              // BLD-ROUTE-MAP: "Iniciar ruta" abre la pestaña Ruta forzando el
+              // MAPA como pantalla principal (?view=map), aunque el vendedor
+              // hubiera dejado la lista en una visita anterior.
+              router.replace({ pathname: '/(tabs)/route', params: { view: 'map' } } as never);
             }}
             fullWidth
             disabled={!readyToStartLive}

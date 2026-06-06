@@ -7,6 +7,7 @@ import type { GFStop, StopState } from '../src/types/plan';
 
 interface MapLogicModule {
   selectNextStop: (stops: GFStop[]) => GFStop | null;
+  resolveSelectedStop: (prevId: number | null, stops: GFStop[]) => number | null;
   splitStopsByLocation: (stops: GFStop[]) => { located: GFStop[]; unlocated: GFStop[] };
   computeRouteProgress: (stops: GFStop[]) => { total: number; visited: number; pending: number; pct: number; completed: boolean };
   haversineMeters: (aLat: number, aLon: number, bLat: number, bLon: number) => number;
@@ -48,6 +49,27 @@ function testSelectNextStop(m: MapLogicModule) {
   // all done → null
   assert.equal(m.selectNextStop([mk({ id: 1, state: 'done' })]), null);
   assert.equal(m.selectNextStop([]), null);
+}
+
+function testResolveSelectedStop(m: MapLogicModule) {
+  const stops = [
+    mk({ id: 1, state: 'done', route_sequence: 1 }),
+    mk({ id: 2, state: 'pending', route_sequence: 2 }),
+    mk({ id: 3, state: 'pending', route_sequence: 3 }),
+  ];
+  // keep manual selection if still pending
+  assert.equal(m.resolveSelectedStop(3, stops), 3);
+  // previous selection no longer pending (done) → advance to next pending
+  assert.equal(m.resolveSelectedStop(1, stops), 2);
+  // no previous → next pending
+  assert.equal(m.resolveSelectedStop(null, stops), 2);
+  // previous id not in list → next pending
+  assert.equal(m.resolveSelectedStop(999, stops), 2);
+  // all done → null
+  assert.equal(m.resolveSelectedStop(1, [mk({ id: 1, state: 'done' })]), null);
+  // in_progress manual selection is kept
+  const wip = [mk({ id: 5, state: 'in_progress', route_sequence: 5 }), mk({ id: 6, state: 'pending', route_sequence: 1 })];
+  assert.equal(m.resolveSelectedStop(5, wip), 5);
 }
 
 function testSplitByLocation(m: MapLogicModule) {
@@ -114,6 +136,7 @@ async function main() {
   ) as MapLogicModule;
 
   testSelectNextStop(m);
+  testResolveSelectedStop(m);
   testSplitByLocation(m);
   testProgress(m);
   testDistance(m);

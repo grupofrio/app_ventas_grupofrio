@@ -6,7 +6,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter, useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
@@ -27,6 +27,7 @@ import { RouteStopPanel } from '../../src/components/domain/RouteStopPanel';
 import { RouteActionsMenu } from '../../src/components/domain/RouteActionsMenu';
 import {
   selectNextStop,
+  resolveSelectedStop,
   splitStopsByLocation,
   computeRouteProgress,
   orderedStops as orderStopsBySeq,
@@ -52,6 +53,7 @@ type ViewMode = 'map' | 'list';
 
 export default function RouteScreen() {
   const router = useRouter();
+  const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
   const [searchQuery, setSearchQuery] = React.useState('');
   const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
   const salesSummary = useSalesStore((s) => s.summary);
@@ -77,6 +79,19 @@ export default function RouteScreen() {
     if (stops.length > 0) setViewMode(located.length > 0 ? 'map' : 'list');
   }, [viewMode, stops.length, located.length]);
 
+  // BLD-ROUTE-MAP: entrar desde "Iniciar ruta" / "Continuar a ruta" pasa
+  // ?view=map y debe FORZAR el mapa, aunque el usuario hubiera dejado la
+  // lista en una visita anterior. Se limpia el param tras aplicarlo para no
+  // re-forzar en navegaciones internas (abrir cliente y volver).
+  useFocusEffect(
+    useCallback(() => {
+      if (viewParam === 'map' && located.length > 0) {
+        setViewMode('map');
+        router.setParams({ view: undefined });
+      }
+    }, [viewParam, located.length, router]),
+  );
+
   const selectedStop = React.useMemo(
     () => (selectedStopId != null ? stops.find((s) => s.id === selectedStopId) ?? null : null),
     [selectedStopId, stops],
@@ -88,13 +103,7 @@ export default function RouteScreen() {
   // returning from a sale/no-sale) IF the user hasn't manually picked one.
   useFocusEffect(
     useCallback(() => {
-      setSelectedStopId((prev) => {
-        if (prev != null && stops.some((s) => s.id === prev && (s.state === 'pending' || s.state === 'in_progress'))) {
-          return prev; // keep a still-pending manual selection
-        }
-        const next = selectNextStop(stops);
-        return next ? next.id : null;
-      });
+      setSelectedStopId((prev) => resolveSelectedStop(prev, stops));
     }, [stops]),
   );
 

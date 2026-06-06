@@ -53,6 +53,23 @@ export function selectNextStop(stops: GFStop[]): GFStop | null {
   return pending[0] ?? null;
 }
 
+/**
+ * Resolve which stop should be selected on the map after a focus change:
+ *   - keep the previous manual selection ONLY if it's still pending/in_progress
+ *   - otherwise advance to the next stop (selectNextStop)
+ * Returns the stop id to select, or null. Pure — used by the route screen's
+ * focus effect so returning from a completed sale/no-sale auto-advances.
+ */
+export function resolveSelectedStop(prevId: number | null, stops: GFStop[]): number | null {
+  if (prevId != null && stops.some(
+    (s) => s.id === prevId && (s.state === 'pending' || s.state === 'in_progress'),
+  )) {
+    return prevId;
+  }
+  const next = selectNextStop(stops);
+  return next ? next.id : null;
+}
+
 /** Split stops into those with coordinates (map-able) and those without. */
 export function splitStopsByLocation(stops: GFStop[]): {
   located: GFStop[];

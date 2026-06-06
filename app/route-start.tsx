@@ -166,7 +166,7 @@ export default function RouteStartScreen() {
     if (!planId) return;
     if (savingKm) return;
     if (!isValidKm(kmInput)) {
-      Alert.alert('KM inválido', 'Captura un kilometraje válido (número mayor o igual a 0).');
+      Alert.alert('KM inválido', 'Captura un kilometraje válido (número mayor a 0).');
       return;
     }
     const km = Math.round(parseFloat(kmInput));

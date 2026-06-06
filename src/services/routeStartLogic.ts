@@ -32,10 +32,14 @@ export function isChecklistComplete(header: GFVehicleChecklist | null): boolean 
   return !!header && header.state === 'completed';
 }
 
-/** A km value is valid when it's a finite non-negative number. */
+/**
+ * A km value is valid when it's a finite number > 0.
+ * Backend (_handle_km_update) rejects km <= 0 ("km debe ser mayor a cero"),
+ * so we mirror that client-side to avoid a confusing round-trip rejection.
+ */
 export function isValidKm(km: unknown): boolean {
   const n = typeof km === 'number' ? km : parseFloat(String(km ?? ''));
-  return Number.isFinite(n) && n >= 0;
+  return Number.isFinite(n) && n > 0;
 }
 
 /**

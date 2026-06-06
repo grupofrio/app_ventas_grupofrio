@@ -50,9 +50,10 @@ function testChecklistComplete(m: LogicModule) {
 
 function testKmValidation(m: LogicModule) {
   assert.equal(m.isValidKm('123456'), true);
-  assert.equal(m.isValidKm(0), true);
-  assert.equal(m.isValidKm('0'), true);
   assert.equal(m.isValidKm(98765), true);
+  // Backend rejects km <= 0, so client mirrors that.
+  assert.equal(m.isValidKm(0), false);
+  assert.equal(m.isValidKm('0'), false);
   assert.equal(m.isValidKm(''), false);
   assert.equal(m.isValidKm('abc'), false);
   assert.equal(m.isValidKm(-5), false);

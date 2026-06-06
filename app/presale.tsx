@@ -156,10 +156,15 @@ export default function PresaleScreen() {
     setSubmitting(true);
     try {
       const res = await createPresale(built.payload);
+      const folio = res.name || `#${res.saleOrderId ?? ''}`;
+      // Limpiar formulario/carrito local tras éxito.
+      setCart([]);
+      setSelected(null);
+      setDeliveryDate(addDaysIso(today, 1));
       Alert.alert(
-        'Preventa registrada',
-        `Cotización ${res.name || `#${res.saleOrderId ?? ''}`} creada.`,
-        [{ text: 'OK', onPress: () => router.back() }],
+        'Preventa creada',
+        `Preventa creada como cotización ${folio}.`,
+        [{ text: 'Volver a Ruta', onPress: () => router.back() }],
       );
     } catch (err) {
       if (err instanceof PresaleNotEnabledError) {

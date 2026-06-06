@@ -1,35 +1,30 @@
 /**
  * Presale (Preventa) network service.
  *
- * ⚠️ BACKEND PENDING. There is NO presale endpoint yet — /sales/create always
- * confirms the order (action_confirm), so it cannot produce a quotation. Until
- * Sebas ships a presale endpoint (or a confirm=false flag on /sales/create),
- * this service stays GATED behind PRESALE_BACKEND_ENABLED so we NEVER simulate
- * success.
+ * BACKEND LIVE (Sebas, 2026-06): POST /pwa-ruta/presale-create crea una
+ * cotización sale.order en estado 'draft', reusando la lógica de venta
+ * (cliente, líneas, pricelist, compañía, empleado, almacén/contexto de ruta,
+ * analíticas, operation_id/idempotencia), guarda commitment_date, y NO
+ * confirma, NO crea/valida entrega, NO toca inventario de ruta, NO entra a
+ * corte/liquidación. El plan sólo resuelve contexto/almacén (la cotización
+ * NO se enlaza a gf_route_plan_id/gf_route_stop_id). Leads bloqueados en MVP.
  *
- * When enabled, it POSTs to PRESALE_ENDPOINT with the payload from
- * presaleLogic.buildPresalePayload. Expected backend behavior:
- *   - create sale.order in 'draft' (quotation)
- *   - set commitment_date
- *   - do NOT confirm, do NOT deliver, do NOT touch route inventory
- *   - return { ok:true, data:{ sale_order_id, name } }
+ * Respuesta: { ok:true, data:{ sale_order_id, name } }.
+ * postRest lanza en ok:false / HTTP>=400 (envelope, fix #16) → sin falso éxito.
  */
 
 import { postRest } from './api';
 import { logInfo } from '../utils/logger';
 import type { PresalePayload } from './presaleLogic';
 
-/**
- * Flip to true ONLY when Sebas confirms the endpoint is deployed and the
- * contract matches. Keep false until then so the UI shows the blocked state.
- */
-export const PRESALE_BACKEND_ENABLED = false;
+/** Backend de preventa habilitado (endpoint /pwa-ruta/presale-create live). */
+export const PRESALE_BACKEND_ENABLED = true;
 
-/** Whether the backend supports presale to a lead (vs requiring a customer). */
+/** El backend MVP NO soporta preventa a lead — quedan bloqueados con mensaje. */
 export const PRESALE_LEAD_SUPPORTED = false;
 
-/** Proposed endpoint — confirm exact path with Sebas before enabling. */
-const PRESALE_ENDPOINT = 'gf/logistics/api/employee/presale/create';
+/** Endpoint real (confirmado por Sebas). pwa-ruta usa base relativa. */
+const PRESALE_ENDPOINT = 'pwa-ruta/presale-create';
 
 export interface PresaleResult {
   ok: boolean;
@@ -65,13 +60,19 @@ export async function createPresale(payload: PresalePayload): Promise<PresaleRes
   const data = (result && typeof result === 'object'
     ? ((result as Record<string, unknown>).data ?? result)
     : {}) as Record<string, unknown>;
+
+  const saleOrderId = num(data.sale_order_id) ?? num(data.id);
+  const name = str(data.name) || str(data.sale_order_name);
+
+  // Respuesta malformada (200 ok pero sin folio ni id) → NO simular éxito.
+  if (saleOrderId == null && !name) {
+    throw new Error('El servidor no devolvió la cotización (sin folio ni id).');
+  }
+
   logInfo('general', 'presale_create', {
     partner_id: payload.partner_id,
     lines: payload.lines.length,
+    sale_order_id: saleOrderId,
   });
-  return {
-    ok: true,
-    saleOrderId: num(data.sale_order_id) ?? num(data.id),
-    name: str(data.name) || str(data.sale_order_name),
-  };
+  return { ok: true, saleOrderId, name };
 }

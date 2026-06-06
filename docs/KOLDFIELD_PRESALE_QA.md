@@ -1,7 +1,7 @@
 # KoldField — QA de Preventa
 
-**Rama:** `feat/koldfield-presale-consignment` · **Commit:** `310255e`
-**Estado backend:** `PRESALE_BACKEND_ENABLED = false` (registro de cotización aún no habilitado por Sebas).
+**Rama:** `feat/koldfield-presale-consignment`
+**Estado backend:** `PRESALE_BACKEND_ENABLED = true` — endpoint LIVE `POST /pwa-ruta/presale-create` (crea cotización `sale.order` en `draft`). Leads bloqueados (`PRESALE_LEAD_SUPPORTED = false`).
 
 > Checklist para validar en dispositivo/simulador que la Preventa está bien
 > integrada y **no rompe ventas**. Marcar ✅/❌ y anotar hallazgos.
@@ -55,18 +55,28 @@
 
 ---
 
-## 5. Confirmación con backend APAGADO (estado actual)
+## 5. Confirmación con backend ACTIVO (estado actual)
 
-- [ ] Banner visible arriba: **"⚠️ Preventa pendiente de habilitar en backend"**.
+- [ ] (Ya NO debe aparecer el banner de "pendiente de habilitar".)
 - [ ] Con cliente + productos + fecha válida, tocar **"Confirmar preventa"**.
-- [ ] Debe mostrar: **"Preventa no disponible — pendiente de habilitar en el backend. No se creó ninguna cotización."**
+- [ ] Llama `POST /pwa-ruta/presale-create`.
+- [ ] Éxito → mensaje **"Preventa creada como cotización S01234."** con folio real.
+- [ ] El carrito/formulario se **limpia** tras éxito; botón **"Volver a Ruta"**.
 - [ ] Confirmar que **NO**:
-  - [ ] simula éxito / no muestra folio falso,
-  - [ ] genera venta,
   - [ ] abre checkout,
   - [ ] registra pago,
   - [ ] afecta inventario de ruta,
   - [ ] entra a liquidación/corte.
+- [ ] Validar en **Odoo** que se creó `sale.order` en `draft` con `commitment_date` (ver §7).
+
+### Errores a verificar (no debe simular éxito)
+- [ ] Sin conexión → "Conéctate para registrar la preventa." (no llama).
+- [ ] Fecha pasada/ inválida → mensaje de fecha, no llama.
+- [ ] Sin cliente / sin productos → mensaje, no llama.
+- [ ] Error 400 / payload → muestra el mensaje del backend.
+- [ ] Token/sesión inválida → muestra error, no crea.
+- [ ] Respuesta sin `sale_order_id` ni `name` → "El servidor no devolvió la cotización…" (no falso éxito).
+- [ ] Error de red → mensaje claro.
 
 ---
 
@@ -85,23 +95,19 @@ Validar que **siguen funcionando igual** que antes:
 
 ---
 
-## 7. Cuando Sebas habilite el backend
+## 7. Validación en Odoo (backend ya disponible)
 
-Pendiente hasta que exista el endpoint de cotización. Pasos:
+Tras crear una preventa real desde el APK:
+- [ ] se creó un **`sale.order` en estado `draft`** (cotización),
+- [ ] tiene **`commitment_date`** = la fecha capturada en la app,
+- [ ] **NO** está confirmado (no `sale`/`done`),
+- [ ] **NO** generó entrega ni movió inventario de la ruta,
+- [ ] **NO** entró a liquidación/corte del día,
+- [ ] el **folio/nombre** (`data.name`) coincide con el que mostró la app,
+- [ ] (idempotencia) reintentar con el mismo `operation_id` no duplica la cotización.
 
-1. En `src/services/presale.ts`:
-   - [ ] `PRESALE_BACKEND_ENABLED = true`.
-   - [ ] `PRESALE_ENDPOINT` = ruta exacta confirmada por Sebas.
-   - [ ] `PRESALE_LEAD_SUPPORTED = true` **sólo si** el backend acepta `lead_id`.
-2. Generar APK y crear una preventa real.
-3. Validar en **Odoo**:
-   - [ ] se creó un **`sale.order` en estado `draft`** (cotización),
-   - [ ] tiene **`commitment_date`** = la fecha capturada,
-   - [ ] **NO** está confirmado (no `sale`/`done`),
-   - [ ] **NO** generó entrega ni movió inventario de la ruta,
-   - [ ] **NO** entró a liquidación/corte del día,
-   - [ ] el **folio/nombre** devuelto coincide con el que muestra la app.
-4. Si se habilitó lead: validar el flujo de preventa a prospecto según contrato.
+**Leads (futuro):** cuando el backend soporte `lead_id`, poner
+`PRESALE_LEAD_SUPPORTED=true` y validar el flujo de preventa a prospecto.
 
 ---
 

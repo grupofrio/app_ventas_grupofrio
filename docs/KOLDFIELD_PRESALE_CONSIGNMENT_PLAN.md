@@ -1,7 +1,7 @@
 # KoldField — Preventa & Consignación
 
 **Rama:** `feat/koldfield-presale-consignment` (desde `main`)
-**Estado:** Preventa MVP (frontend) implementado, **gated** por backend. Consignación **documentada, no implementada**.
+**Estado:** Preventa MVP (frontend) **conectado a backend LIVE** (`POST /pwa-ruta/presale-create`). Consignación **documentada, no implementada**.
 
 ---
 
@@ -24,13 +24,18 @@
 - No entra a la liquidación del día.
 - No soporta lead hasta que backend lo confirme.
 
-### Contrato backend requerido (PENDIENTE — Sebas)
-Hoy `POST /gf/logistics/api/employee/sales/create` **siempre** hace `action_confirm()` → no sirve para cotización. Se requiere **una** de:
-- **Opción A (preferida):** nuevo endpoint `POST /gf/logistics/api/employee/presale/create` que cree `sale.order` en `draft` con `commitment_date`, **sin** confirmar, sin entrega, sin tocar inventario de ruta — reutilizando la lógica server-side de pricelist/analítica/almacén que ya tiene `_handle_sales_create`.
-- **Opción B:** un flag `confirm=false` (o `as_quotation=true`) + `commitment_date` en `/sales/create`.
+### Contrato backend (LIVE — Sebas, 2026-06)
+**Endpoint real:** `POST /pwa-ruta/presale-create`. Crea `sale.order` en `draft`
+(cotización), reutiliza la lógica de venta (cliente, líneas, pricelist,
+compañía, empleado, almacén/contexto de ruta, analíticas, `operation_id`/
+idempotencia), guarda `commitment_date`. **NO** confirma, **NO** crea/valida
+entrega, **NO** descuenta inventario de ruta, **NO** entra a corte/liquidación,
+**NO** corre prefactura/pago/cashbox. La cotización **NO** se enlaza a
+`gf_route_plan_id`/`gf_route_stop_id` (el plan sólo resuelve contexto/almacén).
+Leads bloqueados en MVP.
 
-**Respuesta esperada:** `{ ok:true, data:{ sale_order_id, name } }`.
-Errores funcionales como `{ ok:false, message }` (postRest ya lanza en `ok:false`).
+**Respuesta:** `{ ok:true, data:{ sale_order_id, name } }`.
+Errores funcionales como `{ ok:false, message }` (postRest lanza en `ok:false`).
 
 ### Payload propuesto (enviado por la app)
 ```json
@@ -52,13 +57,14 @@ Errores funcionales como `{ ok:false, message }` (postRest ya lanza en `ok:false
 - `price_unit`: precio base sin IVA (igual que `SaleLineItem.price`).
 - `partner_id` requerido en MVP; `lead_id` sólo si el backend lo soporta.
 
-### Cómo se habilita
-En `src/services/presale.ts`:
-- `PRESALE_BACKEND_ENABLED = false` → flip a `true` cuando el endpoint esté desplegado.
-- `PRESALE_LEAD_SUPPORTED = false` → flip a `true` si el backend acepta `lead_id`.
-- `PRESALE_ENDPOINT` → confirmar la ruta exacta con Sebas.
+### Estado de los flags (`src/services/presale.ts`)
+- `PRESALE_BACKEND_ENABLED = true` ✅ (endpoint live).
+- `PRESALE_ENDPOINT = 'pwa-ruta/presale-create'` ✅.
+- `PRESALE_LEAD_SUPPORTED = false` (leads bloqueados en MVP; flip a `true` sólo
+  si el backend acepta `lead_id`).
 
-Mientras `PRESALE_BACKEND_ENABLED=false`: la pantalla muestra banner "Preventa pendiente de habilitar en backend" y al confirmar lanza `PresaleNotEnabledError` → mensaje claro, **sin simular éxito ni crear nada**.
+El guard `PresaleNotEnabledError` se conserva por defensa: si alguien volviera a
+poner el flag en `false`, la UI muestra el bloqueo sin simular éxito.
 
 ### Cómo probar
 **Hoy (backend OFF):** Ruta → "📅 Preventa" → buscar/seleccionar cliente → agregar productos → fecha → "Confirmar preventa" → debe mostrar "Preventa no disponible / pendiente de habilitar". Verificar que un lead se bloquea con el mensaje de conversión.

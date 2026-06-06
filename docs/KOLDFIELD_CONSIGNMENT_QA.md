@@ -3,11 +3,13 @@
 **Rama:** `feat/koldfield-presale-consignment`
 **Backend:** módulo `gf_consignment` (Sebas). Endpoints `/pwa-ruta/consignment/{my-active,create,visit,close}`.
 
-> ⚠️ **Contrato ASUMIDO:** el módulo backend no es accesible desde el repo de la
-> app. Los payloads/respuestas están en `src/services/consignment.ts` (un solo
-> lugar) y deben **confirmarse con Sebas** antes del piloto. El parseo es
-> defensivo (acepta varios nombres de campo) pero **no adivina** importes:
-> el backend es la fuente de verdad.
+> ⚠️ **Contrato ASUMIDO + BLOQUEADO:** el módulo backend no es accesible desde
+> el repo de la app. Mientras `CONSIGNMENT_BACKEND_CONFIRMED = false` (en
+> `src/services/consignment.ts`), las operaciones que afectan inventario/cobro
+> (create/visit/close) **NO se ejecutan**: la app muestra "Consignación
+> pendiente de validar con backend" y no registra nada. La UI sí es navegable.
+> Flip a `true` SÓLO cuando Sebas confirme paths/payloads/respuestas (abajo).
+> El parseo es defensivo y **no adivina** importes: el backend es la verdad.
 
 ---
 

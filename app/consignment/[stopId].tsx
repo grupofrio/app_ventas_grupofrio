@@ -31,6 +31,7 @@ import { formatCurrency } from '../../src/utils/time';
 import type { ActiveConsignment } from '../../src/types/consignment';
 import {
   getActiveConsignment, createConsignment, visitConsignment, closeConsignment,
+  CONSIGNMENT_BACKEND_CONFIRMED, ConsignmentNotConfirmedError,
 } from '../../src/services/consignment';
 import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
@@ -78,7 +79,14 @@ export default function ConsignmentScreen() {
       const a = await getActiveConsignment(partnerId);
       setActive(a);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+      // Mientras el contrato no esté confirmado, el GET puede no existir aún.
+      // Dejamos ver la UI de creación (las mutaciones están gateadas igual),
+      // en vez de bloquear con pantalla de error.
+      if (!CONSIGNMENT_BACKEND_CONFIRMED) {
+        setActive(null);
+      } else {
+        setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+      }
     } finally {
       setLoading(false);
     }
@@ -115,7 +123,11 @@ export default function ConsignmentScreen() {
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (err) {
-      Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo crear la consignación.');
+      if (err instanceof ConsignmentNotConfirmedError) {
+        Alert.alert('Consignación pendiente', 'Pendiente de validar con backend. No se ejecutó nada.');
+      } else {
+        Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo crear la consignación.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -161,7 +173,11 @@ export default function ConsignmentScreen() {
                 );
               }
             } catch (err) {
-              Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo procesar la consignación.');
+              if (err instanceof ConsignmentNotConfirmedError) {
+                Alert.alert('Consignación pendiente', 'Pendiente de validar con backend. No se ejecutó nada.');
+              } else {
+                Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo procesar la consignación.');
+              }
             } finally {
               setSubmitting(false);
             }
@@ -219,6 +235,14 @@ export default function ConsignmentScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Nueva consignación" showBack />
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+          {!CONSIGNMENT_BACKEND_CONFIRMED && (
+            <View style={styles.warnBanner}>
+              <Text style={styles.warnText}>
+                ⚠️ Consignación pendiente de validar con backend. Puedes ver el flujo,
+                pero el registro está bloqueado hasta confirmar el contrato.
+              </Text>
+            </View>
+          )}
           <Card>
             <Text style={styles.clientName}>{stop.customer_name}</Text>
             <Text style={styles.dim}>Crea la consignación inicial. Afecta inventario de tu unidad, NO cobra ahora.</Text>
@@ -278,6 +302,14 @@ export default function ConsignmentScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title={closing ? 'Cerrar consignación' : 'Consignación activa'} showBack />
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+        {!CONSIGNMENT_BACKEND_CONFIRMED && (
+          <View style={styles.warnBanner}>
+            <Text style={styles.warnText}>
+              ⚠️ Consignación pendiente de validar con backend. El registro de
+              visita/cierre está bloqueado hasta confirmar el contrato.
+            </Text>
+          </View>
+        )}
         <Card>
           <Text style={styles.clientName}>{stop.customer_name}</Text>
           <Text style={styles.dim}>
@@ -378,4 +410,10 @@ const styles = StyleSheet.create({
   summaryTitle: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, color: colors.textDim, marginBottom: 2 },
   summaryVal: { fontFamily: fonts.monoBold, fontSize: 14, fontWeight: '700', color: colors.text },
   footNote: { fontSize: 11, color: colors.textDim, textAlign: 'center', marginTop: 8, lineHeight: 15 },
+  warnBanner: {
+    padding: 12, borderRadius: radii.button,
+    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+  },
+  warnText: { fontSize: 12, lineHeight: 17, color: colors.text },
 });
+

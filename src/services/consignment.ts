@@ -35,6 +35,23 @@ const ENDPOINTS = {
   close: 'pwa-ruta/consignment/close',
 } as const;
 
+/**
+ * GATE de seguridad: el contrato real del backend gf_consignment NO está
+ * confirmado (módulo no accesible desde este repo). Mientras esto sea false,
+ * las operaciones que AFECTAN inventario/cobro (create/visit/close) NO se
+ * ejecutan: lanzan ConsignmentNotConfirmedError y la UI muestra "pendiente de
+ * validar con backend". La lectura (my-active) sí corre para poder ver la UI.
+ * Flip a true SÓLO cuando Sebas confirme paths/payloads/respuestas.
+ */
+export const CONSIGNMENT_BACKEND_CONFIRMED = false;
+
+export class ConsignmentNotConfirmedError extends Error {
+  constructor() {
+    super('Consignación pendiente de validar con backend.');
+    this.name = 'ConsignmentNotConfirmedError';
+  }
+}
+
 function num(v: unknown): number {
   if (Array.isArray(v)) return num(v[0]);
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
@@ -102,6 +119,7 @@ interface CreateInput {
 
 /** POST crear consignación inicial (afecta inventario en backend, no cobra). */
 export async function createConsignment(input: CreateInput): Promise<ConsignmentCreateResult> {
+  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
   const result = await postRest<unknown>(ENDPOINTS.create, {
     operation_id: input.operationId,
     partner_id: input.partnerId,
@@ -134,6 +152,7 @@ interface VisitInput {
  * cobro por el faltante y resurte al objetivo.
  */
 export async function visitConsignment(input: VisitInput): Promise<ConsignmentVisitResult> {
+  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
   const result = await postRest<unknown>(ENDPOINTS.visit, {
     operation_id: input.operationId,
     consignment_id: input.consignmentId,
@@ -153,6 +172,7 @@ export async function visitConsignment(input: VisitInput): Promise<ConsignmentVi
 
 /** POST cierre: conteo físico final → cobra faltante + devuelve resto. */
 export async function closeConsignment(input: VisitInput): Promise<ConsignmentCloseResult> {
+  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
   const result = await postRest<unknown>(ENDPOINTS.close, {
     operation_id: input.operationId,
     consignment_id: input.consignmentId,

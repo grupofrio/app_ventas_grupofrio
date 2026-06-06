@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(new URL('.', import.meta.url).pathname, '..');
+// fileURLToPath handles Windows correctly (new URL('.').pathname leaves a
+// leading slash + drive like /C:/... → resolve produced C:\C:\...).
+const root = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 function read(path: string): string {
-  return readFileSync(resolve(root, path), 'utf8');
+  return readFileSync(resolve(root, path), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function main() {

@@ -27,9 +27,8 @@ interface Props {
   onToggleExpand: () => void;
   onSelectStop: (stop: GFStop) => void;
   onNavigate: (stop: GFStop) => void;
-  onSell: (stop: GFStop) => void;
-  onNoSale: (stop: GFStop) => void;
-  onViewClient: (stop: GFStop) => void;
+  /** Opens the FULL client hub (/stop/[id]) — same flow as the list. */
+  onOpenClient: (stop: GFStop) => void;
   onCloseRoute: () => void;
   onRefill: () => void;
   onIncident: () => void;
@@ -38,7 +37,7 @@ interface Props {
 export function RouteStopPanel(props: Props) {
   const {
     progress, selectedStop, nextStop, distanceMeters, orderedStops, unlocatedStops,
-    expanded, onToggleExpand, onSelectStop, onNavigate, onSell, onNoSale, onViewClient,
+    expanded, onToggleExpand, onSelectStop, onNavigate, onOpenClient,
     onCloseRoute, onRefill, onIncident,
   } = props;
 
@@ -82,13 +81,15 @@ export function RouteStopPanel(props: Props) {
               </Text>
             </View>
           </View>
+          {/* Primary action: open the FULL client hub (check-in geocercado,
+              venta, no venta, regalo, datos, lealtad). Navegar es secundario.
+              No se exponen venta/no-venta directos aquí para no saltarse el
+              check-in/geocerca del flujo real. */}
+          <TouchableOpacity style={styles.openClientBtn} onPress={() => onOpenClient(focus)} activeOpacity={0.85}>
+            <Text style={styles.openClientText}>👤 Abrir cliente</Text>
+          </TouchableOpacity>
           <View style={styles.actionRow}>
-            <PanelButton label="📍 Navegar" onPress={() => onNavigate(focus)} primary />
-            <PanelButton label="🧾 Vender" onPress={() => onSell(focus)} primary />
-          </View>
-          <View style={styles.actionRow}>
-            <PanelButton label="🚫 No venta" onPress={() => onNoSale(focus)} />
-            <PanelButton label="👤 Ver cliente" onPress={() => onViewClient(focus)} />
+            <PanelButton label="📍 Navegar" onPress={() => onNavigate(focus)} />
           </View>
         </View>
       ) : (
@@ -189,6 +190,11 @@ const styles = StyleSheet.create({
   focusName: { fontSize: 16, fontWeight: '700', color: colors.text },
   focusMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
   actionRow: { flexDirection: 'row', gap: 8 },
+  openClientBtn: {
+    backgroundColor: colors.primary, paddingVertical: 14, borderRadius: radii.button,
+    alignItems: 'center', minHeight: 48, justifyContent: 'center',
+  },
+  openClientText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   btn: { flex: 1, paddingVertical: 12, borderRadius: radii.button, alignItems: 'center', minHeight: 46, justifyContent: 'center' },
   btnPrimary: { backgroundColor: colors.primary },
   btnSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },

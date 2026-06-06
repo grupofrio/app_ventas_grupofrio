@@ -103,9 +103,11 @@ export default function RouteScreen() {
     }
   }, []);
 
-  const handleSell = useCallback((stop: GFStop) => router.push(`/sale/${stop.id}` as never), [router]);
-  const handleNoSale = useCallback((stop: GFStop) => router.push(`/nosale/${stop.id}` as never), [router]);
-  const handleViewClient = useCallback((stop: GFStop) => router.push(`/stop/${stop.id}` as never), [router]);
+  // Abrir cliente = MISMO destino que la lista (/stop/[id]): el hub completo
+  // del cliente (check-in geocercado, venta, no venta, regalo, datos, lealtad).
+  // No se exponen venta/no-venta directos desde el mapa para no saltarse el
+  // check-in y la validación de geocerca del flujo real.
+  const handleOpenClient = useCallback((stop: GFStop) => router.push(`/stop/${stop.id}` as never), [router]);
   const refreshPlan = useCallback(async () => {
     await Promise.all([
       loadPlan(),
@@ -200,9 +202,7 @@ export default function RouteScreen() {
             onToggleExpand={() => setPanelExpanded((v) => !v)}
             onSelectStop={handleSelectStop}
             onNavigate={handleOpenLocation}
-            onSell={handleSell}
-            onNoSale={handleNoSale}
-            onViewClient={handleViewClient}
+            onOpenClient={handleOpenClient}
             onCloseRoute={() => router.push('/route-close' as never)}
             onRefill={() => router.push('/refill-accept' as never)}
             onIncident={() => router.push('/incident' as never)}

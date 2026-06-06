@@ -35,6 +35,7 @@ import { GFIncident } from '../src/types/incident';
 export default function IncidentScreen() {
   const router = useRouter();
   const employeeId = useAuthStore((s) => s.employeeId);
+  const companyId = useAuthStore((s) => s.companyId);
   const isOnline = useSyncStore((s) => s.isOnline);
 
   const [typeKey, setTypeKey] = useState<string | null>(null);
@@ -72,9 +73,13 @@ export default function IncidentScreen() {
       Alert.alert('Sin conexión', 'Conéctate para reportar el incidente.');
       return;
     }
+    if (!employeeId || !companyId) {
+      Alert.alert('Sesión incompleta', 'No se pudo identificar tu empleado/empresa. Vuelve a iniciar sesión.');
+      return;
+    }
     setSubmitting(true);
     try {
-      await createIncident(built.payload);
+      await createIncident(built.payload, employeeId, companyId);
       setTypeKey(null);
       setSeverityKey(null);
       setDescription('');

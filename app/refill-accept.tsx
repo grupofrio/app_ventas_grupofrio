@@ -166,9 +166,17 @@ export default function RefillAcceptScreen() {
             )}
             <View style={styles.binaryNote}>
               <Text style={styles.binaryNoteText}>
-                La aceptación es tal cual viene. Si hay diferencias físicas, repórtalas como incidente.
+                La aceptación es tal cual viene. Si hay diferencias físicas (faltante/sobrante),
+                repórtalas como incidente antes o después de aceptar.
               </Text>
             </View>
+            <Button
+              label="🚩 Reportar diferencia"
+              variant="secondary"
+              onPress={() => router.push('/incident' as never)}
+              fullWidth
+              style={{ marginTop: 10 }}
+            />
             <Button
               label={accepting ? 'Aceptando…' : (pending.isRefill ? 'Aceptar recarga' : 'Aceptar carga')}
               variant="success"
@@ -176,7 +184,7 @@ export default function RefillAcceptScreen() {
               fullWidth
               disabled={!isOnline || accepting}
               loading={accepting}
-              style={{ marginTop: 10 }}
+              style={{ marginTop: 8 }}
             />
           </Card>
         ) : (

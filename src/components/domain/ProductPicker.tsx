@@ -43,6 +43,13 @@ interface ProductPickerProps {
   existingProductIds: number[];
   partnerId?: number;
   pricelistId?: number | null;
+  /**
+   * Optional sink for the selected line. When provided, the picker calls this
+   * INSTEAD of writing to useVisitStore.saleLines — used by flows that keep
+   * their own cart (e.g. Preventa) so they don't contaminate the active-visit
+   * cart. When omitted, behavior is unchanged (writes to the visit store).
+   */
+  onAddLine?: (line: SaleLineItem) => void;
 }
 
 const CATEGORIES = [
@@ -100,7 +107,7 @@ type EnrichedProduct = TruckProduct & {
 
 // ═══ Component ═══
 
-export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId }: ProductPickerProps) {
+export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId, onAddLine }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
   const inventorySource = useProductStore((s) => s.inventorySource);
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
@@ -277,7 +284,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       stock: product.qty_display,
       weight: product.weight || 5,
     };
-    addSaleLine(line);
+    if (onAddLine) {
+      onAddLine(line); // caller-managed cart (e.g. Preventa)
+    } else {
+      addSaleLine(line); // default: active-visit cart
+    }
     setSearch('');
     setQuantities({});
     onClose();

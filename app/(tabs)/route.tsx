@@ -132,6 +132,18 @@ export default function RouteScreen() {
           />
         </View>
 
+        {/* BLD-PRESALE: preventa (cotización con fecha de entrega), acción
+            general — no depende de un cliente del plan. */}
+        <View style={styles.offrouteRow}>
+          <Button
+            label="📅 Preventa"
+            variant="secondary"
+            small
+            onPress={() => router.push('/presale' as never)}
+            style={{ flex: 1 }}
+          />
+        </View>
+
         {planTypeLabel && (
           <View style={styles.routeTypeRow}>
             <Badge label={planTypeLabel} variant="blue" />

@@ -1,0 +1,311 @@
+/**
+ * Route close hub — Sprint C.
+ *
+ * Orchestrates the end-of-day cierre for the jefe de ruta. Reuses what already
+ * exists (no duplication):
+ *   - Conciliación + Validar corte + Confirmar liquidación → app/cashclose.tsx
+ *     (Sebas: fetchRouteReconciliation / validateRouteCorte / confirmRouteLiquidation)
+ *   - KM final → updateKm('arrival') (routeKm.ts)
+ *   - Cerrar ruta → closeRoute (routeClose.ts)
+ *
+ * Checklist de regreso: NOT in the current backend (only the departure
+ * checklist exists, one per plan). Surfaced as a note + incident fallback,
+ * NOT faked.
+ */
+
+import React, { useCallback, useState } from 'react';
+import {
+  View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { TopBar } from '../src/components/ui/TopBar';
+import { Button } from '../src/components/ui/Button';
+import { Card } from '../src/components/ui/Card';
+import { Badge } from '../src/components/ui/Badge';
+import { colors, spacing, radii } from '../src/theme/tokens';
+import { fonts } from '../src/theme/typography';
+import { useRouteStore } from '../src/stores/useRouteStore';
+import { useSyncStore } from '../src/stores/useSyncStore';
+import { useRouteStartStore } from '../src/stores/useRouteStartStore';
+import { updateKm } from '../src/services/routeKm';
+import { closeRoute } from '../src/services/routeClose';
+import { isValidKm } from '../src/services/routeStartLogic';
+
+type StepStatus = 'pending' | 'done' | 'skip';
+
+function StatusBadge({ status }: { status: StepStatus }) {
+  if (status === 'done') return <Badge label="✓ Listo" variant="green" />;
+  if (status === 'skip') return <Badge label="N/D" variant="dim" />;
+  return <Badge label="Pendiente" variant="orange" />;
+}
+
+export default function RouteCloseScreen() {
+  const router = useRouter();
+  const plan = useRouteStore((s) => s.plan);
+  const planId = plan?.plan_id ?? null;
+  const planState = plan?.state ?? null;
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const kmInitial = useRouteStartStore((s) => s.kmInitial);
+
+  const [kmFinalInput, setKmFinalInput] = useState('');
+  const [kmFinal, setKmFinal] = useState<number | null>(null);
+  const [savingKm, setSavingKm] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closed, setClosed] = useState(false);
+
+  // If the plan already came back closed/reconciled, reflect it.
+  useFocusEffect(
+    useCallback(() => {
+      if (planState === 'closed' || planState === 'reconciled' || planState === 'done') {
+        setClosed(true);
+      }
+    }, [planState]),
+  );
+
+  const kmStatus: StepStatus = kmFinal != null ? 'done' : 'pending';
+
+  async function handleSaveKmFinal() {
+    if (!planId || savingKm) return;
+    if (!isValidKm(kmFinalInput)) {
+      Alert.alert('KM inválido', 'Captura un kilometraje válido (mayor a 0).');
+      return;
+    }
+    const km = Math.round(parseFloat(kmFinalInput));
+    if (kmInitial != null && km < kmInitial) {
+      Alert.alert('KM final menor al inicial', `El KM final (${km}) no puede ser menor al inicial (${kmInitial}).`);
+      return;
+    }
+    if (!isOnline) {
+      Alert.alert('Sin conexión', 'Conéctate al WiFi de la sucursal para registrar el KM final.');
+      return;
+    }
+    Alert.alert('Confirmar KM final', `Registrar ${km} km como kilometraje de llegada.`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Guardar',
+        onPress: async () => {
+          setSavingKm(true);
+          try {
+            await updateKm(planId, 'arrival', km);
+            setKmFinal(km);
+            setKmFinalInput('');
+          } catch (err) {
+            // Backend validates arrival >= departure; show its message.
+            Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
+          } finally {
+            setSavingKm(false);
+          }
+        },
+      },
+    ]);
+  }
+
+  async function handleCloseRoute() {
+    if (!planId || closing) return;
+    if (kmFinal == null) {
+      Alert.alert('Falta KM final', 'Registra el KM final antes de cerrar la ruta.');
+      return;
+    }
+    if (!isOnline) {
+      Alert.alert('Sin conexión', 'Conéctate para cerrar la ruta.');
+      return;
+    }
+    Alert.alert(
+      'Cerrar ruta',
+      'Vas a cerrar la ruta del día. El servidor valida corte y liquidación. ¿Continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar ruta',
+          style: 'destructive',
+          onPress: async () => {
+            setClosing(true);
+            try {
+              const res = await closeRoute(planId, { departureKm: kmInitial, arrivalKm: kmFinal });
+              setClosed(true);
+              const warn = res.warnings.length ? `\n\nAvisos:\n• ${res.warnings.join('\n• ')}` : '';
+              Alert.alert('Ruta cerrada', `${res.message}${warn}`, [
+                { text: 'OK', onPress: () => router.replace('/(tabs)' as never) },
+              ]);
+            } catch (err) {
+              // Backend rejects if corte/liquidación incompletos — message claro.
+              Alert.alert(
+                'No se pudo cerrar la ruta',
+                err instanceof Error ? err.message : 'Revisa corte y liquidación, luego intenta de nuevo.',
+              );
+            } finally {
+              setClosing(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  if (!planId) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <TopBar title="Cerrar ruta" showBack />
+        <View style={styles.center}>
+          <Text style={styles.emptyIcon}>📭</Text>
+          <Text style={styles.emptyTitle}>Sin ruta asignada</Text>
+          <Text style={styles.emptyBody}>No hay plan activo para cerrar.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (closed) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <TopBar title="Cerrar ruta" showBack />
+        <View style={styles.center}>
+          <Text style={styles.okIcon}>🏁</Text>
+          <Text style={styles.emptyTitle}>Ruta cerrada</Text>
+          <Text style={styles.emptyBody}>Tu operación del día quedó finalizada.</Text>
+          <Button label="Ir a Inicio" variant="primary" onPress={() => router.replace('/(tabs)' as never)} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <TopBar title="Cerrar ruta" showBack />
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+        {!isOnline && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineText}>📶 Sin conexión. El cierre requiere WiFi de la sucursal.</Text>
+          </View>
+        )}
+
+        {/* Step 1: checklist de regreso — gap documentado */}
+        <Card>
+          <View style={styles.rowBetween}>
+            <Text style={styles.stepTitle}>1 · Revisión de regreso</Text>
+            <StatusBadge status="skip" />
+          </View>
+          <Text style={styles.stepBody}>
+            El checklist de regreso no está disponible en el sistema actual (sólo
+            existe el de salida). Si la unidad tiene alguna novedad, repórtala como
+            incidente.
+          </Text>
+          <Button
+            label="🚩 Reportar incidente"
+            variant="secondary"
+            onPress={() => router.push('/incident' as never)}
+            fullWidth
+          />
+        </Card>
+
+        {/* Step 2: KM final */}
+        <Card>
+          <View style={styles.rowBetween}>
+            <Text style={styles.stepTitle}>2 · KM final</Text>
+            <StatusBadge status={kmStatus} />
+          </View>
+          {kmFinal != null ? (
+            <Text style={styles.stepBody}>
+              Registrado: <Text style={styles.kmValue}>{kmFinal} km</Text>
+              {kmInitial != null ? `  ·  Recorrido: ${kmFinal - kmInitial} km` : ''}
+            </Text>
+          ) : (
+            <>
+              <Text style={styles.stepBody}>
+                Captura el kilometraje de llegada de la unidad.
+                {kmInitial != null ? ` Debe ser ≥ ${kmInitial} (KM inicial).` : ''}
+              </Text>
+              <View style={styles.kmRow}>
+                <TextInput
+                  style={styles.kmInput}
+                  value={kmFinalInput}
+                  onChangeText={setKmFinalInput}
+                  placeholder="Ej. 123890"
+                  placeholderTextColor={colors.textDim}
+                  keyboardType="number-pad"
+                  editable={isOnline && !savingKm}
+                />
+                <Button
+                  label={savingKm ? 'Guardando…' : 'Guardar'}
+                  variant="primary"
+                  onPress={handleSaveKmFinal}
+                  disabled={!isOnline || savingKm}
+                  loading={savingKm}
+                />
+              </View>
+            </>
+          )}
+        </Card>
+
+        {/* Step 3: conciliación + corte + liquidación (en Corte de Caja) */}
+        <Card>
+          <View style={styles.rowBetween}>
+            <Text style={styles.stepTitle}>3 · Conciliación y liquidación</Text>
+          </View>
+          <Text style={styles.stepBody}>
+            Revisa la conciliación, valida el corte y confirma la liquidación con
+            administración en la pantalla de Corte de Caja.
+          </Text>
+          <Button
+            label="Abrir Corte de Caja"
+            variant="secondary"
+            onPress={() => router.push('/cashclose' as never)}
+            fullWidth
+          />
+        </Card>
+
+        {/* Step 4: cerrar ruta */}
+        <View style={styles.closeCard}>
+          <Text style={styles.closeTitle}>4 · Cerrar ruta</Text>
+          <Text style={styles.closeBody}>
+            El servidor valida que el corte y la liquidación estén completos. Si
+            falta algo, te dirá exactamente qué.
+          </Text>
+          <Button
+            label={closing ? 'Cerrando…' : '🏁 Cerrar ruta'}
+            variant="success"
+            onPress={handleCloseRoute}
+            fullWidth
+            disabled={closing || kmFinal == null || !isOnline}
+            loading={closing}
+          />
+          {kmFinal == null && (
+            <Text style={styles.closeHint}>Registra el KM final para habilitar el cierre.</Text>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.bg },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 14 },
+  content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100, gap: 12 },
+  emptyIcon: { fontSize: 52, marginBottom: 4 },
+  okIcon: { fontSize: 56, marginBottom: 4 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, textAlign: 'center' },
+  emptyBody: { fontSize: 13, color: colors.textDim, textAlign: 'center' },
+  offlineBanner: {
+    padding: 12, borderRadius: radii.button,
+    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.4)',
+  },
+  offlineText: { fontSize: 12, color: colors.text },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  stepTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+  stepBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 10 },
+  kmRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  kmInput: {
+    flex: 1, height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
+    paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card,
+  },
+  kmValue: { fontFamily: fonts.monoBold, fontWeight: '700', color: colors.text },
+  closeCard: {
+    padding: 16, borderRadius: radii.card, borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.3)', backgroundColor: 'rgba(34,197,94,0.05)', marginTop: 4,
+  },
+  closeTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 6 },
+  closeBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 12 },
+  closeHint: { fontSize: 11, color: colors.textDim, marginTop: 8, textAlign: 'center' },
+});

@@ -150,6 +150,17 @@ export default function RouteScreen() {
           />
         </View>
 
+        {/* BLD-SPRINT-C: cierre / regreso (KM final, conciliación, liquidación, cerrar ruta) */}
+        <View style={styles.offrouteRow}>
+          <Button
+            label="🏁 Cerrar ruta"
+            variant="secondary"
+            small
+            onPress={() => router.push('/route-close' as never)}
+            style={{ flex: 1 }}
+          />
+        </View>
+
         {planTypeLabel && (
           <View style={styles.routeTypeRow}>
             <Badge label={planTypeLabel} variant="blue" />

@@ -1,72 +1,72 @@
 /**
- * Route close service — PREPARED FOR SPRINT C, not wired to any UI yet.
+ * Route close service — Sprint C.
  *
- * Thin wrappers over the cierre-family endpoints so Sprint C (conciliación,
- * validar corte, confirmar liquidación, cerrar ruta) has the contracts ready.
- * KM final reuses updateKm('arrival') from routeKm.ts; reconciliation uses
- * fetchRouteReconciliation (gfLogistics.ts); liquidation summary uses
- * fetchLiquidationSummary (gfLogistics.ts). Those are NOT re-declared here.
+ * Only `closeRoute` lives here. The other cierre actions already exist and are
+ * REUSED (not duplicated):
+ *   - Conciliación:        fetchRouteReconciliation  (gfLogistics.ts, Sebas)
+ *   - Validar corte:       validateRouteCorte        (gfLogistics.ts, Sebas)
+ *   - Confirmar liquidación: confirmRouteLiquidation (gfLogistics.ts, Sebas)
+ *   - KM final:            updateKm('arrival')       (routeKm.ts)
  *
- * ⚠️ Do NOT call these from Sprint A/B screens. They mutate route state and
- * belong to the cierre flow. Endpoints (production, used by PWA):
- *   POST /pwa-ruta/validate-corte
- *   POST /gf/logistics/api/employee/liquidacion/confirm
- *   POST /pwa-ruta/close-route
+ * close-route is backend-validated: action_close_route() raises if something
+ * critical is missing (corte/liquidación per backend rules) and returns
+ * warnings. We surface message/warnings; we never simulate success.
+ *
+ * Endpoint (production, used by PWA): POST /pwa-ruta/close-route
+ *   body: { plan_id, departure_km?, arrival_km? }  (backend keeps stored km
+ *   when a value is omitted)
  */
 
 import { postRest } from './api';
 import { logInfo } from '../utils/logger';
 
 const PWA_RUTA = 'pwa-ruta';
-const GF_BASE = 'gf/logistics/api/employee';
 
-export interface ValidateCorteResult {
+export interface CloseRouteResult {
   ok: boolean;
-  raw: unknown;
+  message: string;
+  state: string;
+  km_traveled: number | null;
+  warnings: string[];
 }
 
-/** Recalcula y persiste validación de corte. (Sprint C) */
-export async function validateCorte(
-  planId: number,
-  clientValidation: Record<string, unknown> = {},
-  notes = '',
-): Promise<ValidateCorteResult> {
-  const raw = await postRest<unknown>(`${PWA_RUTA}/validate-corte`, {
-    plan_id: planId,
-    client_validation: clientValidation,
-    notes: notes.trim(),
-  });
-  logInfo('general', 'route_validate_corte', { planId });
-  return { ok: true, raw };
+function toNum(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : null;
 }
 
-/** Confirma la liquidación (endpoint canónico gf_logistics_ops). (Sprint C) */
-export async function confirmLiquidacion(
-  planId: number,
-  opts: { notes?: string; force?: boolean; cashCollected?: number | null } = {},
-): Promise<{ ok: boolean; raw: unknown }> {
-  const body: Record<string, unknown> = {
-    plan_id: planId,
-    notes: (opts.notes ?? '').trim(),
-    force: !!opts.force,
-  };
-  if (typeof opts.cashCollected === 'number') body.cash_collected = opts.cashCollected;
-  const raw = await postRest<unknown>(`${GF_BASE}/liquidacion/confirm`, body);
-  logInfo('general', 'route_confirm_liquidacion', { planId });
-  return { ok: true, raw };
-}
-
-/** Cierra la ruta con KM de salida/llegada. (Sprint C) */
 export async function closeRoute(
   planId: number,
-  departureKm: number,
-  arrivalKm: number,
-): Promise<{ ok: boolean; raw: unknown }> {
-  const raw = await postRest<unknown>(`${PWA_RUTA}/close-route`, {
-    plan_id: planId,
-    departure_km: departureKm,
-    arrival_km: arrivalKm,
-  });
+  opts: { departureKm?: number | null; arrivalKm?: number | null } = {},
+): Promise<CloseRouteResult> {
+  const body: Record<string, unknown> = { plan_id: planId };
+  if (typeof opts.departureKm === 'number' && opts.departureKm > 0) {
+    body.departure_km = opts.departureKm;
+  }
+  if (typeof opts.arrivalKm === 'number' && opts.arrivalKm > 0) {
+    body.arrival_km = opts.arrivalKm;
+  }
+
+  // postRest throws on ok:false / HTTP>=400 (envelope detection, fix #16),
+  // so a successful return here means the backend accepted the close.
+  const result = await postRest<unknown>(`${PWA_RUTA}/close-route`, body);
+  const data = (result && typeof result === 'object'
+    ? ((result as Record<string, unknown>).data ?? result)
+    : {}) as Record<string, unknown>;
+
   logInfo('general', 'route_close', { planId });
-  return { ok: true, raw };
+
+  const warnings = Array.isArray(data.warnings)
+    ? data.warnings.filter((w): w is string => typeof w === 'string')
+    : [];
+
+  return {
+    ok: true,
+    message: typeof (result as Record<string, unknown>)?.message === 'string'
+      ? (result as Record<string, unknown>).message as string
+      : 'Ruta cerrada',
+    state: typeof data.state === 'string' ? data.state : 'closed',
+    km_traveled: toNum(data.km_traveled),
+    warnings,
+  };
 }

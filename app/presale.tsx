@@ -17,7 +17,7 @@
 
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
+  View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';

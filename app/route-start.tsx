@@ -57,7 +57,6 @@ export default function RouteStartScreen() {
   const setChecklistComplete = useRouteStartStore((s) => s.setChecklistComplete);
   const setKmInitialStore = useRouteStartStore((s) => s.setKmInitial);
   const setLoadAccepted = useRouteStartStore((s) => s.setLoadAccepted);
-  const readiness = useRouteStartStore((s) => s.readiness);
   const kmInitialStored = useRouteStartStore((s) => s.kmInitial);
 
   const [loading, setLoading] = useState(false);
@@ -152,6 +151,16 @@ export default function RouteStartScreen() {
   );
 
   const kmStatus: StepStatus = kmInitialStored != null ? 'done' : 'pending';
+
+  // BLD-SPRINT-A-FIX: readiness derived LIVE from the on-screen step status,
+  // not from the store's readiness object. The store can momentarily lag on a
+  // plan/day change (setForPlan resets loadAccepted before the load effect
+  // re-derives it), which previously left "Iniciar ruta" stuck disabled on a
+  // new day. Live derivation is the single source of truth for the button.
+  const checklistDoneLive = checklistStatus === 'done';
+  const kmDoneLive = kmInitialStored != null;
+  const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
+  const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive;
 
   async function handleSaveKm() {
     if (!planId) return;
@@ -317,13 +326,13 @@ export default function RouteStartScreen() {
           )}
         </Card>
 
-        {/* Readiness summary */}
-        <View style={[styles.readyCard, readiness.readyToStart ? styles.readyOk : styles.readyPending]}>
+        {/* Readiness summary (live-derived — see BLD-SPRINT-A-FIX) */}
+        <View style={[styles.readyCard, readyToStartLive ? styles.readyOk : styles.readyPending]}>
           <Text style={styles.readyTitle}>
-            {readiness.readyToStart ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar'}
+            {readyToStartLive ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar'}
           </Text>
           <Text style={styles.readyChecklist}>
-            {readiness.checklistDone ? '✓' : '○'} Checklist   ·   {readiness.kmCaptured ? '✓' : '○'} KM   ·   {readiness.loadAccepted ? '✓' : '○'} Carga
+            {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga
           </Text>
           <Button
             label="Iniciar ruta"
@@ -335,9 +344,9 @@ export default function RouteStartScreen() {
               router.replace('/(tabs)/route' as never);
             }}
             fullWidth
-            disabled={!readiness.readyToStart}
+            disabled={!readyToStartLive}
           />
-          {!readiness.readyToStart && (
+          {!readyToStartLive && (
             <Text style={styles.readyHint}>
               El botón se habilita cuando termines checklist, KM y carga.
             </Text>

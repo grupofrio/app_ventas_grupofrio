@@ -188,6 +188,21 @@ export default function ChecklistScreen() {
           {completed && <Badge label="✓ Completado" variant="green" />}
         </View>
 
+        {/* BLD-SPRINT-A: aviso honesto si hay checks foto OBLIGATORIOS sin
+            responder. La captura de foto en checklist no está en Sprint A,
+            así que estos puntos bloquearían "Completar". Lo hacemos visible
+            para que el chofer/soporte sepan el motivo y no quede atrapado. */}
+        {checks.some((c) => c.check_type === 'photo' && c.required && !c.answered) && !completed && (
+          <View style={styles.photoBlockBanner}>
+            <Text style={styles.photoBlockTitle}>⚠️ Puntos con foto pendientes</Text>
+            <Text style={styles.photoBlockBody}>
+              Este checklist incluye punto(s) obligatorios con foto que aún no se
+              capturan desde la app. No podrás completar hasta resolverlos.
+              Repórtalo a tu supervisor.
+            </Text>
+          </View>
+        )}
+
         {checks.map((check) => {
           const draft = drafts[check.id] || {};
           const willFail = check.check_type === 'yes_no'
@@ -323,4 +338,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   photoNotice: { fontSize: 12, color: colors.textDim, fontStyle: 'italic', marginVertical: 6 },
+  photoBlockBanner: {
+    padding: 12, borderRadius: radii.button,
+    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+    marginBottom: 4,
+  },
+  photoBlockTitle: { fontSize: 13, fontWeight: '700', color: colors.text, marginBottom: 4 },
+  photoBlockBody: { fontSize: 12, lineHeight: 17, color: colors.textDim },
 });

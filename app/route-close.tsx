@@ -339,7 +339,6 @@ const styles = StyleSheet.create({
     flex: 1, height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
     paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card,
   },
-  kmValue: { fontFamily: fonts.monoBold, fontWeight: '700', color: colors.text },
   kmSummary: { gap: 6, marginBottom: 2 },
   kmSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   kmSummaryLabel: { fontSize: 12, color: colors.textDim },

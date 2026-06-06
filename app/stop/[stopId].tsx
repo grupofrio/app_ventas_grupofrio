@@ -261,19 +261,15 @@ export default function StopDetailScreen() {
               fullWidth
             />
           </View>
-          {/* BLD-CONSIGNMENT: placeholder seguro. La consignación vive dentro
-              del cliente, pero NO se implementa hasta que Sebas defina el
-              backend (modelo gf.consignment u owner/picking nativo). Sólo
-              clientes de alta (no leads). No simula nada. */}
+          {/* BLD-CONSIGNMENT: flujo real (gf_consignment). Vive dentro del
+              cliente, sólo clientes de alta (no leads). Abre crear/visita/
+              cierre según consignación activa. */}
           {stop._entityType !== 'lead' && (
             <View style={styles.actionRow}>
               <Button
-                label="📦 Consignación (próximamente)"
+                label="📦 Consignación"
                 variant="secondary"
-                onPress={() => Alert.alert(
-                  'Consignación',
-                  'La consignación estará disponible cuando se habilite en el backend (modelo de consignación). Por ahora no registra nada.',
-                )}
+                onPress={() => router.push(`/consignment/${stop.id}` as never)}
                 fullWidth
               />
             </View>

@@ -278,6 +278,89 @@ export async function postRest<T = any>(
 }
 
 /**
+ * GET a REST endpoint (e.g. pwa-ruta/consignment/my-active?partner_id=N).
+ * Mirrors postRest envelope handling (unwrapRestResult throws on ok===false).
+ */
+export async function getRest<T = any>(
+  url: string,
+  options: { timeoutMs?: number } = {},
+): Promise<T> {
+  const absoluteUrl = await buildAbsoluteUrl(url);
+  const headers = await buildHeaders();
+  const requestId = makeRequestId();
+  const startedAt = Date.now();
+
+  logInfo('api', 'http_request', buildHttpTraceData({
+    phase: 'request',
+    channel: 'rest',
+    method: 'GET',
+    url: absoluteUrl,
+    requestId,
+    requestHeaders: headers,
+  }));
+
+  try {
+    const response = await fetchWithTimeout(absoluteUrl, {
+      method: 'GET',
+      headers,
+    }, options.timeoutMs);
+
+    const text = await response.text();
+    const parsed = safeParseJson(text);
+    let resultPayload: T | undefined;
+    const durationMs = Date.now() - startedAt;
+    let errorMessage: string | undefined;
+
+    try {
+      resultPayload = unwrapRestResult(parsed, response.status) as T;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    const trace = buildHttpTraceData({
+      phase: response.ok && !errorMessage ? 'response' : 'error',
+      channel: 'rest',
+      method: 'GET',
+      url: absoluteUrl,
+      requestId,
+      status: response.status,
+      durationMs,
+      responseBody: parsed,
+      errorMessage: errorMessage || (
+        response.ok
+          ? undefined
+          : (parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`)
+      ),
+    });
+
+    if (response.ok && !errorMessage) {
+      logInfo('api', 'http_response', trace);
+    } else {
+      logError('api', 'http_error', trace);
+      const msg = errorMessage || parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
+      throw makeLoggedHttpError(msg);
+    }
+
+    return resultPayload as T;
+  } catch (error) {
+    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    logError('api', 'http_error', buildHttpTraceData({
+      phase: 'error',
+      channel: 'rest',
+      method: 'GET',
+      url: absoluteUrl,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      errorMessage: message,
+    }));
+    throw error;
+  }
+}
+
+/**
  * POST to an Odoo JSON-RPC endpoint (e.g. /jsonrpc, /get_records, /api/create_update).
  * Wraps params in { jsonrpc: '2.0', params: {...} }.
  * Returns the .result from the JSON-RPC response.

@@ -132,6 +132,24 @@ export default function RouteScreen() {
           />
         </View>
 
+        {/* BLD-SPRINT-B: recarga mid-ruta + reporte de incidente */}
+        <View style={styles.offrouteRow}>
+          <Button
+            label="🔄 Recarga"
+            variant="secondary"
+            small
+            onPress={() => router.push('/refill-accept' as never)}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="🚩 Incidente"
+            variant="secondary"
+            small
+            onPress={() => router.push('/incident' as never)}
+            style={{ flex: 1 }}
+          />
+        </View>
+
         {planTypeLabel && (
           <View style={styles.routeTypeRow}>
             <Badge label={planTypeLabel} variant="blue" />

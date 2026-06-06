@@ -1,88 +1,109 @@
 # KoldField — QA de Consignación
 
 **Rama:** `feat/koldfield-presale-consignment`
-**Backend:** módulo `gf_consignment` (Sebas). Endpoints `/pwa-ruta/consignment/{my-active,create,visit,close}`.
+**Backend:** módulo `gf_consignment` (Sebas) — **CONTRATO REAL CONFIRMADO**.
+Endpoints `/pwa-ruta/consignment/{my-active,create,visit,close}` · `auth=api_key`.
 
-> ⚠️ **Contrato ASUMIDO + BLOQUEADO:** el módulo backend no es accesible desde
-> el repo de la app. Mientras `CONSIGNMENT_BACKEND_CONFIRMED = false` (en
-> `src/services/consignment.ts`), las operaciones que afectan inventario/cobro
-> (create/visit/close) **NO se ejecutan**: la app muestra "Consignación
-> pendiente de validar con backend" y no registra nada. La UI sí es navegable.
-> Flip a `true` SÓLO cuando Sebas confirme paths/payloads/respuestas (abajo).
-> El parseo es defensivo y **no adivina** importes: el backend es la verdad.
+> ✅ `CONSIGNMENT_BACKEND_CONFIRMED = true`. El frontend usa el contrato real.
+> El backend es la **fuente de verdad** (inventario, venta/cobro, resurtido,
+> devolución, cierre). La app manda conteos/objetivos + `price_unit` y muestra
+> **preliminar**; la respuesta NO trae `sold_qty`/folio de venta → la app no
+> depende de ellos. No simula éxito (postRest lanza en `ok:false`/HTTP≥400).
 
 ---
 
-## Contrato asumido (a confirmar con Sebas)
+## Contrato real (implementado)
 
-| Endpoint | Método | Request | Respuesta |
-|---|---|---|---|
-| `consignment/my-active` | GET | `?partner_id=N` | `{ok,data:{consignment_id,partner_id,state,name,lines:[{product_id,product_name,target_qty,theoretical_qty,price_unit,last_visit}],last_visit_date}}` o `data:null` |
-| `consignment/create` | POST | `{operation_id,partner_id,lines:[{product_id,target_qty,price_unit}],employee_id,company_id,route_plan_id,source:'koldfield_consignment'}` | `{ok,data:{consignment_id,name}}` |
-| `consignment/visit` | POST | `{operation_id,consignment_id,lines:[{product_id,physical_qty}],employee_id,route_plan_id}` | `{ok,data:{consignment_id,charged_amount,name}}` |
-| `consignment/close` | POST | `{operation_id,consignment_id,lines:[{product_id,physical_qty}],employee_id,route_plan_id}` | `{ok,data:{consignment_id,charged_amount,returned_total,state}}` |
+### GET `/pwa-ruta/consignment/my-active`
+Query: `?partner_id=N` (requerido) `&company_id=M` (opcional). No usa route_plan_id/employee_id.
+Respuesta: `{ ok, message, data:{ consignment: <obj> | false } }`.
+Línea: `{ line_id, product_id, product_name, product_uom_id, price_unit, target_qty, current_qty, last_count_qty, active }`.
 
-**Preguntas abiertas para Sebas** (ver final del doc).
+### POST `/pwa-ruta/consignment/create`
+```json
+{
+  "partner_id": 123,
+  "company_id": 1,
+  "employee_id": 45,
+  "route_plan_id": 987,
+  "mobile_location_id": 55,
+  "apply_inventory": true,
+  "lines": [{ "product_id": 10, "target_qty": 10, "price_unit": 25.0 }]
+}
+```
+(`vehicle_id`/`notes` opcionales — la app no tiene `vehicle_id` en el plan, se omite.)
+Reglas: `partner_id`+`lines` requeridos; `apply_inventory=true` baja inventario y necesita `route_plan_id` **o** `mobile_location_id`. `price_unit` lo manda la app (precio cliente del ProductPicker; backend no calcula precio cliente todavía).
+
+### POST `/pwa-ruta/consignment/visit` y `/close`
+```json
+{
+  "consignment_id": 555,
+  "operation_id": "consign-visit-...",
+  "payment_method": "cash",
+  "counts": [{ "product_id": 10, "physical_qty": 4, "target_qty": 10, "price_unit": 25.0 }]
+}
+```
+- Se manda `payment_method` (NUNCA `method`). Default `cash`.
+- `visit`: backend calcula `sold = max(target-físico,0)`, crea venta+pago, resurte, baja inventario por resurtido, deja `current_qty = target`.
+- `close`: cobra faltante, registra devolución del físico restante (ubicación cliente → unidad), cierra y desactiva líneas.
+
+### Respuesta create/visit/close
+`{ ok, message, data:{ consignment:<obj completo con lines> } }`.
+Mensajes: create `"Consignacion creada"`, visit `"Visita de consignacion registrada"`, close `"Consignacion cerrada"`.
+**Limitación actual:** la respuesta NO trae `sale_order_id`, folio, `payment_id`, `picking_id`, importe ni `sold_qty` (están en `gf.consignment.move`, no serializados). La app muestra el **preliminar** antes de confirmar y el **mensaje del backend** después.
 
 ---
 
 ## A. Crear consignación (cliente sin consignación activa)
-
-- [ ] Abrir un **cliente de alta** desde Ruta → `/stop/[id]`.
-- [ ] Ver y tocar **"📦 Consignación"**.
-- [ ] (Lead: el botón NO debe aparecer.)
-- [ ] La app consulta `my-active` → sin activa → muestra pantalla **"Nueva consignación"**.
-- [ ] "+ Agregar" → ProductPicker → elegir producto + **cantidad objetivo**.
-- [ ] Ver líneas con objetivo, precio del cliente y **Valor consignado** total.
-- [ ] "Confirmar consignación" → `POST /pwa-ruta/consignment/create`.
-- [ ] Éxito → "Consignación creada — Folio …" → vuelve al cliente.
-- [ ] **Validar en Odoo:** se afectó **inventario de la unidad** (entrega inicial) y **NO** se cobró efectivo.
+- [ ] Cliente **de alta** → `/stop/[id]` → **"📦 Consignación"** (lead: NO aparece).
+- [ ] `my-active` (con `company_id`) → sin activa (`consignment:false`) → pantalla "Nueva consignación".
+- [ ] "+ Agregar" → ProductPicker → producto + **cantidad objetivo** (precio = precio cliente).
+- [ ] Si **no hay** `route_plan_id` **ni** `mobile_location_id` → **advertencia** antes de confirmar.
+- [ ] "Confirmar consignación" → `POST create` con `apply_inventory:true`.
+- [ ] Éxito → mensaje backend + folio → vuelve al cliente.
+- [ ] **Odoo:** bajó **inventario de la unidad**; **NO** cobró efectivo.
 
 ## B. Visitar consignación activa
-
-- [ ] Abrir el mismo cliente → "📦 Consignación".
-- [ ] La app muestra **líneas activas** (objetivo, teórico, precio, última visita).
+- [ ] Mismo cliente → "📦 Consignación" → muestra líneas (objetivo, actual, precio, últ. conteo, última visita).
 - [ ] Capturar **existencia física** por producto.
-- [ ] La app calcula **preliminar**: vendido = objetivo − físico; cobro = vendido × precio; resurtir = vendido.
-- [ ] Ejemplo: objetivo 10, físico 4 → vendido 6, cobro = 6×precio, resurtir 6.
-- [ ] "Registrar visita" → confirmar → `POST /pwa-ruta/consignment/visit`.
-- [ ] Éxito → "Visita registrada — cobrado del faltante …" → recarga la consignación.
-- [ ] **Validar en Odoo:** se creó **venta/cobro** por el faltante, **resurtido** al objetivo, e **inventario de unidad** afectado.
+- [ ] Preliminar en app: vendido = objetivo − físico; cobro = vendido × precio; resurtir = vendido (ej. obj 10, físico 4 → vendido 6).
+- [ ] "Registrar visita" → confirmar (pago efectivo) → `POST visit` con `counts`+`payment_method:cash`.
+- [ ] Éxito → mensaje backend → recarga consignación (líneas a `current_qty=target`).
+- [ ] **Odoo:** venta/cobro por faltante, resurtido al objetivo, inventario de unidad afectado, entra a corte/liquidación (ligado a `gf_route_plan_id`).
 
 ## C. Cerrar consignación
-
-- [ ] En la consignación activa, tocar **"Cerrar consignación"**.
-- [ ] Capturar **existencia física final**.
-- [ ] La app muestra preliminar de **cobro del faltante** (y nota de devolución del resto).
-- [ ] "Confirmar cierre" → `POST /pwa-ruta/consignment/close`.
-- [ ] Éxito → "Consignación cerrada — cobrado …" → vuelve al cliente.
-- [ ] **Validar en Odoo:** se **cobró el faltante**, se **devolvió/recuperó** el producto restante, y la consignación quedó en estado **cerrado**.
+- [ ] En activa → "Cerrar consignación" → capturar **existencia física final**.
+- [ ] Preliminar de cobro del faltante (+ nota de devolución del resto).
+- [ ] "Confirmar cierre" → `POST close` con `counts`+`payment_method:cash`.
+- [ ] Éxito → mensaje backend → vuelve al cliente.
+- [ ] **Odoo:** cobró faltante, devolvió/recuperó resto (cliente → unidad), consignación **cerrada**, líneas desactivadas.
 
 ## D. Errores (no debe simular éxito)
 - [ ] Sin conexión → pantalla "Requiere conexión" (no llama).
 - [ ] Conteo físico faltante/ inválido → mensaje, no llama.
 - [ ] Crear sin productos → mensaje.
-- [ ] Error 400 / backend → muestra el mensaje del backend.
-- [ ] Respuesta sin folio ni id en create → error claro (no falso éxito).
+- [ ] Error 400/backend → muestra el mensaje real del backend.
 - [ ] Token/sesión inválida → error.
 
 ## E. No-regresión
-- [ ] **Venta normal** (cliente → `/stop/[id]` → Venta → checkout).
-- [ ] **Preventa** ("📅 Preventa" en menú general).
+- [ ] **Venta normal** (cliente → Venta → checkout).
+- [ ] **Preventa** ("📅 Preventa" en menú general) — intacta.
 - [ ] **Venta fuera de plan / visita especial**.
-- [ ] **Checkout** y **No venta**.
-- [ ] **Cierre de ruta** (en la rama que lo incluya; N/A en esta base).
-- [ ] El carrito de consignación NO contamina venta normal ni preventa.
+- [ ] **Checkout**, **No venta**, **cierre/corte**.
+- [ ] El carrito de consignación NO contamina venta normal ni preventa (carrito local).
 
 ---
 
-## Preguntas abiertas para Sebas (confirmar contrato)
-1. `my-active`: ¿query por `partner_id` (asumido) o también `stop_id`/`route_plan_id`?
-2. `create`/`visit`/`close`: ¿nombres exactos de campos del payload?
-3. ¿El backend **calcula** importes/vendido/resurtido (asumido) o espera que la app los mande?
-4. **Pago/cobro:** ¿`visit`/`close` asumen **efectivo**, o hay que mandar `payment_method` (cash/transfer)?
-5. ¿`visit` crea venta+cobro+resurtido automáticamente? ¿`close` crea cobro+devolución automáticamente?
-6. ¿Respuesta incluye `charged_amount`/`returned_total` para mostrar al vendedor?
-7. ¿`operation_id` es la clave de idempotencia (asumido) para visita/cierre?
+## Pago
+MVP usa **`cash`** por default (entra al flujo de pago/caja del vendedor; ligado a
+`gf_route_plan_id` → entra a corte/liquidación). Métodos válidos backend:
+`cash`/`transfer`/`card`/`credit`. Si se necesita selector simple, se agrega luego
+sin inventar flujo complejo.
 
-Si alguno difiere, se ajusta **sólo** `src/services/consignment.ts`.
+## Riesgos abiertos
+- La respuesta no expone importe/folio de venta → el vendedor ve el **preliminar** y
+  el mensaje del backend, pero no el folio de la venta generada (deuda backend:
+  serializar `gf.consignment.move`).
+- `vehicle_id` no está en el plan de KoldField → se omite (opcional en backend).
+- `mobile_location_id` depende de que el plan lo traiga; si falta y tampoco hay
+  `route_plan_id`, se advierte (el backend no sabría de dónde bajar inventario).

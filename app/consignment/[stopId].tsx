@@ -31,11 +31,11 @@ import { formatCurrency } from '../../src/utils/time';
 import type { ActiveConsignment } from '../../src/types/consignment';
 import {
   getActiveConsignment, createConsignment, visitConsignment, closeConsignment,
-  CONSIGNMENT_BACKEND_CONFIRMED, ConsignmentNotConfirmedError,
+  CONSIGNMENT_BACKEND_CONFIRMED,
 } from '../../src/services/consignment';
 import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
-  cartToCreateLines, validateCreateLines, buildPhysicalLines,
+  cartToCreateLines, validateCreateLines, buildCountLines,
 } from '../../src/services/consignmentLogic';
 
 function makeOperationId(prefix: string): string {
@@ -48,6 +48,7 @@ export default function ConsignmentScreen() {
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
+  const mobileLocationId = useRouteStore((s) => s.plan?.mobile_location_id ?? null);
   const employeeId = useAuthStore((s) => s.employeeId);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -76,21 +77,14 @@ export default function ConsignmentScreen() {
     setLoading(true);
     setError(null);
     try {
-      const a = await getActiveConsignment(partnerId);
+      const a = await getActiveConsignment(partnerId, companyId);
       setActive(a);
     } catch (err) {
-      // Mientras el contrato no esté confirmado, el GET puede no existir aún.
-      // Dejamos ver la UI de creación (las mutaciones están gateadas igual),
-      // en vez de bloquear con pantalla de error.
-      if (!CONSIGNMENT_BACKEND_CONFIRMED) {
-        setActive(null);
-      } else {
-        setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
-      }
+      setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
     } finally {
       setLoading(false);
     }
-  }, [partnerId, isOnline]);
+  }, [partnerId, isOnline, companyId]);
 
   React.useEffect(() => { void fetchActive(); }, [fetchActive]);
   React.useEffect(() => {
@@ -106,81 +100,95 @@ export default function ConsignmentScreen() {
   }, []);
 
   // ── CREATE ────────────────────────────────────────────────────────────────
-  async function handleCreate() {
+  function runCreate() {
     if (submitting || !partnerId) return;
     const v = validateCreateLines(cart);
     if (!v.ok) { Alert.alert('Falta información', v.reason); return; }
     if (!isOnline) { Alert.alert('Sin conexión', 'La consignación requiere conexión.'); return; }
     setSubmitting(true);
-    try {
-      const res = await createConsignment({
-        operationId: makeOperationId('consign-create'),
-        partnerId,
-        lines: v.lines,
-        employeeId, companyId, routePlanId: planId,
-      });
-      Alert.alert('Consignación creada', `Folio ${res.name || `#${res.consignmentId ?? ''}`}.`, [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
-    } catch (err) {
-      if (err instanceof ConsignmentNotConfirmedError) {
-        Alert.alert('Consignación pendiente', 'Pendiente de validar con backend. No se ejecutó nada.');
-      } else {
+    (async () => {
+      try {
+        const res = await createConsignment({
+          partnerId,
+          companyId,
+          employeeId,
+          routePlanId: planId,
+          mobileLocationId,
+          vehicleId: null, // no disponible en el plan actual
+          lines: v.lines,
+        });
+        const c = res.consignment;
+        Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      } catch (err) {
         Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo crear la consignación.');
+      } finally {
+        setSubmitting(false);
       }
-    } finally {
-      setSubmitting(false);
+    })();
+  }
+
+  function handleCreate() {
+    if (submitting || !partnerId) return;
+    // Backend necesita route_plan_id O mobile_location_id para saber de dónde
+    // bajar inventario (apply_inventory=true).
+    if (planId == null && mobileLocationId == null) {
+      Alert.alert(
+        'Sin ruta/ubicación',
+        'No hay plan de ruta ni ubicación de unidad. El backend puede no saber de dónde bajar el inventario. ¿Continuar de todos modos?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Continuar', onPress: runCreate },
+        ],
+      );
+      return;
     }
+    runCreate();
   }
 
   // ── VISIT / CLOSE ───────────────────────────────────────────────────────────
-  async function handleVisitOrClose() {
+  function handleVisitOrClose() {
     if (submitting || !active) return;
-    const built = buildPhysicalLines(active.lines, physical);
+    const built = buildCountLines(active.lines, physical);
     if (!built.ok) { Alert.alert('Falta información', built.reason); return; }
     if (!isOnline) { Alert.alert('Sin conexión', 'La consignación requiere conexión.'); return; }
 
     const action = closing ? 'cerrar' : 'registrar la visita de';
     Alert.alert(
       closing ? 'Cerrar consignación' : 'Registrar visita',
-      `¿Confirmas ${action} esta consignación? El servidor calcula el cobro del faltante${closing ? ' y la devolución del resto' : ' y el resurtido'}.`,
+      `¿Confirmas ${action} esta consignación? El servidor calcula y cobra el faltante${closing ? ' y registra la devolución del resto' : ' y el resurtido'}. Pago: efectivo.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Confirmar',
-          onPress: async () => {
+          onPress: () => {
             setSubmitting(true);
-            try {
-              const payload = {
-                operationId: makeOperationId(closing ? 'consign-close' : 'consign-visit'),
-                consignmentId: active.consignment_id,
-                lines: built.lines,
-                employeeId, routePlanId: planId,
-              };
-              if (closing) {
-                const res = await closeConsignment(payload);
-                Alert.alert(
-                  'Consignación cerrada',
-                  `Cobrado: ${res.chargedAmount != null ? formatCurrency(res.chargedAmount) : 'según servidor'}.`,
-                  [{ text: 'OK', onPress: () => router.back() }],
-                );
-              } else {
-                const res = await visitConsignment(payload);
-                Alert.alert(
-                  'Visita registrada',
-                  `Cobrado del faltante: ${res.chargedAmount != null ? formatCurrency(res.chargedAmount) : 'según servidor'}. Resurtido al objetivo.`,
-                  [{ text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } }],
-                );
-              }
-            } catch (err) {
-              if (err instanceof ConsignmentNotConfirmedError) {
-                Alert.alert('Consignación pendiente', 'Pendiente de validar con backend. No se ejecutó nada.');
-              } else {
+            (async () => {
+              try {
+                const payload = {
+                  consignmentId: active.id,
+                  operationId: makeOperationId(closing ? 'consign-close' : 'consign-visit'),
+                  paymentMethod: 'cash' as const,
+                  counts: built.counts,
+                };
+                if (closing) {
+                  const res = await closeConsignment(payload);
+                  Alert.alert(res.message || 'Consignación cerrada', 'El servidor registró el cobro y la devolución.', [
+                    { text: 'OK', onPress: () => router.back() },
+                  ]);
+                } else {
+                  const res = await visitConsignment(payload);
+                  Alert.alert(res.message || 'Visita registrada', 'El servidor cobró el faltante y resurtió al objetivo.', [
+                    { text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } },
+                  ]);
+                }
+              } catch (err) {
                 Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo procesar la consignación.');
+              } finally {
+                setSubmitting(false);
               }
-            } finally {
-              setSubmitting(false);
-            }
+            })();
           },
         },
       ],
@@ -313,7 +321,7 @@ export default function ConsignmentScreen() {
         <Card>
           <Text style={styles.clientName}>{stop.customer_name}</Text>
           <Text style={styles.dim}>
-            Folio {active.name || `#${active.consignment_id}`}
+            Folio {active.name || `#${active.id}`}
             {active.last_visit_date ? ` · última visita ${active.last_visit_date}` : ''}
           </Text>
           <Text style={styles.hint}>Captura la existencia física actual por producto.</Text>
@@ -326,7 +334,8 @@ export default function ConsignmentScreen() {
             <Card key={line.product_id}>
               <Text style={styles.lineName}>{line.product_name}</Text>
               <Text style={styles.lineMeta}>
-                Objetivo: {line.target_qty}  ·  Teórico: {line.theoretical_qty}  ·  {formatCurrency(line.price_unit)}
+                Objetivo: {line.target_qty}  ·  Actual: {line.current_qty}  ·  {formatCurrency(line.price_unit)}
+                {line.last_count_qty ? `  ·  últ. conteo ${line.last_count_qty}` : ''}
               </Text>
               <View style={styles.countRow}>
                 <Text style={styles.countLabel}>Existencia física</Text>

@@ -1,19 +1,18 @@
 /**
- * Consignación network service (gf_consignment).
+ * Consignación network service (gf_consignment) — CONTRATO REAL (Sebas).
  *
- * ⚠️ CONTRATO ASUMIDO — el módulo backend NO es accesible desde este repo.
- * Los paths, payloads y formas de respuesta se derivan de la descripción
- * funcional + las convenciones de los endpoints /pwa-ruta. **Sebas debe
- * confirmar.** Si difieren, AJUSTAR SÓLO ESTE ARCHIVO (un único lugar):
- *   - paths en ENDPOINTS
- *   - campos en los payloads (buildCreate/Visit/Close)
- *   - parseo en normalize*()
+ * Endpoints (auth api_key; empleado por X-GF-Employee-Token que ya manda
+ * buildHeaders + employee_id en payload):
+ *   GET  /pwa-ruta/consignment/my-active?partner_id=N[&company_id=M]
+ *   POST /pwa-ruta/consignment/create
+ *   POST /pwa-ruta/consignment/visit
+ *   POST /pwa-ruta/consignment/close
  *
- * Online-first (no hay cola offline para consignación). postRest lanza en
- * ok:false / HTTP>=400 (envelope, fix #16) → nunca simula éxito.
- *
- * Fuente de verdad = backend para inventario, venta/cobro, resurtido,
- * devolución y cierre. La app sólo manda conteos y muestra preliminar.
+ * Respuesta: { ok, message, data:{ consignment: <obj> | false } }.
+ * Online-first; postRest lanza en ok:false / HTTP>=400 → nunca simula éxito.
+ * El backend es la fuente de verdad (inventario, venta/cobro, resurtido,
+ * devolución, cierre). La app sólo manda conteos/objetivos y muestra
+ * preliminar. La respuesta NO trae sold_qty/folio → no se depende de ellos.
  */
 
 import { postRest, getRest } from './api';
@@ -22,10 +21,9 @@ import type {
   ActiveConsignment,
   ConsignmentLine,
   CreateConsignmentLine,
-  PhysicalCountLine,
-  ConsignmentCreateResult,
-  ConsignmentVisitResult,
-  ConsignmentCloseResult,
+  ConsignmentCountLine,
+  ConsignmentPaymentMethod,
+  ConsignmentMutationResult,
 } from '../types/consignment';
 
 const ENDPOINTS = {
@@ -35,22 +33,8 @@ const ENDPOINTS = {
   close: 'pwa-ruta/consignment/close',
 } as const;
 
-/**
- * GATE de seguridad: el contrato real del backend gf_consignment NO está
- * confirmado (módulo no accesible desde este repo). Mientras esto sea false,
- * las operaciones que AFECTAN inventario/cobro (create/visit/close) NO se
- * ejecutan: lanzan ConsignmentNotConfirmedError y la UI muestra "pendiente de
- * validar con backend". La lectura (my-active) sí corre para poder ver la UI.
- * Flip a true SÓLO cuando Sebas confirme paths/payloads/respuestas.
- */
-export const CONSIGNMENT_BACKEND_CONFIRMED = false;
-
-export class ConsignmentNotConfirmedError extends Error {
-  constructor() {
-    super('Consignación pendiente de validar con backend.');
-    this.name = 'ConsignmentNotConfirmedError';
-  }
-}
+/** Contrato confirmado por Sebas → operaciones reales habilitadas. */
+export const CONSIGNMENT_BACKEND_CONFIRMED = true;
 
 function num(v: unknown): number {
   if (Array.isArray(v)) return num(v[0]);
@@ -66,127 +50,141 @@ function str(v: unknown): string {
   if (Array.isArray(v)) return typeof v[1] === 'string' ? v[1] : String(v[0] ?? '');
   return typeof v === 'string' ? v : '';
 }
-function unwrap(result: unknown): Record<string, unknown> | null {
-  if (!result || typeof result !== 'object') return null;
-  const payload = result as Record<string, unknown>;
-  const data = payload.data !== undefined ? payload.data : payload;
-  if (!data || typeof data !== 'object') return null;
-  return data as Record<string, unknown>;
+function bool(v: unknown): boolean {
+  return v === true;
 }
 
 function normalizeLine(raw: Record<string, unknown>): ConsignmentLine {
   return {
+    line_id: num(raw.line_id ?? raw.id),
     product_id: num(raw.product_id),
     product_name: str(raw.product_name) || str(raw.name),
-    target_qty: num(raw.target_qty ?? raw.target ?? raw.objective_qty),
-    theoretical_qty: num(raw.theoretical_qty ?? raw.current_qty ?? raw.actual_qty ?? raw.qty),
-    price_unit: num(raw.price_unit ?? raw.price),
-    last_visit: raw.last_visit != null ? str(raw.last_visit) : null,
+    product_uom_id: numOrNull(raw.product_uom_id),
+    price_unit: num(raw.price_unit),
+    target_qty: num(raw.target_qty),
+    current_qty: num(raw.current_qty),
+    last_count_qty: num(raw.last_count_qty),
+    active: raw.active === undefined ? true : bool(raw.active),
   };
 }
 
-/**
- * GET consignación activa del cliente. Devuelve null si no tiene.
- * Query por partner_id (la consignación vive con el cliente).
- */
-export async function getActiveConsignment(partnerId: number): Promise<ActiveConsignment | null> {
-  const result = await getRest<unknown>(`${ENDPOINTS.myActive}?partner_id=${partnerId}`);
-  const data = unwrap(result);
-  if (!data) return null;
-  const id = num(data.consignment_id ?? data.id);
-  if (!id) return null; // sin consignación activa
-  const rawLines = Array.isArray(data.lines) ? data.lines : [];
+/** Extrae `data.consignment`. `false`/ausente → null. */
+function parseConsignment(result: unknown): ActiveConsignment | null {
+  if (!result || typeof result !== 'object') return null;
+  const payload = result as Record<string, unknown>;
+  const data = (payload.data ?? payload) as Record<string, unknown>;
+  const c = data?.consignment;
+  if (!c || c === true || typeof c !== 'object') return null;
+  const obj = c as Record<string, unknown>;
+  const rawLines = Array.isArray(obj.lines) ? obj.lines : [];
   return {
-    consignment_id: id,
-    partner_id: num(data.partner_id) || partnerId,
-    state: str(data.state) || 'active',
-    name: str(data.name),
+    id: num(obj.id),
+    name: str(obj.name),
+    partner_id: num(obj.partner_id),
+    partner_name: str(obj.partner_name),
+    company_id: numOrNull(obj.company_id),
+    employee_id: numOrNull(obj.employee_id),
+    route_plan_id: numOrNull(obj.route_plan_id),
+    vehicle_id: numOrNull(obj.vehicle_id),
+    mobile_location_id: numOrNull(obj.mobile_location_id),
+    state: str(obj.state) || 'active',
+    date_opened: str(obj.date_opened),
+    last_visit_date: str(obj.last_visit_date),
+    date_closed: str(obj.date_closed),
     lines: (rawLines as unknown[])
       .filter((l): l is Record<string, unknown> => !!l && typeof l === 'object')
       .map(normalizeLine),
-    last_visit_date: data.last_visit_date != null ? str(data.last_visit_date) : null,
   };
+}
+
+function messageOf(result: unknown, fallback: string): string {
+  if (result && typeof result === 'object') {
+    const m = (result as Record<string, unknown>).message;
+    if (typeof m === 'string' && m.trim()) return m;
+  }
+  return fallback;
+}
+
+/** GET consignación activa del cliente (null si no tiene). */
+export async function getActiveConsignment(
+  partnerId: number,
+  companyId?: number | null,
+): Promise<ActiveConsignment | null> {
+  let url = `${ENDPOINTS.myActive}?partner_id=${partnerId}`;
+  if (typeof companyId === 'number' && companyId > 0) url += `&company_id=${companyId}`;
+  const result = await getRest<unknown>(url);
+  return parseConsignment(result);
 }
 
 interface CreateInput {
-  operationId: string;
   partnerId: number;
-  lines: CreateConsignmentLine[];
-  employeeId: number | null;
   companyId: number | null;
-  routePlanId: number | null;
-}
-
-/** POST crear consignación inicial (afecta inventario en backend, no cobra). */
-export async function createConsignment(input: CreateInput): Promise<ConsignmentCreateResult> {
-  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
-  const result = await postRest<unknown>(ENDPOINTS.create, {
-    operation_id: input.operationId,
-    partner_id: input.partnerId,
-    lines: input.lines,
-    employee_id: input.employeeId,
-    company_id: input.companyId,
-    route_plan_id: input.routePlanId,
-    source: 'koldfield_consignment',
-  });
-  const data = unwrap(result) ?? {};
-  const consignmentId = numOrNull(data.consignment_id ?? data.id);
-  const name = str(data.name);
-  if (consignmentId == null && !name) {
-    throw new Error('El servidor no devolvió la consignación (sin folio ni id).');
-  }
-  logInfo('general', 'consignment_create', { partner_id: input.partnerId, lines: input.lines.length });
-  return { ok: true, consignmentId, name };
-}
-
-interface VisitInput {
-  operationId: string;
-  consignmentId: number;
-  lines: PhysicalCountLine[];
   employeeId: number | null;
   routePlanId: number | null;
+  mobileLocationId: number | null;
+  vehicleId: number | null;
+  notes?: string;
+  lines: CreateConsignmentLine[];
 }
 
-/**
- * POST visita: manda conteo físico. El backend calcula vendido, crea venta/
- * cobro por el faltante y resurte al objetivo.
- */
-export async function visitConsignment(input: VisitInput): Promise<ConsignmentVisitResult> {
-  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
-  const result = await postRest<unknown>(ENDPOINTS.visit, {
-    operation_id: input.operationId,
-    consignment_id: input.consignmentId,
-    lines: input.lines,
+/** POST crear consignación inicial. apply_inventory:true → backend baja stock. */
+export async function createConsignment(input: CreateInput): Promise<ConsignmentMutationResult> {
+  const body: Record<string, unknown> = {
+    partner_id: input.partnerId,
     employee_id: input.employeeId,
-    route_plan_id: input.routePlanId,
-  });
-  const data = unwrap(result) ?? {};
-  logInfo('general', 'consignment_visit', { consignment_id: input.consignmentId, lines: input.lines.length });
+    apply_inventory: true,
+    lines: input.lines,
+  };
+  if (input.companyId != null) body.company_id = input.companyId;
+  if (input.routePlanId != null) body.route_plan_id = input.routePlanId;
+  if (input.mobileLocationId != null) body.mobile_location_id = input.mobileLocationId;
+  if (input.vehicleId != null) body.vehicle_id = input.vehicleId;
+  if (input.notes && input.notes.trim()) body.notes = input.notes.trim();
+
+  const result = await postRest<unknown>(ENDPOINTS.create, body);
+  logInfo('general', 'consignment_create', { partner_id: input.partnerId, lines: input.lines.length });
   return {
     ok: true,
-    consignmentId: numOrNull(data.consignment_id ?? data.id) ?? input.consignmentId,
-    chargedAmount: numOrNull(data.charged_amount ?? data.charge_total ?? data.amount),
-    name: str(data.name),
+    message: messageOf(result, 'Consignación creada'),
+    consignment: parseConsignment(result),
   };
 }
 
-/** POST cierre: conteo físico final → cobra faltante + devuelve resto. */
-export async function closeConsignment(input: VisitInput): Promise<ConsignmentCloseResult> {
-  if (!CONSIGNMENT_BACKEND_CONFIRMED) throw new ConsignmentNotConfirmedError();
-  const result = await postRest<unknown>(ENDPOINTS.close, {
-    operation_id: input.operationId,
+interface CountInput {
+  consignmentId: number;
+  operationId: string;
+  paymentMethod: ConsignmentPaymentMethod;
+  counts: ConsignmentCountLine[];
+}
+
+/** POST visita: conteo físico → backend cobra faltante y resurte al objetivo. */
+export async function visitConsignment(input: CountInput): Promise<ConsignmentMutationResult> {
+  const result = await postRest<unknown>(ENDPOINTS.visit, {
     consignment_id: input.consignmentId,
-    lines: input.lines,
-    employee_id: input.employeeId,
-    route_plan_id: input.routePlanId,
+    operation_id: input.operationId,
+    payment_method: input.paymentMethod,
+    counts: input.counts,
   });
-  const data = unwrap(result) ?? {};
+  logInfo('general', 'consignment_visit', { consignment_id: input.consignmentId, counts: input.counts.length });
+  return {
+    ok: true,
+    message: messageOf(result, 'Visita de consignación registrada'),
+    consignment: parseConsignment(result),
+  };
+}
+
+/** POST cierre: conteo físico final → cobra faltante + devuelve resto + cierra. */
+export async function closeConsignment(input: CountInput): Promise<ConsignmentMutationResult> {
+  const result = await postRest<unknown>(ENDPOINTS.close, {
+    consignment_id: input.consignmentId,
+    operation_id: input.operationId,
+    payment_method: input.paymentMethod,
+    counts: input.counts,
+  });
   logInfo('general', 'consignment_close', { consignment_id: input.consignmentId });
   return {
     ok: true,
-    consignmentId: numOrNull(data.consignment_id ?? data.id) ?? input.consignmentId,
-    chargedAmount: numOrNull(data.charged_amount ?? data.charge_total ?? data.amount),
-    returnedTotal: numOrNull(data.returned_total ?? data.returned_qty ?? data.return_total),
-    state: str(data.state) || 'closed',
+    message: messageOf(result, 'Consignación cerrada'),
+    consignment: parseConsignment(result),
   };
 }

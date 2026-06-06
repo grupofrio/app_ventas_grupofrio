@@ -12,7 +12,7 @@ import type {
   ConsignmentLineCalc,
   ConsignmentVisitTotals,
   CreateConsignmentLine,
-  PhysicalCountLine,
+  ConsignmentCountLine,
 } from '../types/consignment';
 import type { SaleLineItem } from '../stores/useVisitStore';
 
@@ -83,18 +83,20 @@ export function validateCreateLines(cart: SaleLineItem[]): CreateValidation {
 }
 
 /**
- * Construye las líneas de conteo físico desde el mapa {product_id: texto}.
- * Acepta vacío como 0. Rechaza valores no numéricos o negativos.
+ * Construye los `counts` (visit/close) desde el mapa {product_id: texto}.
+ * Cada count lleva product_id, physical_qty, target_qty y price_unit (de la
+ * línea activa); el backend recalcula vendido/cobro/resurtido.
+ * Rechaza vacío, no numérico o negativo.
  */
-export type PhysicalValidation =
-  | { ok: true; lines: PhysicalCountLine[] }
+export type CountValidation =
+  | { ok: true; counts: ConsignmentCountLine[] }
   | { ok: false; reason: string };
 
-export function buildPhysicalLines(
+export function buildCountLines(
   activeLines: ConsignmentLine[],
   input: Record<number, string>,
-): PhysicalValidation {
-  const lines: PhysicalCountLine[] = [];
+): CountValidation {
+  const counts: ConsignmentCountLine[] = [];
   for (const line of activeLines) {
     const raw = input[line.product_id];
     if (raw === undefined || raw === '') {
@@ -104,8 +106,13 @@ export function buildPhysicalLines(
     if (!Number.isFinite(qty) || qty < 0) {
       return { ok: false, reason: `Existencia física inválida en "${line.product_name}".` };
     }
-    lines.push({ product_id: line.product_id, physical_qty: qty });
+    counts.push({
+      product_id: line.product_id,
+      physical_qty: qty,
+      target_qty: n(line.target_qty),
+      price_unit: n(line.price_unit),
+    });
   }
-  if (lines.length === 0) return { ok: false, reason: 'No hay líneas para contar.' };
-  return { ok: true, lines };
+  if (counts.length === 0) return { ok: false, reason: 'No hay líneas para contar.' };
+  return { ok: true, counts };
 }

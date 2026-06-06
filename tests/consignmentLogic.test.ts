@@ -16,18 +16,22 @@ interface LogicModule {
   computeConsignedValue: (lines: Array<{ product_id: number; target_qty: number; price_unit: number }>) => number;
   cartToCreateLines: (cart: SaleLineItem[]) => Array<{ product_id: number; target_qty: number; price_unit: number }>;
   validateCreateLines: (cart: SaleLineItem[]) => { ok: true; lines: any[] } | { ok: false; reason: string };
-  buildPhysicalLines: (lines: ConsignmentLine[], input: Record<number, string>) =>
-    { ok: true; lines: Array<{ product_id: number; physical_qty: number }> } | { ok: false; reason: string };
+  buildCountLines: (lines: ConsignmentLine[], input: Record<number, string>) =>
+    { ok: true; counts: Array<{ product_id: number; physical_qty: number; target_qty: number; price_unit: number }> }
+    | { ok: false; reason: string };
 }
 
 function cline(partial: Partial<ConsignmentLine> & Pick<ConsignmentLine, 'product_id' | 'target_qty' | 'price_unit'>): ConsignmentLine {
   return {
+    line_id: partial.line_id ?? partial.product_id,
     product_id: partial.product_id,
     product_name: partial.product_name ?? `P${partial.product_id}`,
-    target_qty: partial.target_qty,
-    theoretical_qty: partial.theoretical_qty ?? partial.target_qty,
+    product_uom_id: partial.product_uom_id ?? 1,
     price_unit: partial.price_unit,
-    last_visit: null,
+    target_qty: partial.target_qty,
+    current_qty: partial.current_qty ?? partial.target_qty,
+    last_count_qty: partial.last_count_qty ?? 0,
+    active: partial.active ?? true,
   };
 }
 function sline(productId: number, qty: number, price: number): SaleLineItem {
@@ -73,19 +77,22 @@ function testCreateValidation(m: LogicModule) {
   if (ok.ok) assert.deepEqual(ok.lines, [{ product_id: 10, target_qty: 5, price_unit: 25 }]);
 }
 
-function testPhysicalLines(m: LogicModule) {
+function testCountLines(m: LogicModule) {
   const lines = [cline({ product_id: 1, target_qty: 10, price_unit: 5 }), cline({ product_id: 2, target_qty: 5, price_unit: 3 })];
   // missing one → fail
-  assert.equal(m.buildPhysicalLines(lines, { 1: '4' }).ok, false);
+  assert.equal(m.buildCountLines(lines, { 1: '4' }).ok, false);
   // empty string → fail (must capture)
-  assert.equal(m.buildPhysicalLines(lines, { 1: '4', 2: '' }).ok, false);
+  assert.equal(m.buildCountLines(lines, { 1: '4', 2: '' }).ok, false);
   // invalid → fail
-  assert.equal(m.buildPhysicalLines(lines, { 1: '4', 2: 'abc' }).ok, false);
-  assert.equal(m.buildPhysicalLines(lines, { 1: '4', 2: '-1' }).ok, false);
-  // all valid → ok (0 allowed)
-  const ok = m.buildPhysicalLines(lines, { 1: '4', 2: '0' });
+  assert.equal(m.buildCountLines(lines, { 1: '4', 2: 'abc' }).ok, false);
+  assert.equal(m.buildCountLines(lines, { 1: '4', 2: '-1' }).ok, false);
+  // all valid → ok (0 allowed); counts incluyen target_qty + price_unit
+  const ok = m.buildCountLines(lines, { 1: '4', 2: '0' });
   assert.equal(ok.ok, true);
-  if (ok.ok) assert.deepEqual(ok.lines, [{ product_id: 1, physical_qty: 4 }, { product_id: 2, physical_qty: 0 }]);
+  if (ok.ok) assert.deepEqual(ok.counts, [
+    { product_id: 1, physical_qty: 4, target_qty: 10, price_unit: 5 },
+    { product_id: 2, physical_qty: 0, target_qty: 5, price_unit: 3 },
+  ]);
 }
 
 async function main() {
@@ -98,7 +105,7 @@ async function main() {
   testVisitTotals(m);
   testConsignedValue(m);
   testCreateValidation(m);
-  testPhysicalLines(m);
+  testCountLines(m);
 
   console.log('consignment logic tests: ok');
 }

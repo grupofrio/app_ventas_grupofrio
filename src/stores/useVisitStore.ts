@@ -113,6 +113,8 @@ function persistVisitState(state: {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
+  saleConfirmed?: boolean;
+  saleOperationId?: string | null;
 }) {
   const snapshot = buildVisitSnapshot(state);
   if (snapshot) {
@@ -226,6 +228,10 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       checkInLat: snapshot.checkInLat,
       checkInLon: snapshot.checkInLon,
       elapsedSeconds: snapshot.elapsedSeconds,
+      // P0-2: restore sale confirmation + idempotency key (back-compat: old
+      // snapshots without these fields default to not-confirmed).
+      saleConfirmed: snapshot.saleConfirmed ?? false,
+      saleOperationId: snapshot.saleOperationId ?? null,
     });
     persistVisitState(snapshot);
   },
@@ -252,14 +258,24 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       }));
   },
 
-  // V1.2: Anti-duplicate — lock confirm button, generate operation ID
+  // V1.2 + P0-2: Anti-duplicate — lock confirm, generate idempotency key ONCE.
+  // If a sale is already confirmed for this visit AND still has its operationId
+  // (e.g. restored after a crash), REUSE it instead of minting a new one — this
+  // prevents a duplicate sale with a fresh operation_id on retry/restart.
   lockSaleConfirm: () => {
+    const existing = get().saleOperationId;
+    if (get().saleConfirmed && existing) {
+      return existing;
+    }
     const opId = `sale_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     set({ saleConfirmed: true, saleOperationId: opId });
+    // Persist immediately so a crash right after locking still blocks re-confirm.
+    persistVisitState({ ...get() });
     return opId;
   },
 
   unlockSaleConfirm: () => {
     set({ saleConfirmed: false, saleOperationId: null });
+    persistVisitState({ ...get() });
   },
 }));

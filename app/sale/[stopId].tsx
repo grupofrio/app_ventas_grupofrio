@@ -22,6 +22,8 @@ import { formatCatalogPrice, formatCurrency } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
+import { OperationGate } from '../../src/components/OperationGate';
+import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import {
   getEffectiveSalesCompanyId,
   getPartnerPricelistId,
@@ -40,7 +42,7 @@ import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts
 import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
-export default function SaleScreen() {
+function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
@@ -122,6 +124,16 @@ export default function SaleScreen() {
                      && hasStock && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
+  // P0-2 (hardening): si la venta ya estaba confirmada (p.ej. restaurada tras
+  // un crash entre confirmar y checkout), reanuda el estado post-venta para que
+  // el vendedor continúe al cobro/checkout en vez de re-confirmar (evita venta
+  // duplicada). No crea nada: solo reabre la guía "Continuar a checkout".
+  React.useEffect(() => {
+    if (saleConfirmed && !afterSaleAction && stop) {
+      setAfterSaleAction(shouldSkipStopCheckout(stop.id) ? 'route' : 'checkout');
+    }
+  }, [saleConfirmed, afterSaleAction, stop?.id]);
+
   function setSaleQtyFromText(productId: number, qtyText: string) {
     const digits = qtyText.replace(/\D/g, '');
     updateSaleQty(productId, digits ? Number(digits) : 0);
@@ -170,6 +182,23 @@ export default function SaleScreen() {
         'Stock insuficiente',
         stockIssues.map((i) =>
           `${i.name}: pides ${i.requested}, disponible ${i.available}`
+        ).join('\n'),
+      );
+      return;
+    }
+
+    // P0-1 (frontend-safe): revalidar contra stock FRESCO al confirmar (el tope
+    // del carrito usa el stock capturado al agregar, que pudo quedar obsoleto).
+    // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
+    // localmente ni reemplaza la validación backend.
+    const freshIssues = findFreshStockIssues(saleLines, useProductStore.getState().products);
+    if (freshIssues.length > 0) {
+      Alert.alert(
+        'Stock insuficiente',
+        freshIssues.map((i) =>
+          i.kind === 'invalid_qty'
+            ? `${i.name}: cantidad inválida`
+            : `${i.name}: pides ${i.requested}, disponible ${i.available}`
         ).join('\n'),
       );
       return;
@@ -528,6 +557,16 @@ export default function SaleScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// P0-4 (hardening): gate de readiness — no permitir vender sin plan activo +
+// checklist + KM inicial + carga aceptada (evita salto de flujo por deep link).
+export default function SaleScreen() {
+  return (
+    <OperationGate title="Venta">
+      <SaleScreenInner />
+    </OperationGate>
   );
 }
 

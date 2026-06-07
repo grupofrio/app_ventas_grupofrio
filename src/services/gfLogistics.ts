@@ -822,6 +822,13 @@ export async function confirmRouteLiquidation(
     cash_collected?: number;
     notes?: string;
     force?: boolean;
+    /**
+     * P0-3 (hardening): idempotency key para evitar doble confirmación por
+     * doble-tap / retry. El backend actual ignora campos desconocidos, así que
+     * enviarlo es compatible; cuando Sebas lo soporte, deduplicará por este id
+     * (o por plan_id). Ver docs/KOLDFIELD_BACKEND_HARDENING_REQUESTS.md.
+     */
+    operation_id?: string;
   } = {},
 ): Promise<GFRouteLiquidationConfirmResult> {
   const body: Record<string, unknown> = {};
@@ -836,6 +843,9 @@ export async function confirmRouteLiquidation(
   }
   if (payload.force === true) {
     body.force = true;
+  }
+  if (typeof payload.operation_id === 'string' && payload.operation_id) {
+    body.operation_id = payload.operation_id;
   }
 
   try {

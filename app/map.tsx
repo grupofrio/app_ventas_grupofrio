@@ -94,8 +94,10 @@ export default function MapScreen() {
     });
   }, []);
 
-  const openSale = useCallback((stop: GFStop) => {
-    router.push(`/sale/${stop.id}` as never);
+  // P0-4 (hardening): NO abrir venta directa desde el mapa. Se enruta al hub del
+  // cliente (/stop/[id]) que conserva check-in + geocerca + guards de visita.
+  const openClient = useCallback((stop: GFStop) => {
+    router.push(`/stop/${stop.id}` as never);
   }, [router]);
 
   const promptStopAction = useCallback((stop: GFStop) => {
@@ -105,10 +107,10 @@ export default function MapScreen() {
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Abrir Maps', onPress: () => openNavigation(stop) },
-        { text: 'Hacer venta', onPress: () => openSale(stop) },
+        { text: 'Abrir cliente', onPress: () => openClient(stop) },
       ],
     );
-  }, [openNavigation, openSale]);
+  }, [openNavigation, openClient]);
 
   const visited = stops.filter((s) => s.state === 'done').length;
   const pending = stops.filter((s) => s.state === 'pending').length;
@@ -192,9 +194,9 @@ export default function MapScreen() {
         if (!next) return null;
         return (
           <View style={styles.actionsWrap}>
-            <TouchableOpacity style={styles.saleButton} onPress={() => openSale(next)} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.saleButton} onPress={() => openClient(next)} activeOpacity={0.8}>
               <Text style={styles.saleButtonText}>
-                🧾 Venta a #{next.route_sequence} {next.customer_name}
+                🧾 Abrir #{next.route_sequence} {next.customer_name}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.mapsButton} onPress={() => openNavigation(next)} activeOpacity={0.8}>

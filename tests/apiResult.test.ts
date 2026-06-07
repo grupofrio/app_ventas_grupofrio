@@ -35,6 +35,21 @@ function testThrowsWhenWrappedRestResultReportsOkFalse(
   );
 }
 
+// Quick win (hardening): 401 → mensaje claro de sesión expirada + code.
+function testThrowsClearMessageOn401(
+  unwrapRestResult: (parsed: unknown, status: number) => unknown,
+) {
+  assert.throws(
+    () => unwrapRestResult({ anything: true }, 401),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Sesión expirada/i);
+      assert.equal((err as Error & { code?: string }).code, 'session_expired');
+      return true;
+    },
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const apiResult = await import(
@@ -44,6 +59,7 @@ async function main() {
 
   testUnwrapsSuccessfulWrappedRestResult(apiResult.unwrapRestResult);
   testThrowsWhenWrappedRestResultReportsOkFalse(apiResult.unwrapRestResult);
+  testThrowsClearMessageOn401(apiResult.unwrapRestResult);
   console.log('api result tests: ok');
 }
 

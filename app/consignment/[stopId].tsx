@@ -37,12 +37,13 @@ import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
   cartToCreateLines, validateCreateLines, buildCountLines,
 } from '../../src/services/consignmentLogic';
+import { OperationGate } from '../../src/components/OperationGate';
 
 function makeOperationId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export default function ConsignmentScreen() {
+function ConsignmentScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
@@ -381,6 +382,15 @@ export default function ConsignmentScreen() {
         />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// P0-4 (hardening): gate de readiness antes de consignación.
+export default function ConsignmentScreen() {
+  return (
+    <OperationGate title="Consignación">
+      <ConsignmentScreenInner />
+    </OperationGate>
   );
 }
 

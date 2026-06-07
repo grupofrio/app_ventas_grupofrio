@@ -10,6 +10,11 @@ export interface PersistedVisitSnapshot {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
+  // P0-2 (hardening): persist sale confirmation + idempotency key so a crash
+  // after confirming a sale does NOT let the vendor re-confirm and create a
+  // duplicate sale with a new operation_id on restart.
+  saleConfirmed: boolean;
+  saleOperationId: string | null;
 }
 
 interface BuildVisitSnapshotInput {
@@ -21,6 +26,8 @@ interface BuildVisitSnapshotInput {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
+  saleConfirmed?: boolean;
+  saleOperationId?: string | null;
 }
 
 export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVisitSnapshot | null {
@@ -33,6 +40,8 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     checkInLat,
     checkInLon,
     elapsedSeconds,
+    saleConfirmed = false,
+    saleOperationId = null,
   } = input;
 
   if (!['checked_in', 'selling', 'no_selling'].includes(phase)) return null;
@@ -47,6 +56,8 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     checkInLat,
     checkInLon,
     elapsedSeconds,
+    saleConfirmed,
+    saleOperationId,
   };
 }
 

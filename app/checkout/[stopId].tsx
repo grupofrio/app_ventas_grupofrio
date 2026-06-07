@@ -25,8 +25,9 @@ import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
+import { OperationGate } from '../../src/components/OperationGate';
 
-export default function CheckoutScreen() {
+function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
@@ -372,6 +373,15 @@ export default function CheckoutScreen() {
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// P0-4 (hardening): gate de readiness antes de checkout.
+export default function CheckoutScreen() {
+  return (
+    <OperationGate title="Checkout">
+      <CheckoutScreenInner />
+    </OperationGate>
   );
 }
 

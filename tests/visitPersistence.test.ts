@@ -16,6 +16,8 @@ interface VisitPersistenceModule {
     checkInLat: number | null;
     checkInLon: number | null;
     elapsedSeconds: number;
+    saleConfirmed?: boolean;
+    saleOperationId?: string | null;
   }) => null | {
     phase: string;
     currentStopId: number;
@@ -25,6 +27,8 @@ interface VisitPersistenceModule {
     checkInLat: number | null;
     checkInLon: number | null;
     elapsedSeconds: number;
+    saleConfirmed: boolean;
+    saleOperationId: string | null;
   };
   shouldRehydrateVisit: (
     snapshot: { currentStopId: number } | null,
@@ -69,7 +73,35 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     checkInLat: 19.4,
     checkInLon: -99.1,
     elapsedSeconds: 90,
+    // P0-2: defaults when not provided.
+    saleConfirmed: false,
+    saleOperationId: null,
   });
+}
+
+// P0-2: snapshot must carry sale confirmation + idempotency key.
+function testSnapshotCarriesSaleConfirmation(module: VisitPersistenceModule) {
+  const snapshot = module.buildVisitSnapshot({
+    phase: 'selling',
+    currentStopId: 15,
+    currentStop: {
+      id: 15,
+      customer_id: 200,
+      customer_name: 'Abarrotes Centro',
+      state: 'in_progress',
+      source_model: 'gf.route.stop',
+    },
+    offrouteVisitId: null,
+    checkInTime: 123456,
+    checkInLat: null,
+    checkInLon: null,
+    elapsedSeconds: 5,
+    saleConfirmed: true,
+    saleOperationId: 'sale_123_abc',
+  });
+  assert.ok(snapshot);
+  assert.equal(snapshot!.saleConfirmed, true);
+  assert.equal(snapshot!.saleOperationId, 'sale_123_abc');
 }
 
 function testIdleVisitDoesNotPersist(module: VisitPersistenceModule) {
@@ -149,6 +181,7 @@ async function main() {
   ) as VisitPersistenceModule;
 
   testBuildActiveVisitSnapshot(module);
+  testSnapshotCarriesSaleConfirmation(module);
   testIdleVisitDoesNotPersist(module);
   testRehydrateRequiresInProgressStop(module);
   testResetVisitWhenCurrentStopDisappearsFromFreshPlan(module);

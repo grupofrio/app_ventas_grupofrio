@@ -148,6 +148,21 @@ export default function CheckinScreen() {
       return;
     }
 
+    // Quick win (hardening): no registrar check-in con ubicación inválida (0,0 /
+    // sin fix) cuando el cliente tiene coordenadas y no hay override. Falsear la
+    // posición rompe la geocerca y la trazabilidad. Clientes sin coordenadas
+    // siguen permitidos (check-in libre).
+    const clientHasCoords = !!(stop.customer_latitude && stop.customer_longitude);
+    const hasValidFix =
+      latitude != null && longitude != null && !(latitude === 0 && longitude === 0);
+    if (clientHasCoords && !hasValidFix && !allowOffDistanceVisits) {
+      Alert.alert(
+        'Ubicación no disponible',
+        'Activa el GPS/permiso de ubicación para hacer check-in con este cliente.',
+      );
+      return;
+    }
+
     setCheckingIn(true); // Lock immediately
 
     const lat = latitude || 0;

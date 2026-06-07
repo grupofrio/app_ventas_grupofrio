@@ -14,6 +14,7 @@ import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { StopCard } from '../../src/components/domain/StopCard';
 import { RoutePreparationCard } from '../../src/components/domain/RoutePreparationCard';
 import { RouteLoadAcceptanceCard } from '../../src/components/domain/RouteLoadAcceptanceCard';
+import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -47,6 +48,7 @@ export default function HomeScreen() {
   const productsLastSync = useProductStore((s) => s.lastSync);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const routeStartReadiness = useRouteStartStore((s) => s.readiness);
 
   // Reload on auth identity changes so a previous employee's in-memory state is not reused.
   useEffect(() => {
@@ -133,6 +135,18 @@ export default function HomeScreen() {
   // mensaje del backend como subtítulo cuando exista, sin ocultarlo.
   const isStandardNoPlan = !planError || /sin plan/i.test(planError);
 
+  // BLD-SPRINT-A.1: CTA "Iniciar operación" con 3 estados para no confundir:
+  //  - ruta ya en marcha (alguna parada en curso/hecha) → "Ver ruta"
+  //  - operación lista (checklist+KM+carga) pero sin arrancar → "Continuar a ruta"
+  //  - falta algo → "Iniciar operación"
+  const routeUnderway = stops.some((s) => s.state === 'in_progress' || s.state === 'done');
+  const opReady = routeStartReadiness.readyToStart;
+  const routeStartCta = routeUnderway
+    ? { title: 'Ver ruta', sub: 'Tu recorrido del día', icon: '🗺️', target: '/(tabs)/route' as const }
+    : opReady
+      ? { title: 'Continuar a ruta', sub: 'Operación lista · revisa tus paradas', icon: '✅', target: '/(tabs)/route' as const }
+      : { title: 'Iniciar operación', sub: 'Checklist · KM inicial · Aceptar carga', icon: '🚚', target: '/route-start' as const };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Status bar */}
@@ -216,6 +230,31 @@ export default function HomeScreen() {
           </View>
         ) : (
           <>
+            {/* BLD-SPRINT-A.1: CTA contextual de inicio de operación.
+                3 estados (ver routeStartCta arriba) para no confundir cuando
+                la operación ya está lista o la ruta ya arrancó. */}
+            <TouchableOpacity
+              style={styles.routeStartCta}
+              onPress={() => {
+                // BLD-ROUTE-MAP: "Ver ruta" / "Continuar a ruta" abren la
+                // pestaña Ruta forzando el mapa (?view=map). "Iniciar
+                // operación" va al hub normal.
+                if (routeStartCta.target === '/(tabs)/route') {
+                  router.push({ pathname: '/(tabs)/route', params: { view: 'map' } } as never);
+                } else {
+                  router.push(routeStartCta.target as never);
+                }
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.routeStartIcon}>{routeStartCta.icon}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.routeStartTitle}>{routeStartCta.title}</Text>
+                <Text style={styles.routeStartSub}>{routeStartCta.sub}</Text>
+              </View>
+              <Text style={styles.routeStartChevron}>›</Text>
+            </TouchableOpacity>
+
             {/* BLD-20260505-ROUTEPREP: card "Preparar ruta" — invita al
                 vendedor a precargar plan/productos/precios con WiFi en
                 CEDIS antes de salir. No bloquea otras acciones; sólo
@@ -400,6 +439,22 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     backgroundColor: 'rgba(37,99,235,0.04)',
   },
+  // BLD-SPRINT-A: CTA "Iniciar operación"
+  routeStartCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: radii.card,
+    marginBottom: 14,
+    backgroundColor: 'rgba(37,99,235,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.3)',
+  },
+  routeStartIcon: { fontSize: 26 },
+  routeStartTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  routeStartSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+  routeStartChevron: { fontSize: 28, color: colors.primary, fontWeight: '300' },
   weatherTemp: {
     fontFamily: fonts.monoBold,
     fontSize: 18,

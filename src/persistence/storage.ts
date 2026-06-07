@@ -86,6 +86,7 @@ export const STORAGE_KEYS = {
   PLAN: 'route:plan',
   STOPS: 'route:stops',
   VISIT_STATE: 'visit:active',
+  ROUTE_START: 'route:start', // Sprint A: checklist/km/load readiness cache
 
   // Products
   PRODUCTS: 'entities:products',

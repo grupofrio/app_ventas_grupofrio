@@ -13,12 +13,38 @@ import type {
   ConsignmentVisitTotals,
   CreateConsignmentLine,
   ConsignmentCountLine,
+  ConsignmentPaymentMethod,
 } from '../types/consignment';
 import type { SaleLineItem } from '../stores/useVisitStore';
 
 function n(v: unknown): number {
   const x = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
   return Number.isFinite(x) ? x : 0;
+}
+
+/** Métodos de pago válidos (P1) — coinciden con los que acepta el backend. */
+export const CONSIGNMENT_PAYMENT_METHODS: ReadonlyArray<{ value: ConsignmentPaymentMethod; label: string }> = [
+  { value: 'cash', label: 'Efectivo' },
+  { value: 'transfer', label: 'Transferencia' },
+  { value: 'card', label: 'Tarjeta' },
+  { value: 'credit', label: 'Crédito' },
+];
+
+export function isValidConsignmentPaymentMethod(m: unknown): m is ConsignmentPaymentMethod {
+  return m === 'cash' || m === 'transfer' || m === 'card' || m === 'credit';
+}
+
+export function consignmentPaymentLabel(m: ConsignmentPaymentMethod): string {
+  return CONSIGNMENT_PAYMENT_METHODS.find((x) => x.value === m)?.label ?? String(m);
+}
+
+/**
+ * Total de producto a recuperar/devolver al CERRAR = suma de la existencia
+ * física restante capturada (lo que queda en el cliente y vuelve a la unidad).
+ * Preliminar; el backend confirma.
+ */
+export function computeReturnTotal(counts: ReadonlyArray<{ physical_qty: number }>): number {
+  return counts.reduce((s, c) => s + Math.max(0, n(c.physical_qty)), 0);
 }
 
 /** Cálculo preliminar de una línea dado el conteo físico. */

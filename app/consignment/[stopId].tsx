@@ -28,7 +28,7 @@ import { useProductStore } from '../../src/stores/useProductStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import type { SaleLineItem } from '../../src/stores/useVisitStore';
 import { formatCurrency } from '../../src/utils/time';
-import type { ActiveConsignment } from '../../src/types/consignment';
+import type { ActiveConsignment, ConsignmentPaymentMethod } from '../../src/types/consignment';
 import {
   getActiveConsignment, createConsignment, visitConsignment, closeConsignment,
   CONSIGNMENT_BACKEND_CONFIRMED,
@@ -36,8 +36,10 @@ import {
 import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
   cartToCreateLines, validateCreateLines, buildCountLines,
+  CONSIGNMENT_PAYMENT_METHODS, consignmentPaymentLabel, computeReturnTotal,
 } from '../../src/services/consignmentLogic';
 import { OperationGate } from '../../src/components/OperationGate';
+import { isSessionExpiredError } from '../../src/services/sessionError';
 
 function makeOperationId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -53,6 +55,7 @@ function ConsignmentScreenInner() {
   const employeeId = useAuthStore((s) => s.employeeId);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const logout = useAuthStore((s) => s.logout);
   const isOnline = useSyncStore((s) => s.isOnline);
   const products = useProductStore((s) => s.products);
   const loadProducts = useProductStore((s) => s.loadProducts);
@@ -70,7 +73,25 @@ function ConsignmentScreenInner() {
   // VISIT / CLOSE mode
   const [physical, setPhysical] = useState<Record<number, string>>({});
   const [closing, setClosing] = useState(false); // toggle: visita vs cierre
+  const [paymentMethod, setPaymentMethod] = useState<ConsignmentPaymentMethod>('cash'); // P1
   const [submitting, setSubmitting] = useState(false);
+
+  // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
+  // al vendedor atrapado. No borra datos sin confirmación (logout es explícito).
+  const handleApiError = useCallback((err: unknown, fallback: string) => {
+    if (isSessionExpiredError(err)) {
+      Alert.alert(
+        'Sesión expirada',
+        'Tu sesión caducó. Vuelve a iniciar sesión para continuar.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Volver a iniciar sesión', onPress: () => { void logout(); } },
+        ],
+      );
+      return;
+    }
+    Alert.alert('Error', err instanceof Error ? err.message : fallback);
+  }, [logout]);
 
   const fetchActive = useCallback(async () => {
     if (!partnerId) { setError('Cliente inválido.'); setLoading(false); return; }
@@ -123,7 +144,7 @@ function ConsignmentScreenInner() {
           { text: 'OK', onPress: () => router.back() },
         ]);
       } catch (err) {
-        Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo crear la consignación.');
+        handleApiError(err, 'No se pudo crear la consignación.');
       } finally {
         setSubmitting(false);
       }
@@ -158,7 +179,7 @@ function ConsignmentScreenInner() {
     const action = closing ? 'cerrar' : 'registrar la visita de';
     Alert.alert(
       closing ? 'Cerrar consignación' : 'Registrar visita',
-      `¿Confirmas ${action} esta consignación? El servidor calcula y cobra el faltante${closing ? ' y registra la devolución del resto' : ' y el resurtido'}. Pago: efectivo.`,
+      `¿Confirmas ${action} esta consignación? El servidor calcula y cobra el faltante${closing ? ' y registra la devolución del resto' : ' y el resurtido'}. Pago: ${consignmentPaymentLabel(paymentMethod)}.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -170,7 +191,7 @@ function ConsignmentScreenInner() {
                 const payload = {
                   consignmentId: active.id,
                   operationId: makeOperationId(closing ? 'consign-close' : 'consign-visit'),
-                  paymentMethod: 'cash' as const,
+                  paymentMethod,
                   counts: built.counts,
                 };
                 if (closing) {
@@ -185,7 +206,7 @@ function ConsignmentScreenInner() {
                   ]);
                 }
               } catch (err) {
-                Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo procesar la consignación.');
+                handleApiError(err, 'No se pudo procesar la consignación.');
               } finally {
                 setSubmitting(false);
               }
@@ -306,6 +327,9 @@ function ConsignmentScreenInner() {
   // ── VISIT / CLOSE mode (consignación activa) ──────────────────────────────
   const calcs = active.lines.map((l) => computeLineCalc(l, parseFloat(physical[l.product_id] ?? '') || 0));
   const totals = computeVisitTotals(calcs);
+  const returnTotal = computeReturnTotal(
+    active.lines.map((l) => ({ physical_qty: parseFloat(physical[l.product_id] ?? '') || 0 })),
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -359,11 +383,32 @@ function ConsignmentScreenInner() {
           );
         })}
 
+        {/* P1: método de pago */}
+        <Card>
+          <Text style={styles.stepTitle}>Método de pago</Text>
+          <View style={styles.payRow}>
+            {CONSIGNMENT_PAYMENT_METHODS.map((m) => {
+              const activeMethod = paymentMethod === m.value;
+              return (
+                <TouchableOpacity
+                  key={m.value}
+                  style={[styles.payChip, activeMethod && styles.payChipActive]}
+                  onPress={() => setPaymentMethod(m.value)}
+                >
+                  <Text style={[styles.payChipText, activeMethod && styles.payChipTextActive]}>{m.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Card>
+
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>Preliminar (el servidor confirma)</Text>
-          <View style={styles.rowBetween}><Text style={styles.dim}>Vendido total</Text><Text style={styles.summaryVal}>{totals.soldTotal}</Text></View>
-          <View style={styles.rowBetween}><Text style={styles.dim}>A cobrar</Text><Text style={styles.summaryVal}>{formatCurrency(totals.chargeTotal)}</Text></View>
+          <View style={styles.rowBetween}><Text style={styles.dim}>Vendido / faltante total</Text><Text style={styles.summaryVal}>{totals.soldTotal}</Text></View>
           {!closing && <View style={styles.rowBetween}><Text style={styles.dim}>A resurtir</Text><Text style={styles.summaryVal}>{totals.restockTotal}</Text></View>}
+          {closing && <View style={styles.rowBetween}><Text style={styles.dim}>A recuperar / devolver</Text><Text style={styles.summaryVal}>{returnTotal}</Text></View>}
+          <View style={styles.rowBetween}><Text style={styles.dim}>Importe estimado a cobrar</Text><Text style={styles.summaryVal}>{formatCurrency(totals.chargeTotal)}</Text></View>
+          <View style={styles.rowBetween}><Text style={styles.dim}>Método de pago</Text><Text style={styles.summaryVal}>{consignmentPaymentLabel(paymentMethod)}</Text></View>
           {closing && <Text style={styles.hint}>Al cerrar: se cobra el faltante y se devuelve el producto restante.</Text>}
         </View>
 
@@ -434,5 +479,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
   },
   warnText: { fontSize: 12, lineHeight: 17, color: colors.text },
+  payRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  payChip: {
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: radii.button,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card,
+  },
+  payChipActive: { borderColor: colors.primary, backgroundColor: 'rgba(37,99,235,0.10)' },
+  payChipText: { fontSize: 13, fontWeight: '700', color: colors.text },
+  payChipTextActive: { color: colors.primary },
 });
 

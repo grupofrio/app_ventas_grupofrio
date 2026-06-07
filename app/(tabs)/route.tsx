@@ -419,7 +419,7 @@ export default function RouteScreen() {
                 ]}
               >
                 <TouchableOpacity
-                  onPress={() => router.push(`/stop/${stop.id}` as never)}
+                  onPress={() => handleOpenClient(stop)}
                   activeOpacity={0.7}
                 >
                   <View style={styles.cardRow}>

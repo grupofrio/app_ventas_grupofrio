@@ -76,6 +76,15 @@ function main() {
     'la búsqueda de visita especial debe filtrar por plaza analítica',
   );
 
+  // P1 review (Sebas): la tarjeta de la LISTA debe abrir el cliente vía
+  // handleOpenClient (que valida orden de visita), NO con router.push directo,
+  // para no saltarse la advertencia de fuera de orden.
+  assert.match(
+    routeScreen,
+    /onPress=\{\(\) => handleOpenClient\(stop\)\}/,
+    'la tarjeta de la lista debe usar handleOpenClient(stop), no router.push directo',
+  );
+
   assert.match(
     routeScreen,
     /Buscar cliente planificado/,

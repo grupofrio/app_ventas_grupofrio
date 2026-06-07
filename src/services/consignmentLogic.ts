@@ -22,16 +22,13 @@ function n(v: unknown): number {
   return Number.isFinite(x) ? x : 0;
 }
 
-/** Métodos de pago válidos (P1) — coinciden con los que acepta el backend. */
+/** MVP piloto: consignación cobra en efectivo hasta que corte soporte más buckets. */
 export const CONSIGNMENT_PAYMENT_METHODS: ReadonlyArray<{ value: ConsignmentPaymentMethod; label: string }> = [
   { value: 'cash', label: 'Efectivo' },
-  { value: 'transfer', label: 'Transferencia' },
-  { value: 'card', label: 'Tarjeta' },
-  { value: 'credit', label: 'Crédito' },
 ];
 
 export function isValidConsignmentPaymentMethod(m: unknown): m is ConsignmentPaymentMethod {
-  return m === 'cash' || m === 'transfer' || m === 'card' || m === 'credit';
+  return m === 'cash';
 }
 
 export function consignmentPaymentLabel(m: ConsignmentPaymentMethod): string {

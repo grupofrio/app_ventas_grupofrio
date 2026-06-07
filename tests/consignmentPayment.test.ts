@@ -11,21 +11,21 @@ interface Mod {
 }
 
 function run(m: Mod) {
-  // los 4 métodos del backend
+  // MVP piloto: consignación sólo cobra efectivo hasta que corte soporte todos
+  // los buckets de pago end-to-end.
   assert.deepEqual(
     m.CONSIGNMENT_PAYMENT_METHODS.map((x) => x.value),
-    ['cash', 'transfer', 'card', 'credit'],
+    ['cash'],
   );
 
   assert.equal(m.isValidConsignmentPaymentMethod('cash'), true);
-  assert.equal(m.isValidConsignmentPaymentMethod('transfer'), true);
-  assert.equal(m.isValidConsignmentPaymentMethod('card'), true);
-  assert.equal(m.isValidConsignmentPaymentMethod('credit'), true);
+  assert.equal(m.isValidConsignmentPaymentMethod('transfer'), false);
+  assert.equal(m.isValidConsignmentPaymentMethod('card'), false);
+  assert.equal(m.isValidConsignmentPaymentMethod('credit'), false);
   assert.equal(m.isValidConsignmentPaymentMethod('paypal'), false);
   assert.equal(m.isValidConsignmentPaymentMethod(null), false);
 
   assert.equal(m.consignmentPaymentLabel('cash'), 'Efectivo');
-  assert.equal(m.consignmentPaymentLabel('transfer'), 'Transferencia');
 
   // total a devolver = suma de existencia física (clamp negativos)
   assert.equal(m.computeReturnTotal([{ physical_qty: 4 }, { physical_qty: 0 }, { physical_qty: 6 }]), 10);

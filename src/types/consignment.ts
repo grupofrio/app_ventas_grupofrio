@@ -10,7 +10,7 @@
 
 export type ConsignmentState = 'active' | 'closed' | 'draft' | string;
 
-export type ConsignmentPaymentMethod = 'cash' | 'transfer' | 'card' | 'credit';
+export type ConsignmentPaymentMethod = 'cash';
 
 /** Línea tal como la devuelve el backend (my-active / create / visit / close). */
 export interface ConsignmentLine {

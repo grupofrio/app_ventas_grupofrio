@@ -327,12 +327,24 @@ function normalizeExchangeResponse(result: unknown): GFExchangeResponse {
 
 // ═══ Plan & Route ═══
 
+function getMyPlanDate(): string {
+  const qaRouteDate = (process.env as Record<string, string | undefined>)[
+    'EXPO_PUBLIC_KF_QA_ROUTE_DATE'
+  ]?.trim();
+
+  if (qaRouteDate && /^\d{4}-\d{2}-\d{2}$/.test(qaRouteDate)) {
+    return qaRouteDate;
+  }
+
+  return todayLocalISO();
+}
+
 export async function getMyPlan(): Promise<GFPlan | null> {
   try {
     // BLD-20260404-007: Backend wraps response in { ok, message, data }.
     // When found=false, the employee has no plan assigned for today.
     const result = await postRest<any>(`${GF_BASE}/my_plan`, {
-      date: todayLocalISO(),
+      date: getMyPlanDate(),
     });
     if (!result || typeof result !== 'object') return null;
     if (result.ok === false) {

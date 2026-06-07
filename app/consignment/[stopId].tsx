@@ -36,7 +36,7 @@ import {
 import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
   cartToCreateLines, validateCreateLines, buildCountLines,
-  CONSIGNMENT_PAYMENT_METHODS, consignmentPaymentLabel, computeReturnTotal,
+  consignmentPaymentLabel, computeReturnTotal,
 } from '../../src/services/consignmentLogic';
 import { OperationGate } from '../../src/components/OperationGate';
 import { isSessionExpiredError } from '../../src/services/sessionError';
@@ -73,7 +73,7 @@ function ConsignmentScreenInner() {
   // VISIT / CLOSE mode
   const [physical, setPhysical] = useState<Record<number, string>>({});
   const [closing, setClosing] = useState(false); // toggle: visita vs cierre
-  const [paymentMethod, setPaymentMethod] = useState<ConsignmentPaymentMethod>('cash'); // P1
+  const paymentMethod: ConsignmentPaymentMethod = 'cash';
   const [submitting, setSubmitting] = useState(false);
 
   // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
@@ -383,23 +383,10 @@ function ConsignmentScreenInner() {
           );
         })}
 
-        {/* P1: método de pago */}
+        {/* MVP piloto: método de pago fijo hasta que corte soporte más buckets. */}
         <Card>
           <Text style={styles.stepTitle}>Método de pago</Text>
-          <View style={styles.payRow}>
-            {CONSIGNMENT_PAYMENT_METHODS.map((m) => {
-              const activeMethod = paymentMethod === m.value;
-              return (
-                <TouchableOpacity
-                  key={m.value}
-                  style={[styles.payChip, activeMethod && styles.payChipActive]}
-                  onPress={() => setPaymentMethod(m.value)}
-                >
-                  <Text style={[styles.payChipText, activeMethod && styles.payChipTextActive]}>{m.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <Text style={styles.fixedPaymentText}>{consignmentPaymentLabel(paymentMethod)}</Text>
         </Card>
 
         <View style={styles.summaryCard}>
@@ -479,13 +466,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
   },
   warnText: { fontSize: 12, lineHeight: 17, color: colors.text },
-  payRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  payChip: {
-    paddingVertical: 8, paddingHorizontal: 14, borderRadius: radii.button,
-    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card,
-  },
-  payChipActive: { borderColor: colors.primary, backgroundColor: 'rgba(37,99,235,0.10)' },
-  payChipText: { fontSize: 13, fontWeight: '700', color: colors.text },
-  payChipTextActive: { color: colors.primary },
+  fixedPaymentText: { fontSize: 14, fontWeight: '700', color: colors.text, marginTop: 8 },
 });
-

@@ -95,10 +95,9 @@ Mensajes: create `"Consignacion creada"`, visit `"Visita de consignacion registr
 ---
 
 ## Pago
-MVP usa **`cash`** por default (entra al flujo de pago/caja del vendedor; ligado a
-`gf_route_plan_id` → entra a corte/liquidación). Métodos válidos backend:
-`cash`/`transfer`/`card`/`credit`. Si se necesita selector simple, se agrega luego
-sin inventar flujo complejo.
+MVP usa sólo **`cash`** (entra al flujo de pago/caja del vendedor; ligado a
+`gf_route_plan_id` → entra a corte/liquidación). `transfer`/`card`/`credit` quedan
+fuera del selector hasta que corte/liquidación los soporte end-to-end.
 
 ## Riesgos abiertos
 - La respuesta no expone importe/folio de venta → el vendedor ve el **preliminar** y

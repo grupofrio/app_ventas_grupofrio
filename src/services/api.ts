@@ -17,7 +17,11 @@ const STORE_KEYS = {
   GF_TOKEN: 'kf_gf_token',
 } as const;
 
-export const DEFAULT_BASE_URL = 'https://grupofrio.odoo.com';
+const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefined>)[
+  'EXPO_PUBLIC_KF_DEFAULT_BASE_URL'
+]?.trim().replace(/\/+$/, '');
+
+export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio.odoo.com';
 export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
 
 let _baseUrl = DEFAULT_BASE_URL;

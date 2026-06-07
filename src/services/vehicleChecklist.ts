@@ -12,7 +12,7 @@
  *  - `answered` is the source of truth for "respondido", NOT `passed`.
  */
 
-import { postRest, getRest } from './api';
+import { postRest } from './api';
 import { logInfo, logWarn } from '../utils/logger';
 import {
   GFVehicleChecklist,
@@ -83,13 +83,17 @@ function normalizeCheck(raw: Record<string, unknown>): GFVehicleCheck {
 }
 
 /**
- * GET checklist header for a plan. Returns null when none exists yet
+ * Read checklist header for a plan. Returns null when none exists yet
  * (backend responds { ok:true, data:null }).
+ *
+ * These endpoints are Odoo type=json routes; use POST payloads even for reads.
  */
 export async function getVehicleChecklist(
   routePlanId: number,
 ): Promise<GFVehicleChecklist | null> {
-  const result = await postRestGet(`${PWA_RUTA}/vehicle-checklist?route_plan_id=${routePlanId}`);
+  const result = await postRest<unknown>(`${PWA_RUTA}/vehicle-checklist`, {
+    route_plan_id: routePlanId,
+  });
   const data = unwrap(result);
   if (!data) return null;
   return normalizeChecklistHeader(data);
@@ -114,9 +118,11 @@ export async function initVehicleChecklist(checklistId: number): Promise<void> {
   logInfo('general', 'route_checklist_init', { checklistId });
 }
 
-/** GET all checks for a checklist. */
+/** Read all checks for a checklist. */
 export async function getVehicleChecks(checklistId: number): Promise<GFVehicleCheck[]> {
-  const result = await postRestGet(`${PWA_RUTA}/vehicle-checks?checklist_id=${checklistId}`);
+  const result = await postRest<unknown>(`${PWA_RUTA}/vehicle-checks`, {
+    checklist_id: checklistId,
+  });
   const data = unwrap(result);
   const checks = Array.isArray(data?.checks) ? data!.checks : [];
   return (checks as unknown[])
@@ -203,8 +209,4 @@ export async function ensureChecklistReady(routePlanId: number): Promise<{
 
   const checks = header.id > 0 ? await getVehicleChecks(header.id) : [];
   return { header, checks };
-}
-
-async function postRestGet(url: string): Promise<unknown> {
-  return getRest<unknown>(url);
 }

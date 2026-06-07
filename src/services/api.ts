@@ -278,9 +278,9 @@ export async function postRest<T = any>(
 }
 
 /**
- * GET a REST endpoint (e.g. pwa-ruta/vehicle-checklist?route_plan_id=N).
+ * GET a REST endpoint (e.g. pwa-ruta/vehicle-checklist?route_plan_id=N
+ * or pwa-ruta/consignment/my-active?partner_id=N).
  * Mirrors postRest envelope handling (unwrapRestResult throws on ok===false).
- * Added for Sprint A (route-start flow) where backend exposes GET endpoints.
  */
 export async function getRest<T = any>(
   url: string,

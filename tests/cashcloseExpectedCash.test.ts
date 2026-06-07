@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-const root = resolve(new URL('.', import.meta.url).pathname, '..');
+// fileURLToPath handles Windows (new URL('.').pathname leaves /C:/... → C:\C:\).
+const root = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 function read(path: string): string {
-  return readFileSync(resolve(root, path), 'utf8');
+  return readFileSync(resolve(root, path), 'utf8').replace(/\r\n/g, '\n');
 }
 
 test('cash close service preserves expected payment buckets from backend', () => {

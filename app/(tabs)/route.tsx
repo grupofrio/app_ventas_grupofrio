@@ -267,6 +267,16 @@ export default function RouteScreen() {
         {/* BLD-SPRINT-B: recarga mid-ruta + reporte de incidente */}
         <View style={styles.offrouteRow}>
           <Button
+            label="📅 Preventa"
+            variant="secondary"
+            small
+            onPress={() => router.push('/presale' as never)}
+            style={{ flex: 1 }}
+          />
+        </View>
+
+        <View style={styles.offrouteRow}>
+          <Button
             label="🔄 Recarga"
             variant="secondary"
             small

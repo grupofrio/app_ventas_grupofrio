@@ -5,7 +5,9 @@ import { resolve } from 'node:path';
 const REPO_ROOT = (globalThis as unknown as { process: { cwd: () => string } }).process.cwd();
 
 function main() {
-  const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8');
+  // Normalize CRLF→LF so the source-text regexes below match regardless of the
+  // checkout's line endings (Windows autocrlf produced \r\n, breaking \n}\n\n).
+  const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8').replace(/\r\n/g, '\n');
 
   assert.match(
     api,

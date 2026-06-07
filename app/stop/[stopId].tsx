@@ -261,6 +261,19 @@ export default function StopDetailScreen() {
               fullWidth
             />
           </View>
+          {/* BLD-CONSIGNMENT: flujo real (gf_consignment). Vive dentro del
+              cliente, sólo clientes de alta (no leads). Abre crear/visita/
+              cierre según consignación activa. */}
+          {stop._entityType !== 'lead' && (
+            <View style={styles.actionRow}>
+              <Button
+                label="📦 Consignación"
+                variant="secondary"
+                onPress={() => router.push(`/consignment/${stop.id}` as never)}
+                fullWidth
+              />
+            </View>
+          )}
         </View>
 
         {/* KoldScore action suggestion */}

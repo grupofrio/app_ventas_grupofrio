@@ -26,6 +26,7 @@ import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
 import { Badge } from '../src/components/ui/Badge';
 import { ProductPicker } from '../src/components/domain/ProductPicker';
+import { CalendarPicker } from '../src/components/ui/CalendarPicker';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
@@ -39,6 +40,7 @@ import { formatCurrency } from '../src/utils/time';
 import {
   buildPresalePayload, computeCartTotal, addDaysIso,
 } from '../src/services/presaleLogic';
+import { formatHumanDate } from '../src/services/calendarLogic';
 import {
   createPresale, PresaleNotEnabledError, PRESALE_BACKEND_ENABLED, PRESALE_LEAD_SUPPORTED,
 } from '../src/services/presale';
@@ -67,6 +69,8 @@ export default function PresaleScreen() {
 
   const today = todayLocalISO();
   const [deliveryDate, setDeliveryDate] = useState(addDaysIso(today, 1));
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [manualDate, setManualDate] = useState(false); // fallback al input manual
   const [submitting, setSubmitting] = useState(false);
 
   // Ensure catalog is available (presale may be opened without a loaded plan).
@@ -267,21 +271,55 @@ export default function PresaleScreen() {
         {/* Step 3: fecha de entrega */}
         <Card>
           <Text style={styles.stepTitle}>3 · Fecha de entrega</Text>
-          <TextInput
-            style={styles.dateInput}
-            value={deliveryDate}
-            onChangeText={setDeliveryDate}
-            placeholder="AAAA-MM-DD"
-            placeholderTextColor={colors.textDim}
-            keyboardType="numbers-and-punctuation"
-          />
+
+          {/* Selector de calendario (primario) */}
+          <TouchableOpacity
+            style={styles.dateSelectBtn}
+            onPress={() => setDatePickerVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.dateSelectIcon}>📅</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.dateSelectLabel}>Fecha de entrega</Text>
+              <Text style={styles.dateSelectValue}>
+                {formatHumanDate(deliveryDate) || 'Seleccionar fecha'}
+              </Text>
+            </View>
+            <Text style={styles.dateSelectChevron}>›</Text>
+          </TouchableOpacity>
+          <Text style={styles.dateIsoHint}>{deliveryDate}</Text>
+
+          {/* Chips rápidos +1/+3/+7 */}
           <View style={styles.quickDates}>
-            {[1, 3, 7].map((d) => (
-              <TouchableOpacity key={d} style={styles.quickChip} onPress={() => setDeliveryDate(addDaysIso(today, d))}>
-                <Text style={styles.quickChipText}>+{d}d</Text>
-              </TouchableOpacity>
-            ))}
+            {[1, 3, 7].map((d) => {
+              const iso = addDaysIso(today, d);
+              const active = deliveryDate === iso;
+              return (
+                <TouchableOpacity
+                  key={d}
+                  style={[styles.quickChip, active && styles.quickChipActive]}
+                  onPress={() => setDeliveryDate(iso)}
+                >
+                  <Text style={[styles.quickChipText, active && styles.quickChipTextActive]}>+{d}d</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+
+          {/* Fallback: escribir manualmente (req 7) */}
+          <TouchableOpacity onPress={() => setManualDate((v) => !v)}>
+            <Text style={styles.manualToggle}>{manualDate ? 'Ocultar entrada manual' : 'o escribir la fecha manualmente'}</Text>
+          </TouchableOpacity>
+          {manualDate && (
+            <TextInput
+              style={styles.dateInput}
+              value={deliveryDate}
+              onChangeText={setDeliveryDate}
+              placeholder="AAAA-MM-DD"
+              placeholderTextColor={colors.textDim}
+              keyboardType="numbers-and-punctuation"
+            />
+          )}
         </Card>
 
         <Button
@@ -307,6 +345,14 @@ export default function PresaleScreen() {
           onAddLine={addLine}
         />
       )}
+
+      <CalendarPicker
+        visible={datePickerVisible}
+        valueIso={deliveryDate}
+        minIso={today}
+        onSelect={setDeliveryDate}
+        onClose={() => setDatePickerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -345,12 +391,25 @@ const styles = StyleSheet.create({
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   totalLabel: { fontSize: 13, fontWeight: '700', color: colors.text },
   totalValue: { fontFamily: fonts.monoBold, fontSize: 16, fontWeight: '800', color: colors.success },
+  dateSelectBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    height: 56, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
+    paddingHorizontal: 14, backgroundColor: colors.card,
+  },
+  dateSelectIcon: { fontSize: 22 },
+  dateSelectLabel: { fontSize: 11, color: colors.textDim, marginBottom: 2 },
+  dateSelectValue: { fontSize: 16, fontWeight: '700', color: colors.text },
+  dateSelectChevron: { fontSize: 22, color: colors.textDim, fontWeight: '800' },
+  dateIsoHint: { fontSize: 11, color: colors.textDim, fontFamily: fonts.monoBold, marginTop: 4, marginLeft: 2 },
   dateInput: {
     height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
-    paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card,
+    paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card, marginTop: 6,
   },
-  quickDates: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  manualToggle: { fontSize: 12, color: colors.primary, fontWeight: '700', marginTop: 10 },
+  quickDates: { flexDirection: 'row', gap: 8, marginTop: 10 },
   quickChip: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: radii.button, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  quickChipActive: { borderColor: colors.primary, backgroundColor: 'rgba(37,99,235,0.10)' },
   quickChipText: { fontSize: 13, fontWeight: '700', color: colors.text },
+  quickChipTextActive: { color: colors.primary },
   footNote: { fontSize: 11, color: colors.textDim, textAlign: 'center', marginTop: 8, lineHeight: 15 },
 });

@@ -12,6 +12,7 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { SyncQueueItem } from '../src/types/sync';
+import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -42,6 +43,12 @@ export default function SyncScreen() {
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
+
+  // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
+  const syncCopy = describeSyncQueueState({ pendingCount, errorCount, deadCount, isSyncing, isOnline });
+  const toneColor: Record<string, string> = {
+    ok: '#22C55E', syncing: '#2563EB', pending: '#F59E0B', error: '#EF4444',
+  };
 
   // BLD-20260424-PURGE: handler con confirmación. Los items dead suelen
   // ser residuos históricos (ventas viejas con shape obsoleto, GPS sin
@@ -81,6 +88,15 @@ export default function SyncScreen() {
             {pendingCount > 0 ? ` · ${pendingCount} pendientes` : ''}
             {errorCount > 0 ? ` · ${errorCount} errores` : ''}
           </Text>
+        </View>
+
+        {/* P1: resumen claro del estado de la cola */}
+        <View style={[styles.summaryCard, { borderColor: toneColor[syncCopy.tone] }]}>
+          <View style={[styles.summaryDot, { backgroundColor: toneColor[syncCopy.tone] }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.summaryLabel}>{syncCopy.label}</Text>
+            <Text style={styles.summaryDetail}>{syncCopy.detail}</Text>
+          </View>
         </View>
 
         {/* Actions */}
@@ -214,6 +230,14 @@ const styles = StyleSheet.create({
   online: { backgroundColor: colors.successAlpha08, borderColor: 'rgba(34,197,94,0.15)' },
   offline: { backgroundColor: colors.warningAlpha08, borderColor: 'rgba(245,158,11,0.15)' },
   statusText: { fontSize: 12, fontWeight: '600', color: colors.text },
+  summaryCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: radii.button, borderWidth: 1,
+    backgroundColor: colors.card, marginBottom: 14,
+  },
+  summaryDot: { width: 12, height: 12, borderRadius: 6 },
+  summaryLabel: { fontSize: 14, fontWeight: '700', color: colors.text },
+  summaryDetail: { fontSize: 12, color: colors.textDim, marginTop: 2, lineHeight: 16 },
   sectionTitle: {
     fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
     letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,

@@ -34,6 +34,8 @@ import {
   distanceToStop,
 } from '../../src/services/routeMapLogic';
 import type { RouteFreshness } from '../../src/stores/useRouteStore';
+import { evaluateVisitOrder } from '../../src/services/routeOrderLogic';
+import { logInfo } from '../../src/utils/logger';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -125,7 +127,32 @@ export default function RouteScreen() {
   // del cliente (check-in geocercado, venta, no venta, regalo, datos, lealtad).
   // No se exponen venta/no-venta directos desde el mapa para no saltarse el
   // check-in y la validación de geocerca del flujo real.
-  const handleOpenClient = useCallback((stop: GFStop) => router.push(`/stop/${stop.id}` as never), [router]);
+  // P1: advertencia suave de orden de visita. No bloquea — si el vendedor abre
+  // un cliente que no es el siguiente recomendado, pide confirmación y registra
+  // la desviación en el log local (no hay endpoint backend para esto).
+  const handleOpenClient = useCallback((stop: GFStop) => {
+    const open = () => router.push(`/stop/${stop.id}` as never);
+    const evalOrder = evaluateVisitOrder(stops, stop.id);
+    if (evalOrder.outOfOrder && evalOrder.nextStop) {
+      const nextName = evalOrder.nextStop.customer_name;
+      logInfo('general', 'route_order_deviation', {
+        selectedStopId: stop.id,
+        selectedSeq: stop.route_sequence ?? null,
+        recommendedStopId: evalOrder.nextStop.id,
+        recommendedSeq: evalOrder.nextStop.route_sequence ?? null,
+      });
+      Alert.alert(
+        'Fuera de orden',
+        `Este no es el siguiente cliente recomendado. El siguiente es ${nextName}. ¿Deseas continuar?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Continuar', onPress: open },
+        ],
+      );
+      return;
+    }
+    open();
+  }, [router, stops]);
   const refreshPlan = useCallback(async () => {
     await Promise.all([
       loadPlan({ force: true }),

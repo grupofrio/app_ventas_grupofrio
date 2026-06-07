@@ -67,6 +67,28 @@ export function calculateKmDriven(
   return Math.round(f - i);
 }
 
+/**
+ * P2 — guardas contra valores de KM absurdos (no bloquean: la UI pide
+ * confirmación). Criterio documentado:
+ *  - Lectura de odómetro > 2,000,000 km: casi siempre es un error de captura
+ *    (los vehículos rara vez superan ~1M km). Umbral alto a propósito para no
+ *    molestar en operación real.
+ *  - Recorrido en un día (final - inicial) > 1,500 km: una ruta de ventas no
+ *    recorre esa distancia en un día → probable typo en el KM final.
+ * Las reglas duras existentes (km > 0, final >= inicial) NO cambian.
+ */
+export const MAX_REASONABLE_ODOMETER_KM = 2_000_000;
+export const MAX_REASONABLE_KM_PER_DAY = 1_500;
+
+export function isAbsurdOdometer(km: unknown): boolean {
+  const n = typeof km === 'number' ? km : parseFloat(String(km ?? ''));
+  return Number.isFinite(n) && n > MAX_REASONABLE_ODOMETER_KM;
+}
+
+export function isAbsurdKmDriven(driven: number | null | undefined): boolean {
+  return typeof driven === 'number' && Number.isFinite(driven) && driven > MAX_REASONABLE_KM_PER_DAY;
+}
+
 /** Format a km number with thousands separators: 52428 → "52,428". */
 export function formatKm(n: number | null | undefined): string {
   const v = kmOrNull(n);

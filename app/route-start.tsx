@@ -34,7 +34,7 @@ import { getVehicleChecklist } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad } from '../src/services/gfLogistics';
 import { buildRouteLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
-import { isChecklistComplete, isValidKm } from '../src/services/routeStartLogic';
+import { isChecklistComplete, isValidKm, isAbsurdOdometer } from '../src/services/routeStartLogic';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -170,6 +170,23 @@ export default function RouteStartScreen() {
       return;
     }
     const km = Math.round(parseFloat(kmInput));
+    // P2: guard contra odómetro absurdo (probable typo). No bloquea: confirma.
+    if (isAbsurdOdometer(km)) {
+      Alert.alert(
+        'KM inusualmente alto',
+        `${km.toLocaleString('es-MX')} km parece un error de captura. ¿Es correcto?`,
+        [
+          { text: 'Corregir', style: 'cancel' },
+          { text: 'Sí, es correcto', onPress: () => confirmSaveKm(km) },
+        ],
+      );
+      return;
+    }
+    confirmSaveKm(km);
+  }
+
+  function confirmSaveKm(km: number) {
+    if (!planId) return;
     Alert.alert(
       'Confirmar KM inicial',
       `Vas a registrar ${km} km como kilometraje de salida. Esto se guarda en el servidor.`,

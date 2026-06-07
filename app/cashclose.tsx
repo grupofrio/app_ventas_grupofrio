@@ -79,12 +79,18 @@ interface CorteAdjustmentInput {
 }
 
 /**
- * Parsea el input de efectivo. Acepta "1234.56", "1,234.56", vacío → 0.
+ * Parsea el input de efectivo. Acepta "1234.56", "1,234.56", "1234,56", vacío → 0.
  * NaN-safe.
  */
 function parseCashInput(raw: string): number {
   if (!raw) return 0;
-  const cleaned = raw.replace(/[^\d.,-]/g, '').replace(',', '.');
+  const normalized = raw.replace(/[^\d.,-]/g, '');
+  const lastDot = normalized.lastIndexOf('.');
+  const lastComma = normalized.lastIndexOf(',');
+  const decimalIndex = Math.max(lastDot, lastComma);
+  const cleaned = decimalIndex >= 0
+    ? `${normalized.slice(0, decimalIndex).replace(/[.,]/g, '')}.${normalized.slice(decimalIndex + 1).replace(/[.,]/g, '')}`
+    : normalized.replace(/[.,]/g, '');
   const value = parseFloat(cleaned);
   return Number.isFinite(value) ? value : 0;
 }
@@ -442,7 +448,13 @@ export default function CashCloseScreen() {
         setLiquidationConfirmedAt(confirmedAt);
         await loadLiquidation();
         await loadPlan();
-        Alert.alert('Liquidacion confirmada', result.message || 'La liquidacion quedo guardada en Odoo.');
+        const routeWarning = result.data?.route_close_warning;
+        Alert.alert(
+          'Liquidacion confirmada',
+          routeWarning
+            ? `El efectivo quedo confirmado. Cierre de ruta pendiente: ${routeWarning}`
+            : 'El efectivo quedo confirmado en Odoo.',
+        );
         return;
       }
       if (result.code === 'difference_warning' && !force) {

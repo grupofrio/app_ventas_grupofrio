@@ -60,8 +60,9 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!isAuthenticated || !isOnline) return;
+      void loadPlan();
       void loadTodaySales();
-    }, [isAuthenticated, isOnline, loadTodaySales]),
+    }, [isAuthenticated, isOnline, loadPlan, loadTodaySales]),
   );
 
   useEffect(() => {
@@ -101,7 +102,7 @@ export default function HomeScreen() {
   const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
   const refreshPlan = useCallback(async () => {
     await Promise.all([
-      loadPlan(),
+      loadPlan({ force: true }),
       loadTodaySales(),
     ]);
   }, [loadPlan, loadTodaySales]);
@@ -210,7 +211,7 @@ export default function HomeScreen() {
             ) : null}
             <TouchableOpacity
               style={[styles.noPlanBtn, (!isOnline || isLoading) && styles.noPlanBtnDisabled]}
-              onPress={() => { void loadPlan(); }}
+              onPress={() => { void loadPlan({ force: true }); }}
               disabled={!isOnline || isLoading}
               activeOpacity={0.8}
             >

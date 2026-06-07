@@ -17,10 +17,18 @@ import {
   mergeBackendStopsWithDrafts,
   stampMissingCreatedAt,
 } from '../services/offrouteDrafts';
-import { shouldKeepCachedStopsAfterEmptyRefresh } from '../services/routeRefreshPolicy';
+import {
+  routeFreshnessStatus,
+  routePlanVersionToken,
+  shouldKeepCachedStopsAfterEmptyRefresh,
+  shouldRefreshRouteCache,
+  shouldReloadRouteStops,
+} from '../services/routeRefreshPolicy';
 import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
+
+export type RouteFreshness = 'updated' | 'stale' | 'offline_cache';
 
 interface RouteState {
   plan: GFPlan | null;
@@ -28,6 +36,8 @@ interface RouteState {
   isLoading: boolean;
   error: string | null;
   lastSync: number | null; // timestamp
+  routeFreshness: RouteFreshness;
+  planVersionToken: string | null;
 
   // Derived
   stopsCompleted: number;
@@ -35,7 +45,7 @@ interface RouteState {
   progressPct: number;
 
   // Actions
-  loadPlan: () => Promise<void>;
+  loadPlan: (opts?: { force?: boolean }) => Promise<void>;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
   removeStop: (stopId: number) => void;
   addVirtualStop: (
@@ -63,16 +73,43 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   isLoading: false,
   error: null,
   lastSync: null,
+  routeFreshness: 'stale',
+  planVersionToken: null,
   stopsCompleted: 0,
   stopsTotal: 0,
   progressPct: 0,
 
-  loadPlan: async () => {
+  loadPlan: async (opts = {}) => {
     if (get().isLoading) return; // Prevent concurrent calls
+
+    const isOnline = useSyncStore.getState().isOnline;
+    const now = Date.now();
 
     if (!useSyncStore.getState().isOnline) {
       // Keep any rehydrated cached plan visible when offline.
-      set({ isLoading: false, error: get().plan ? null : 'Sin conexion' });
+      set({
+        isLoading: false,
+        error: get().plan ? null : 'Sin conexion',
+        routeFreshness: 'offline_cache',
+      });
+      return;
+    }
+
+    if (!shouldRefreshRouteCache({
+      plan: get().plan,
+      lastSync: get().lastSync,
+      now,
+      isOnline,
+      force: opts.force,
+    })) {
+      set({
+        routeFreshness: routeFreshnessStatus({
+          plan: get().plan,
+          lastSync: get().lastSync,
+          now,
+          isOnline,
+        }),
+      });
       return;
     }
 
@@ -81,6 +118,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       const visitStore = useVisitStore.getState();
       const cachedPlan = get().plan;
       const cachedStops = get().stops;
+      const cachedToken = get().planVersionToken ?? routePlanVersionToken(cachedPlan);
       const plan = await getMyPlan();
       if (!plan) {
         if (shouldKeepCachedStopsAfterEmptyRefresh({
@@ -97,13 +135,39 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           set({
             isLoading: false,
             error: 'No se pudo actualizar la ruta; mostrando ruta guardada',
+            routeFreshness: 'stale',
           });
           return;
         }
         if (visitStore.currentStopId !== null) {
           visitStore.resetVisit();
         }
-        set({ plan: null, stops: [], isLoading: false, error: 'Sin plan para hoy' });
+        set({
+          plan: null,
+          stops: [],
+          isLoading: false,
+          error: 'Sin plan para hoy',
+          routeFreshness: 'stale',
+          planVersionToken: null,
+        });
+        return;
+      }
+
+      const nextToken = routePlanVersionToken(plan);
+      if (!shouldReloadRouteStops({
+        cachedStopsCount: cachedStops.length,
+        cachedToken,
+        nextToken,
+      })) {
+        set({
+          plan,
+          isLoading: false,
+          error: null,
+          lastSync: now,
+          routeFreshness: 'updated',
+          planVersionToken: nextToken,
+        });
+        storeSave(STORAGE_KEYS.PLAN, plan);
         return;
       }
 
@@ -177,7 +241,9 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         error: keepCachedStops
           ? 'No se pudo actualizar paradas; mostrando ruta guardada'
           : null,
-        lastSync: Date.now(),
+        lastSync: now,
+        routeFreshness: keepCachedStops ? 'stale' : 'updated',
+        planVersionToken: nextToken,
         stopsCompleted: completed,
         stopsTotal: total,
         progressPct: total > 0 ? Math.round((completed / total) * 100) : 0,
@@ -261,6 +327,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
   reset: () => set({
     plan: null, stops: [], isLoading: false, error: null,
-    lastSync: null, stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
+    lastSync: null, routeFreshness: 'stale', planVersionToken: null,
+    stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
   }),
 }));

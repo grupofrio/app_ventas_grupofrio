@@ -44,6 +44,10 @@ export interface GFPlan {
   name: string;
   date: string; // "2026-03-25"
   state: PlanState;
+  write_date?: string | null;
+  demand_snapshot_hash?: string | null;
+  route_plan_version?: string | null;
+  route_plan_cache_ttl_seconds?: number | null;
   route?: string;
   generation_mode?: string;
   selected_count?: number;

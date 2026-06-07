@@ -29,3 +29,18 @@ test('cash close screen does not display liquidation total_expected as expected 
   assert.match(source, /getLiquidationExpectedCashTotal\(liquidation\)/);
   assert.doesNotMatch(source, /Efectivo esperado'[^]*liquidation\.total_expected/);
 });
+
+test('cash close success alert does not expose backend persistence wording', () => {
+  const source = read('app/cashclose.tsx');
+
+  assert.match(source, /El efectivo quedo confirmado en Odoo/);
+  assert.doesNotMatch(source, /Alert\.alert\('Liquidacion confirmada', result\.message/);
+});
+
+test('cash close amount parser handles thousands and decimal separators', () => {
+  const source = read('app/cashclose.tsx');
+
+  assert.match(source, /lastIndexOf\('\.'\)/);
+  assert.match(source, /lastIndexOf\(','\)/);
+  assert.match(source, /slice\(0, decimalIndex\)\.replace\(\s*\/\[\.,\]\/g,\s*''\s*\)/);
+});

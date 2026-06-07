@@ -184,6 +184,7 @@ export interface GFRouteLiquidationConfirmResult {
     total_expected?: number;
     difference?: number;
     force?: boolean;
+    route_close_warning?: string | null;
   } | null;
 }
 
@@ -862,6 +863,9 @@ export async function confirmRouteLiquidation(
         total_expected: toNumber(rawData.total_expected),
         difference: toNumber(rawData.difference),
         force: Boolean(rawData.force),
+        route_close_warning: typeof rawData.route_close_warning === 'string'
+          ? rawData.route_close_warning
+          : null,
       },
     };
   } catch (error) {

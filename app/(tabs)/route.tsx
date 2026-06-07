@@ -33,6 +33,7 @@ import {
   orderedStops as orderStopsBySeq,
   distanceToStop,
 } from '../../src/services/routeMapLogic';
+import type { RouteFreshness } from '../../src/stores/useRouteStore';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -51,11 +52,17 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
 
 type ViewMode = 'map' | 'list';
 
+function getRouteFreshnessBadge(status: RouteFreshness): { label: string; variant: 'green' | 'orange' | 'dim' } {
+  if (status === 'updated') return { label: 'Actualizada', variant: 'green' };
+  if (status === 'offline_cache') return { label: 'Offline/cache', variant: 'dim' };
+  return { label: 'Pendiente de actualizar', variant: 'orange' };
+}
+
 export default function RouteScreen() {
   const router = useRouter();
   const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
   const [searchQuery, setSearchQuery] = React.useState('');
-  const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
+  const { plan, stops, stopsCompleted, stopsTotal, loadPlan, routeFreshness } = useRouteStore();
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const userLat = useLocationStore((s) => s.latitude);
@@ -121,7 +128,7 @@ export default function RouteScreen() {
   const handleOpenClient = useCallback((stop: GFStop) => router.push(`/stop/${stop.id}` as never), [router]);
   const refreshPlan = useCallback(async () => {
     await Promise.all([
-      loadPlan(),
+      loadPlan({ force: true }),
       loadTodaySales(),
     ]);
   }, [loadPlan, loadTodaySales]);
@@ -129,8 +136,9 @@ export default function RouteScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      void loadPlan();
       void loadTodaySales();
-    }, [loadTodaySales]),
+    }, [loadPlan, loadTodaySales]),
   );
 
   const handleOpenLocation = useCallback((stop: GFStop) => {
@@ -164,6 +172,7 @@ export default function RouteScreen() {
     ? filterPlannedStopsBySearch(sorted, trimmedSearchQuery)
     : sorted;
   const planTypeLabel = getPlanTypeLabel(plan?.generation_mode);
+  const freshnessBadge = getRouteFreshnessBadge(routeFreshness);
 
   const showMap = viewMode === 'map';
 
@@ -244,6 +253,8 @@ export default function RouteScreen() {
                   onPress={() => router.push('/analytics' as never)} style={{ flex: 1 }} />
           <Button label="🏆 Ranking" variant="secondary" small
                   onPress={() => router.push('/ranking' as never)} style={{ flex: 1 }} />
+          <Button label="Actualizar" variant="secondary" small
+                  onPress={onRefresh} style={{ flex: 1 }} />
         </View>
 
         {/* BLD-20260408-P0: Off-route sale button */}
@@ -303,9 +314,10 @@ export default function RouteScreen() {
           />
         </View>
 
-        {planTypeLabel && (
+        {(planTypeLabel || freshnessBadge) && (
           <View style={styles.routeTypeRow}>
-            <Badge label={planTypeLabel} variant="blue" />
+            {planTypeLabel ? <Badge label={planTypeLabel} variant="blue" /> : null}
+            <Badge label={freshnessBadge.label} variant={freshnessBadge.variant} />
           </View>
         )}
 
@@ -430,7 +442,7 @@ const styles = StyleSheet.create({
   fabText: { fontSize: 20, color: colors.text },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
-  routeTypeRow: { marginBottom: 10 },
+  routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
   statItem: { alignItems: 'center' },
   statLabel: { fontSize: 10, color: colors.textDim, marginBottom: 2 },

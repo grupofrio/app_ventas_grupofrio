@@ -78,20 +78,24 @@ function ConsignmentScreenInner() {
 
   // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
   // al vendedor atrapado. No borra datos sin confirmación (logout es explícito).
+  const promptReLogin = useCallback(() => {
+    Alert.alert(
+      'Sesión expirada',
+      'Tu sesión caducó. Vuelve a iniciar sesión para continuar.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Volver a iniciar sesión', onPress: () => { void logout(); } },
+      ],
+    );
+  }, [logout]);
+
   const handleApiError = useCallback((err: unknown, fallback: string) => {
     if (isSessionExpiredError(err)) {
-      Alert.alert(
-        'Sesión expirada',
-        'Tu sesión caducó. Vuelve a iniciar sesión para continuar.',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Volver a iniciar sesión', onPress: () => { void logout(); } },
-        ],
-      );
+      promptReLogin();
       return;
     }
     Alert.alert('Error', err instanceof Error ? err.message : fallback);
-  }, [logout]);
+  }, [promptReLogin]);
 
   const fetchActive = useCallback(async () => {
     if (!partnerId) { setError('Cliente inválido.'); setLoading(false); return; }
@@ -102,11 +106,19 @@ function ConsignmentScreenInner() {
       const a = await getActiveConsignment(partnerId, companyId);
       setActive(a);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+      // P1: si /my-active responde sesión expirada, ofrecer re-login (igual que
+      // las mutaciones) en vez de dejar solo "Reintentar". Errores normales
+      // conservan el botón de reintento.
+      if (isSessionExpiredError(err)) {
+        setError('Sesión expirada. Vuelve a iniciar sesión.');
+        promptReLogin();
+      } else {
+        setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [partnerId, isOnline, companyId]);
+  }, [partnerId, isOnline, companyId, promptReLogin]);
 
   React.useEffect(() => { void fetchActive(); }, [fetchActive]);
   React.useEffect(() => {

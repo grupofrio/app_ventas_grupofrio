@@ -40,7 +40,7 @@
  *   - NO usar campos hardcoded de /sales/summary como fallback (sería falso).
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -124,6 +124,7 @@ export default function CashCloseScreen() {
   const isSyncing = useSyncStore((s) => s.isSyncing);
   const processQueue = useSyncStore((s) => s.processQueue);
   const errorCount = useSyncStore((s) => s.errorCount);
+  const deadCount = useSyncStore((s) => s.deadCount);
 
   // BLD-20260505-CLOSESYNC: Sincronización local de UI. NO emite alerts
   // automáticas; sólo se levanta una alerta si el usuario presionó
@@ -264,6 +265,8 @@ export default function CashCloseScreen() {
   // queden ventas/pagos sin emitir al backend, eso falsea el corte.
   const guardInput = {
     pendingCount,
+    errorCount,
+    deadCount,
     isSyncing: isSyncing || syncBusy,
     liquidationAvailable: !!hasLiquidationData,
   };
@@ -434,6 +437,17 @@ export default function CashCloseScreen() {
     }
   }, [canValidateCorte, loadPlan, loadReconciliation, notes, planId]);
 
+  // P0-3 (hardening): operation_id ESTABLE por intento de liquidación. Se genera
+  // una sola vez (mismo id para el reintento "force") para que el backend pueda
+  // deduplicar un doble-tap/retry y no confirme dos veces.
+  const liquidationOpIdRef = useRef<string | null>(null);
+  function getLiquidationOperationId(): string {
+    if (!liquidationOpIdRef.current) {
+      liquidationOpIdRef.current = `liquidation-${planId ?? 'na'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    return liquidationOpIdRef.current;
+  }
+
   const submitLiquidation = useCallback(async (force: boolean) => {
     setLiquidationBusy(true);
     try {
@@ -442,6 +456,7 @@ export default function CashCloseScreen() {
         cash_collected: cashCaptured,
         notes,
         force,
+        operation_id: getLiquidationOperationId(),
       });
       if (result.ok) {
         const confirmedAt = result.data?.liquidacion_done_at ?? new Date().toISOString();
@@ -487,8 +502,13 @@ export default function CashCloseScreen() {
       Alert.alert('Captura efectivo', 'Cuenta el efectivo fisico antes de confirmar la liquidacion.');
       return;
     }
+    // P0-3 (hardening): nunca aceptar efectivo negativo.
+    if (!Number.isFinite(cashCaptured) || cashCaptured < 0) {
+      Alert.alert('Efectivo invalido', 'El efectivo capturado no puede ser negativo.');
+      return;
+    }
     await submitLiquidation(false);
-  }, [canConfirmFinalLiquidation, hasInput, submitLiquidation]);
+  }, [canConfirmFinalLiquidation, hasInput, cashCaptured, submitLiquidation]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>

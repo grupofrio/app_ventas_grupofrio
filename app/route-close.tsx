@@ -31,6 +31,7 @@ import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
 import { isValidKm, calculateKmDriven, formatKm } from '../src/services/routeStartLogic';
+import { OperationGate } from '../src/components/OperationGate';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -40,7 +41,7 @@ function StatusBadge({ status }: { status: StepStatus }) {
   return <Badge label="Pendiente" variant="orange" />;
 }
 
-export default function RouteCloseScreen() {
+function RouteCloseScreenInner() {
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
   const planId = plan?.plan_id ?? null;
@@ -315,6 +316,16 @@ export default function RouteCloseScreen() {
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// P0-4 (hardening): solo se puede cerrar una ruta que se inició (plan activo +
+// checklist + KM inicial + carga aceptada).
+export default function RouteCloseScreen() {
+  return (
+    <OperationGate title="Cerrar ruta">
+      <RouteCloseScreenInner />
+    </OperationGate>
   );
 }
 

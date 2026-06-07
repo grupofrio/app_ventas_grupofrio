@@ -40,10 +40,23 @@ function main() {
     'TopBar debe permitir navegación custom para cortar el stack después de la venta',
   );
 
+  // P0-4 (hardening): el mapa YA NO ofrece venta directa (saltaba check-in y
+  // geocerca). Al tocar un pin abre el hub del cliente (/stop/[id]) que conserva
+  // check-in + geocerca + guards de visita.
   assert.match(
     mapScreen,
-    /Hacer venta/,
-    'el mapa debe ofrecer acción de venta al tocar un pin',
+    /Abrir cliente/,
+    'el mapa debe abrir el hub del cliente (no venta directa) al tocar un pin',
+  );
+  assert.match(
+    mapScreen,
+    /\/stop\/\$\{stop\.id\}/,
+    'el mapa debe enrutar al hub /stop/[id], no a /sale directo',
+  );
+  assert.doesNotMatch(
+    mapScreen,
+    /\/sale\/\$\{stop\.id\}/,
+    'el mapa NO debe enrutar directo a /sale (salta check-in/geocerca)',
   );
   assert.match(
     mapScreen,

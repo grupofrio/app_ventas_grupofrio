@@ -26,6 +26,7 @@ import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
+import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 const GEOFENCE_RADIUS_M = 50;
 
@@ -168,6 +169,7 @@ export default function CheckinScreen() {
     const lat = latitude || 0;
     const lon = longitude || 0;
     const startLocalVisit = (queueForSync: boolean) => {
+      useNavigationStore.getState().stopNavigation();
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
       setGpsMode('in_visit');

@@ -25,6 +25,9 @@ interface Props {
   userLat: number | null;
   userLon: number | null;
   onSelectStop: (stop: GFStop) => void;
+  navigationActive?: boolean;
+  navigationTargetLat?: number | null;
+  navigationTargetLon?: number | null;
 }
 
 const GDL = { latitude: 20.6597, longitude: -103.3496 }; // sensible default region
@@ -51,7 +54,7 @@ function regionForStops(located: GFStop[], userLat: number | null, userLon: numb
 }
 
 export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
-  { stops, selectedStopId, userLat, userLon, onSelectStop }, ref,
+  { stops, selectedStopId, userLat, userLon, onSelectStop, navigationActive, navigationTargetLat, navigationTargetLon }, ref,
 ) {
   const mapRef = useRef<MapView | null>(null);
 
@@ -96,9 +99,19 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
       {polyline.length > 1 && (
         <Polyline
           coordinates={polyline}
-          strokeColor="rgba(37,99,235,0.55)"
+          strokeColor={navigationActive ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.55)'}
           strokeWidth={3}
           lineDashPattern={[10, 5]}
+        />
+      )}
+      {navigationActive && userLat != null && userLon != null && navigationTargetLat != null && navigationTargetLon != null && (
+        <Polyline
+          coordinates={[
+            { latitude: userLat, longitude: userLon },
+            { latitude: navigationTargetLat, longitude: navigationTargetLon },
+          ]}
+          strokeColor="#2563EB"
+          strokeWidth={5}
         />
       )}
       {located.map((stop) => {

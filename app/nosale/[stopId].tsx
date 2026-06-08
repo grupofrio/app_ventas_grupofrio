@@ -23,6 +23,7 @@ import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { NO_SALE_REASONS } from '../../src/services/noSaleReasons';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
+import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 const COMPETITORS = ['Crystal', 'Ice Factory', 'Pureza', 'Generico'];
 
@@ -78,8 +79,14 @@ export default function NoSaleScreen() {
     }
     setPhase('checked_out');
     resetVisit();
-    // BLD-ROUTE-MAP: volver a Ruta (mapa), no a Inicio — el vendedor sigue
-    // en su recorrido y la app debe enfocar el siguiente cliente pendiente.
+
+    const currentIdx = stops.findIndex((s) => s.id === stop!.id);
+    const nextStop = stops.find((s, i) => i > currentIdx && s.state === 'pending');
+    if (nextStop && nextStop.customer_latitude && nextStop.customer_longitude) {
+      useNavigationStore.getState().startNavigation(nextStop.id);
+      router.replace('/(tabs)/route?view=map' as never);
+      return;
+    }
     router.replace('/(tabs)/route' as never);
   }
 

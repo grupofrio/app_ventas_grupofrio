@@ -36,6 +36,7 @@ import {
 import type { RouteFreshness } from '../../src/stores/useRouteStore';
 import { evaluateVisitOrder } from '../../src/services/routeOrderLogic';
 import { logInfo } from '../../src/utils/logger';
+import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -82,11 +83,36 @@ export default function RouteScreen() {
   const progress = React.useMemo(() => computeRouteProgress(stops), [stops]);
   const orderedForPanel = React.useMemo(() => orderStopsBySeq(stops), [stops]);
 
+  // ── Navigation mode (in-app client-to-client) ─────────────────────────────
+  const navigationActive = useNavigationStore((s) => s.active);
+  const navigationTargetStopId = useNavigationStore((s) => s.targetStopId);
+  const startNavigation = useNavigationStore((s) => s.startNavigation);
+  const stopNavigation = useNavigationStore((s) => s.stopNavigation);
+
+  const navigationTargetStop = React.useMemo(
+    () => (navigationTargetStopId != null ? stops.find((s) => s.id === navigationTargetStopId) ?? null : null),
+    [navigationTargetStopId, stops],
+  );
+
   // Decide default view once we know whether there's a mappable plan.
   React.useEffect(() => {
     if (viewMode !== null) return;
     if (stops.length > 0) setViewMode(located.length > 0 ? 'map' : 'list');
   }, [viewMode, stops.length, located.length]);
+
+  // Force map view when navigation is active.
+  React.useEffect(() => {
+    if (navigationActive && located.length > 0 && viewMode !== 'map') {
+      setViewMode('map');
+    }
+  }, [navigationActive, located.length]);
+
+  // Auto-follow user GPS while navigating.
+  React.useEffect(() => {
+    if (navigationActive && userLat != null && userLon != null) {
+      mapRef.current?.centerOn(userLat, userLon);
+    }
+  }, [navigationActive, userLat, userLon]);
 
   // BLD-ROUTE-MAP: entrar desde "Iniciar ruta" / "Continuar a ruta" pasa
   // ?view=map y debe FORZAR el mapa, aunque el usuario hubiera dejado la
@@ -168,6 +194,17 @@ export default function RouteScreen() {
     }, [loadPlan, loadTodaySales]),
   );
 
+  const handleStartNavigation = useCallback(() => {
+    const target = focusStop ?? nextStop;
+    if (!target) return;
+    startNavigation(target.id);
+    if (viewMode !== 'map') setViewMode('map');
+  }, [focusStop, nextStop, startNavigation, viewMode]);
+
+  const handleStopNavigation = useCallback(() => {
+    stopNavigation();
+  }, [stopNavigation]);
+
   const handleOpenLocation = useCallback((stop: GFStop) => {
     const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
     if (!primaryUrl) {
@@ -223,6 +260,9 @@ export default function RouteScreen() {
             userLat={userLat}
             userLon={userLon}
             onSelectStop={handleSelectStop}
+            navigationActive={navigationActive}
+            navigationTargetLat={navigationTargetStop?.customer_latitude ?? null}
+            navigationTargetLon={navigationTargetStop?.customer_longitude ?? null}
           />
           <View style={styles.mapFabs} pointerEvents="box-none">
             <TouchableOpacity style={styles.fab} onPress={() => setActionsMenuOpen(true)} activeOpacity={0.85}>
@@ -254,6 +294,9 @@ export default function RouteScreen() {
             onNavigate={handleOpenLocation}
             onOpenClient={handleOpenClient}
             onCloseRoute={() => router.push('/route-close' as never)}
+            navigationActive={navigationActive}
+            onStartNavigation={handleStartNavigation}
+            onStopNavigation={handleStopNavigation}
           />
           <RouteActionsMenu
             visible={actionsMenuOpen}

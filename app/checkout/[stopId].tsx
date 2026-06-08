@@ -26,6 +26,7 @@ import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
 import { OperationGate } from '../../src/components/OperationGate';
+import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -129,13 +130,12 @@ function CheckoutScreenInner() {
     resetVisit();
 
     if (nextStop && shouldNavigateToNextStop) {
-      router.replace(`/stop/${nextStop.id}` as never);
+      if (nextStop.customer_latitude && nextStop.customer_longitude) {
+        useNavigationStore.getState().startNavigation(nextStop.id);
+      }
+      router.replace('/(tabs)/route?view=map' as never);
       return;
     }
-    // BLD-20260427-P0-POST-SALE-RETURN-TO-ROUTE: post-cierre, regresar a Ruta
-    // (no a Inicio). El vendedor mantiene el contexto del día y sus stops.
-    // Alinea con el camino offroute (app/sale/[stopId].tsx L209) que ya iba a
-    // /(tabs)/route. Antes: '/(tabs)' caía en (tabs)/index.tsx (Inicio).
     router.replace('/(tabs)/route' as never);
   }
 

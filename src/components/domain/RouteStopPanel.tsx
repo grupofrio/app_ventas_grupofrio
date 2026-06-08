@@ -31,12 +31,16 @@ interface Props {
   onOpenClient: (stop: GFStop) => void;
   /** Route-level close, shown ONLY in the "ruta completada" state. */
   onCloseRoute: () => void;
+  navigationActive: boolean;
+  onStartNavigation: () => void;
+  onStopNavigation: () => void;
 }
 
 export function RouteStopPanel(props: Props) {
   const {
     progress, selectedStop, nextStop, distanceMeters, orderedStops, unlocatedStops,
     expanded, onToggleExpand, onSelectStop, onNavigate, onOpenClient, onCloseRoute,
+    navigationActive, onStartNavigation, onStopNavigation,
   } = props;
 
   // The focused stop is the user-selected one, else the next recommended.
@@ -74,7 +78,7 @@ export function RouteStopPanel(props: Props) {
             <View style={{ flex: 1 }}>
               <Text style={styles.focusName} numberOfLines={1}>{focus.customer_name}</Text>
               <Text style={styles.focusMeta}>
-                {selectedStop ? 'Seleccionado' : 'Siguiente'} · {focusMeta?.label}
+                {navigationActive ? '🧭 Navegando' : selectedStop ? 'Seleccionado' : 'Siguiente'} · {focusMeta?.label}
                 {dist ? ` · ${dist}` : ''}
               </Text>
             </View>
@@ -87,7 +91,11 @@ export function RouteStopPanel(props: Props) {
             <Text style={styles.openClientText}>👤 Abrir cliente</Text>
           </TouchableOpacity>
           <View style={styles.actionRow}>
-            <PanelButton label="📍 Navegar" onPress={() => onNavigate(focus)} />
+            {navigationActive ? (
+              <PanelButton label="⏹ Detener navegación" onPress={onStopNavigation} active />
+            ) : (
+              <PanelButton label="🧭 Iniciar navegación" onPress={onStartNavigation} />
+            )}
           </View>
         </View>
       ) : (
@@ -146,14 +154,14 @@ export function RouteStopPanel(props: Props) {
   );
 }
 
-function PanelButton({ label, onPress, primary }: { label: string; onPress: () => void; primary?: boolean }) {
+function PanelButton({ label, onPress, primary, active }: { label: string; onPress: () => void; primary?: boolean; active?: boolean }) {
   return (
     <TouchableOpacity
-      style={[styles.btn, primary ? styles.btnPrimary : styles.btnSecondary]}
+      style={[styles.btn, primary ? styles.btnPrimary : active ? styles.btnActive : styles.btnSecondary]}
       onPress={onPress}
       activeOpacity={0.85}
     >
-      <Text style={[styles.btnText, primary ? styles.btnTextPrimary : styles.btnTextSecondary]}>{label}</Text>
+      <Text style={[styles.btnText, (primary || active) ? styles.btnTextPrimary : styles.btnTextSecondary]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -186,6 +194,7 @@ const styles = StyleSheet.create({
   openClientText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   btn: { flex: 1, paddingVertical: 12, borderRadius: radii.button, alignItems: 'center', minHeight: 46, justifyContent: 'center' },
   btnPrimary: { backgroundColor: colors.primary },
+  btnActive: { backgroundColor: 'rgba(37,99,235,0.18)', borderWidth: 1, borderColor: colors.primary },
   btnSecondary: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
   btnText: { fontSize: 14, fontWeight: '700' },
   btnTextPrimary: { color: '#FFFFFF' },

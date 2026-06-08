@@ -83,7 +83,9 @@ export default function NoSaleScreen() {
     const currentIdx = stops.findIndex((s) => s.id === stop!.id);
     const nextStop = stops.find((s, i) => i > currentIdx && s.state === 'pending');
     if (nextStop && nextStop.customer_latitude && nextStop.customer_longitude) {
-      useNavigationStore.getState().startNavigation(nextStop.id);
+      const origin = latitude && longitude ? { latitude, longitude } : null;
+      const destination = { latitude: nextStop.customer_latitude, longitude: nextStop.customer_longitude };
+      useNavigationStore.getState().startNavigation(nextStop.id, origin, destination);
       router.replace('/(tabs)/route?view=map' as never);
       return;
     }

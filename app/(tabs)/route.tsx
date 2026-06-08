@@ -86,6 +86,7 @@ export default function RouteScreen() {
   // ── Navigation mode (in-app client-to-client) ─────────────────────────────
   const navigationActive = useNavigationStore((s) => s.active);
   const navigationTargetStopId = useNavigationStore((s) => s.targetStopId);
+  const navigationRouteCoords = useNavigationStore((s) => s.routeCoordinates);
   const startNavigation = useNavigationStore((s) => s.startNavigation);
   const stopNavigation = useNavigationStore((s) => s.stopNavigation);
 
@@ -197,9 +198,15 @@ export default function RouteScreen() {
   const handleStartNavigation = useCallback(() => {
     const target = focusStop ?? nextStop;
     if (!target) return;
-    startNavigation(target.id);
+    const origin = userLat != null && userLon != null
+      ? { latitude: userLat, longitude: userLon }
+      : null;
+    const destination = target.customer_latitude != null && target.customer_longitude != null
+      ? { latitude: target.customer_latitude, longitude: target.customer_longitude }
+      : null;
+    startNavigation(target.id, origin, destination);
     if (viewMode !== 'map') setViewMode('map');
-  }, [focusStop, nextStop, startNavigation, viewMode]);
+  }, [focusStop, nextStop, startNavigation, viewMode, userLat, userLon]);
 
   const handleStopNavigation = useCallback(() => {
     stopNavigation();
@@ -263,6 +270,7 @@ export default function RouteScreen() {
             navigationActive={navigationActive}
             navigationTargetLat={navigationTargetStop?.customer_latitude ?? null}
             navigationTargetLon={navigationTargetStop?.customer_longitude ?? null}
+            navigationRouteCoords={navigationRouteCoords}
           />
           <View style={styles.mapFabs} pointerEvents="box-none">
             <TouchableOpacity style={styles.fab} onPress={() => setActionsMenuOpen(true)} activeOpacity={0.85}>

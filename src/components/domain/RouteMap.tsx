@@ -19,6 +19,8 @@ export interface RouteMapHandle {
   centerOn: (lat: number, lon: number) => void;
 }
 
+interface LatLng { latitude: number; longitude: number }
+
 interface Props {
   stops: GFStop[];
   selectedStopId: number | null;
@@ -28,6 +30,8 @@ interface Props {
   navigationActive?: boolean;
   navigationTargetLat?: number | null;
   navigationTargetLon?: number | null;
+  /** Road-following polyline from Directions API. When populated replaces the straight line. */
+  navigationRouteCoords?: LatLng[];
 }
 
 const GDL = { latitude: 20.6597, longitude: -103.3496 }; // sensible default region
@@ -54,7 +58,7 @@ function regionForStops(located: GFStop[], userLat: number | null, userLon: numb
 }
 
 export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
-  { stops, selectedStopId, userLat, userLon, onSelectStop, navigationActive, navigationTargetLat, navigationTargetLon }, ref,
+  { stops, selectedStopId, userLat, userLon, onSelectStop, navigationActive, navigationTargetLat, navigationTargetLon, navigationRouteCoords }, ref,
 ) {
   const mapRef = useRef<MapView | null>(null);
 
@@ -104,14 +108,23 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
           lineDashPattern={[10, 5]}
         />
       )}
-      {navigationActive && userLat != null && userLon != null && navigationTargetLat != null && navigationTargetLon != null && (
+      {navigationActive && navigationRouteCoords && navigationRouteCoords.length > 1 && (
+        <Polyline
+          coordinates={navigationRouteCoords}
+          strokeColor="#2563EB"
+          strokeWidth={5}
+        />
+      )}
+      {navigationActive && (!navigationRouteCoords || navigationRouteCoords.length === 0) &&
+        userLat != null && userLon != null && navigationTargetLat != null && navigationTargetLon != null && (
         <Polyline
           coordinates={[
             { latitude: userLat, longitude: userLon },
             { latitude: navigationTargetLat, longitude: navigationTargetLon },
           ]}
           strokeColor="#2563EB"
-          strokeWidth={5}
+          strokeWidth={4}
+          lineDashPattern={[8, 4]}
         />
       )}
       {located.map((stop) => {

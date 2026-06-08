@@ -131,7 +131,9 @@ function CheckoutScreenInner() {
 
     if (nextStop && shouldNavigateToNextStop) {
       if (nextStop.customer_latitude && nextStop.customer_longitude) {
-        useNavigationStore.getState().startNavigation(nextStop.id);
+        const origin = lat && lon ? { latitude: lat, longitude: lon } : null;
+        const destination = { latitude: nextStop.customer_latitude, longitude: nextStop.customer_longitude };
+        useNavigationStore.getState().startNavigation(nextStop.id, origin, destination);
       }
       router.replace('/(tabs)/route?view=map' as never);
       return;

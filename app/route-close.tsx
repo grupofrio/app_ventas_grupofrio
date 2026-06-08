@@ -30,7 +30,7 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
-import { isValidKm, calculateKmDriven, formatKm } from '../src/services/routeStartLogic';
+import { isValidKm, calculateKmDriven, formatKm, isAbsurdKmDriven, isAbsurdOdometer } from '../src/services/routeStartLogic';
 import { OperationGate } from '../src/components/OperationGate';
 
 type StepStatus = 'pending' | 'done' | 'skip';
@@ -96,6 +96,28 @@ function RouteCloseScreenInner() {
       Alert.alert('Sin conexión', 'Conéctate al WiFi de la sucursal para registrar el KM final.');
       return;
     }
+    // P2: guard contra valores absurdos (recorrido del día o lectura de odómetro
+    // exageradamente alta = probable typo). No bloquea: pide confirmación.
+    const driven = kmInitial != null ? km - kmInitial : null;
+    if (isAbsurdKmDriven(driven) || isAbsurdOdometer(km)) {
+      const detail = isAbsurdKmDriven(driven)
+        ? `El recorrido del día sería ${driven!.toLocaleString('es-MX')} km`
+        : `${km.toLocaleString('es-MX')} km de odómetro`;
+      Alert.alert(
+        'KM inusualmente alto',
+        `${detail}, parece un error de captura. ¿Es correcto?`,
+        [
+          { text: 'Corregir', style: 'cancel' },
+          { text: 'Sí, es correcto', onPress: () => confirmSaveKmFinal(km) },
+        ],
+      );
+      return;
+    }
+    confirmSaveKmFinal(km);
+  }
+
+  function confirmSaveKmFinal(km: number) {
+    if (!planId) return;
     Alert.alert('Confirmar KM final', `Registrar ${km} km como kilometraje de llegada.`, [
       { text: 'Cancelar', style: 'cancel' },
       {

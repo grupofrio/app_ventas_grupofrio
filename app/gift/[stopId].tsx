@@ -30,6 +30,7 @@ import {
 } from '../../src/services/giftPayload';
 import { createGift } from '../../src/services/gfSalesOps';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
+import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 
 interface EditableGiftLine extends GiftDraftLine {
   productName: string;
@@ -167,6 +168,29 @@ export default function GiftScreen() {
       if (submitIssues.length > 0) {
         Alert.alert('Faltan datos', getIssueMessage(submitIssues[0]));
       }
+      return;
+    }
+
+    // P2: no regalar más de lo disponible en la unidad. Reusa el validador de
+    // stock fresco de venta (P0) — no duplica lógica. qty<=0/NaN ya lo descarta
+    // toGiftPayloadLines; aquí cubrimos qty > disponible.
+    const stockIssues = findFreshStockIssues(
+      payloadLines.map((l) => ({
+        productId: l.productId,
+        productName: products.find((p) => p.id === l.productId)?.name ?? `#${l.productId}`,
+        qty: l.qty,
+      })),
+      products,
+    );
+    if (stockIssues.length > 0) {
+      Alert.alert(
+        'Stock insuficiente',
+        stockIssues.map((i) =>
+          i.kind === 'invalid_qty'
+            ? `${i.name}: cantidad inválida`
+            : `${i.name}: regalas ${i.requested}, disponible ${i.available}`,
+        ).join('\n'),
+      );
       return;
     }
 

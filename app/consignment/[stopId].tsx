@@ -40,6 +40,7 @@ import {
 } from '../../src/services/consignmentLogic';
 import { OperationGate } from '../../src/components/OperationGate';
 import { isSessionExpiredError } from '../../src/services/sessionError';
+import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 
 function makeOperationId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -138,6 +139,20 @@ function ConsignmentScreenInner() {
     if (submitting || !partnerId) return;
     const v = validateCreateLines(cart);
     if (!v.ok) { Alert.alert('Falta información', v.reason); return; }
+    // P2: no consignar más de lo disponible en la unidad. Reusa el validador de
+    // stock fresco (P0). Solo en CREATE — visit/close los recalcula el backend.
+    const stockIssues = findFreshStockIssues(cart, products);
+    if (stockIssues.length > 0) {
+      Alert.alert(
+        'Stock insuficiente',
+        stockIssues.map((i) =>
+          i.kind === 'invalid_qty'
+            ? `${i.name}: cantidad inválida`
+            : `${i.name}: objetivo ${i.requested}, disponible ${i.available}`,
+        ).join('\n'),
+      );
+      return;
+    }
     if (!isOnline) { Alert.alert('Sin conexión', 'La consignación requiere conexión.'); return; }
     setSubmitting(true);
     (async () => {

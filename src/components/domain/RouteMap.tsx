@@ -5,9 +5,16 @@
  * location. The selected stop gets a larger, highlighted marker. Tapping a
  * marker calls onSelectStop. A ref exposes fitAll()/centerOn() so the parent
  * can drive the camera. Requires a dev/prebuild client (react-native-maps).
+ *
+ * Perf notes:
+ *   - StopMarker is React.memo'd: markers only re-render when stop data or
+ *     selection state changes, not on every GPS tick.
+ *   - tracksViewChanges={false} prevents native re-measure on every frame.
+ *   - initialRegion depends only on `located` (GPS coords don't affect it
+ *     after mount since MapView ignores initialRegion changes post-mount).
  */
 
-import React, { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
+import React, { forwardRef, useImperativeHandle, useMemo, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import type { GFStop } from '../../types/plan';
@@ -34,16 +41,39 @@ interface Props {
   navigationRouteCoords?: LatLng[];
 }
 
-const GDL = { latitude: 20.6597, longitude: -103.3496 }; // sensible default region
+// ── StopMarker ──────────────────────────────────────────────────────────────
+// Extracted as React.memo so it only re-renders when its own stop data or
+// selection state changes — not on every GPS update of the parent.
+interface StopMarkerProps {
+  stop: GFStop;
+  selected: boolean;
+  onPress: (stop: GFStop) => void;
+}
 
-function regionForStops(located: GFStop[], userLat: number | null, userLon: number | null): Region {
+const StopMarker = React.memo(function StopMarker({ stop, selected, onPress }: StopMarkerProps) {
+  const meta = stopStatusMeta(stop.state);
+  const handlePress = useCallback(() => onPress(stop), [onPress, stop]);
+  return (
+    <Marker
+      coordinate={{ latitude: stop.customer_latitude!, longitude: stop.customer_longitude! }}
+      onPress={handlePress}
+      tracksViewChanges={false}
+      anchor={{ x: 0.5, y: 0.5 }}
+      zIndex={selected ? 999 : undefined}
+    >
+      <View style={[styles.marker, { backgroundColor: meta.color }, selected && styles.markerSelected]}>
+        <Text style={styles.markerText}>{stop.route_sequence ?? '•'}</Text>
+      </View>
+    </Marker>
+  );
+});
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const GDL = { latitude: 20.6597, longitude: -103.3496 };
+
+function regionForStops(located: GFStop[]): Region {
   if (located.length === 0) {
-    return {
-      latitude: userLat ?? GDL.latitude,
-      longitude: userLon ?? GDL.longitude,
-      latitudeDelta: 0.05,
-      longitudeDelta: 0.05,
-    };
+    return { latitude: GDL.latitude, longitude: GDL.longitude, latitudeDelta: 0.05, longitudeDelta: 0.05 };
   }
   const lats = located.map((s) => s.customer_latitude!);
   const lngs = located.map((s) => s.customer_longitude!);
@@ -57,15 +87,21 @@ function regionForStops(located: GFStop[], userLat: number | null, userLon: numb
   };
 }
 
+// ── RouteMap ─────────────────────────────────────────────────────────────────
 export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
-  { stops, selectedStopId, userLat, userLon, onSelectStop, navigationActive, navigationTargetLat, navigationTargetLon, navigationRouteCoords }, ref,
+  { stops, selectedStopId, userLat, userLon, onSelectStop,
+    navigationActive, navigationTargetLat, navigationTargetLon, navigationRouteCoords },
+  ref,
 ) {
   const mapRef = useRef<MapView | null>(null);
 
   const { located } = useMemo(() => splitStopsByLocation(stops), [stops]);
-  const initialRegion = useMemo(() => regionForStops(located, userLat, userLon), [located, userLat, userLon]);
 
-  const polyline = useMemo(
+  // initialRegion only matters on first mount — MapView ignores changes after mount.
+  // Depend only on `located` so GPS updates don't trigger a recompute.
+  const initialRegion = useMemo(() => regionForStops(located), [located]);
+
+  const polylineCoords = useMemo(
     () => orderedStops(located).map((s) => ({
       latitude: s.customer_latitude!, longitude: s.customer_longitude!,
     })),
@@ -83,10 +119,29 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
     centerOn: (lat: number, lon: number) => {
       mapRef.current?.animateToRegion(
         { latitude: lat, longitude: lon, latitudeDelta: 0.012, longitudeDelta: 0.012 },
-        400,
+        350,
       );
     },
   }), [located]);
+
+  // Memoize markers: only re-create when stops data or selection changes,
+  // not on GPS ticks (userLat/userLon not in deps).
+  const markers = useMemo(
+    () => located.map((stop) => (
+      <StopMarker
+        key={stop.id}
+        stop={stop}
+        selected={stop.id === selectedStopId}
+        onPress={onSelectStop}
+      />
+    )),
+    [located, selectedStopId, onSelectStop],
+  );
+
+  const hasRoadRoute = navigationActive && navigationRouteCoords && navigationRouteCoords.length > 1;
+  const hasFallbackLine = navigationActive && !hasRoadRoute
+    && userLat != null && userLon != null
+    && navigationTargetLat != null && navigationTargetLon != null;
 
   return (
     <MapView
@@ -100,57 +155,36 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
       toolbarEnabled={false}
       mapType="standard"
     >
-      {polyline.length > 1 && (
+      {polylineCoords.length > 1 && (
         <Polyline
-          coordinates={polyline}
-          strokeColor={navigationActive ? 'rgba(37,99,235,0.2)' : 'rgba(37,99,235,0.55)'}
+          coordinates={polylineCoords}
+          strokeColor={navigationActive ? 'rgba(37,99,235,0.18)' : 'rgba(37,99,235,0.55)'}
           strokeWidth={3}
           lineDashPattern={[10, 5]}
         />
       )}
-      {navigationActive && navigationRouteCoords && navigationRouteCoords.length > 1 && (
+
+      {hasRoadRoute && (
         <Polyline
-          coordinates={navigationRouteCoords}
+          coordinates={navigationRouteCoords!}
           strokeColor="#2563EB"
           strokeWidth={5}
         />
       )}
-      {navigationActive && (!navigationRouteCoords || navigationRouteCoords.length === 0) &&
-        userLat != null && userLon != null && navigationTargetLat != null && navigationTargetLon != null && (
+
+      {hasFallbackLine && (
         <Polyline
           coordinates={[
-            { latitude: userLat, longitude: userLon },
-            { latitude: navigationTargetLat, longitude: navigationTargetLon },
+            { latitude: userLat!, longitude: userLon! },
+            { latitude: navigationTargetLat!, longitude: navigationTargetLon! },
           ]}
           strokeColor="#2563EB"
           strokeWidth={4}
           lineDashPattern={[8, 4]}
         />
       )}
-      {located.map((stop) => {
-        const meta = stopStatusMeta(stop.state);
-        const selected = stop.id === selectedStopId;
-        return (
-          <Marker
-            key={stop.id}
-            coordinate={{ latitude: stop.customer_latitude!, longitude: stop.customer_longitude! }}
-            onPress={() => onSelectStop(stop)}
-            tracksViewChanges={false}
-            anchor={{ x: 0.5, y: 0.5 }}
-            zIndex={selected ? 999 : undefined}
-          >
-            <View
-              style={[
-                styles.marker,
-                { backgroundColor: meta.color },
-                selected && styles.markerSelected,
-              ]}
-            >
-              <Text style={styles.markerText}>{stop.route_sequence ?? '•'}</Text>
-            </View>
-          </Marker>
-        );
-      })}
+
+      {markers}
     </MapView>
   );
 });

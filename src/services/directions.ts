@@ -35,6 +35,19 @@ function decodePolyline(encoded: string): LatLng[] {
   return coords;
 }
 
+const MAX_POLYLINE_POINTS = 150;
+
+/** Uniform-sample coords down to maxPoints while keeping first and last. */
+function simplifyPolyline(coords: LatLng[], maxPoints = MAX_POLYLINE_POINTS): LatLng[] {
+  if (coords.length <= maxPoints) return coords;
+  const step = Math.ceil(coords.length / maxPoints);
+  const out: LatLng[] = [];
+  for (let i = 0; i < coords.length; i += step) out.push(coords[i]);
+  const last = coords[coords.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
+}
+
 export async function fetchDrivingRoute(
   origin: LatLng,
   destination: LatLng,
@@ -50,7 +63,7 @@ export async function fetchDrivingRoute(
     const res = await fetch(url);
     const data = await res.json() as { status: string; routes: Array<{ overview_polyline: { points: string } }> };
     if (data.status !== 'OK' || !data.routes.length) return null;
-    return decodePolyline(data.routes[0].overview_polyline.points);
+    return simplifyPolyline(decodePolyline(data.routes[0].overview_polyline.points));
   } catch {
     return null;
   }

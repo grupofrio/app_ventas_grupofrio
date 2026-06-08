@@ -32,6 +32,7 @@ import {
   computeRouteProgress,
   orderedStops as orderStopsBySeq,
   distanceToStop,
+  haversineMeters,
 } from '../../src/services/routeMapLogic';
 import type { RouteFreshness } from '../../src/stores/useRouteStore';
 import { evaluateVisitOrder } from '../../src/services/routeOrderLogic';
@@ -73,6 +74,7 @@ export default function RouteScreen() {
 
   // ── Map-first state (BLD-ROUTE-MAP) ──────────────────────────────────────
   const mapRef = React.useRef<RouteMapHandle | null>(null);
+  const lastCenterRef = React.useRef<{ lat: number; lon: number; time: number } | null>(null);
   const [viewMode, setViewMode] = React.useState<ViewMode | null>(null); // null until first decide
   const [selectedStopId, setSelectedStopId] = React.useState<number | null>(null);
   const [panelExpanded, setPanelExpanded] = React.useState(false);
@@ -109,10 +111,18 @@ export default function RouteScreen() {
   }, [navigationActive, located.length]);
 
   // Auto-follow user GPS while navigating.
+  // Throttled: only reanimate if the user moved >25 m OR >5 s since last center.
+  // This prevents constant animateToRegion calls on low-end devices.
   React.useEffect(() => {
-    if (navigationActive && userLat != null && userLon != null) {
-      mapRef.current?.centerOn(userLat, userLon);
+    if (!navigationActive || userLat == null || userLon == null) return;
+    const now = Date.now();
+    const last = lastCenterRef.current;
+    if (last) {
+      const moved = haversineMeters(last.lat, last.lon, userLat, userLon);
+      if (now - last.time < 5000 && moved < 25) return;
     }
+    lastCenterRef.current = { lat: userLat, lon: userLon, time: now };
+    mapRef.current?.centerOn(userLat, userLon);
   }, [navigationActive, userLat, userLon]);
 
   // BLD-ROUTE-MAP: entrar desde "Iniciar ruta" / "Continuar a ruta" pasa

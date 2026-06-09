@@ -10,10 +10,10 @@ function normalize(t: Record<string, unknown>): TaskItem {
   } as TaskItem;
 }
 
-/** Tareas asignadas a un empleado. */
-export async function fetchMyTasks(employeeId: number): Promise<TaskItem[]> {
+/** Tareas asignadas a un empleado. Requiere companyId (obligatorio en el backend). */
+export async function fetchMyTasks(employeeId: number, companyId: number): Promise<TaskItem[]> {
   const data = await getRest<{ tasks?: TaskItem[] } | TaskItem[]>(
-    `/pwa-supv/tasks?assignee_id=${employeeId}`,
+    `/pwa-supv/tasks?assignee_id=${employeeId}&company_id=${companyId}`,
   );
   const raw = Array.isArray(data) ? data
     : Array.isArray((data as { tasks?: TaskItem[] }).tasks) ? (data as { tasks: TaskItem[] }).tasks

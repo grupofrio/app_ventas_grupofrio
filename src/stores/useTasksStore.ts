@@ -11,7 +11,7 @@ interface TasksStore {
   /** Pending count — drives the red badge in the tab bar. */
   pendingCount: number;
 
-  loadTasks: (employeeId: number) => Promise<void>;
+  loadTasks: (employeeId: number, companyId: number) => Promise<void>;
   completeTask: (taskId: number, notes?: string) => Promise<void>;
   startTask: (taskId: number) => Promise<void>;
 }
@@ -23,10 +23,10 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
   lastFetchedAt: null,
   pendingCount: 0,
 
-  loadTasks: async (employeeId) => {
+  loadTasks: async (employeeId, companyId) => {
     set({ loading: true, error: null });
     try {
-      const tasks = await fetchMyTasks(employeeId);
+      const tasks = await fetchMyTasks(employeeId, companyId);
       const pendingCount = tasks.filter((t) => t.state === 'pending' || t.state === 'in_progress').length;
       set({ tasks, pendingCount, loading: false, lastFetchedAt: Date.now() });
     } catch (e) {

@@ -103,11 +103,12 @@ const TaskCard = React.memo(function TaskCard({
 
 export default function TasksScreen() {
   const employeeId = useAuthStore((s) => s.employeeId);
+  const companyId  = useAuthStore((s) => s.companyId);
   const { tasks, loading, error, pendingCount, loadTasks, completeTask, startTask } = useTasksStore();
 
   const doLoad = useCallback(async () => {
-    if (employeeId) await loadTasks(employeeId);
-  }, [employeeId, loadTasks]);
+    if (employeeId && companyId) await loadTasks(employeeId, companyId);
+  }, [employeeId, companyId, loadTasks]);
 
   useFocusEffect(useCallback(() => { void doLoad(); }, [doLoad]));
 

@@ -107,13 +107,14 @@ export default function TasksScreen() {
   const { tasks, loading, error, pendingCount, loadTasks, completeTask, startTask } = useTasksStore();
 
   const doLoad = useCallback(async () => {
-    if (!employeeId || !companyId) {
+    if (!employeeId) {
       useTasksStore.setState({
-        error: `Sin datos de sesión (emp=${employeeId ?? 'null'}, co=${companyId ?? 'null'}). Cierra sesión e ingresa de nuevo.`,
+        error: 'Sin sesión activa. Cierra sesión e ingresa de nuevo.',
         loading: false,
       });
       return;
     }
+    // companyId is optional: backend derives it from the employee when absent.
     await loadTasks(employeeId, companyId);
   }, [employeeId, companyId, loadTasks]);
 

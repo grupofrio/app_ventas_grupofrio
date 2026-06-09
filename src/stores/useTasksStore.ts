@@ -11,7 +11,7 @@ interface TasksStore {
   /** Pending count — drives the red badge in the tab bar. */
   pendingCount: number;
 
-  loadTasks: (employeeId: number, companyId: number) => Promise<void>;
+  loadTasks: (employeeId: number, companyId?: number | null) => Promise<void>;
   completeTask: (taskId: number, notes?: string) => Promise<void>;
   startTask: (taskId: number) => Promise<void>;
 }

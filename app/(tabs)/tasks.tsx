@@ -107,7 +107,14 @@ export default function TasksScreen() {
   const { tasks, loading, error, pendingCount, loadTasks, completeTask, startTask } = useTasksStore();
 
   const doLoad = useCallback(async () => {
-    if (employeeId && companyId) await loadTasks(employeeId, companyId);
+    if (!employeeId || !companyId) {
+      useTasksStore.setState({
+        error: `Sin datos de sesión (emp=${employeeId ?? 'null'}, co=${companyId ?? 'null'}). Cierra sesión e ingresa de nuevo.`,
+        loading: false,
+      });
+      return;
+    }
+    await loadTasks(employeeId, companyId);
   }, [employeeId, companyId, loadTasks]);
 
   useFocusEffect(useCallback(() => { void doLoad(); }, [doLoad]));

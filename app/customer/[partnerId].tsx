@@ -13,6 +13,7 @@ import {
   buildCustomerContactStopPatch,
   buildCustomerContactUpdatePayload,
   CustomerContactForm,
+  phoneChanged,
   validateCustomerContactForm,
 } from '../../src/services/customerContactUpdate';
 
@@ -43,25 +44,18 @@ export default function CustomerEditScreen() {
     mobile: currentStop?.mobile ?? '',
     email: currentStop?.email ?? '',
   });
+  // Valores con los que abrió el formulario: base para no sobrescribir sin confirmar.
+  const [initialContact] = useState({
+    phone: currentStop?.phone ?? '',
+    mobile: currentStop?.mobile ?? '',
+  });
   const [saving, setSaving] = useState(false);
 
   function updateField(key: keyof CustomerContactForm, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleSave() {
-    if (!Number.isFinite(numericPartnerId) || numericPartnerId <= 0) {
-      Alert.alert('Cliente no disponible', 'No se pudo determinar el cliente a actualizar.');
-      return;
-    }
-
-    const error = validateCustomerContactForm(form);
-    if (error) {
-      Alert.alert('Revisa los datos', error);
-      return;
-    }
-
-    if (saving) return;
+  function doSave() {
     setSaving(true);
 
     const payload = buildCustomerContactUpdatePayload(numericPartnerId, form);
@@ -79,6 +73,43 @@ export default function CustomerEditScreen() {
         : 'No hay conexion. Los cambios quedaron en cola para sincronizar.',
       [{ text: 'OK', onPress: () => router.back() }],
     );
+  }
+
+  function handleSave() {
+    if (!Number.isFinite(numericPartnerId) || numericPartnerId <= 0) {
+      Alert.alert('Cliente no disponible', 'No se pudo determinar el cliente a actualizar.');
+      return;
+    }
+
+    const error = validateCustomerContactForm(form);
+    if (error) {
+      Alert.alert('Revisa los datos', error);
+      return;
+    }
+
+    if (saving) return;
+
+    // No sobrescribir un teléfono existente sin confirmación explícita.
+    const replacing: string[] = [];
+    if (initialContact.phone.trim() && phoneChanged(initialContact.phone, form.phone)) {
+      replacing.push(`el teléfono (${initialContact.phone.trim()})`);
+    }
+    if (initialContact.mobile.trim() && phoneChanged(initialContact.mobile, form.mobile)) {
+      replacing.push(`el móvil (${initialContact.mobile.trim()})`);
+    }
+    if (replacing.length > 0) {
+      Alert.alert(
+        'Confirmar cambio',
+        `Este cliente ya tiene registrado ${replacing.join(' y ')}. ¿Reemplazarlo?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Reemplazar', style: 'destructive', onPress: doSave },
+        ],
+      );
+      return;
+    }
+
+    doSave();
   }
 
   if (!currentStop) {

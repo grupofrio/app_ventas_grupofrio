@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -12,14 +12,12 @@ import { Button } from '../src/components/ui/Button';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
-
-interface FormData {
-  nombre: string;
-  telefono: string;
-  direccion: string;
-  canal: string;
-  notas: string;
-}
+import {
+  buildProspectionPayload,
+  canalHint,
+  GIRO_OPTIONS,
+  NewLeadForm,
+} from '../src/services/leadIntake';
 
 export default function NewCustomerScreen() {
   const router = useRouter();
@@ -27,16 +25,16 @@ export default function NewCustomerScreen() {
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
-  const [form, setForm] = useState<FormData>({
+  const [form, setForm] = useState<NewLeadForm>({
     nombre: '',
     telefono: '',
     direccion: '',
-    canal: '',
+    giro: '',
     notas: '',
   });
   const [saved, setSaved] = useState(false);
 
-  function updateField(key: keyof FormData, value: string) {
+  function updateField(key: keyof NewLeadForm, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -46,19 +44,7 @@ export default function NewCustomerScreen() {
       return;
     }
 
-    enqueue('prospection', {
-      contact_name: form.nombre.trim(),
-      mobile: form.telefono.trim() || undefined,
-      street: form.direccion.trim() || undefined,
-      tag_ids: [],
-      description: [
-        form.canal.trim() ? `Canal: ${form.canal.trim()}` : '',
-        form.notas.trim(),
-      ].filter(Boolean).join('\n') || undefined,
-      latitude: latitude || undefined,
-      longitude: longitude || undefined,
-      _source: 'nuevo_lead_ruta',
-    });
+    enqueue('prospection', buildProspectionPayload(form, { latitude, longitude }));
 
     setSaved(true);
     Alert.alert(
@@ -111,14 +97,26 @@ export default function NewCustomerScreen() {
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Canal</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Tienda, restaurante, mayoreo..."
-            placeholderTextColor={colors.textDim}
-            value={form.canal}
-            onChangeText={(v) => updateField('canal', v)}
-          />
+          <Text style={styles.label}>Giro del negocio</Text>
+          <View style={styles.chipWrap}>
+            {GIRO_OPTIONS.map((g) => {
+              const selected = form.giro === g.slug;
+              return (
+                <TouchableOpacity
+                  key={g.slug}
+                  style={[styles.chip, selected && styles.chipSelected]}
+                  onPress={() => updateField('giro', selected ? '' : g.slug)}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                    {g.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {form.giro ? (
+            <Text style={styles.canalHint}>{canalHint(form.giro)}</Text>
+          ) : null}
         </View>
 
         <View style={styles.fieldGroup}>
@@ -179,5 +177,35 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
     paddingTop: spacing.sm,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.card,
+    borderRadius: radii.button,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  chipSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryAlpha08,
+  },
+  chipText: {
+    fontSize: 13,
+    color: colors.textDim,
+  },
+  chipTextSelected: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  canalHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: colors.primary,
   },
 });

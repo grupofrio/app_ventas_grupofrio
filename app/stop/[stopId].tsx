@@ -33,6 +33,11 @@ import { getStopTypeLabel } from '../../src/services/routePresentation';
 import { logInfo } from '../../src/utils/logger';
 import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
 import { getLeadActionVisibility, getLeadPartnerId } from '../../src/services/leadVisit';
+import {
+  hasContactPhone,
+  MISSING_PHONE_CTA_LABEL,
+  MISSING_PHONE_NOTICE,
+} from '../../src/services/customerContactUpdate';
 
 export default function StopDetailScreen() {
   const { stopId, giftSuccess } = useLocalSearchParams<{ stopId: string; giftSuccess?: string }>();
@@ -120,6 +125,24 @@ export default function StopDetailScreen() {
     ? getLeadPartnerId(stop)
     : stop.customer_id;
 
+  const openCustomerEditor = () => {
+    if (!editablePartnerId) {
+      Alert.alert('Cliente no disponible', 'Primero completa Datos para crear o enlazar el contacto.');
+      return;
+    }
+    router.push({
+      pathname: '/customer/[partnerId]',
+      params: {
+        partnerId: String(editablePartnerId),
+        stopId: String(stop.id),
+      },
+    } as never);
+  };
+  // Aviso de captura: solo clientes (no leads) sin phone NI mobile (el campo de
+  // WhatsApp normalizado lo administra el bot y queda fuera de esta lógica).
+  const showMissingPhoneNotice =
+    stop._entityType !== 'lead' && !!editablePartnerId && !hasContactPhone(stop);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title={stop.customer_name} showBack />
@@ -146,23 +169,22 @@ export default function StopDetailScreen() {
                 label="Editar cliente"
                 variant="secondary"
                 small
-                onPress={() => {
-                  if (!editablePartnerId) {
-                    Alert.alert('Cliente no disponible', 'Primero completa Datos para crear o enlazar el contacto.');
-                    return;
-                  }
-                  router.push({
-                    pathname: '/customer/[partnerId]',
-                    params: {
-                      partnerId: String(editablePartnerId),
-                      stopId: String(stop.id),
-                    },
-                  } as never);
-                }}
+                onPress={openCustomerEditor}
                 style={{ alignSelf: 'flex-start', marginTop: 10 }}
               />
             </View>
           </View>
+          {showMissingPhoneNotice && (
+            <View style={{ marginTop: 10 }}>
+              <AlertBanner variant="warning" icon="📱" message={MISSING_PHONE_NOTICE} />
+              <Button
+                label={MISSING_PHONE_CTA_LABEL}
+                small
+                onPress={openCustomerEditor}
+                style={{ alignSelf: 'flex-start' }}
+              />
+            </View>
+          )}
           {stopTypeLabel && (
             <View style={{ marginTop: 2 }}>
               <Badge

@@ -11,7 +11,7 @@
  * Uses Odoo search with authenticated fallback to /get_records.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, Alert, RefreshControl, Linking,
@@ -38,12 +38,21 @@ import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
 
 const DEFAULT_OFFROUTE_COMPANY_ID = 34;
 
+function offrouteEntityKey(result: OffrouteSearchResult): string {
+  const entityId = result.entityType === 'lead'
+    ? result.id
+    : result.partnerId ?? result.id;
+  return `${result.entityType}:${entityId}`;
+}
+
 export default function OffRouteScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<OffrouteSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [selectingKey, setSelectingKey] = useState<string | null>(null);
+  const selectingKeyRef = useRef<string | null>(null);
   const addVirtualStop = useRouteStore((s) => s.addVirtualStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const patchStop = useRouteStore((s) => s.patchStop);
@@ -112,128 +121,144 @@ export default function OffRouteScreen() {
   }
 
   async function handleSelect(result: OffrouteSearchResult) {
-    let offrouteVisitId: number | null = null;
+    const selectionKey = offrouteEntityKey(result);
+    if (selectingKeyRef.current === selectionKey) return;
 
-    if (isOnline) {
-      try {
-        const visit = await startOffrouteVisit({
-          partner_id: result.partnerId ?? null,
-          lead_id: result.entityType === 'lead' ? result.id : null,
-          company_id: companyId ?? DEFAULT_OFFROUTE_COMPANY_ID,
-          latitude,
-          longitude,
-        });
-        offrouteVisitId = extractOffrouteVisitId(
-          visit && typeof visit === 'object' ? (visit.id as number | null | undefined) : null,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudo iniciar la visita especial.';
-        if (!isRetryableSyncErrorMessage(message)) {
-          Alert.alert('Visita especial rechazada', message);
-          return;
+    selectingKeyRef.current = selectionKey;
+    setSelectingKey(selectionKey);
+
+    try {
+      let offrouteVisitId: number | null = null;
+
+      if (isOnline) {
+        try {
+          const visit = await startOffrouteVisit({
+            partner_id: result.partnerId ?? null,
+            lead_id: result.entityType === 'lead' ? result.id : null,
+            company_id: companyId ?? DEFAULT_OFFROUTE_COMPANY_ID,
+            latitude,
+            longitude,
+          });
+          offrouteVisitId = extractOffrouteVisitId(
+            visit && typeof visit === 'object' ? (visit.id as number | null | undefined) : null,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'No se pudo iniciar la visita especial.';
+          if (!isRetryableSyncErrorMessage(message)) {
+            Alert.alert('Visita especial rechazada', message);
+            return;
+          }
+          Alert.alert(
+            'Visita especial local',
+            'No se pudo registrar la visita especial en servidor. Continuará solo localmente.',
+          );
         }
-        Alert.alert(
-          'Visita especial local',
-          'No se pudo registrar la visita especial en servidor. Continuará solo localmente.',
-        );
       }
-    }
 
-    const virtualStopId = addVirtualStop(
-      result.partnerId ?? result.id,
-      result.name,
-      {
-        entityType: result.entityType,
-        leadId: result.entityType === 'lead' ? result.id : null,
-        partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
-        offrouteVisitId,
-        pricelistId: result.pricelistId,
-        pricelistName: result.pricelistName,
-        customerLatitude: result.customerLatitude,
-        customerLongitude: result.customerLongitude,
-        googleMapsUrl: result.googleMapsUrl,
-      },
-    );
-    updateStopState(virtualStopId, 'in_progress');
-
-    // Start a visit for this virtual stop
-    const visitStore = useVisitStore.getState();
-    visitStore.resetVisit();
-    visitStore.startVisit(
-      {
-        id: virtualStopId,
-        customer_id: result.partnerId ?? result.id,
-        customer_name: result.name,
-        state: 'in_progress',
-        source_model: 'gf.route.stop',
-        _entityType: result.entityType,
-        _isOffroute: true,
-        _leadId: result.entityType === 'lead' ? result.id : null,
-        _partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
-        _offrouteVisitId: offrouteVisitId,
-        _pricelistId: result.pricelistId,
-        _pricelistName: result.pricelistName,
-        customer_latitude: result.customerLatitude ?? undefined,
-        customer_longitude: result.customerLongitude ?? undefined,
-        google_maps_url: result.googleMapsUrl ?? undefined,
-      },
-      0, 0, // lat/lon — GPS will provide real values if available
-    );
-    visitStore.setOffrouteVisitId(offrouteVisitId);
-    patchStop(virtualStopId, { _offrouteVisitId: offrouteVisitId });
-
-    if (isOnline) {
-      const priceWarmup = await warmOffrouteCustomerPrices(
-        result,
-        { companyId, warehouseId },
+      const virtualStopId = addVirtualStop(
+        result.partnerId ?? result.id,
+        result.name,
         {
-          getProducts: () => useProductStore.getState().products,
-          loadProducts: (targetWarehouseId) => useProductStore.getState().loadProducts(targetWarehouseId),
-          computeCustomerPrices,
+          entityType: result.entityType,
+          leadId: result.entityType === 'lead' ? result.id : null,
+          partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
+          offrouteVisitId,
+          pricelistId: result.pricelistId,
+          pricelistName: result.pricelistName,
+          customerLatitude: result.customerLatitude,
+          customerLongitude: result.customerLongitude,
+          googleMapsUrl: result.googleMapsUrl,
         },
       );
-      if (priceWarmup.status === 'failed') {
-        console.warn('[offroute] Price warmup failed:', priceWarmup.reason);
+      updateStopState(virtualStopId, 'in_progress');
+
+      // Start a visit for this virtual stop
+      const visitStore = useVisitStore.getState();
+      visitStore.resetVisit();
+      visitStore.startVisit(
+        {
+          id: virtualStopId,
+          customer_id: result.partnerId ?? result.id,
+          customer_name: result.name,
+          state: 'in_progress',
+          source_model: 'gf.route.stop',
+          _entityType: result.entityType,
+          _isOffroute: true,
+          _leadId: result.entityType === 'lead' ? result.id : null,
+          _partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
+          _offrouteVisitId: offrouteVisitId,
+          _pricelistId: result.pricelistId,
+          _pricelistName: result.pricelistName,
+          customer_latitude: result.customerLatitude ?? undefined,
+          customer_longitude: result.customerLongitude ?? undefined,
+          google_maps_url: result.googleMapsUrl ?? undefined,
+        },
+        0, 0, // lat/lon — GPS will provide real values if available
+      );
+      visitStore.setOffrouteVisitId(offrouteVisitId);
+      patchStop(virtualStopId, { _offrouteVisitId: offrouteVisitId });
+
+      if (isOnline) {
+        const priceWarmup = await warmOffrouteCustomerPrices(
+          result,
+          { companyId, warehouseId },
+          {
+            getProducts: () => useProductStore.getState().products,
+            loadProducts: (targetWarehouseId) => useProductStore.getState().loadProducts(targetWarehouseId),
+            computeCustomerPrices,
+          },
+        );
+        if (priceWarmup.status === 'failed') {
+          console.warn('[offroute] Price warmup failed:', priceWarmup.reason);
+        }
+      }
+
+      // BLD-20260424-BUGC: TODOS los leads pasan por /checkin (igual que
+      // customers). Antes, los leads sin partner_id se enrutaban directo
+      // a /postvisit, saltándose el check-in y sin permitir al operador
+      // elegir "✕ No Venta" cuando el local estaba cerrado o el dueño no
+      // se encontraba. /checkin ahora muestra "📋 Datos" Y "✕ No Venta",
+      // y el operador decide según la situación real en campo. Si trae
+      // los datos del prospecto entra a Datos; si no, registra No Venta
+      // y avanza la ruta sin inventar información.
+      if (result.entityType === 'lead') {
+        router.push(`/checkin/${virtualStopId}` as never);
+        return;
+      }
+
+      Alert.alert(
+        'Visita especial',
+        `¿Qué quieres hacer con ${result.name}?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Ir a ubicacion',
+            onPress: () => { void openSpecialVisitLocation(result); },
+          },
+          {
+            text: 'Generar venta',
+            onPress: () => router.push(`/sale/${virtualStopId}` as never),
+          },
+        ],
+      );
+    } finally {
+      if (selectingKeyRef.current === selectionKey) {
+        selectingKeyRef.current = null;
+        setSelectingKey(null);
       }
     }
-
-    // BLD-20260424-BUGC: TODOS los leads pasan por /checkin (igual que
-    // customers). Antes, los leads sin partner_id se enrutaban directo
-    // a /postvisit, saltándose el check-in y sin permitir al operador
-    // elegir "✕ No Venta" cuando el local estaba cerrado o el dueño no
-    // se encontraba. /checkin ahora muestra "📋 Datos" Y "✕ No Venta",
-    // y el operador decide según la situación real en campo. Si trae
-    // los datos del prospecto entra a Datos; si no, registra No Venta
-    // y avanza la ruta sin inventar información.
-    if (result.entityType === 'lead') {
-      router.push(`/checkin/${virtualStopId}` as never);
-      return;
-    }
-
-    Alert.alert(
-      'Visita especial',
-      `¿Qué quieres hacer con ${result.name}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Ir a ubicacion',
-          onPress: () => { void openSpecialVisitLocation(result); },
-        },
-        {
-          text: 'Generar venta',
-          onPress: () => router.push(`/sale/${virtualStopId}` as never),
-        },
-      ],
-    );
   }
 
   function renderCustomer({ item }: { item: OffrouteSearchResult }) {
     const badgeLabel = item.entityType === 'lead' ? 'Lead' : 'Cliente';
+    const itemKey = offrouteEntityKey(item);
+    const isSelecting = selectingKey === itemKey;
 
     return (
       <TouchableOpacity
-        style={styles.customerCard}
+        style={[styles.customerCard, isSelecting && styles.customerCardDisabled]}
         onPress={() => { void handleSelect(item); }}
+        disabled={isSelecting}
         activeOpacity={0.7}
       >
         <View style={{ flex: 1 }}>
@@ -252,7 +277,11 @@ export default function OffRouteScreen() {
           ]}>
             {badgeLabel}
           </Text>
-          <Text style={styles.selectArrow}>{'>'}</Text>
+          {isSelecting ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.selectArrow}>{'>'}</Text>
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -370,6 +399,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 14, marginBottom: 8,
     borderLeftWidth: 3, borderLeftColor: colors.primary,
+  },
+  customerCardDisabled: {
+    opacity: 0.65,
   },
   customerName: { fontSize: 14, fontWeight: '700', color: colors.text },
   customerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 2 },

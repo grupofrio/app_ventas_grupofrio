@@ -28,6 +28,8 @@ import type { GFStop } from '../types/plan';
 // an orphaned draft doesn't clutter the route the next morning.
 export const VIRTUAL_STOP_TTL_MS = 2 * 60 * 60 * 1000;
 
+const ACTIVE_VIRTUAL_STATES = new Set(['pending', 'in_progress']);
+
 export function isVirtualStop(stop: Pick<GFStop, 'id' | '_isOffroute'>): boolean {
   if (stop._isOffroute === true) return true;
   if (typeof stop.id === 'number' && stop.id < 0) return true;
@@ -78,6 +80,51 @@ export function stampMissingCreatedAt(
   return mutated ? next : stops;
 }
 
+function activeVirtualDraftEntityKey(stop: GFStop): string | null {
+  if (!isVirtualStop(stop)) return null;
+  if (!ACTIVE_VIRTUAL_STATES.has(stop.state)) return null;
+
+  const entityType = stop._entityType ?? 'customer';
+  if (entityType === 'lead') {
+    return `lead:${stop._leadId ?? stop.customer_id}`;
+  }
+  return `customer:${stop._partnerId ?? stop.customer_id}`;
+}
+
+export function findActiveVirtualDraftForEntity(
+  stops: GFStop[],
+  input: {
+    entityType?: 'customer' | 'lead';
+    customerId: number;
+    leadId?: number | null;
+    partnerId?: number | null;
+  },
+): GFStop | null {
+  const entityType = input.entityType ?? 'customer';
+  const targetLeadId = input.leadId ?? null;
+  const targetPartnerId = input.partnerId ?? null;
+  const targetCustomerId = input.customerId;
+
+  return stops.find((stop) => {
+    const key = activeVirtualDraftEntityKey(stop);
+    if (!key) return false;
+
+    if (entityType === 'lead') return key === `lead:${targetLeadId ?? targetCustomerId}`;
+    return key === `customer:${targetPartnerId ?? targetCustomerId}`;
+  }) ?? null;
+}
+
+export function dedupeActiveVirtualDrafts(stops: GFStop[]): GFStop[] {
+  const seenActiveVirtualKeys = new Set<string>();
+  return stops.filter((stop) => {
+    const key = activeVirtualDraftEntityKey(stop);
+    if (!key) return true;
+    if (seenActiveVirtualKeys.has(key)) return false;
+    seenActiveVirtualKeys.add(key);
+    return true;
+  });
+}
+
 /**
  * Merge backend stops with currently-held virtual drafts.
  * - Real stops from backend come first (preserves server order).
@@ -91,7 +138,7 @@ export function mergeBackendStopsWithDrafts(
   now: number = Date.now(),
 ): GFStop[] {
   const drafts = extractVirtualDrafts(existingStops);
-  const fresh = pruneStaleVirtualDrafts(drafts, now);
+  const fresh = dedupeActiveVirtualDrafts(pruneStaleVirtualDrafts(drafts, now));
   if (fresh.length === 0) return backendStops;
 
   const backendIds = new Set(backendStops.map((s) => s.id));

@@ -18,7 +18,12 @@ import { useVisitStore } from '../stores/useVisitStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
-import { stampMissingCreatedAt, pruneStaleVirtualDrafts, extractVirtualDrafts } from './offrouteDrafts';
+import {
+  dedupeActiveVirtualDrafts,
+  stampMissingCreatedAt,
+  pruneStaleVirtualDrafts,
+  extractVirtualDrafts,
+} from './offrouteDrafts';
 // V2: Error persistence & periodic flush
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 import { todayLocalISO } from '../utils/localDate';
@@ -58,9 +63,10 @@ export async function rehydrateAppState(): Promise<{
           .filter((d) => !pruneStaleVirtualDrafts([d]).length)
           .map((d) => d.id),
       );
-      stops = staleDraftIds.size > 0
+      const withoutStale = staleDraftIds.size > 0
         ? stamped.filter((s) => !staleDraftIds.has(s.id))
         : stamped;
+      stops = dedupeActiveVirtualDrafts(withoutStale);
     }
 
     if (plan && stops) {

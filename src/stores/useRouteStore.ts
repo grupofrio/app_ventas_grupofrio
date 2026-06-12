@@ -14,6 +14,7 @@ import { storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
 import { removeStopById } from '../services/routeStops';
 import {
+  findActiveVirtualDraftForEntity,
   mergeBackendStopsWithDrafts,
   stampMissingCreatedAt,
 } from '../services/offrouteDrafts';
@@ -264,6 +265,16 @@ export const useRouteStore = create<RouteState>((set, get) => ({
    * Returns the virtual stop ID for navigation.
    */
   addVirtualStop: (customerId, customerName, opts) => {
+    const existingDraft = findActiveVirtualDraftForEntity(get().stops, {
+      entityType: opts?.entityType,
+      customerId,
+      leadId: opts?.leadId,
+      partnerId: opts?.partnerId,
+    });
+    if (existingDraft) {
+      return existingDraft.id;
+    }
+
     const virtualStop = createVirtualStop({
       customerId,
       customerName,

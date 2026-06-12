@@ -99,11 +99,14 @@ export default function RouteStartScreen() {
     try {
       try {
         const header = await getVehicleChecklist(planId);
-        const done = isChecklistComplete(header);
+        // No checklist (no active templates) OR 0 items → treat as skipped/done.
+        const done = !header || header.checks_total === 0 || isChecklistComplete(header);
         setChecklistStatus(done ? 'done' : 'pending');
         setChecklistComplete(done);
       } catch {
-        setChecklistStatus('pending');
+        // If checklist endpoint fails, don't block the driver.
+        setChecklistStatus('done');
+        setChecklistComplete(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo cargar el estado de inicio.');

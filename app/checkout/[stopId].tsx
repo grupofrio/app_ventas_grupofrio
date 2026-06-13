@@ -27,6 +27,7 @@ import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
 import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
+import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -130,10 +131,12 @@ function CheckoutScreenInner() {
     resetVisit();
 
     if (nextStop && shouldNavigateToNextStop) {
-      if (nextStop.customer_latitude && nextStop.customer_longitude) {
-        const origin = lat && lon ? { latitude: lat, longitude: lon } : null;
-        const destination = { latitude: nextStop.customer_latitude, longitude: nextStop.customer_longitude };
-        useNavigationStore.getState().startNavigation(nextStop.id, origin, destination);
+      // origin = ubicación actual del vendedor (useLocationStore); si no hay fix
+      // válido queda en null (sin coords falsas 0,0). null si el siguiente
+      // cliente no tiene coordenadas → no se inicia navegación.
+      const nav = buildCheckoutNavigation(latitude, longitude, nextStop);
+      if (nav) {
+        useNavigationStore.getState().startNavigation(nextStop.id, nav.origin, nav.destination);
       }
       router.replace('/(tabs)/route?view=map' as never);
       return;

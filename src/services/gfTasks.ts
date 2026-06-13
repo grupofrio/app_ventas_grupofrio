@@ -1,7 +1,8 @@
 import { getRest, postRest } from './api';
 import type { TaskItem } from '../types/tasks';
 
-function normalize(t: Record<string, unknown>): TaskItem {
+function normalize(input: unknown): TaskItem {
+  const t = (input ?? {}) as unknown as Record<string, unknown>;
   return {
     ...t,
     id: (t.task_id ?? t.id) as number,
@@ -22,7 +23,7 @@ export async function fetchMyTasks(employeeId: number, companyId?: number | null
   const raw = Array.isArray(data) ? data
     : Array.isArray((data as { tasks?: TaskItem[] }).tasks) ? (data as { tasks: TaskItem[] }).tasks
     : [];
-  return raw.map((t) => normalize(t as Record<string, unknown>));
+  return raw.map((t) => normalize(t));
 }
 
 /** Marca una tarea como completada. */

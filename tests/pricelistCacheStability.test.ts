@@ -42,6 +42,7 @@ interface CacheModule {
     options?: { companyId?: number | null; fallbackPricelistId?: number | null },
   ) => Map<number, number> | null;
   resetPricelistCachesForTests: () => void;
+  CUSTOMER_PRICE_CACHE_TTL_MS: number;
 }
 
 function testHashIgnoresVolatileFields(cache: CacheModule) {
@@ -148,7 +149,13 @@ function testHashIsCompanyAndFallbackAware(cache: CacheModule) {
   assert.notEqual(k1, k2);
 }
 
-function testCustomerPriceCacheExpiresAfterFiveMinutes(cache: CacheModule) {
+function testCustomerPriceCacheExpiresAfterOperatingDay(cache: CacheModule) {
+  // Perf Fase 1: el TTL pasó de 5 min a una jornada (10 h) para que el caché de
+  // precios sobreviva toda la ruta sin red. Se valida contra la constante
+  // exportada, no contra un número hardcodeado.
+  const TTL = cache.CUSTOMER_PRICE_CACHE_TTL_MS;
+  assert.equal(TTL, 10 * 60 * 60 * 1000, 'TTL de precios debe ser una jornada (10 h)');
+
   const originalNow = Date.now;
   const products = [{ id: 10, list_price: 100, product_tmpl_id: 5, categ_id: 1 }];
 
@@ -156,18 +163,26 @@ function testCustomerPriceCacheExpiresAfterFiveMinutes(cache: CacheModule) {
     Date.now = () => 1_000;
     cache.cacheCustomerPrices(99, products, new Map([[10, 80]]), { companyId: 34 });
 
-    Date.now = () => 1_000 + (5 * 60 * 1000) - 1;
+    // Sigue válido pasados 5 min (antes expiraba) y casi al final de la jornada.
+    Date.now = () => 1_000 + (5 * 60 * 1000);
     assert.deepEqual(
       [...(cache.peekCachedCustomerPrices(99, products, { companyId: 34 }) ?? new Map()).entries()],
       [[10, 80]],
-      'price cache should remain valid inside the five minute TTL',
+      'price cache should still be valid after 5 minutes (now lasts a full day)',
+    );
+    Date.now = () => 1_000 + TTL - 1;
+    assert.deepEqual(
+      [...(cache.peekCachedCustomerPrices(99, products, { companyId: 34 }) ?? new Map()).entries()],
+      [[10, 80]],
+      'price cache should remain valid inside the operating-day TTL',
     );
 
-    Date.now = () => 1_000 + (5 * 60 * 1000) + 1;
+    // Expira pasada la jornada → fuerza refresh con red.
+    Date.now = () => 1_000 + TTL + 1;
     assert.equal(
       cache.peekCachedCustomerPrices(99, products, { companyId: 34 }),
       null,
-      'price cache should expire after five minutes so changed Odoo pricelists refresh',
+      'price cache should expire after the operating day so changed Odoo pricelists refresh',
     );
   } finally {
     Date.now = originalNow;
@@ -190,7 +205,7 @@ async function main() {
   testPartnerCacheKeyAcceptsMany2oneArrays(cache);
   testHashRoundsListPriceToCents(cache);
   testHashIsCompanyAndFallbackAware(cache);
-  testCustomerPriceCacheExpiresAfterFiveMinutes(cache);
+  testCustomerPriceCacheExpiresAfterOperatingDay(cache);
 
   console.log('pricelist cache stability tests: ok');
 }

@@ -28,7 +28,21 @@ type CacheOptions = {
   fallbackPricelistId?: number | null;
 };
 
-const CUSTOMER_PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
+/**
+ * Perf Fase 1: TTL del caché de precios por cliente extendido de 5 min a una
+ * JORNADA operativa (10 h). Razón: los precios de lista/pricelist son estables
+ * intradía; un TTL de 5 min hacía que en ruta sin señal el ProductPicker
+ * re-disparara un RPC que cuelga hasta 45 s (DEFAULT_FETCH_TIMEOUT_MS). Con TTL
+ * de jornada, `peekCachedCustomerPrices` sirve los precios precargados en el
+ * CEDIS toda la ruta sin esperar la red.
+ *
+ * Seguridad: el caché es solo para LECTURA/visualización en el picker. La venta
+ * sigue siendo online-first y el BACKEND es la fuente final de verdad de
+ * precios e inventario al confirmar la venta. No habilita venta offline.
+ * Nota: caché en memoria; se invalida al re-preparar ruta (catálogo nuevo
+ * cambia el cache key) y al reiniciar la app (persistirlo es Fase 2).
+ */
+export const CUSTOMER_PRICE_CACHE_TTL_MS = 10 * 60 * 60 * 1000;
 
 /**
  * Shape of a product as it participates in pricing cache keys.

@@ -32,6 +32,7 @@ import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
 import { formatCurrency } from '../../utils/time';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 
 // ═══ Types ═══
 
@@ -121,6 +122,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const isGlobalFallback = inventorySource === 'global_legacy';
 
   const [search, setSearch] = useState('');
+  // Perf Fase 1: el filtro usa el valor debounced; el input sigue ligado a
+  // `search` (escribir es instantáneo) → no se re-filtra en cada tecla.
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [activeCategory, setActiveCategory] = useState<CategoryKey>('all');
   const [quantities, setQuantities] = useState<Record<number, number>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -235,7 +239,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const filtered = useMemo(() => {
     return enrichedProducts.filter((p) => {
       if (activeCategory !== 'all' && p.category !== activeCategory) return false;
-      if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), search)) return false;
+      if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), debouncedSearch)) return false;
       // Ocultar agotados solo en modo normal (truck_stock con stock real).
       // En modo referencia o fallback global, dejamos pasar para no dejar
       // al vendedor con pantalla en blanco.
@@ -248,7 +252,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, search, isGlobalFallback, showOutOfStockAsReference]);
+  }, [enrichedProducts, activeCategory, debouncedSearch, isGlobalFallback, showOutOfStockAsReference]);
 
   // Category counts
   const categoryCounts = useMemo(() => {

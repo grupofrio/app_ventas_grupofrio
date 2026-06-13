@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert, Linking } from 'react-native';
+import { View, Text, ScrollView, FlatList, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter, useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -37,6 +37,7 @@ import {
 import type { RouteFreshness } from '../../src/stores/useRouteStore';
 import { evaluateVisitOrder } from '../../src/services/routeOrderLogic';
 import { logInfo } from '../../src/utils/logger';
+import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
@@ -66,6 +67,7 @@ export default function RouteScreen() {
   const router = useRouter();
   const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
   const [searchQuery, setSearchQuery] = React.useState('');
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
   const { plan, stops, stopsCompleted, stopsTotal, loadPlan, routeFreshness } = useRouteStore();
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
@@ -246,7 +248,9 @@ export default function RouteScreen() {
     if (da !== db) return da - db;
     return (a.route_sequence || 0) - (b.route_sequence || 0);
   });
-  const trimmedSearchQuery = searchQuery.trim();
+  // Perf Fase 1: el input sigue ligado a searchQuery (instantáneo); el filtro
+  // usa el valor debounced para no recalcular la lista en cada tecla.
+  const trimmedSearchQuery = debouncedSearchQuery.trim();
   const hasSearchQuery = trimmedSearchQuery.length > 0;
   const plannedStops = filterPlannedStopsBySearch(sorted, '');
   const visibleStops = hasSearchQuery
@@ -256,6 +260,51 @@ export default function RouteScreen() {
   const freshnessBadge = getRouteFreshnessBadge(routeFreshness);
 
   const showMap = viewMode === 'map';
+
+  // Perf Fase 1: tarjeta de parada como renderItem estable para FlatList.
+  const renderStopCard = React.useCallback(
+    ({ item: stop, index }: { item: GFStop; index: number }) => {
+      const isDone = ['done', 'not_visited', 'closed'].includes(stop.state);
+      const badge = getStopBadge(stop);
+      const stopTypeLabel = getStopTypeLabel(stop);
+      return (
+        <View
+          style={[
+            styles.card,
+            { borderLeftColor: stopStateColors[stop.state] || colors.textDim },
+            isDone && { opacity: 0.65 },
+            stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
+          ]}
+        >
+          <TouchableOpacity onPress={() => handleOpenClient(stop)} activeOpacity={0.7}>
+            <View style={styles.cardRow}>
+              <Text style={styles.cardName} numberOfLines={1}>
+                {isDone ? '✅ ' : `${stop.route_sequence || index + 1}. `}
+                {stop.state === 'in_progress' ? '🔵 ' : ''}
+                {stop.customer_name}
+              </Text>
+              {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
+            </View>
+            {stopTypeLabel && (
+              <View style={{ marginTop: 6 }}>
+                <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+              </View>
+            )}
+          </TouchableOpacity>
+          <View style={styles.cardActions}>
+            <Button
+              label="📍 Maps"
+              variant="secondary"
+              small
+              onPress={() => handleOpenLocation(stop)}
+              style={styles.mapsButton}
+            />
+          </View>
+        </View>
+      );
+    },
+    [handleOpenClient, handleOpenLocation],
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -324,7 +373,7 @@ export default function RouteScreen() {
           />
         </View>
       ) : (
-      <ScrollView
+      <FlatList
         style={{ flex: 1 }}
         contentContainerStyle={styles.content}
         refreshControl={
@@ -334,7 +383,24 @@ export default function RouteScreen() {
             tintColor={colors.primary}
           />
         }
-      >
+        data={visibleStops}
+        keyExtractor={(item) => String(item.id)}
+        renderItem={renderStopCard}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        removeClippedSubviews
+        ListEmptyComponent={(
+          <View style={styles.empty}>
+            <Text style={typography.dim}>
+              {hasSearchQuery
+                ? 'Sin clientes planificados que coincidan'
+                : 'Sin paradas asignadas'}
+            </Text>
+          </View>
+        )}
+        ListHeaderComponent={(
+          <>
         {/* Action buttons */}
         <View style={styles.actionRow}>
           <Button label="📈 Analiticas" variant="secondary" small
@@ -455,62 +521,9 @@ export default function RouteScreen() {
           </Text>
         ) : null}
 
-        {/* Stop list */}
-        {visibleStops.length === 0 ? (
-          <View style={styles.empty}>
-            <Text style={typography.dim}>
-              {hasSearchQuery
-                ? 'Sin clientes planificados que coincidan'
-                : 'Sin paradas asignadas'}
-            </Text>
-          </View>
-        ) : (
-          visibleStops.map((stop, idx) => {
-            const isDone = ['done', 'not_visited', 'closed'].includes(stop.state);
-            const badge = getStopBadge(stop);
-            const stopTypeLabel = getStopTypeLabel(stop);
-            return (
-              <View
-                key={stop.id}
-                style={[
-                  styles.card,
-                  { borderLeftColor: stopStateColors[stop.state] || colors.textDim },
-                  isDone && { opacity: 0.65 },
-                  stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
-                ]}
-              >
-                <TouchableOpacity
-                  onPress={() => handleOpenClient(stop)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.cardRow}>
-                    <Text style={styles.cardName} numberOfLines={1}>
-                      {isDone ? '✅ ' : `${stop.route_sequence || idx + 1}. `}
-                      {stop.state === 'in_progress' ? '🔵 ' : ''}
-                      {stop.customer_name}
-                    </Text>
-                    {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
-                  </View>
-                  {stopTypeLabel && (
-                    <View style={{ marginTop: 6 }}>
-                      <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
-                    </View>
-                  )}
-                </TouchableOpacity>
-                <View style={styles.cardActions}>
-                  <Button
-                    label="📍 Maps"
-                    variant="secondary"
-                    small
-                    onPress={() => handleOpenLocation(stop)}
-                    style={styles.mapsButton}
-                  />
-                </View>
-              </View>
-            );
-          })
+          </>
         )}
-      </ScrollView>
+      />
       )}
     </SafeAreaView>
   );

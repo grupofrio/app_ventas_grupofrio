@@ -16,6 +16,8 @@ import { useRouteStore } from '../stores/useRouteStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useVisitStore } from '../stores/useVisitStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
+import { useProductStore } from '../stores/useProductStore';
+import { hydratePriceCacheFromDisk } from './offlineCache';
 import { GFPlan, GFStop } from '../types/plan';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
 import {
@@ -108,12 +110,20 @@ export async function rehydrateAppState(): Promise<{
       await storeRemove(STORAGE_KEYS.VISIT_STATE);
     }
 
-    // 3. Products are intentionally not rehydrated. Inventory must come from
-    // live Odoo stock so drivers do not sell against stale local quantities.
+    // 3. Perf Fase 2B: rehidratar catálogo + precios desde el caché de jornada.
+    // Antes los productos se BORRABAN siempre para no vender contra stock viejo;
+    // ahora se rehidratan SOLO si el contexto coincide (día/empleado/empresa/
+    // almacén) y no venció — así un reinicio en ruta sin señal no deja al
+    // vendedor sin productos/precios. El stock cacheado es REFERENCIAL: la venta
+    // sigue online-first y el backend valida stock/precio al confirmar.
+    // Limpiamos la key legacy `entities:products` que ya no se usa.
     await storeRemove(STORAGE_KEYS.PRODUCTS);
+    const warehouseId = useAuthStore.getState().warehouseId;
+    productCount = await useProductStore.getState().hydrateFromCache(warehouseId);
+    const restoredPrices = await hydratePriceCacheFromDisk();
 
     console.log(
-      `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}`
+      `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}, prices=${restoredPrices}`
     );
   } catch (error) {
     console.error('[rehydrate] Error:', error);

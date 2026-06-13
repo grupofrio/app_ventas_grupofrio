@@ -175,6 +175,91 @@ export function clearPricelistCaches(): void {
   partnerPricelistIdCache.clear();
 }
 
+// ── Perf Fase 2B: serialización para persistencia de jornada ────────────────
+// Los Maps de precios viven en memoria y se pierden al reiniciar la app. Estas
+// funciones PURAS los convierten a/desde una estructura serializable para que
+// `offlineCache.ts` los guarde en disco (AsyncStorage) y los rehidrate en boot.
+// No se importa AsyncStorage aquí: este módulo debe seguir siendo node-testable.
+//
+// Importante: al rehidratar se PRESERVA `cachedAtMs` original de cada entrada,
+// así el TTL por-entrada (`CUSTOMER_PRICE_CACHE_TTL_MS`) sigue gobernando la
+// lectura — una entrada restaurada que ya venció caduca sola en `peek...`.
+
+export interface SerializedPriceCacheEntry {
+  key: string;
+  prices: Array<[number, number]>;
+  cachedAtMs: number;
+}
+
+export interface SerializedPricelistIdEntry {
+  key: string;
+  pricelistId: number | null;
+}
+
+export interface SerializedPriceCache {
+  prices: SerializedPriceCacheEntry[];
+  pricelistIds: SerializedPricelistIdEntry[];
+}
+
+/** Vuelca los cachés de precios en memoria a una estructura serializable. */
+export function serializePriceCache(): SerializedPriceCache {
+  const prices: SerializedPriceCacheEntry[] = [];
+  for (const [key, entry] of partnerPriceCache.entries()) {
+    prices.push({
+      key,
+      prices: Array.from(entry.prices.entries()),
+      cachedAtMs: entry.cachedAtMs,
+    });
+  }
+  const pricelistIds: SerializedPricelistIdEntry[] = [];
+  for (const [key, pricelistId] of partnerPricelistIdCache.entries()) {
+    pricelistIds.push({ key, pricelistId });
+  }
+  return { prices, pricelistIds };
+}
+
+/**
+ * Rehidrata los cachés de precios desde una estructura serializada. Solo
+ * admite entradas no vencidas según `CUSTOMER_PRICE_CACHE_TTL_MS` (relativo a
+ * `nowMs`), validando formas defensivamente: cualquier entrada malformada se
+ * ignora sin lanzar. Devuelve cuántas entradas de precio se restauraron.
+ */
+export function hydratePriceCache(data: unknown, nowMs: number): number {
+  if (!data || typeof data !== 'object') return 0;
+  const parsed = data as Partial<SerializedPriceCache>;
+  let restored = 0;
+
+  if (Array.isArray(parsed.prices)) {
+    for (const entry of parsed.prices) {
+      if (!entry || typeof entry.key !== 'string') continue;
+      if (typeof entry.cachedAtMs !== 'number' || !Number.isFinite(entry.cachedAtMs)) continue;
+      if (nowMs - entry.cachedAtMs > CUSTOMER_PRICE_CACHE_TTL_MS) continue;
+      if (!Array.isArray(entry.prices)) continue;
+      const priceMap = new Map<number, number>();
+      for (const pair of entry.prices) {
+        if (!Array.isArray(pair) || pair.length !== 2) continue;
+        const [id, price] = pair;
+        if (typeof id !== 'number' || typeof price !== 'number') continue;
+        if (!Number.isFinite(id) || !Number.isFinite(price)) continue;
+        priceMap.set(id, price);
+      }
+      partnerPriceCache.set(entry.key, { prices: priceMap, cachedAtMs: entry.cachedAtMs });
+      restored += 1;
+    }
+  }
+
+  if (Array.isArray(parsed.pricelistIds)) {
+    for (const entry of parsed.pricelistIds) {
+      if (!entry || typeof entry.key !== 'string') continue;
+      const pid = entry.pricelistId;
+      if (pid !== null && (typeof pid !== 'number' || !Number.isFinite(pid))) continue;
+      partnerPricelistIdCache.set(entry.key, pid);
+    }
+  }
+
+  return restored;
+}
+
 export function resetPricelistCachesForTests(): void {
   clearPricelistCaches();
 }

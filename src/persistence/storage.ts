@@ -95,6 +95,9 @@ export const STORAGE_KEYS = {
   // sigue online-first y el backend valida stock/precio al confirmar.
   PRODUCTS_CATALOG: 'cache:products:catalog',
   PRICES_CACHE: 'cache:prices',
+  // Perf Fase 2D-1: consignaciones activas cacheadas SOLO para lectura offline.
+  // create/visit/close siguen online-first; backend = fuente de verdad.
+  CONSIGNMENTS: 'cache:consignments',
 
   // KOLD intelligence
   KOLD_SCORES: 'kold:scores',

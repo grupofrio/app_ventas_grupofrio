@@ -34,6 +34,9 @@ import {
   CONSIGNMENT_BACKEND_CONFIRMED,
 } from '../../src/services/consignment';
 import {
+  readCachedConsignment, writeCachedConsignment, canMutateConsignment,
+} from '../../src/services/consignmentCache';
+import {
   computeLineCalc, computeVisitTotals, computeConsignedValue,
   cartToCreateLines, validateCreateLines, buildCountLines,
   consignmentPaymentLabel, computeReturnTotal,
@@ -66,6 +69,10 @@ function ConsignmentScreenInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<ActiveConsignment | null>(null);
+  // Perf Fase 2D-1: cuando la consignación mostrada viene del caché de lectura
+  // (offline o fallback de error), marcarlo para banner + bloquear mutaciones.
+  const [fromCache, setFromCache] = useState(false);
+  const canMutate = canMutateConsignment(isOnline);
 
   // CREATE mode
   const [cart, setCart] = useState<SaleLineItem[]>([]);
@@ -100,12 +107,22 @@ function ConsignmentScreenInner() {
 
   const fetchActive = useCallback(async () => {
     if (!partnerId) { setError('Cliente inválido.'); setLoading(false); return; }
-    if (!isOnline) { setLoading(false); return; }
+    // Perf Fase 2D-1: sin red → intentar lectura cacheada (read-only).
+    if (!isOnline) {
+      const cached = await readCachedConsignment(partnerId);
+      if (cached) { setActive(cached.consignment); setFromCache(true); }
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const a = await getActiveConsignment(partnerId, companyId);
       setActive(a);
+      setFromCache(false);
+      // Read-through: guardar la consignación (o borrarla si ya no hay) para
+      // poder mostrarla offline en una visita posterior sin señal.
+      void writeCachedConsignment(partnerId, a);
     } catch (err) {
       // P1: si /my-active responde sesión expirada, ofrecer re-login (igual que
       // las mutaciones) en vez de dejar solo "Reintentar". Errores normales
@@ -114,7 +131,16 @@ function ConsignmentScreenInner() {
         setError('Sesión expirada. Vuelve a iniciar sesión.');
         promptReLogin();
       } else {
-        setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+        // Fallback: si la lectura falla pero hay caché válida, mostrarla en
+        // modo lectura en vez de dejar al vendedor sin nada.
+        const cached = await readCachedConsignment(partnerId);
+        if (cached) {
+          setActive(cached.consignment);
+          setFromCache(true);
+          setError(null);
+        } else {
+          setError(err instanceof Error ? err.message : 'No se pudo consultar la consignación.');
+        }
       }
     } finally {
       setLoading(false);
@@ -253,14 +279,21 @@ function ConsignmentScreenInner() {
       </SafeAreaView>
     );
   }
-  if (!isOnline) {
+  // Perf Fase 2D-1: sin red y SIN consignación cacheada → requiere conexión.
+  // Si hay caché de lectura (active != null), caemos al render normal en modo
+  // lectura (banner "desde caché" + botones de mutación deshabilitados).
+  if (!isOnline && !active) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Consignación" showBack />
         <View style={styles.center}>
           <Text style={styles.emptyIcon}>📶</Text>
           <Text style={styles.emptyTitle}>Requiere conexión</Text>
-          <Text style={styles.dim}>La consignación necesita conexión con el servidor.</Text>
+          <Text style={styles.dim}>
+            Sin conexión y sin consignación en caché. Crear/visitar/cerrar
+            requiere servidor. Abre el cliente con señal para cachear su
+            consignación.
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -370,13 +403,25 @@ function ConsignmentScreenInner() {
             </Text>
           </View>
         )}
+        {fromCache && (
+          <View style={styles.cacheBanner}>
+            <Text style={styles.cacheText}>
+              📦 Consignación desde caché{!isOnline ? ' · sin conexión' : ''}. Lectura,
+              no tiempo real. Registrar visita/cierre requiere conexión.
+            </Text>
+          </View>
+        )}
         <Card>
           <Text style={styles.clientName}>{stop.customer_name}</Text>
           <Text style={styles.dim}>
             Folio {active.name || `#${active.id}`}
             {active.last_visit_date ? ` · última visita ${active.last_visit_date}` : ''}
           </Text>
-          <Text style={styles.hint}>Captura la existencia física actual por producto.</Text>
+          <Text style={styles.hint}>
+            {canMutate
+              ? 'Captura la existencia física actual por producto.'
+              : 'Vista de solo lectura. Conéctate para registrar visita o cierre.'}
+          </Text>
         </Card>
 
         {active.lines.map((line) => {
@@ -429,16 +474,22 @@ function ConsignmentScreenInner() {
         <Button
           label={submitting ? 'Procesando…' : (closing ? 'Confirmar cierre' : 'Registrar visita')}
           variant="success" onPress={handleVisitOrClose} fullWidth
-          disabled={submitting} loading={submitting} style={{ marginTop: 4 }}
+          disabled={submitting || !canMutate} loading={submitting} style={{ marginTop: 4 }}
         />
         <Button
           label={closing ? '← Volver a visita' : 'Cerrar consignación'}
           variant="secondary"
           onPress={() => setClosing((v) => !v)}
           fullWidth
-          disabled={submitting}
+          disabled={submitting || !canMutate}
           style={{ marginTop: 8 }}
         />
+        {!canMutate && (
+          <Text style={styles.footNote}>
+            Sin conexión: registrar visita y cerrar están deshabilitados. El
+            backend es la fuente de verdad de cobro e inventario.
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -493,5 +544,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
   },
   warnText: { fontSize: 12, lineHeight: 17, color: colors.text },
+  cacheBanner: {
+    padding: 12, borderRadius: radii.button,
+    backgroundColor: 'rgba(37,99,235,0.08)', borderWidth: 1, borderColor: 'rgba(37,99,235,0.35)',
+  },
+  cacheText: { fontSize: 12, lineHeight: 17, color: colors.text },
   fixedPaymentText: { fontSize: 14, fontWeight: '700', color: colors.text, marginTop: 8 },
 });

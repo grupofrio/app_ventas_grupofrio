@@ -19,6 +19,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
+import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
@@ -35,10 +36,16 @@ export default function HomeScreen() {
   const employeeName = useAuthStore((s) => s.employeeName);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const {
-    plan, stops, stopsCompleted, stopsTotal, progressPct,
-    isLoading, loadPlan, error: planError, lastSync: planLastSync,
-  } = useRouteStore();
+  // Perf Fase 1C: selectors por campo en vez de destructuring del store.
+  const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
+  const stopsCompleted = useRouteStore((s) => s.stopsCompleted);
+  const stopsTotal = useRouteStore((s) => s.stopsTotal);
+  const progressPct = useRouteStore((s) => s.progressPct);
+  const isLoading = useRouteStore((s) => s.isLoading);
+  const loadPlan = useRouteStore((s) => s.loadPlan);
+  const planError = useRouteStore((s) => s.error);
+  const planLastSync = useRouteStore((s) => s.lastSync);
   const isOnline = useSyncStore((s) => s.isOnline);
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
@@ -60,7 +67,10 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!isAuthenticated || !isOnline) return;
-      void loadPlan();
+      // Perf Fase 1C: no re-pedir el plan en cada focus si es reciente (<8s).
+      if (shouldRefetchOnFocus(useRouteStore.getState().lastSync, Date.now())) {
+        void loadPlan();
+      }
       void loadTodaySales();
     }, [isAuthenticated, isOnline, loadPlan, loadTodaySales]),
   );

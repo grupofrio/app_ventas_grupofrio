@@ -37,10 +37,17 @@ function CheckoutScreenInner() {
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const removeStop = useRouteStore((s) => s.removeStop);
 
-  const {
-    elapsedSeconds, saleTotal, saleTotalKg, salePhotoTaken, salePhotoUris,
-    noSaleReasonId, saleOperationId, resetVisit,
-  } = useVisitStore();
+  // Perf Fase 1C: selectors por campo (antes destructuring del store completo →
+  // re-render ante cualquier cambio de visitStore, incl. el tick de 1s aunque
+  // no se use). Mismo comportamiento, menos renders.
+  const elapsedSeconds = useVisitStore((s) => s.elapsedSeconds);
+  const saleTotal = useVisitStore((s) => s.saleTotal);
+  const saleTotalKg = useVisitStore((s) => s.saleTotalKg);
+  const salePhotoTaken = useVisitStore((s) => s.salePhotoTaken);
+  const salePhotoUris = useVisitStore((s) => s.salePhotoUris);
+  const noSaleReasonId = useVisitStore((s) => s.noSaleReasonId);
+  const saleOperationId = useVisitStore((s) => s.saleOperationId);
+  const resetVisit = useVisitStore((s) => s.resetVisit);
 
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);

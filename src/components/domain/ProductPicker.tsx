@@ -271,7 +271,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     });
   }, []);
 
-  function handleSelect(product: EnrichedProduct) {
+  // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
+  const handleSelect = useCallback((product: EnrichedProduct) => {
     if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
 
@@ -296,7 +297,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setSearch('');
     setQuantities({});
     onClose();
-  }
+  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose]);
 
   // ═══ Product Image ═══
 
@@ -332,7 +333,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
   // ═══ List View Row ═══
 
-  function renderListItem({ item: p }: { item: EnrichedProduct }) {
+  // Perf Fase 1C: renderItem memoizado (estable entre re-renders que no cambian
+  // quantities/handlers) → menos recreación de filas en FlatList.
+  const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
@@ -384,11 +387,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }
+  }, [quantities, handleSelect, setQty]);
 
   // ═══ Grid View Card ═══
 
-  function renderGridItem({ item: p }: { item: EnrichedProduct }) {
+  const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
@@ -449,7 +452,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }
+  }, [quantities, handleSelect, setQty]);
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;

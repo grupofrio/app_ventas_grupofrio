@@ -52,6 +52,10 @@ let _currentMode: GpsMode = 'in_transit';
 let _watchSubscription: Location.LocationSubscription | null = null;
 let _periodicTimer: ReturnType<typeof setInterval> | null = null;
 const GPS_POSITION_TIMEOUT_MS = 8000;
+// Perf Fase 1C: tope para el fix inicial en initializeGPS. Si el GPS tarda más,
+// no se cuelga ni se inventa 0,0: queda en estado claro y el watch/check-in
+// reintentan con su propio Promise.race.
+const GPS_INIT_TIMEOUT_MS = 5000;
 
 /** Get current GPS mode. */
 export function getGpsMode(): GpsMode {
@@ -188,9 +192,19 @@ export async function initializeGPS(): Promise<LocationStatus> {
       return 'denied';
     }
 
-    const position = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
+    const initTimeout = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), GPS_INIT_TIMEOUT_MS);
     });
+    const position = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      initTimeout,
+    ]);
+
+    if (!position) {
+      // No bloquea ni inyecta 0,0: estado claro; check-in/watch reintentan.
+      store.setStatus('error', 'GPS lento al iniciar; se reintenta en check-in');
+      return 'error';
+    }
 
     store.setLocation(
       position.coords.latitude,

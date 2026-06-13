@@ -64,11 +64,22 @@ function SaleScreenInner() {
   const productCount = useProductStore((s) => s.productCount);
   const productsLastSync = useProductStore((s) => s.lastSync);
 
-  const {
-    saleLines, salePaymentMethod, salePhotoTaken, salePhotoUris,
-    updateSaleQty, setSalePayment,
-    saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit, offrouteVisitId,
-  } = useVisitStore();
+  // Perf Fase 1C: selectors por campo. Antes el destructuring del store hacía
+  // que la pantalla de venta re-renderizara cada segundo por el tick del timer
+  // (elapsedSeconds), aunque la venta NO lo muestra. Con selectors deja de
+  // re-renderizar por el timer.
+  const saleLines = useVisitStore((s) => s.saleLines);
+  const salePaymentMethod = useVisitStore((s) => s.salePaymentMethod);
+  const salePhotoTaken = useVisitStore((s) => s.salePhotoTaken);
+  const salePhotoUris = useVisitStore((s) => s.salePhotoUris);
+  const updateSaleQty = useVisitStore((s) => s.updateSaleQty);
+  const setSalePayment = useVisitStore((s) => s.setSalePayment);
+  const saleSubtotal = useVisitStore((s) => s.saleSubtotal);
+  const saleTax = useVisitStore((s) => s.saleTax);
+  const saleTotal = useVisitStore((s) => s.saleTotal);
+  const saleTotalKg = useVisitStore((s) => s.saleTotalKg);
+  const resetVisit = useVisitStore((s) => s.resetVisit);
+  const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
 
   const isOnline = useSyncStore((s) => s.isOnline);
   const latitude = useLocationStore((s) => s.latitude);
@@ -109,7 +120,11 @@ function SaleScreenInner() {
   const forecast = stop._koldForecast;
 
   // V1.2: Stock validation + anti-duplicate
-  const { saleConfirmed, hasStockIssues, getStockIssues, lockSaleConfirm, unlockSaleConfirm } = useVisitStore();
+  const saleConfirmed = useVisitStore((s) => s.saleConfirmed);
+  const hasStockIssues = useVisitStore((s) => s.hasStockIssues);
+  const getStockIssues = useVisitStore((s) => s.getStockIssues);
+  const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
+  const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
   const stockIssues = getStockIssues();
   const hasStock = !hasStockIssues();
   const implicitAnalytics = resolveImplicitSaleAnalytics({

@@ -70,11 +70,15 @@ export default function RootLayout() {
             // These are used by odooRpc → sessionRpc to authenticate with
             // /web/dataset/call_kw, which requires a web session (not Api-Key).
             setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
-            await useAuthStore.getState().ensureEmployeeAnalytics();
 
-            // 2. Rehydrate other state (sync queue, route, products)
+            // 2. Perf Fase 1C: analytics del empleado + rehidratación (cola,
+            // ruta, productos) son independientes → en paralelo para acortar el
+            // arranque en redes lentas.
             console.log('[Init] Rehydrating app state...');
-            await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
+            await Promise.all([
+              useAuthStore.getState().ensureEmployeeAnalytics().catch(e => console.error('Analytics failed', e)),
+              rehydrateAppState().catch(e => console.error('Rehydrate failed', e)),
+            ]);
 
             // 3. GPS Initialization
             console.log('[Init] Initializing GPS...');

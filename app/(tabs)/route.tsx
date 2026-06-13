@@ -38,6 +38,7 @@ import type { RouteFreshness } from '../../src/stores/useRouteStore';
 import { evaluateVisitOrder } from '../../src/services/routeOrderLogic';
 import { logInfo } from '../../src/utils/logger';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
+import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
@@ -68,7 +69,13 @@ export default function RouteScreen() {
   const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
   const [searchQuery, setSearchQuery] = React.useState('');
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
-  const { plan, stops, stopsCompleted, stopsTotal, loadPlan, routeFreshness } = useRouteStore();
+  // Perf Fase 1C: selectors por campo en vez de destructuring del store.
+  const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
+  const stopsCompleted = useRouteStore((s) => s.stopsCompleted);
+  const stopsTotal = useRouteStore((s) => s.stopsTotal);
+  const loadPlan = useRouteStore((s) => s.loadPlan);
+  const routeFreshness = useRouteStore((s) => s.routeFreshness);
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const userLat = useLocationStore((s) => s.latitude);
@@ -202,7 +209,12 @@ export default function RouteScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadPlan();
+      // Perf Fase 1C: evita re-pedir el plan en cada focus si se cargó hace <8s
+      // (volver de un cliente). loadPlan ya deduplica concurrencia; esto evita
+      // el refetch redundante. El pull-to-refresh (force) no usa este guard.
+      if (shouldRefetchOnFocus(useRouteStore.getState().lastSync, Date.now())) {
+        void loadPlan();
+      }
       void loadTodaySales();
     }, [loadPlan, loadTodaySales]),
   );

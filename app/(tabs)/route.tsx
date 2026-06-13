@@ -10,6 +10,7 @@ import { useFocusEffect, useRouter, useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
+import { CacheStatusBadge } from '../../src/components/ui/CacheStatusBadge';
 import { colors, spacing, radii, stopStateColors } from '../../src/theme/tokens';
 import { fonts } from '../../src/theme/typography';
 import { typography } from '../../src/theme/typography';
@@ -413,6 +414,8 @@ export default function RouteScreen() {
         )}
         ListHeaderComponent={(
           <>
+        {/* Perf Fase 2C: badge discreto de datos en caché / sin conexión. */}
+        <CacheStatusBadge showDetail style={{ marginBottom: 8 }} />
         {/* Action buttons */}
         <View style={styles.actionRow}>
           <Button label="📈 Analiticas" variant="secondary" small

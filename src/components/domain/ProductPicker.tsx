@@ -28,6 +28,7 @@ import { useAuthStore } from '../../stores/useAuthStore';
 import { getBaseUrl } from '../../services/api';
 import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
 import { schedulePersistPriceCache } from '../../services/offlineCache';
+import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
@@ -490,6 +491,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* Perf Fase 2C: badge discreto de datos en caché / sin conexión. */}
+        <CacheStatusBadge showDetail style={{ marginHorizontal: spacing.md, marginBottom: spacing.xs }} />
 
         {/* Banners */}
         {isGlobalFallback && (

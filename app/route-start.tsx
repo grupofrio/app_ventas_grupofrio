@@ -30,11 +30,14 @@ import { useRouteStore } from '../src/stores/useRouteStore';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
+import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
 import { getVehicleChecklist } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad } from '../src/services/gfLogistics';
 import { buildRouteLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
 import { isChecklistComplete, isValidKm, isAbsurdOdometer } from '../src/services/routeStartLogic';
+import { computeRouteReadiness } from '../src/services/routeReadiness';
+import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -52,6 +55,20 @@ export default function RouteStartScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
+
+  // Perf Fase 2C: readiness de datos (gate de salida) — ruta + productos +
+  // precios precargados. Mínimo bloqueante = ruta + productos.
+  const stopsCount = useRouteStore((s) => s.stops.length);
+  const productCount = useProductStore((s) => s.productCount);
+  const customersTotal = useRoutePreparationStore((s) => s.customersTotal);
+  const customersPrepared = useRoutePreparationStore((s) => s.customersPrepared);
+  const dataReady = computeRouteReadiness({
+    hasPlan: !!plan,
+    stopsCount,
+    productCount,
+    customersTotal,
+    customersPrepared,
+  });
 
   const setForPlan = useRouteStartStore((s) => s.setForPlan);
   const setChecklistComplete = useRouteStartStore((s) => s.setChecklistComplete);
@@ -163,7 +180,11 @@ export default function RouteStartScreen() {
   const checklistDoneLive = checklistStatus === 'done';
   const kmDoneLive = kmInitialStored != null;
   const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
-  const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive;
+  // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
+  // caché (ruta + productos) para no salir a ruta sin con qué operar. Los
+  // precios faltantes son advertencia, no bloqueo (degradación segura).
+  const dataMinReady = dataReady.minimumReady;
+  const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive && dataMinReady;
 
   async function handleSaveKm() {
     if (!planId) return;
@@ -358,14 +379,31 @@ export default function RouteStartScreen() {
           )}
         </Card>
 
+        {/* Step 5: preparar datos de ruta (Fase 2C) — reusa el orquestador
+            (useRoutePreparationStore) vía RoutePreparationCard: progreso,
+            faltantes, errores por-cliente y reintentar. */}
+        <Card>
+          <View style={styles.rowBetween}>
+            <Text style={styles.stepTitle}>5 · Preparar datos de ruta</Text>
+            <StatusBadge status={dataMinReady ? 'done' : 'pending'} />
+          </View>
+          <Text style={styles.stepBody}>
+            Descarga clientes, productos y precios con WiFi para operar offline en ruta.
+          </Text>
+          <RoutePreparationCard />
+        </Card>
+
         {/* Readiness summary (live-derived — see BLD-SPRINT-A-FIX) */}
         <View style={[styles.readyCard, readyToStartLive ? styles.readyOk : styles.readyPending]}>
           <Text style={styles.readyTitle}>
             {readyToStartLive ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar'}
           </Text>
           <Text style={styles.readyChecklist}>
-            {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga
+            {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
           </Text>
+          {dataMinReady && dataReady.warnings.length > 0 && (
+            <Text style={styles.readyWarn}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
+          )}
           <Button
             label="Iniciar ruta"
             variant="success"
@@ -380,7 +418,9 @@ export default function RouteStartScreen() {
           />
           {!readyToStartLive && (
             <Text style={styles.readyHint}>
-              El botón se habilita cuando termines checklist, KM y carga.
+              {!dataMinReady && dataReady.blockReason
+                ? dataReady.blockReason
+                : 'El botón se habilita cuando termines checklist, KM, carga y preparación de datos.'}
             </Text>
           )}
         </View>
@@ -425,5 +465,6 @@ const styles = StyleSheet.create({
   readyPending: { backgroundColor: colors.card, borderColor: colors.border },
   readyTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 8 },
   readyChecklist: { fontSize: 13, color: colors.textDim, marginBottom: 12, fontFamily: fonts.monoBold },
+  readyWarn: { fontSize: 11, color: '#B45309', marginBottom: 10, lineHeight: 16 },
   readyHint: { fontSize: 11, color: colors.textDim, marginTop: 8, textAlign: 'center' },
 });

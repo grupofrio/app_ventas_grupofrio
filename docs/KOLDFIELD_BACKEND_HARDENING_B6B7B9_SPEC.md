@@ -1,5 +1,9 @@
 # KoldField — Backend hardening B6/B7/B9: spec implementable (para Sebas)
 
+> ## 🛑 NO MERGEAR — VEREDICTO ACTUAL: `BLOCKED_PENDING_SAFE_VALIDATION` (2026-06-12)
+> **El repo `GrupoVeniu/GrupoFrio` despliega DIRECTO a PRODUCTIVO al mergear** (Odoo.sh rama `GrupoFrio`). **No existe staging separado.** Por lo tanto, **mergear #116 = desplegar a producción**, y este PR toca **stock/inventario, cierre de ruta, liquidación y dinero**.
+> El PR se ve **técnicamente correcto** (ver "Revisión técnica"), pero **NO debe mergearse** hasta validarlo en un **entorno seguro** (staging/copia) o una **ventana controlada autorizada**. Esto **supersede** el veredicto previo `APPROVE_FOR_STAGING` (que asumía un staging inexistente). Ver "Validación segura: Opciones A/B/C", "Plan de rollback" y "Criterios go/no-go" al final.
+
 **Tipo:** especificación técnica fundamentada en el código real. **No es código desplegable desde este entorno** (ver "Blocker de entorno").
 **Dueño de implementación/deploy:** Sebastián (módulos Odoo, Odoo.sh rama `GrupoFrio`).
 **Origen:** bloqueantes B6/B7/B9 del plan Fase 2 (`KOLDFIELD_PERFORMANCE_FASE2_CEDIS_CACHE_PLAN.md` §5) y `KOLDFIELD_BACKEND_HARDENING_REQUESTS.md`.
@@ -166,4 +170,44 @@ Ref. principal: `GrupoFrio-operativo/gf_logistics_ops/controllers/gf_api.py` (co
 - [ ] **9. Sin pagos/movimientos duplicados** → tras retries de 3/5/7, revisar que no haya `account.payment`, `stock.move` ni asientos duplicados. Probar también 2 ventas casi simultáneas (concurrencia) → a lo sumo una confirma; inventario nunca negativo.
 - [ ] **10. Respuesta app ante `insufficient_stock`** → la app KoldField muestra el detalle por línea y permite ajustar; la venta NO se confirma offline.
 
-**Si los 10 pasan:** el PR puede mergearse a `GrupoFrio` y desplegarse por Odoo.sh. **Si 8 o 9 fallan:** REQUEST_CHANGES (ajustar resolución de `location` o añadir lock atómico) antes de merge.
+**Si los 10 pasan en un entorno seguro:** recién entonces se puede mergear a `GrupoFrio`. **Si 8 o 9 fallan:** REQUEST_CHANGES (ajustar resolución de `location` o añadir lock atómico) antes de merge.
+
+> ⚠️ **Importante:** estos 10 casos ejecutan ventas/cierres/liquidaciones reales. **NO correrlos en productivo** sin entorno seguro o ventana controlada autorizada (ver Opciones abajo). El veredicto "APPROVE_FOR_STAGING" de la sección anterior queda **superado por `BLOCKED_PENDING_SAFE_VALIDATION`** porque no existe staging separado y el merge despliega directo a prod.
+
+---
+
+## ⚠️ El repo despliega DIRECTO a productivo
+
+`GrupoVeniu/GrupoFrio` (rama `GrupoFrio`) está integrado con Odoo.sh: **mergear a `GrupoFrio` despliega a producción automáticamente.** No hay un paso de staging intermedio por defecto. Como #116 modifica **inventario, cierre de ruta, liquidación y flujo de dinero**, un deploy sin validar puede **bloquear ventas en campo**, **descuadrar cortes/liquidaciones** o **corromper inventario** de toda la flota. → **NO MERGE hasta validación segura.**
+
+## Validación segura — Opciones (de más a menos segura)
+
+### Opción A (recomendada) — Staging / copia de BD en Odoo.sh
+- Levantar la rama `feat/koldfield-backend-hardening-b6b7b9` en un **build de staging de Odoo.sh** (o una **copia de la BD productiva**) — Odoo.sh permite ramas staging con copia de datos.
+- Usar **ruta/van/productos/cliente de prueba** (o datos clonados); no afectar registros reales.
+- Correr los **10 casos** del checklist + verificar #8 (`lot_stock_id`) y #9 (duplicados/concurrencia).
+- **Ventaja:** datos realistas, cero riesgo a producción. **Requiere:** que Odoo.sh tenga el slot de staging disponible.
+
+### Opción B — Entorno local / dev
+- Restaurar un **backup reciente** de la BD en una instancia Odoo 18 local/dev (o contenedor).
+- Instalar/actualizar `gf_logistics_ops` 18.0.1.5.0; correr la suite de tests del módulo (`TransactionCase`) + los 10 casos manuales con datos clonados.
+- **Ventaja:** aislamiento total, permite tests automatizados de Odoo. **Requiere:** infra local + tiempo de setup; los datos pueden divergir de prod.
+
+### Opción C — Ventana controlada en productivo (SOLO si A y B no son viables)
+**Requiere autorización explícita de Yamil y Sebas.** Condiciones mínimas obligatorias:
+- **Fuera de horario operativo** (ninguna van en ruta activa).
+- **Backup completo de la BD inmediatamente antes** (Odoo.sh snapshot).
+- Usar **empleado/ruta/cliente/productos de PRUEBA dedicados**, nunca registros reales de clientes.
+- **Stock pequeño y controlado** en una ubicación de prueba.
+- **Plan de rollback escrito y probado** (abajo) + **observador técnico presente** (Sebas) durante toda la ventana.
+- Revertir inmediatamente ante cualquier desviación.
+
+## Plan de rollback
+1. **Código:** revertir el merge en `GrupoFrio` (`git revert <merge_sha>` + push) → Odoo.sh redepliega la versión previa (`gf_logistics_ops` 18.0.1.4.0). Alternativa: re-desplegar el build anterior desde el historial de Odoo.sh.
+2. **Datos (si una prueba alteró registros reales):** restaurar el **snapshot/backup** tomado antes de la ventana (Opción C). Por eso el backup previo es obligatorio.
+3. **Verificación post-rollback:** confirmar que `sales/create`, `close-route` y `liquidacion-confirm` responden como antes (smoke con la app o RPC de solo lectura); confirmar versión del módulo = 18.0.1.4.0.
+4. **Comunicación:** avisar a vendedores en campo si hubo interrupción; registrar incidente.
+
+## Criterios go / no-go
+- **GO (mergear):** los 10 casos pasan en entorno seguro (A o B), **incluidos #8 y #9**; backup/rollback verificados; ventana sin vans activas; OK explícito de Sebas.
+- **NO-GO:** falla #8 (`available_qty` no corresponde al almacén móvil real) o #9 (duplicados o inventario negativo en concurrencia) → REQUEST_CHANGES. Tampoco mergear si no hay backup reciente, si hay vans en ruta, o sin autorización.

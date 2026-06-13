@@ -23,6 +23,14 @@ const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefine
 
 export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio.odoo.com';
 export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
+/**
+ * Perf Fase 1B: timeout corto para LECTURAS (getRest). En red muerta, una
+ * lectura cacheable no debe colgar 45s — falla rápido (10s) y el llamador usa
+ * caché/fallback. Las MUTACIONES (postRest/postRpc: venta, pago, cierre)
+ * conservan el timeout conservador de 45s. No oculta errores: el timeout sigue
+ * lanzando y el llamador lo maneja.
+ */
+export const DEFAULT_READ_TIMEOUT_MS = 10_000;
 
 let _baseUrl = DEFAULT_BASE_URL;
 
@@ -308,7 +316,7 @@ export async function getRest<T = any>(
     const response = await fetchWithTimeout(absoluteUrl, {
       method: 'GET',
       headers,
-    }, options.timeoutMs);
+    }, options.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS);
 
     const text = await response.text();
     const parsed = safeParseJson(text);

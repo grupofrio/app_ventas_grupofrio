@@ -8,6 +8,7 @@
 
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { useSyncStore } from '../stores/useSyncStore';
+import { shouldProcessOnReconnect } from './connectivitySync';
 
 let unsubscribe: (() => void) | null = null;
 
@@ -20,8 +21,10 @@ export function startConnectivityMonitor(): void {
 
     useSyncStore.getState().setOnline(isNowOnline);
 
-    // If we just came back online, process queue
-    if (!wasOnline && isNowOnline) {
+    // Perf Fase 2E: procesar la cola SOLO en el flanco offline→online (helper
+    // puro testeable). processQueue además se auto-protege contra ciclos
+    // concurrentes (guard isSyncing).
+    if (shouldProcessOnReconnect(wasOnline, isNowOnline)) {
       if (__DEV__) console.log('[connectivity] Back online — processing sync queue');
       useSyncStore.getState().processQueue();
     }

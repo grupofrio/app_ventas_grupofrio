@@ -28,9 +28,15 @@ import { fonts } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
+import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
 import { isValidKm, calculateKmDriven, formatKm, isAbsurdKmDriven, isAbsurdOdometer } from '../src/services/routeStartLogic';
+import {
+  canCloseRoute, describeCloseSyncBlock, shouldCleanupJornadaCache,
+} from '../src/services/routeCloseGuard';
+import { clearPersistedPriceCache, clearPersistedCatalog } from '../src/services/offlineCache';
+import { clearCachedConsignments } from '../src/services/consignmentCache';
 import { OperationGate } from '../src/components/OperationGate';
 
 type StepStatus = 'pending' | 'done' | 'skip';
@@ -48,6 +54,17 @@ function RouteCloseScreenInner() {
   const planState = plan?.state ?? null;
   const isOnline = useSyncStore((s) => s.isOnline);
   const kmInitialStore = useRouteStartStore((s) => s.kmInitial);
+
+  // Perf Fase 2E: gate de cierre por sincronización pendiente. No se debe cerrar
+  // la ruta con ventas/cobros sin sincronizar (corte fantasma).
+  const pendingCount = useSyncStore((s) => s.pendingCount);
+  const errorCount = useSyncStore((s) => s.errorCount);
+  const deadCount = useSyncStore((s) => s.deadCount);
+  const isSyncing = useSyncStore((s) => s.isSyncing);
+  const resetPreparation = useRoutePreparationStore((s) => s.resetPreparation);
+  const syncInput = { pendingCount, errorCount, deadCount, isSyncing };
+  const closeAllowedBySync = canCloseRoute(syncInput);
+  const syncBlockMsg = describeCloseSyncBlock(syncInput);
 
   const [kmFinalInput, setKmFinalInput] = useState('');
   const [kmFinal, setKmFinal] = useState<number | null>(null);
@@ -153,6 +170,18 @@ function RouteCloseScreenInner() {
       Alert.alert('Sin conexión', 'Conéctate para cerrar la ruta.');
       return;
     }
+    // Perf Fase 2E: no cerrar con operaciones críticas sin sincronizar.
+    if (!closeAllowedBySync) {
+      Alert.alert(
+        'Operaciones pendientes',
+        syncBlockMsg ?? 'Sincroniza las operaciones pendientes antes de cerrar ruta.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Ir a sincronizar', onPress: () => router.push('/cashclose' as never) },
+        ],
+      );
+      return;
+    }
     Alert.alert(
       'Cerrar ruta',
       'Vas a cerrar la ruta del día. El servidor valida corte y liquidación. ¿Continuar?',
@@ -166,6 +195,15 @@ function RouteCloseScreenInner() {
             try {
               const res = await closeRoute(planId, { departureKm: kmInitial, arrivalKm: kmFinal });
               setClosed(true);
+              // Perf Fase 2E: limpiar caché de jornada SOLO tras cierre exitoso.
+              // No toca la cola de sync (ya vacía por el gate) ni datos de
+              // auditoría. Si el cierre fallara, el catch no limpia nada.
+              if (shouldCleanupJornadaCache(true)) {
+                void clearPersistedPriceCache();
+                void clearPersistedCatalog();
+                void clearCachedConsignments();
+                resetPreparation();
+              }
               const warn = res.warnings.length ? `\n\nAvisos:\n• ${res.warnings.join('\n• ')}` : '';
               Alert.alert('Ruta cerrada', `${res.message}${warn}`, [
                 { text: 'OK', onPress: () => router.replace('/(tabs)' as never) },
@@ -324,16 +362,36 @@ function RouteCloseScreenInner() {
             El servidor valida que el corte y la liquidación estén completos. Si
             falta algo, te dirá exactamente qué.
           </Text>
+          {/* Perf Fase 2E: bloqueo por operaciones sin sincronizar. */}
+          {!closeAllowedBySync && (
+            <View style={styles.syncBlock}>
+              <Text style={styles.syncBlockText}>
+                ⚠️ {syncBlockMsg ?? 'Sincroniza operaciones pendientes antes de cerrar ruta.'}
+              </Text>
+              <Button
+                label="Ir a sincronizar"
+                variant="secondary"
+                onPress={() => router.push('/cashclose' as never)}
+                fullWidth
+                style={{ marginTop: 8 }}
+              />
+            </View>
+          )}
           <Button
             label={closing ? 'Cerrando…' : '🏁 Cerrar ruta'}
             variant="success"
             onPress={handleCloseRoute}
             fullWidth
-            disabled={closing || kmFinal == null || !isOnline}
+            disabled={closing || kmFinal == null || !isOnline || !closeAllowedBySync}
             loading={closing}
           />
           {kmFinal == null && (
             <Text style={styles.closeHint}>Registra el KM final para habilitar el cierre.</Text>
+          )}
+          {kmFinal != null && !closeAllowedBySync && (
+            <Text style={styles.closeHint}>
+              El cierre se habilita cuando no queden operaciones pendientes de sincronizar.
+            </Text>
           )}
         </View>
       </ScrollView>
@@ -391,4 +449,9 @@ const styles = StyleSheet.create({
   closeTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 6 },
   closeBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 12 },
   closeHint: { fontSize: 11, color: colors.textDim, marginTop: 8, textAlign: 'center' },
+  syncBlock: {
+    padding: 12, borderRadius: radii.button, marginBottom: 12,
+    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+  },
+  syncBlockText: { fontSize: 12, lineHeight: 17, color: colors.text },
 });

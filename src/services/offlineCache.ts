@@ -137,3 +137,8 @@ export async function hydratePriceCacheFromDisk(ctx: CacheContext = getCacheCont
 export async function clearPersistedPriceCache(): Promise<void> {
   try { await storeRemove(STORAGE_KEYS.PRICES_CACHE); } catch { /* noop */ }
 }
+
+/** Limpia el catálogo persistente en disco (p.ej. al cerrar ruta — Fase 2E). */
+export async function clearPersistedCatalog(): Promise<void> {
+  try { await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG); } catch { /* noop */ }
+}

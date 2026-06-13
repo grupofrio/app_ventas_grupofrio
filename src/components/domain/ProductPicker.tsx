@@ -27,6 +27,7 @@ import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { getBaseUrl } from '../../services/api';
 import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
+import { schedulePersistPriceCache } from '../../services/offlineCache';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
@@ -167,6 +168,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         setPriceMap(map);
         setPriceLoading(false);
       }
+      // Perf Fase 2B: persistir el precio recién computado para lectura offline
+      // tras un reinicio (partner no precargado en la preparación de ruta).
+      schedulePersistPriceCache();
     }).catch(() => {
       if (!cancelled) setPriceLoading(false);
     });
@@ -190,6 +194,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
         const map = await computeCustomerPrices(partnerId, useProductStore.getState().products, pricingOptions);
         setPriceMap(map);
+        schedulePersistPriceCache();
       } else {
         setPriceMap(new Map());
       }

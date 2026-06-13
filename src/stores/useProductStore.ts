@@ -16,10 +16,17 @@
 import { create } from 'zustand';
 import { Product } from '../types/product';
 import { odooRead } from '../services/odooRpc';
-import { storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { fetchTruckStock } from '../services/gfLogistics';
 import { logInfo, logWarn } from '../utils/logger';
 import { useAuthStore } from './useAuthStore';
+import {
+  buildCacheEnvelope,
+  readCacheEnvelope,
+  buildContextKey,
+} from '../services/persistentCache';
+import { todayLocalISO } from '../utils/localDate';
+import { schedulePersistPriceCache } from '../services/offlineCache';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
 
@@ -49,6 +56,12 @@ interface ProductState {
    */
   hasStockData: boolean | null;
 
+  // Perf Fase 2B: metadata de caché persistente (para debug/UI mínima en 2C).
+  // fromCache = los productos actuales provienen del caché de jornada (no de la
+  // red). cachedAtMs = cuándo se generó el caché rehidratado.
+  fromCache: boolean;
+  cachedAtMs: number | null;
+
   // Derived
   totalStockKg: number;
   productCount: number;
@@ -57,6 +70,13 @@ interface ProductState {
   loadProducts: (warehouseId: number) => Promise<void>;
   updateLocalStock: (productId: number, qtyChange: number) => void;
   getProduct: (productId: number) => TruckProduct | undefined;
+  /**
+   * Perf Fase 2B: rehidrata el catálogo desde el caché persistente de jornada
+   * si el contexto coincide (mismo día/empleado/empresa/almacén) y no venció.
+   * Devuelve el número de productos restaurados (0 si miss/stale/corrupto).
+   * NO hace red; la carga online sigue siendo `loadProducts`.
+   */
+  hydrateFromCache: (warehouseId: number | null) => Promise<number>;
   reset: () => void;
 }
 
@@ -91,6 +111,37 @@ const PRODUCT_FIELDS = [
   // via search_read/get_records. Images loaded via URL in ProductPicker.
 ];
 
+// ── Perf Fase 2B: catálogo persistente de jornada ───────────────────────────
+// TTL holgado del sobre (cubre jornada larga); la invalidación primaria es la
+// contextKey (día/empleado/empresa/almacén). El stock cacheado es REFERENCIAL:
+// el backend valida al confirmar la venta. No habilita venta offline.
+const CATALOG_CACHE_TTL_MS = 14 * 60 * 60 * 1000;
+
+interface CatalogCachePayload {
+  products: TruckProduct[];
+  inventorySource: InventorySource | null;
+  hasStockData: boolean | null;
+}
+
+/** contextKey de catálogo: día + empleado + empresa + almacén. */
+function buildCatalogContextKey(warehouseId: number | null): string {
+  const auth = useAuthStore.getState();
+  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, warehouseId]);
+}
+
+/** Persiste el catálogo actual en disco (fire-and-forget). */
+function persistCatalogToDisk(
+  products: TruckProduct[],
+  inventorySource: InventorySource | null,
+  hasStockData: boolean | null,
+  warehouseId: number | null,
+): void {
+  if (products.length === 0) return;
+  const payload: CatalogCachePayload = { products, inventorySource, hasStockData };
+  const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(warehouseId), Date.now());
+  void storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
+}
+
 export const useProductStore = create<ProductState>((set, get) => ({
   products: [],
   isLoading: false,
@@ -98,6 +149,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   lastSync: null,
   inventorySource: null,
   hasStockData: null,
+  fromCache: false,
+  cachedAtMs: null,
   totalStockKg: 0,
   productCount: 0,
 
@@ -270,6 +323,9 @@ export const useProductStore = create<ProductState>((set, get) => ({
         productCount: products.length,
         inventorySource: source,
         hasStockData,
+        // Carga fresca de red → ya no provienen del caché.
+        fromCache: false,
+        cachedAtMs: null,
       });
 
       // BLD-20260424-BUGA: resumen estructurado de la carga para poder
@@ -287,7 +343,13 @@ export const useProductStore = create<ProductState>((set, get) => ({
         mobileLocationId,
       });
 
+      // Perf Fase 2B: persistir catálogo para sobrevivir reinicios en ruta.
+      // Antes se BORRABA (storeRemove) para no vender contra stock viejo; ahora
+      // se guarda como referencial — la venta sigue online-first y el backend
+      // valida stock/precio al confirmar. Limpiamos la key legacy sin uso.
       void storeRemove(STORAGE_KEYS.PRODUCTS);
+      persistCatalogToDisk(products, source, hasStockData, warehouseId);
+      schedulePersistPriceCache();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
       set({ error: msg, isLoading: false });
@@ -323,14 +385,64 @@ export const useProductStore = create<ProductState>((set, get) => ({
     });
     const totalKg = products.reduce((sum, p) => sum + p._totalKg, 0);
     set({ products, totalStockKg: Math.round(totalKg) });
-    void storeRemove(STORAGE_KEYS.PRODUCTS);
+    // Perf Fase 2B: re-persistir el catálogo con las reservas locales para que
+    // qty_reserved/qty_display sobrevivan un reinicio (display de lectura).
+    persistCatalogToDisk(
+      products,
+      get().inventorySource,
+      get().hasStockData,
+      useAuthStore.getState().warehouseId,
+    );
   },
 
   getProduct: (productId) => get().products.find((p) => p.id === productId),
+
+  hydrateFromCache: async (warehouseId: number | null) => {
+    try {
+      const raw = await storeLoad<unknown>(STORAGE_KEYS.PRODUCTS_CATALOG);
+      if (raw === null) return 0;
+      const result = readCacheEnvelope<CatalogCachePayload>(
+        raw,
+        buildCatalogContextKey(warehouseId),
+        CATALOG_CACHE_TTL_MS,
+        Date.now(),
+      );
+      if (result.status !== 'ok' || !result.payload || !Array.isArray(result.payload.products)) {
+        // miss (otro día/empleado/almacén/corrupto) o stale → limpiar, no hidratar.
+        await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG);
+        if (result.status === 'stale') {
+          logInfo('inventory', 'catalog_cache_stale_cleared', {});
+        }
+        return 0;
+      }
+      const products = result.payload.products;
+      const totalKg = products.reduce((sum, p) => sum + (p._totalKg || 0), 0);
+      set({
+        products,
+        inventorySource: result.payload.inventorySource ?? 'truck_stock',
+        hasStockData: result.payload.hasStockData ?? null,
+        totalStockKg: Math.round(totalKg),
+        productCount: products.length,
+        lastSync: result.cachedAtMs,
+        fromCache: true,
+        cachedAtMs: result.cachedAtMs,
+      });
+      logInfo('inventory', 'catalog_cache_hydrated', {
+        count: products.length,
+        cachedAtMs: result.cachedAtMs,
+      });
+      return products.length;
+    } catch (error) {
+      logWarn('inventory', 'catalog_cache_hydrate_failed', { error: String(error) });
+      try { await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG); } catch { /* noop */ }
+      return 0;
+    }
+  },
 
   reset: () => set({
     products: [], isLoading: false, error: null,
     lastSync: null, totalStockKg: 0, productCount: 0,
     inventorySource: null, hasStockData: null,
+    fromCache: false, cachedAtMs: null,
   }),
 }));

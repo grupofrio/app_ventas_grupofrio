@@ -29,6 +29,7 @@ import {
   dedupePartnerIds,
   PreparationFailure,
 } from '../services/routePreparationLogic';
+import { schedulePersistPriceCache } from '../services/offlineCache';
 import { logInfo, logWarn } from '../utils/logger';
 
 const PREPARE_CONCURRENCY = 4; // matches preloadRouteCustomerPrices for parity
@@ -204,6 +205,10 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       for (let i = 0; i < workerCount; i++) workers.push(worker());
       await Promise.all(workers);
 
+      // Perf Fase 2B: persistir el caché de precios precargado para que
+      // sobreviva un reinicio en ruta (lectura offline en el ProductPicker).
+      schedulePersistPriceCache();
+
       set({
         isPreparing: false,
         currentStep: null,
@@ -263,6 +268,9 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
         stillFailed.push({ ...failure, reason });
       }
     }
+
+    // Perf Fase 2B: persistir lo recuperado en el reintento.
+    schedulePersistPriceCache();
 
     set({
       isPreparing: false,

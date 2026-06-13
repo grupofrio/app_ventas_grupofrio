@@ -90,6 +90,11 @@ export const STORAGE_KEYS = {
 
   // Products
   PRODUCTS: 'entities:products',
+  // Perf Fase 2B: catálogo persistente de jornada (sobrevive reinicios) +
+  // dump del caché de precios por cliente. Solo LECTURA offline; la venta
+  // sigue online-first y el backend valida stock/precio al confirmar.
+  PRODUCTS_CATALOG: 'cache:products:catalog',
+  PRICES_CACHE: 'cache:prices',
 
   // KOLD intelligence
   KOLD_SCORES: 'kold:scores',

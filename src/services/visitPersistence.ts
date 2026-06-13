@@ -61,6 +61,19 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
   };
 }
 
+/**
+ * Perf Fase 1B: decide si el tick del timer de visita debe persistir el
+ * snapshot. Antes se escribía AsyncStorage CADA segundo; ahora solo cada
+ * `intervalSeconds` (default 20). `elapsedSeconds` se recomputa de checkInTime
+ * al rehidratar, así que entre snapshots no se pierde duración relevante.
+ */
+export function shouldPersistVisitTick(elapsedSeconds: number, intervalSeconds = 20): boolean {
+  return Number.isFinite(elapsedSeconds)
+    && elapsedSeconds > 0
+    && intervalSeconds > 0
+    && elapsedSeconds % intervalSeconds === 0;
+}
+
 export function shouldRehydrateVisit(
   snapshot: Pick<PersistedVisitSnapshot, 'currentStopId'> | null,
   stops: Array<Pick<GFStop, 'id' | 'state'>>,

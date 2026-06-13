@@ -26,6 +26,7 @@ import {
   SYNC_PRIORITY_MAP,
 } from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
+import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { postRest, postRpc } from '../services/api';
 import {
   readPhotoAsBase64,
@@ -66,6 +67,25 @@ const GPS_BATCH_SIZE = 50;
 // Backoff: 2s, 8s, 30s with ±20% jitter
 const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
 const BACKOFF_JITTER = 0.2;
+
+// Perf Fase 1B: ventana para AGRUPAR las persistencias de la cola por
+// transiciones de estado (markDone/markError/markDead/clearDone/clearDead y
+// post-ciclo). Antes cada mutación reescribía TODO el JSON de la cola; con un
+// ciclo de 200 ítems eso eran cientos de writes. enqueue() sigue persistiendo
+// INMEDIATO, así que las OPERACIONES nunca dependen del debounce — solo las
+// banderas de estado, que son recuperables por idempotencia al rehidratar.
+const PERSIST_DEBOUNCE_MS = 800;
+
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+/** Agenda una persistencia (trailing): la primera mutación de la ráfaga fija
+ * un write dentro de PERSIST_DEBOUNCE_MS; las siguientes se coalescen. */
+function schedulePersist(): void {
+  if (_persistTimer) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    void useSyncStore.getState().persistQueue();
+  }, PERSIST_DEBOUNCE_MS);
+}
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -246,7 +266,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       i.id === id ? { ...i, status: 'done' as SyncItemStatus } : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
-    get().persistQueue();
+    schedulePersist();
   },
 
   markError: (id, message) => {
@@ -268,7 +288,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
-    get().persistQueue();
+    schedulePersist();
 
     logWarn('sync', 'item_error', {
       id, type: item.type, retries: newRetries,
@@ -289,7 +309,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
-    get().persistQueue();
+    schedulePersist();
 
     logError('sync', 'item_dead', { id, message });
   },
@@ -308,7 +328,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   clearDone: () => {
     const newQueue = get().queue.filter((i) => i.status !== 'done');
     set({ queue: newQueue, ...computeCounts(newQueue) });
-    get().persistQueue();
+    schedulePersist();
   },
 
   // BLD-20260424-PURGE: limpieza explícita de items DEAD (operaciones que
@@ -325,7 +345,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
-      get().persistQueue();
+      schedulePersist();
       logInfo('sync', 'dead_items_purged', { removed });
     }
     return removed;
@@ -334,9 +354,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ Persistence ═══
 
   persistQueue: async () => {
+    // Un write inmediato cancela cualquier persistencia agendada (sería
+    // redundante: ya escribimos el estado actual completo).
+    if (_persistTimer) {
+      clearTimeout(_persistTimer);
+      _persistTimer = null;
+    }
     const { queue } = get();
     // Only persist non-done items to avoid unbounded growth
-    const toPersist = queue.filter((i) => i.status !== 'done');
+    const toPersist = selectPersistableQueue(queue);
     await storeSave(STORAGE_KEYS.SYNC_QUEUE, toPersist);
   },
 

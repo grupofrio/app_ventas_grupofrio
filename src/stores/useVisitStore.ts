@@ -9,11 +9,15 @@
 import { create } from 'zustand';
 import { GFStop } from '../types/plan';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
-import { PersistedVisitSnapshot, buildVisitSnapshot } from '../services/visitPersistence';
+import { PersistedVisitSnapshot, buildVisitSnapshot, shouldPersistVisitTick } from '../services/visitPersistence';
 import { buildStartedVisitState, createInitialVisitState } from '../services/visitState';
 import { appendVisitPhotoUri } from '../services/visitPhotos';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
+
+// Perf Fase 1B: cada cuántos segundos persiste el snapshot el tick del timer
+// (el contador visible sigue actualizándose cada segundo en memoria).
+const VISIT_TICK_PERSIST_INTERVAL_S = 20;
 
 export interface SaleLineItem {
   productId: number;
@@ -207,8 +211,14 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     const { checkInTime } = get();
     if (checkInTime) {
       const elapsedSeconds = Math.floor((Date.now() - checkInTime) / 1000);
+      // El contador visible se actualiza cada segundo (estado en memoria,
+      // barato). Perf Fase 1B: NO escribir AsyncStorage cada segundo —
+      // persistir solo cada VISIT_TICK_PERSIST_INTERVAL_S; al rehidratar el
+      // elapsed se recomputa de checkInTime, así que no se pierde duración.
       set({ elapsedSeconds });
-      persistVisitState({ ...get(), elapsedSeconds });
+      if (shouldPersistVisitTick(elapsedSeconds, VISIT_TICK_PERSIST_INTERVAL_S)) {
+        persistVisitState({ ...get(), elapsedSeconds });
+      }
     }
   },
 

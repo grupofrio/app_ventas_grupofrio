@@ -128,4 +128,42 @@ Ref. principal: `GrupoFrio-operativo/gf_logistics_ops/controllers/gf_api.py` (co
 5. **Contrato `insufficient_stock`:** definido (Hito 2).
 6. **Idempotencia final:** venta/pago YA OK; cierre/liquidación → short-circuit por estado (+`operation_id` si aplica).
 7. **Riesgos:** (a) copias divergentes → aplicar SOLO sobre el canónico de Odoo.sh; (b) cambios afectan dinero/inventario en prod → revisión de Sebas + staging obligatorio; (c) `free_qty` por ubicación móvil debe resolver la `location` correcta (mismo origen que baja la venta) — validar; (d) B5 requiere confirmación de negocio.
-8. **PR/link:** no aplicable desde este entorno (sin remoto). Este doc es el handoff.
+8. **PR/link:** backend PR **[GrupoVeniu/GrupoFrio#116](https://github.com/GrupoVeniu/GrupoFrio/pull/116)** (base `GrupoFrio`). Este doc = handoff (app PR #36).
+
+---
+
+## Revisión técnica (reviewer independiente) — 2026-06-12
+
+**Veredicto: `APPROVE_FOR_STAGING`.** Diff limitado a B6/B7/B9 (3 archivos: manifest +1, controller +110, test nuevo); bump `18.0.1.4.0 → 18.0.1.5.0` verificado; `py -m py_compile` OK; `test_route_hardening_b6b7b9_contract.py` PASA. No se encontró bug que requiera cambios de código.
+
+**Confirmaciones:**
+- **Stock guard** usa `ctx["warehouse"].lot_stock_id` (mismo almacén que arma la venta), `free_qty` con `with_context(location=…)`, solo `is_storable`, y corre **después** del short-circuit `_find_existing_sale_by_operation` → un retry de venta ya creada **no** se re-evalúa.
+- **Contrato `insufficient_stock`** completo por línea (`product_id/product_name/requested_qty/available_qty`) vía `_response(False, …)` (patrón existente, campos adicionales = compatibles).
+- **Idempotencia venta/pago por `operation_id`:** intacta (no se modificó ese código).
+- **Cierre:** con `plan_id` (lo que envía la app) se resuelve el plan exacto; el retry tras cierre exitoso devuelve `already_closed` sin re-ejecutar. La ampliación de `allow_states` no causa mis-selección: por fecha está acotado al día y `len(matched)>1` lanza "Envía plan_id" en vez de elegir mal.
+- **Liquidación:** short-circuit por `liquidacion_done_at` antes de re-estampar/auto-cerrar.
+
+**Riesgos / límites (no bloquean staging, validar ahí):**
+1. **TOCTOU concurrente:** dos ventas simultáneas para el mismo producto con stock para una sola podrían pasar ambas el check antes de confirmar. El guard reduce drásticamente el sobregiro pero no es un lock atómico; la barrera final dura sigue dependiendo de la config de Odoo (almacén que rechace negativo) o de la reserva en `action_confirm`. → Caso de staging #9; si se requiere atomicidad total, es un endurecimiento posterior (lock/SELECT FOR UPDATE).
+2. **`lot_stock_id` vs ubicación real de descuento:** asume que el origen del picking de entrega = `lot_stock_id` del almacén móvil. Validar con el almacén/van real (caso #8).
+3. **Liquidación en estado `done`:** el lookup de liquidación no incluye `done` (igual que antes); si un admin lleva el plan a `done`, un retry de liquidación no short-circuita. Edge pre-existente, no regresión.
+4. **B5 precios intradía** y **idempotencia de consignación visit/close**: pendientes (abajo / Hito 4).
+
+---
+
+## Checklist de staging para Sebastián (almacén móvil real)
+
+> Probar en staging con un plan/ruta real y su almacén móvil. Marcar cada caso.
+
+- [ ] **1. Venta con stock suficiente** → `ok:true`, venta confirmada, `qty_available` baja en la ubicación de la unidad.
+- [ ] **2. Venta con stock insuficiente** → `ok:false`, `data.error_code="insufficient_stock"`, `data.lines[]` con `product_id/product_name/requested_qty/available_qty`; **no** se crea `sale.order`; inventario intacto.
+- [ ] **3. Retry de venta** (mismo `operation_id`) → 2ª respuesta `duplicate:true`, **una sola** `sale.order` y **un solo** `account.payment`; el guard NO se re-evalúa.
+- [ ] **4. Cierre de ruta exitoso** → `ok:true`, `state:"closed"`, picking de retorno generado si aplica.
+- [ ] **5. Retry de cierre** (mismo plan ya cerrado) → `ok:true`, `data.already_closed:true`, **sin** segundo picking ni reconversión de leads.
+- [ ] **6. Liquidación exitosa** → `ok:true`, `liquidacion_done_at` seteado; auto-cierre si `in_progress`.
+- [ ] **7. Retry de liquidación** (ya confirmada) → `ok:true`, `data.already_confirmed:true`, **sin** re-estampar ni re-cobrar.
+- [ ] **8. `available_qty` = almacén móvil real** → comparar el `available_qty` devuelto contra el on-hand real de la van (no del almacén central). Confirmar que `lot_stock_id` es el origen del picking de entrega.
+- [ ] **9. Sin pagos/movimientos duplicados** → tras retries de 3/5/7, revisar que no haya `account.payment`, `stock.move` ni asientos duplicados. Probar también 2 ventas casi simultáneas (concurrencia) → a lo sumo una confirma; inventario nunca negativo.
+- [ ] **10. Respuesta app ante `insufficient_stock`** → la app KoldField muestra el detalle por línea y permite ajustar; la venta NO se confirma offline.
+
+**Si los 10 pasan:** el PR puede mergearse a `GrupoFrio` y desplegarse por Odoo.sh. **Si 8 o 9 fallan:** REQUEST_CHANGES (ajustar resolución de `location` o añadir lock atómico) antes de merge.

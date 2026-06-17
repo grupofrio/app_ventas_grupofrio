@@ -279,7 +279,18 @@ export default function StopDetailScreen() {
             <Button
               label="⭐ Lealtad"
               variant="secondary"
-              onPress={() => Alert.alert('Lealtad', 'F8: Programa de lealtad')}
+              onPress={() => {
+                // Programa de Lealtad (lectura): nivel/racha del cliente desde
+                // Odoo (gf_partner_loyalty). Requiere un partner resuelto.
+                if (!editablePartnerId) {
+                  Alert.alert('Lealtad', 'Este cliente aún no tiene contacto enlazado. Completa Datos primero.');
+                  return;
+                }
+                router.push({
+                  pathname: '/loyalty/[partnerId]',
+                  params: { partnerId: String(editablePartnerId) },
+                } as never);
+              }}
               fullWidth
             />
           </View>

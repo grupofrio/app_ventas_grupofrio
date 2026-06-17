@@ -1,6 +1,6 @@
 # KoldField — Readiness pre-APK
 
-**Fecha:** 2026-06-17 · **Base:** `main` @ `b9eada3` · **typecheck:** limpio · **tests:** 122/122
+**Fecha:** 2026-06-17 · **Base:** `main` @ `5a3ecdb` · **typecheck:** limpio · **tests:** 124/124
 **Veredicto:** ✅ **GO_APK_QA** (APK de pruebas/piloto). Para **producción**: **GO_WITH_BACKEND_BLOCKERS** (depende de #116 en staging).
 
 ## 1. Qué quedó cerrado (mergeado en main)
@@ -10,6 +10,7 @@
 - **Refill** (#38): muestra todos los productos (no `slice(0,10)`), agotados primero, buscable, `operation_id`.
 - **Regalo offline** (#39): encola si falla sin red (dispatcher `gift` en sync queue), `operation_id` estable, no duplica.
 - **Lealtad** (#40): botón conectado a pantalla real de lectura (res.partner `x_loyalty_*`), sin placeholder.
+- **Hardening offline/cache de venta** (#42): ProductPicker sin red **ya no se queda cargando** (guard `isOnline` → cae a `list_price` referencial, sin spinner eterno); venta offline sigue bloqueada con mensaje y **no** se encola como confirmada; `unwrapRestResult` preserva `data`/`error_code`; **`insufficient_stock`** ahora muestra producto/`requested_qty`/`available_qty` y refresca el inventario real (cuando el backend #116 envíe `data.lines`). El **#116** sigue siendo la **barrera dura anti-sobreventa** (staging).
 
 ## 2. Matriz pantalla por pantalla (pre-APK)
 

@@ -163,7 +163,7 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({dead.length})</Text>
             <Text style={styles.deadHint}>
-              Estas operaciones agotaron sus reintentos. Usa "Limpiar Historial" arriba para borrarlas y quitar la alerta roja.
+              No se completarán: agotaron sus reintentos o dependían de una venta que falló. Reintenta la venta desde su visita, o usa "Limpiar Historial" arriba para borrarlas (padre y dependientes juntos) y quitar la alerta roja.
             </Text>
             {dead.map((item) => (
               <SyncItem key={item.id} item={item} />
@@ -201,6 +201,11 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
   const label = typeLabels[item.type] || item.type;
   const orderDetail = describeSaleOrderItem(item);
   const badge = statusBadge[item.status] || statusBadge.pending;
+  // BLD-20260617-DEAD-CASCADE: un dependiente (p.ej. foto) que murió porque su
+  // padre (la venta) falló. No debe parecer un pendiente normal: se explica la
+  // causa real y se evita duplicar el mensaje en la línea de hora.
+  const blockedByParent =
+    item.status === 'dead' && !!item.dependsOn && item.dependsOn.length > 0;
   const time = new Date(item.created_at).toLocaleTimeString('es-MX', {
     hour: '2-digit', minute: '2-digit',
   });
@@ -220,10 +225,15 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
               : ''}
           </Text>
         )}
+        {blockedByParent && (
+          <Text style={styles.syncBlockedLine}>
+            ⚠ {item.error_message || 'No enviada: depende de una venta que falló'}. Reintenta la venta o limpia el historial de errores.
+          </Text>
+        )}
         <Text style={styles.syncTime}>
           {time}
           {item.retries > 0 ? ` · Intento ${item.retries}/3` : ''}
-          {item.error_message ? ` · ${item.error_message}` : ''}
+          {item.error_message && !blockedByParent ? ` · ${item.error_message}` : ''}
         </Text>
       </View>
       <Badge label={badge.label} variant={badge.variant} />
@@ -265,6 +275,7 @@ const styles = StyleSheet.create({
   iconDone: { backgroundColor: colors.successAlpha12 },
   syncLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
   syncOrderLine: { fontSize: 12, color: colors.text, fontWeight: '500', marginTop: 1 },
+  syncBlockedLine: { fontSize: 12, color: '#EF4444', fontWeight: '500', marginTop: 2, lineHeight: 16 },
   syncTime: { fontSize: 11, color: colors.textDim },
   deadHint: {
     fontSize: 11, color: colors.textDim, fontStyle: 'italic',

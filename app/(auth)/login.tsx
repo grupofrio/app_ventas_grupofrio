@@ -3,14 +3,16 @@
  * Matches mockup s-login: dark bg, orange accent, centered form.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, StyleSheet, KeyboardAvoidingView,
   Platform, ScrollView, Alert,
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { DEFAULT_BASE_URL } from '../../src/services/api';
+import { describeLoginOfflineNotice } from '../../src/services/authOffline';
 import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
@@ -18,7 +20,19 @@ import { typography } from '../../src/theme/typography';
 export default function LoginScreen() {
   const [barcode, setBarcode] = useState('');
   const [pin, setPin] = useState('');
+  const [isOnline, setIsOnline] = useState(true);
   const { login, isLoading, error } = useAuthStore();
+
+  // Conectividad para el aviso offline (login nuevo requiere internet; una
+  // sesión previa se restaura sola al abrir la app vía rehydrateAuth).
+  useEffect(() => {
+    const unsub = NetInfo.addEventListener((s) => {
+      setIsOnline(!!(s.isConnected && s.isInternetReachable !== false));
+    });
+    return () => unsub();
+  }, []);
+
+  const offlineNotice = describeLoginOfflineNotice(isOnline);
 
   async function handleLogin() {
     if (!barcode.trim() || !pin.trim()) {
@@ -72,6 +86,12 @@ export default function LoginScreen() {
                 keyboardType="number-pad"
               />
             </View>
+
+            {offlineNotice ? (
+              <View style={styles.offlineBox}>
+                <Text style={styles.offlineText}>📴 {offlineNotice}</Text>
+              </View>
+            ) : null}
 
             {error ? (
               <View style={styles.errorBox}>
@@ -137,6 +157,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: colors.text,
     fontSize: 15,
+  },
+  offlineBox: {
+    backgroundColor: colors.warningAlpha08,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.2)',
+    borderRadius: radii.button,
+    padding: 10,
+  },
+  offlineText: {
+    color: colors.warning,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
   },
   errorBox: {
     backgroundColor: colors.errorAlpha08,

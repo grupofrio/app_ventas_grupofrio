@@ -32,3 +32,70 @@ export function describePendingOrdersBanner(s: PendingOrdersSummary): string | n
   if (s.failed > 0) parts.push(`${s.failed} con error`);
   return `📦 Pedidos: ${parts.join(' · ')}`;
 }
+
+// ── Detalle por ítem (pantalla Sync) ────────────────────────────────────────
+
+export type OrderTone = 'pending' | 'error' | 'sent';
+
+export interface SaleOrderDisplay {
+  customerName: string | null;
+  total: number | null;
+  statusLabel: string;
+  tone: OrderTone;
+  operationId: string | null;
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+function strOrNull(v: unknown): string | null {
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+}
+
+/**
+ * Detalle de un sale_order de la cola para mostrar en Sync. Devuelve null si el
+ * item no es sale_order. Lee campos client-only del payload
+ * (`_clientCustomerName`, `_clientTotal`) que NO se envían al backend.
+ */
+export function describeSaleOrderItem(
+  item: Pick<SyncQueueItem, 'type' | 'status' | 'payload'> & { id?: string },
+): SaleOrderDisplay | null {
+  if (item.type !== 'sale_order') return null;
+  const payload = (item.payload ?? {}) as Record<string, unknown>;
+  let tone: OrderTone;
+  let statusLabel: string;
+  if (item.status === 'done') { tone = 'sent'; statusLabel = 'Venta enviada'; }
+  else if (item.status === 'error' || item.status === 'dead') { tone = 'error'; statusLabel = 'Venta con error'; }
+  else { tone = 'pending'; statusLabel = 'Venta pendiente'; }
+  return {
+    customerName: strOrNull(payload._clientCustomerName),
+    total: numOrNull(payload._clientTotal),
+    statusLabel,
+    tone,
+    operationId: strOrNull(payload._operationId) ?? (item.id ?? null),
+  };
+}
+
+export type StopOrderStatus = 'pending' | 'error';
+
+/**
+ * Mapa stopId → estado de su pedido en cola (error gana sobre pending). Solo
+ * sale_order pending/syncing/error/dead; ignora done y otros tipos. Para badges
+ * por-cliente en la lista de ruta. O(n) sobre la cola, una vez.
+ */
+export function buildStopOrderStatusMap(
+  queue: Array<Pick<SyncQueueItem, 'type' | 'status' | 'payload'>>,
+): Record<number, StopOrderStatus> {
+  const map: Record<number, StopOrderStatus> = {};
+  for (const item of queue) {
+    if (item.type !== 'sale_order') continue;
+    const stopId = numOrNull((item.payload as Record<string, unknown>)?.stop_id);
+    if (stopId == null || stopId <= 0) continue;
+    if (item.status === 'error' || item.status === 'dead') {
+      map[stopId] = 'error'; // error gana sobre pending
+    } else if (item.status === 'pending' || item.status === 'syncing') {
+      if (map[stopId] !== 'error') map[stopId] = 'pending';
+    }
+  }
+  return map;
+}

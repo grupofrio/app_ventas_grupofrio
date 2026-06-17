@@ -45,8 +45,21 @@ Tras #46 (pedido offline pendiente), una venta puede quedar legítimamente en es
 9. Sync: "🧾 Venta · ✓ Listo"; el banner de ruta desaparece.
 10. **Cierre/Liquidación:** con el pedido aún pendiente/error → bloqueados con "operaciones pendientes"; una vez enviado → habilitados.
 
+## Visibilidad de pedidos (cliente + total + badge) — añadido
+- En la **venta offline** se adjuntan al `sale_order` encolado dos campos **client-only** (`_clientCustomerName`, `_clientTotal`) — NO se envían al backend (`buildSalesCreatePayload` usa whitelist).
+- **Sync** muestra cada pedido como "Venta pendiente / enviada / con error" + **cliente** + **total $** + hora + error.
+- **Ruta** (stop card): badge "📦 Pedido pendiente" (naranja) o "📦 Pedido con error" (rojo) en el cliente correspondiente; el banner del header sigue mostrando el conteo global.
+
+Casos:
+- [ ] **Sync con cliente+total:** tras venta offline, en Sync aparece "Venta pendiente · <Cliente> · $<total>".
+- [ ] **Badge por cliente en ruta:** el stop del cliente muestra "📦 Pedido pendiente"; otros stops no.
+- [ ] **Error por cliente:** si el pedido falla al sincronizar, el badge del stop pasa a "📦 Pedido con error" (rojo); en Sync "Venta con error" + mensaje.
+- [ ] **Varios pedidos no se mezclan:** cada stop muestra su propio estado; `error` gana sobre `pending` en un mismo stop.
+- [ ] **Al enviarse OK:** el pedido pasa a "Venta enviada" en Sync; el badge del stop desaparece (done no genera badge); el banner de ruta baja el conteo.
+- [ ] **No contaminación:** items `gps`/`gift`/`checkout` no generan badge ni cuentan como pedido.
+
 ## Pruebas automáticas (node)
-- `tests/pendingOrders.test.ts` — resumen de pedidos sin sincronizar + banner.
+- `tests/pendingOrders.test.ts` — resumen + banner + `describeSaleOrderItem` (cliente/total/estado) + `buildStopOrderStatusMap` (badge por stop, error gana, no contamina).
 - `tests/offlineSaleWiring.test.mjs` (#46) — offline encola sale_order; sin descuento local; bloqueos.
 - `tests/saleOfflineUx.test.ts` — etiquetas de estado del pedido.
 - Cobertura existente: `getSaleSyncState`, `rearmSaleOrderForRetry`, cashcloseGuard/routeCloseGuard.

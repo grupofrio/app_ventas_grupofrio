@@ -312,7 +312,14 @@ function SaleScreenInner() {
     // cuando hay conexión. Idempotente por _operationId. cashclose/route-close
     // ya bloquean el cierre/liquidación mientras haya pendientes en la cola.
     if (!isOnline) {
-      const enqId = enqueue('sale_order', payload);
+      // Metadata SOLO para visibilidad en Sync/ruta (cliente + total). NO se
+      // envía al backend: buildSalesCreatePayload arma el contrato con whitelist
+      // y descarta campos desconocidos.
+      const enqId = enqueue('sale_order', {
+        ...payload,
+        _clientCustomerName: stop.customer_name,
+        _clientTotal: total,
+      });
       if (salePhotoUris[0]) {
         enqueue('photo', {
           stop_id: payload.stop_id,

@@ -63,6 +63,7 @@ import { formatCurrency } from '../src/utils/time';
 import {
   canConfirmLiquidation,
   describeBlockingReason,
+  describeLiquidationButtonBlock,
 } from '../src/services/cashcloseGuard';
 
 interface SummaryLine {
@@ -358,6 +359,18 @@ export default function CashCloseScreen() {
     && !liquidationBusy
     && !liquidationAlreadyConfirmed
     && corteAlreadyConfirmed;
+  // Por qué el botón "Confirmar liquidación" está deshabilitado (o null si OK).
+  // El reporte de campo "no funciona" era un disable silencioso: ahora siempre
+  // se explica el motivo y el siguiente paso.
+  const liquidationButtonReason = describeLiquidationButtonBlock({
+    alreadyConfirmed: liquidationAlreadyConfirmed,
+    corteConfirmed: corteAlreadyConfirmed,
+    liquidationAvailable: !!hasLiquidationData,
+    pendingCount,
+    errorCount,
+    deadCount,
+    isSyncing: isSyncing || syncBusy,
+  });
   const canSaveCorteAdjustments = !adjustmentsBusy
     && !corteAlreadyConfirmed
     && pendingCount === 0
@@ -527,7 +540,7 @@ export default function CashCloseScreen() {
             Visible siempre — refleja el estado real de la cola y guía al
             vendedor a sincronizar con WiFi del CEDIS antes de revisar
             cobranza. NO añade botón "Confirmar Liquidación" todavía. */}
-        {pendingCount > 0 ? (
+        {(pendingCount > 0 || errorCount > 0 || deadCount > 0) ? (
           <View style={[styles.syncCard, styles.syncCardPending]}>
             <View style={styles.syncHeader}>
               <Text style={styles.syncIcon}>📡</Text>
@@ -879,22 +892,28 @@ export default function CashCloseScreen() {
             </Text>
           </View>
         ) : (
-          <TouchableOpacity
-            style={[
-              styles.primaryAction,
-              !canConfirmFinalLiquidation && styles.actionDisabled,
-            ]}
-            onPress={handleConfirmLiquidation}
-            disabled={!canConfirmFinalLiquidation}
-            accessibilityRole="button"
-            accessibilityLabel="Confirmar liquidacion"
-          >
-            {liquidationBusy ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Text style={styles.primaryActionText}>Confirmar liquidacion</Text>
+          <>
+            <TouchableOpacity
+              style={[
+                styles.primaryAction,
+                !canConfirmFinalLiquidation && styles.actionDisabled,
+              ]}
+              onPress={handleConfirmLiquidation}
+              disabled={!canConfirmFinalLiquidation}
+              accessibilityRole="button"
+              accessibilityLabel="Confirmar liquidacion"
+            >
+              {liquidationBusy ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.primaryActionText}>Confirmar liquidacion</Text>
+              )}
+            </TouchableOpacity>
+            {/* Por qué está deshabilitado (fix del "botón no funciona"). */}
+            {!canConfirmFinalLiquidation && !liquidationBusy && liquidationButtonReason && (
+              <Text style={styles.blockReasonText}>{liquidationButtonReason}</Text>
             )}
-          </TouchableOpacity>
+          </>
         )}
 
         <Text style={styles.footerNote}>
@@ -1178,6 +1197,14 @@ const styles = StyleSheet.create({
   },
   actionDisabled: {
     opacity: 0.45,
+  },
+  blockReasonText: {
+    fontSize: 12,
+    color: colors.textDim,
+    textAlign: 'center',
+    marginTop: -spacing.md,
+    marginBottom: spacing.lg,
+    lineHeight: 17,
   },
   confirmedBadge: {
     backgroundColor: 'rgba(34,197,94,0.08)',

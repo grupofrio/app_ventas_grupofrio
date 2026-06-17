@@ -63,3 +63,41 @@ export function describeBlockingReason(input: CashCloseGuardInput): string | nul
   }
   return null;
 }
+
+/**
+ * Razón por la que el botón "Confirmar liquidación" está deshabilitado, o null
+ * si está habilitado. Espeja exactamente las condiciones de habilitación de la
+ * pantalla (corte confirmado + sin pendientes/errores + liquidación cargada),
+ * para que un botón gris SIEMPRE explique por qué — el reporte de campo era que
+ * "no funciona" cuando en realidad estaba disabled sin explicación.
+ *
+ * Orden de prioridad pensado para guiar al vendedor al siguiente paso.
+ */
+export interface LiquidationButtonState {
+  alreadyConfirmed: boolean;
+  corteConfirmed: boolean;
+  liquidationAvailable: boolean;
+  pendingCount: number;
+  errorCount?: number;
+  deadCount?: number;
+  isSyncing: boolean;
+}
+
+export function describeLiquidationButtonBlock(s: LiquidationButtonState): string | null {
+  if (s.alreadyConfirmed) return null; // ya confirmada → no se muestra el botón
+  if (!s.liquidationAvailable) {
+    return 'La liquidación no está disponible. Reintenta la carga de Cobranza / Liquidación.';
+  }
+  if (s.pendingCount > 0) {
+    return `Hay ${s.pendingCount} operación(es) pendientes por sincronizar.`;
+  }
+  const failed = (s.errorCount ?? 0) + (s.deadCount ?? 0);
+  if (failed > 0) {
+    return `Hay ${failed} operación(es) con error sin sincronizar. Resuélvelas antes de liquidar.`;
+  }
+  if (s.isSyncing) return 'Sincronizando…';
+  if (!s.corteConfirmed) {
+    return 'Primero confirma el corte de unidades (botón "Confirmar corte" arriba).';
+  }
+  return null;
+}

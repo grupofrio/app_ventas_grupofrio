@@ -42,7 +42,7 @@ import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
-import { summarizePendingOrders, describePendingOrdersBanner } from '../../src/services/pendingOrders';
+import { summarizePendingOrders, describePendingOrdersBanner, buildStopOrderStatusMap } from '../../src/services/pendingOrders';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -87,6 +87,11 @@ export default function RouteScreen() {
   const syncQueue = useSyncStore((s) => s.queue);
   const pendingOrdersBanner = React.useMemo(
     () => describePendingOrdersBanner(summarizePendingOrders(syncQueue)),
+    [syncQueue],
+  );
+  // Mapa stopId → estado de su pedido en cola (para badge por cliente).
+  const stopOrderStatus = React.useMemo(
+    () => buildStopOrderStatusMap(syncQueue),
     [syncQueue],
   );
 
@@ -288,6 +293,7 @@ export default function RouteScreen() {
       const isDone = ['done', 'not_visited', 'closed'].includes(stop.state);
       const badge = getStopBadge(stop);
       const stopTypeLabel = getStopTypeLabel(stop);
+      const orderStatus = stopOrderStatus[stop.id];
       return (
         <View
           style={[
@@ -306,9 +312,13 @@ export default function RouteScreen() {
               </Text>
               {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
             </View>
-            {stopTypeLabel && (
-              <View style={{ marginTop: 6 }}>
-                <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+            {(stopTypeLabel || orderStatus) && (
+              <View style={styles.cardBadgeRow}>
+                {stopTypeLabel && (
+                  <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+                )}
+                {orderStatus === 'pending' && <Badge label="📦 Pedido pendiente" variant="orange" />}
+                {orderStatus === 'error' && <Badge label="📦 Pedido con error" variant="red" />}
               </View>
             )}
           </TouchableOpacity>
@@ -324,7 +334,7 @@ export default function RouteScreen() {
         </View>
       );
     },
-    [handleOpenClient, handleOpenLocation],
+    [handleOpenClient, handleOpenLocation, stopOrderStatus],
   );
 
   return (
@@ -576,6 +586,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.button, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10,
   },
   pendingOrdersText: { fontSize: 12, color: colors.text, fontWeight: '600' },
+  cardBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },

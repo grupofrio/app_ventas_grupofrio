@@ -13,6 +13,8 @@ import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { SyncQueueItem } from '../src/types/sync';
 import { describeSyncQueueState } from '../src/services/syncStatusCopy';
+import { describeSaleOrderItem } from '../src/services/pendingOrders';
+import { formatCurrency } from '../src/utils/time';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -197,6 +199,7 @@ export default function SyncScreen() {
 function SyncItem({ item }: { item: SyncQueueItem }) {
   const icon = typeIcons[item.type] || '📦';
   const label = typeLabels[item.type] || item.type;
+  const orderDetail = describeSaleOrderItem(item);
   const badge = statusBadge[item.status] || statusBadge.pending;
   const time = new Date(item.created_at).toLocaleTimeString('es-MX', {
     hour: '2-digit', minute: '2-digit',
@@ -208,7 +211,13 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
         <Text style={{ fontSize: 16 }}>{icon}</Text>
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.syncLabel}>{label}</Text>
+        <Text style={styles.syncLabel}>{orderDetail ? orderDetail.statusLabel : label}</Text>
+        {orderDetail && (orderDetail.customerName || orderDetail.total != null) && (
+          <Text style={styles.syncOrderLine}>
+            {orderDetail.customerName ?? 'Cliente'}
+            {orderDetail.total != null ? ` · ${formatCurrency(orderDetail.total)}` : ''}
+          </Text>
+        )}
         <Text style={styles.syncTime}>
           {time}
           {item.retries > 0 ? ` · Intento ${item.retries}/3` : ''}
@@ -253,6 +262,7 @@ const styles = StyleSheet.create({
   iconPending: { backgroundColor: colors.warningAlpha12 },
   iconDone: { backgroundColor: colors.successAlpha12 },
   syncLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
+  syncOrderLine: { fontSize: 12, color: colors.text, fontWeight: '500', marginTop: 1 },
   syncTime: { fontSize: 11, color: colors.textDim },
   deadHint: {
     fontSize: 11, color: colors.textDim, fontStyle: 'italic',

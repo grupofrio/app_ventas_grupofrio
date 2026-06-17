@@ -1,40 +1,34 @@
 /**
- * GeoFenceBar — green ok / red warning with distance.
- * From KOLD_FIELD_SPEC.md section 8.
+ * GeoFenceBar — banda de estado de geo-cerca. Presentacional: recibe el tono y
+ * la etiqueta ya resueltos por `describeGeoStatus` (trustSignals), para no
+ * inventar distancias (p.ej. "999m") cuando no hay GPS o geo del cliente.
  */
 
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
+import type { GeoTone } from '../../services/trustSignals';
 
 interface GeoFenceBarProps {
-  isOk: boolean;
-  distanceMeters: number;
+  tone: GeoTone;
+  label: string;
 }
 
-export function GeoFenceBar({ isOk, distanceMeters }: GeoFenceBarProps) {
-  if (isOk) {
-    return (
-      <View style={[styles.bar, styles.ok]}>
-        <Text style={[styles.text, { color: colors.success }]}>
-          📍 GPS verificado · Estas a {distanceMeters}m (max 50m) ✓
-        </Text>
-      </View>
-    );
-  }
-
-  const display = distanceMeters >= 1000
-    ? `${(distanceMeters / 1000).toFixed(1)}km`
-    : `${Math.round(distanceMeters)}m`;
-
+export function GeoFenceBar({ tone, label }: GeoFenceBarProps) {
+  const palette = TONE_PALETTE[tone] ?? TONE_PALETTE.unknown;
   return (
-    <View style={[styles.bar, styles.warn]}>
-      <Text style={[styles.text, { color: colors.error }]}>
-        📍 Fuera de rango: {display}. Acercate a {'<'}50m
-      </Text>
+    <View style={[styles.bar, { backgroundColor: palette.bg, borderColor: palette.border }]}>
+      <Text style={[styles.text, { color: palette.fg }]}>{label}</Text>
     </View>
   );
 }
+
+const TONE_PALETTE: Record<GeoTone, { bg: string; border: string; fg: string }> = {
+  ok: { bg: colors.successAlpha08, border: 'rgba(34,197,94,0.15)', fg: colors.success },
+  far: { bg: colors.errorAlpha08, border: 'rgba(239,68,68,0.2)', fg: colors.error },
+  low_accuracy: { bg: colors.warningAlpha08, border: 'rgba(245,158,11,0.2)', fg: colors.warning },
+  unknown: { bg: colors.warningAlpha08, border: 'rgba(245,158,11,0.2)', fg: colors.warning },
+};
 
 const styles = StyleSheet.create({
   bar: {
@@ -43,14 +37,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
     borderWidth: 1,
-  },
-  ok: {
-    backgroundColor: colors.successAlpha08,
-    borderColor: 'rgba(34,197,94,0.15)',
-  },
-  warn: {
-    backgroundColor: colors.errorAlpha08,
-    borderColor: 'rgba(239,68,68,0.2)',
   },
   text: {
     fontSize: 12,

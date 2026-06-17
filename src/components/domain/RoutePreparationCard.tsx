@@ -22,6 +22,7 @@ import {
   formatPreparedAt,
   isPreparationFreshForPlan,
 } from '../../services/routePreparationLogic';
+import { describeDataFreshness } from '../../services/trustSignals';
 
 export function RoutePreparationCard() {
   const isPreparing = useRoutePreparationStore((s) => s.isPreparing);
@@ -64,6 +65,9 @@ export function RoutePreparationCard() {
   // ── State C — prepared (and same plan) ─────────────────────────────────
   if (isFresh && preparedAt) {
     const hasFailures = failures.length > 0;
+    // Trust signal: antigüedad de los datos ("hace X") + aviso si están viejos
+    // o son de otro día (precios/stock podrían haber cambiado).
+    const freshness = describeDataFreshness({ preparedAtMs: preparedAt, nowMs: Date.now() });
     return (
       <View style={[styles.card, hasFailures ? styles.cardWarning : styles.cardOk]}>
         <View style={styles.headerRow}>
@@ -72,7 +76,12 @@ export function RoutePreparationCard() {
             {hasFailures ? 'Ruta preparada con pendientes' : 'Ruta lista para salir'}
           </Text>
         </View>
-        <Text style={styles.body}>Preparada a las {formatPreparedAt(preparedAt)}</Text>
+        <Text style={styles.body}>
+          Preparada a las {formatPreparedAt(preparedAt)} · {freshness.label}
+        </Text>
+        {freshness.stale && (
+          <Text style={styles.staleWarn}>⚠️ Datos viejos: actualiza la ruta para asegurar precios y stock al día.</Text>
+        )}
         <Text style={styles.metric}>
           Clientes: {customersPrepared}/{customersTotal} · Precios precargados: {pricesPrepared}
         </Text>
@@ -183,6 +192,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#EF4444',
     marginBottom: 8,
+  },
+  staleWarn: {
+    fontSize: 11,
+    color: '#F59E0B',
+    fontWeight: '600',
+    marginBottom: 8,
+    lineHeight: 15,
   },
   btn: {
     marginTop: 6,

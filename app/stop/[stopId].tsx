@@ -30,6 +30,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { getStopTypeLabel } from '../../src/services/routePresentation';
+import { describeGeoStatus } from '../../src/services/trustSignals';
 import { logInfo } from '../../src/utils/logger';
 import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
 import { getLeadActionVisibility, getLeadPartnerId } from '../../src/services/leadVisit';
@@ -51,6 +52,7 @@ export default function StopDetailScreen() {
   const locStatus = useLocationStore((s) => s.status);
   const realDistance = useLocationStore((s) => s.distanceMeters);
   const realIsWithin = useLocationStore((s) => s.isWithinFence);
+  const realAccuracy = useLocationStore((s) => s.accuracy);
 
   React.useEffect(() => {
     if (stop?.customer_latitude && stop?.customer_longitude) {
@@ -79,9 +81,19 @@ export default function StopDetailScreen() {
 
   const hasScore = !!stop._koldScore;
   const hasForecast = !!stop._koldForecast;
-  // F7: Use real GPS distance, fallback to enriched values
+  // F7: Use real GPS distance, fallback to enriched values.
   const isGeoOk = locStatus === 'ready' ? realIsWithin : (stop._geoFenceOk ?? false);
-  const distance = locStatus === 'ready' ? (realDistance ?? 999) : (stop._distanceMeters ?? 999);
+  // Trust signal: estado de geo SIN distancia ficticia. Si no hay fix de GPS ni
+  // geo del cliente, se muestra "no disponible" (no "999m"). No cambia el gate
+  // de visita (isGeoOk), solo lo que ve el vendedor.
+  const hasClientGeo = !!(stop.customer_latitude && stop.customer_longitude);
+  const geoDistance = locStatus === 'ready' ? realDistance : (stop._distanceMeters ?? null);
+  const geo = describeGeoStatus({
+    locStatus,
+    hasClientGeo,
+    distanceMeters: geoDistance,
+    accuracyMeters: realAccuracy,
+  });
   const scoreModuleAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const demandModuleAvailable = useKoldStore((s) => s.demandModuleAvailable);
   const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
@@ -117,7 +129,9 @@ export default function StopDetailScreen() {
   const canStartVisit = isGeoOk || canOperateOffDistance;
   const canOpenVisit = visitGuard.canResumeVisit || (visitGuard.canStartVisit && canStartVisit);
   const primaryActionLabel = visitGuard.canStartVisit && !canStartVisit
-    ? `🔴 Fuera de rango (${Math.round(distance)}m)`
+    ? (geo.distanceKnown && geo.distanceMeters != null
+        ? `🔴 Fuera de rango (${Math.round(geo.distanceMeters)}m)`
+        : '🔴 Ubicación no disponible')
     : visitGuard.primaryActionLabel;
   const stopTypeLabel = getStopTypeLabel(stop);
   const actionVisibility = getLeadActionVisibility(stop);
@@ -149,7 +163,7 @@ export default function StopDetailScreen() {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Geo-fence indicator */}
-        <GeoFenceBar isOk={isGeoOk} distanceMeters={distance} />
+        <GeoFenceBar tone={geo.tone} label={geo.label} />
         {giftSuccessMessage ? (
           <AlertBanner
             variant="success"

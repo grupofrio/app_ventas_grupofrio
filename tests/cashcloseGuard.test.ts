@@ -12,6 +12,10 @@ interface GuardModule {
     pendingCount: number; isSyncing: boolean; liquidationAvailable: boolean;
     errorCount?: number; deadCount?: number;
   }) => string | null;
+  describeLiquidationButtonBlock: (s: {
+    alreadyConfirmed: boolean; corteConfirmed: boolean; liquidationAvailable: boolean;
+    pendingCount: number; errorCount?: number; deadCount?: number; isSyncing: boolean;
+  }) => string | null;
 }
 
 function run(m: GuardModule) {
@@ -33,6 +37,32 @@ function run(m: GuardModule) {
   assert.equal(m.canConfirmLiquidation({ ...ok, liquidationAvailable: false }), false);
   // back-compat: omitting error/dead defaults to 0 → allowed
   assert.equal(m.canConfirmLiquidation({ pendingCount: 0, isSyncing: false, liquidationAvailable: true }), true);
+
+  // ── describeLiquidationButtonBlock (fix "botón no funciona") ──────────────
+  const ready = {
+    alreadyConfirmed: false, corteConfirmed: true, liquidationAvailable: true,
+    pendingCount: 0, errorCount: 0, deadCount: 0, isSyncing: false,
+  };
+  // Todo listo → null (botón habilitado, sin razón).
+  assert.equal(m.describeLiquidationButtonBlock(ready), null);
+  // Ya confirmada → null (no se muestra el botón).
+  assert.equal(m.describeLiquidationButtonBlock({ ...ready, alreadyConfirmed: true }), null);
+  // Liquidación no cargada → razón clara.
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, liquidationAvailable: false }) ?? '', /no está disponible/i);
+  // Pendientes por sincronizar.
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, pendingCount: 2 }) ?? '', /pendientes/i);
+  // Error/dead con pendingCount 0 (antes la card decía "Todo sincronizado").
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, errorCount: 1 }) ?? '', /error/i);
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, deadCount: 2 }) ?? '', /error/i);
+  // Sincronizando.
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, isSyncing: true }) ?? '', /sincroniz/i);
+  // Corte no confirmado → causa más común; debe guiar a confirmar el corte.
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, corteConfirmed: false }) ?? '', /corte/i);
+  // Prioridad: pendientes ANTES que corte no confirmado.
+  assert.match(
+    m.describeLiquidationButtonBlock({ ...ready, corteConfirmed: false, pendingCount: 3 }) ?? '',
+    /pendientes/i,
+  );
 
   console.log('cashclose guard tests: ok');
 }

@@ -15,6 +15,7 @@ import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
+import { isRestorableSession } from '../services/authOffline';
 import { useSalesStore } from './useSalesStore';
 
 interface AuthState {
@@ -198,18 +199,18 @@ export const useAuthStore = create<AuthState>((set) => ({
   rehydrateAuth: async () => {
     try {
       const saved = await storeLoad<Record<string, unknown>>(STORAGE_KEYS.AUTH_STATE);
-      if (!saved || typeof saved !== 'object') return false;
 
-      const employeeId = typeof saved.employeeId === 'number' ? saved.employeeId : null;
-      const warehouseId = typeof saved.warehouseId === 'number' ? saved.warehouseId : null;
-
-      // A valid session MUST have employeeId and warehouseId.
-      // Without them, inventory and route loading will fail silently.
-      if (!employeeId || !warehouseId) {
-        console.warn('[auth] Rehydrate: missing employeeId or warehouseId, forcing re-login');
+      // A valid local session MUST have employeeId + warehouseId (sin ellos,
+      // inventario y ruta fallarían en silencio). Regla centralizada en
+      // isRestorableSession para poder testearla sin RN/zustand.
+      const check = isRestorableSession(saved);
+      if (!check.ok || !saved || typeof saved !== 'object') {
+        console.warn(`[auth] Rehydrate: ${check.reason}, forcing re-login`);
         await storeRemove(STORAGE_KEYS.AUTH_STATE);
         return false;
       }
+      const employeeId = saved.employeeId as number;
+      const warehouseId = saved.warehouseId as number;
 
       set({
         isAuthenticated: true,

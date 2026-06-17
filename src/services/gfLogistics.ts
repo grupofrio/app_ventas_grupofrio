@@ -22,6 +22,7 @@ import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientE
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
 import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
+import { isAlreadyConfirmedResponse } from './idempotentResponse';
 import { normalizePlanStopPayload } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
 
@@ -892,6 +893,17 @@ export async function confirmRouteLiquidation(
     };
   } catch (error) {
     const err = errorResult(error);
+    // #116 idempotencia: reintentar una liquidación que el backend YA confirmó
+    // responde `already_confirmed`. Para el vendedor es éxito (el efectivo ya
+    // quedó confirmado), no un error. Robusto si llega como ok:false (throw).
+    if (isAlreadyConfirmedResponse(err.code, err.message)) {
+      return {
+        ok: true,
+        code: 'already_confirmed',
+        message: 'La liquidación ya estaba confirmada.',
+        data: null,
+      };
+    }
     return {
       ok: false,
       code: err.code,

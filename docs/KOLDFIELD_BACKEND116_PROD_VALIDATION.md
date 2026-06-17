@@ -41,6 +41,23 @@
 
 > T5/T6 validan precisamente el fix de esta sesión. T1–T4 validan el contrato ya soportado. **Registrar en este doc**: endpoint, payload (sin datos sensibles), respuesta backend, estado mostrado en app, screenshot/log, PASS/FAIL.
 
+### Harness ejecutable (para correr en la ventana coordinada)
+`scripts/e2e/backend116_validation.mjs` automatiza T1–T3 (y T5/T6 si hay plan de prueba) a nivel API, con aserciones del contrato #116 e idempotencia. **No es parte del bundle ni del suite**; es herramienta de QA. **Dry-run por defecto** (no toca la red); muta solo con `--run`. ⚠️ Con `--run` crea ventas/cierre/liquidación REALES → usar SOLO con datos de prueba autorizados y ventana sin operación real.
+
+```bash
+# 1) dry-run: valida config sin red
+node scripts/e2e/backend116_validation.mjs
+# 2) ejecución real (coordinada con Sebas/Yamil):
+KF_BASE_URL=https://grupofrio.odoo.com \
+KF_BARCODE=<vendedor_prueba> KF_PIN=<pin> \
+KF_PARTNER_ID=<cliente_prueba> KF_PRODUCT_ID=<producto> KF_AVAIL_QTY=<stock_conocido> \
+KF_WAREHOUSE_ID=<van> KF_PLAN_ID=<plan_prueba> KF_TESTS=T1,T2,T3,T5,T6 \
+node scripts/e2e/backend116_validation.mjs --run
+```
+Salida: PASS/FAIL por test + resumen. T3 imprime los ids de ambas respuestas para confirmar que NO se duplicó la `sale.order` (verificar también en Odoo). **Sin secretos hardcodeados** (todo por env).
+
+> NOTA HONESTA: en esta sesión el harness se validó en **dry-run** (sintaxis + sin red). T1–T6 con `--run` contra producción **no se ejecutaron** (faltan credenciales/datos de prueba autorizados y confirmación para crear transacciones reales).
+
 ## Hito 7 — Validación app
 
 - **typecheck:** ✅ exit 0

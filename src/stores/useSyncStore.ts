@@ -50,7 +50,7 @@ import { createGift } from '../services/gfSalesOps';
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
-import { areSyncDependenciesSatisfied } from '../services/syncDependencies';
+import { areSyncDependenciesSatisfied, cascadeDeadToDependents } from '../services/syncDependencies';
 import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -298,7 +298,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   markDead: (id, message, retries) => {
-    const newQueue = get().queue.map((i) =>
+    const afterParent = get().queue.map((i) =>
       i.id === id
         ? {
             ...i,
@@ -309,10 +309,21 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           }
         : i
     );
+    // BLD-20260617-DEAD-CASCADE: un padre muerto arrastra a sus dependientes
+    // directos vivos (p.ej. la foto de la venta) a `dead`, para que no queden
+    // `pending` eternos bloqueando cashclose/route-close sin escape. clearDead
+    // luego los limpia junto al padre; un retry de la venta los rearma.
+    const newQueue = cascadeDeadToDependents(afterParent, id);
     set({ queue: newQueue, ...computeCounts(newQueue) });
     schedulePersist();
 
+    const cascaded = newQueue.filter(
+      (i, idx) => i.status === 'dead' && afterParent[idx].status !== 'dead',
+    ).length;
     logError('sync', 'item_dead', { id, message });
+    if (cascaded > 0) {
+      logInfo('sync', 'dead_cascade', { parent: id, dependents: cascaded });
+    }
   },
 
   setOnline: (online) => {

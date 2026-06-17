@@ -106,6 +106,49 @@ function testReturnsQueueUntouchedForEmptyId(m: SaleRetryModule) {
   assert.equal(m.rearmSaleOrderForRetry(queue, ''), queue);
 }
 
+// BLD-20260617-DEAD-CASCADE: al reintentar la venta, sus fotos (que murieron
+// en cascada cuando la venta murió) deben volver a 'pending' para que se suban
+// tras el éxito de la venta. La dependencia (dependsOn) se conserva.
+function testRearmsDeadDependentPhotos(m: SaleRetryModule) {
+  const queue: SyncQueueItem[] = [
+    makeItem({ id: 'sale-1', type: 'sale_order', status: 'dead', retries: 3 }),
+    makeItem({
+      id: 'photo-1', type: 'photo', status: 'dead', priority: 2,
+      dependsOn: ['sale-1'], error_message: 'Foto no enviada porque la venta falló',
+      next_retry_at: 9_999_999,
+    }),
+  ];
+  const out = m.rearmSaleOrderForRetry(queue, 'sale-1');
+  assert.equal(out.length, queue.length, 'no duplica items');
+  assert.equal(out[0].status, 'pending', 'venta rearmada');
+  assert.equal(out[1].status, 'pending', 'foto dependiente rearmada');
+  assert.equal(out[1].error_message, null, 'mensaje de la foto limpiado');
+  assert.equal(out[1].next_retry_at, null);
+  assert.deepEqual(out[1].dependsOn, ['sale-1'], 'dependsOn preservado (sigue esperando la venta)');
+}
+
+function testIgnoresDependentOfAnotherSale(m: SaleRetryModule) {
+  const queue: SyncQueueItem[] = [
+    makeItem({ id: 'sale-1', type: 'sale_order', status: 'dead' }),
+    makeItem({ id: 'photo-2', type: 'photo', status: 'dead', dependsOn: ['sale-2'] }),
+  ];
+  const out = m.rearmSaleOrderForRetry(queue, 'sale-1');
+  assert.equal(out[1].status, 'dead', 'foto de otra venta no se toca');
+}
+
+function testDoesNotTouchLiveDependent(m: SaleRetryModule) {
+  // Una foto aún 'pending' (la venta murió pero la cascada no aplicó, o venta en
+  // 'error' no-dead) no necesita rearm; solo se rearman dependientes 'dead'.
+  const queue: SyncQueueItem[] = [
+    makeItem({ id: 'sale-1', type: 'sale_order', status: 'error' }),
+    makeItem({ id: 'photo-1', type: 'photo', status: 'pending', dependsOn: ['sale-1'] }),
+  ];
+  const out = m.rearmSaleOrderForRetry(queue, 'sale-1');
+  assert.equal(out[0].status, 'pending', 'venta rearmada');
+  assert.equal(out[1].status, 'pending', 'foto pending sigue pending (sin cambio de estado)');
+  assert.equal(out[1], queue[1], 'foto pending devuelta por referencia (intacta)');
+}
+
 async function main() {
   const mod = await import(
     // @ts-ignore -- import.meta only used in test runtime.
@@ -118,6 +161,9 @@ async function main() {
   testIgnoresWrongType(mod);
   testIgnoresAlreadyDoneOrPending(mod);
   testReturnsQueueUntouchedForEmptyId(mod);
+  testRearmsDeadDependentPhotos(mod);
+  testIgnoresDependentOfAnotherSale(mod);
+  testDoesNotTouchLiveDependent(mod);
 
   console.log('sale retry tests: ok');
 }

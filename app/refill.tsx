@@ -23,6 +23,7 @@ import { useAuthStore } from '../src/stores/useAuthStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { useDebouncedValue } from '../src/hooks/useDebouncedValue';
 import { filterAndSortRefillProducts, buildRefillPayload } from '../src/services/refillLogic';
+import { refillSavedMessage } from '../src/services/secondaryFlowCopy';
 
 interface RefillLine {
   productId: number;
@@ -107,7 +108,10 @@ export default function RefillScreen() {
         timestampMs: Date.now(),
       }));
       operationIdRef.current = null; // siguiente solicitud = nuevo id
-      Alert.alert('Solicitud enviada', 'Tu solicitud de carga fue registrada.');
+      // Honesto: solo se ENCOLÓ. Odoo la confirma al sincronizar; no decir
+      // "registrada" antes de eso.
+      const msg = refillSavedMessage();
+      Alert.alert(msg.title, msg.body);
       router.back();
     } finally {
       setSubmitting(false);

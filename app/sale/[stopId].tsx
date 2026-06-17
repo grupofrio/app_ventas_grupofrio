@@ -29,6 +29,7 @@ import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { getInsufficientStockDetail, describeInsufficientStock } from '../../src/services/insufficientStock';
+import { insufficientStockActionHint } from '../../src/services/secondaryFlowCopy';
 import {
   getEffectiveSalesCompanyId,
   getPartnerPricelistId,
@@ -377,7 +378,7 @@ function SaleScreenInner() {
         if (warehouseId) void loadProducts(warehouseId);
         Alert.alert(
           'Stock insuficiente (servidor)',
-          `${describeInsufficientStock(insufficient)}\n\nSe actualizó el inventario. Ajusta las cantidades e intenta de nuevo.`,
+          `${describeInsufficientStock(insufficient)}\n\n${insufficientStockActionHint()}`,
         );
         return;
       }

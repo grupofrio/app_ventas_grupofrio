@@ -26,6 +26,18 @@ function runStock(m: StockMod) {
   assert.equal(detail.lines[0].requestedQty, 10);
   assert.match(m.describeInsufficientStock(detail), /Barra 5kg.*10.*4/);
 
+  // Agotado (available_qty === 0) se resalta como "AGOTADO", sin "disponible 0".
+  const errOut: any = new Error('Stock insuficiente.');
+  errOut.code = 'insufficient_stock';
+  errOut.data = { error_code: 'insufficient_stock', lines: [
+    { product_id: 9, product_name: 'Hielo Barra', requested_qty: 8, available_qty: 0 },
+  ] };
+  const outDetail = m.getInsufficientStockDetail(errOut)!;
+  const outText = m.describeInsufficientStock(outDetail);
+  assert.match(outText, /AGOTADO/);
+  assert.match(outText, /Hielo Barra/);
+  assert.doesNotMatch(outText, /disponible 0/);
+
   // Code sin líneas (endpoint aún sin desplegar el detalle) → {lines:[]} + texto genérico.
   const errNoLines: any = new Error('stock insuficiente');
   errNoLines.code = 'insufficient_stock';

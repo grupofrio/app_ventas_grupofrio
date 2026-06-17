@@ -66,6 +66,10 @@ export function describeInsufficientStock(detail: InsufficientStockDetail): stri
     .map((l) => {
       const name = l.productName || (l.productId != null ? `#${l.productId}` : 'Producto');
       const req = l.requestedQty != null ? l.requestedQty : '?';
+      // Resaltar agotados (disponible 0) de forma inequívoca.
+      if (l.availableQty === 0) {
+        return `🔴 ${name}: AGOTADO (pediste ${req})`;
+      }
       const avail = l.availableQty != null ? l.availableQty : '?';
       return `${name}: pediste ${req}, disponible ${avail}`;
     })

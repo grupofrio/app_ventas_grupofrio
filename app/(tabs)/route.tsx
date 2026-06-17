@@ -41,6 +41,8 @@ import { logInfo } from '../../src/utils/logger';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
+import { summarizePendingOrders, describePendingOrdersBanner } from '../../src/services/pendingOrders';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -81,6 +83,12 @@ export default function RouteScreen() {
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const userLat = useLocationStore((s) => s.latitude);
   const userLon = useLocationStore((s) => s.longitude);
+  // Pedidos offline pendientes de envío (sale_order en cola) → banner informativo.
+  const syncQueue = useSyncStore((s) => s.queue);
+  const pendingOrdersBanner = React.useMemo(
+    () => describePendingOrdersBanner(summarizePendingOrders(syncQueue)),
+    [syncQueue],
+  );
 
   // ── Map-first state (BLD-ROUTE-MAP) ──────────────────────────────────────
   const mapRef = React.useRef<RouteMapHandle | null>(null);
@@ -416,6 +424,12 @@ export default function RouteScreen() {
           <>
         {/* Perf Fase 2C: badge discreto de datos en caché / sin conexión. */}
         <CacheStatusBadge showDetail style={{ marginBottom: 8 }} />
+        {/* Pedidos offline pendientes de envío (se sincronizan al reconectar). */}
+        {pendingOrdersBanner && (
+          <TouchableOpacity onPress={() => router.push('/sync' as never)} style={styles.pendingOrdersBanner}>
+            <Text style={styles.pendingOrdersText}>{pendingOrdersBanner} · toca para ver Sync</Text>
+          </TouchableOpacity>
+        )}
         {/* Action buttons */}
         <View style={styles.actionRow}>
           <Button label="📈 Analiticas" variant="secondary" small
@@ -557,6 +571,11 @@ const styles = StyleSheet.create({
   },
   fabText: { fontSize: 20, color: colors.text },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  pendingOrdersBanner: {
+    backgroundColor: 'rgba(234,179,8,0.10)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+    borderRadius: radii.button, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10,
+  },
+  pendingOrdersText: { fontSize: 12, color: colors.text, fontWeight: '600' },
   offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },

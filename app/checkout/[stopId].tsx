@@ -157,19 +157,15 @@ function CheckoutScreenInner() {
     setCheckingOut(true);
 
     let saleSyncState = getSaleSyncState(saleOperationId, queue);
+    // Si hay señal, intentamos enviar el pedido una vez (best-effort) para que
+    // quede confirmado antes de cerrar. Si no hay señal o sigue pendiente, NO
+    // bloqueamos: el pedido queda en cola como "pendiente de envío" y el
+    // vendedor puede cerrar la visita y avanzar (se enviará al reconectar).
     if (saleSyncState.status === 'pending' && isOnline) {
       await processQueue();
       saleSyncState = getSaleSyncState(saleOperationId, useSyncStore.getState().queue);
     }
-
-    if (saleSyncState.status === 'pending') {
-      Alert.alert(
-        'Venta pendiente',
-        'Espera a que la venta termine de sincronizar antes de cerrar la visita.',
-      );
-      setCheckingOut(false);
-      return;
-    }
+    const salePending = saleSyncState.status === 'pending';
 
     if (saleSyncState.status === 'failed') {
       // BLD-20260506-CHECKOUT-SALE-RETRY: ofrecer reintento operativo en
@@ -218,6 +214,14 @@ function CheckoutScreenInner() {
 
     if (!isOnline) {
       enqueueCheckout();
+      if (salePending) {
+        Alert.alert(
+          'Visita cerrada',
+          'Pedido pendiente de envío. Se enviará a Odoo cuando haya conexión.',
+          [{ text: 'OK', onPress: () => finalizeCheckout(shouldNavigateToNextStop) }],
+        );
+        return;
+      }
       finalizeCheckout(shouldNavigateToNextStop);
       return;
     }
@@ -353,9 +357,9 @@ function CheckoutScreenInner() {
 
         {liveSaleSyncState.status === 'pending' && (
           <View style={styles.salePendingBanner}>
-            <ActivityIndicator size="small" color={colors.primary} />
             <Text style={styles.salePendingText}>
-              Sincronizando venta con Odoo…
+              📦 Pedido pendiente de envío. Se enviará a Odoo al reconectar; puedes
+              cerrar la visita y continuar.
             </Text>
           </View>
         )}
@@ -369,7 +373,7 @@ function CheckoutScreenInner() {
             variant="success"
             onPress={() => handleCheckout(sendEnCamino)}
             fullWidth
-            disabled={checkingOut || retryingSale || liveSaleSyncState.status === 'failed' || liveSaleSyncState.status === 'pending'}
+            disabled={checkingOut || retryingSale || liveSaleSyncState.status === 'failed'}
             loading={checkingOut}
           />
           {nextStop && (
@@ -379,7 +383,7 @@ function CheckoutScreenInner() {
               onPress={() => handleCheckout(false)}
               fullWidth
               style={{ marginTop: 6 }}
-              disabled={checkingOut || retryingSale || liveSaleSyncState.status === 'failed' || liveSaleSyncState.status === 'pending'}
+              disabled={checkingOut || retryingSale || liveSaleSyncState.status === 'failed'}
             />
           )}
         </View>

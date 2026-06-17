@@ -10,6 +10,8 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
+import { AlertBanner } from '../../src/components/ui/AlertBanner';
+import { describeSaleOfflineUx } from '../../src/services/saleOfflineUx';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
@@ -139,6 +141,9 @@ function SaleScreenInner() {
                      && hasAnalyticSelection && hasWarehouse
                      && hasStock && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
+  // Evidencia de campo: avisar offline ANTES de confirmar (sin habilitar venta
+  // offline ni deshabilitar el botón — la conectividad en ruta es intermitente).
+  const saleOffline = describeSaleOfflineUx(isOnline);
 
   // P0-2 (hardening): si la venta ya estaba confirmada (p.ej. restaurada tras
   // un crash entre confirmar y checkout), reanuda el estado post-venta para que
@@ -371,6 +376,11 @@ function SaleScreenInner() {
           </Text>
         )}
 
+        {/* Aviso offline temprano: la venta se confirma online-first. */}
+        {saleOffline.showBanner && (
+          <AlertBanner variant="warning" icon="📶" message={saleOffline.bannerText} />
+        )}
+
         {/* Product lines */}
         {saleLines.length === 0 ? (
           <View style={styles.emptyProducts}>
@@ -571,6 +581,12 @@ function SaleScreenInner() {
           loading={false}
           style={{ marginTop: saleConfirmed ? 0 : 14 }}
         />
+
+        {/* Aviso offline bajo el botón (no se deshabilita: conectividad
+            intermitente; el guard de confirmación cubre el caso offline). */}
+        {saleOffline.buttonHint && !saleConfirmed && (
+          <Text style={styles.validationHint}>{saleOffline.buttonHint}</Text>
+        )}
 
         {/* Validation feedback */}
         {!canConfirm && saleLines.length > 0 && !saleConfirmed && (

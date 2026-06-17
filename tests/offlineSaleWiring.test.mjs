@@ -31,4 +31,14 @@ assert(!/enqueue\(\s*['"]sale_order['"]/.test(sale), 'la venta NO debe encolarse
 assert(sale.includes('getInsufficientStockDetail'), 'el catch debe parsear insufficient_stock');
 assert(sale.includes('describeInsufficientStock'), 'debe mostrar el detalle al vendedor');
 
+// UX offline (evidencia de campo): banner temprano + hint bajo el botón, sin
+// deshabilitar el botón (conectividad intermitente) ni habilitar venta offline.
+assert(sale.includes('describeSaleOfflineUx'), 'venta debe avisar offline antes de confirmar');
+assert(sale.includes('saleOffline.showBanner') && sale.includes('AlertBanner'),
+  'debe mostrar banner offline en la pantalla de venta');
+assert(sale.includes('saleOffline.buttonHint'), 'debe mostrar hint offline bajo el botón');
+// El botón NO se deshabilita por offline (solo por saleConfirmed).
+assert(/disabled=\{saleConfirmed\}/.test(sale),
+  'el boton Confirmar no debe deshabilitarse por offline (solo por saleConfirmed)');
+
 console.log('offline sale wiring tests: ok');

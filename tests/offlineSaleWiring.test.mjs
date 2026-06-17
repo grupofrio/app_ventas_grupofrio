@@ -3,9 +3,9 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 /**
- * Wiring de los guards offline de venta (riesgos reportados por Sebastián):
- *  #1 ProductPicker no cuelga sin red; #2 venta bloqueada offline con mensaje;
- *  #3 venta NO se encola como confirmada; #5 insufficient_stock muestra stock.
+ * Wiring de venta offline (modelo "pedido pendiente de envío", S1):
+ *  #1 ProductPicker no cuelga sin red; #2 online sigue siendo createSale directo;
+ *  #3 offline ENCOLA sale_order (+ foto) sin marcar confirmada; #5 insufficient_stock.
  */
 const root = process.cwd();
 const picker = fs.readFileSync(path.join(root, 'src/components/domain/ProductPicker.tsx'), 'utf8');
@@ -15,17 +15,33 @@ const sale = fs.readFileSync(path.join(root, 'app/sale/[stopId].tsx'), 'utf8');
 assert(picker.includes('useSyncStore'), 'ProductPicker debe leer isOnline');
 assert(/if \(!isOnline\)/.test(picker), 'price effect debe cortar el fetch si !isOnline');
 
-// #2 venta bloqueada offline con mensaje claro, ANTES de bloquear/lockear.
-assert(sale.includes('Venta requiere conexion'), 'venta debe bloquear offline con mensaje');
-const offlineIdx = sale.indexOf('if (!isOnline)');
-const lockIdx = sale.indexOf('lockSaleConfirm()');
-assert(offlineIdx > -1 && lockIdx > -1 && offlineIdx < lockIdx,
-  'el guard offline debe ir ANTES de lockSaleConfirm (no deja estado ambiguo)');
+// #2 ONLINE: venta sigue siendo online-first (createSale directo).
+assert(sale.includes('await createSale('), 'venta online usa createSale directo');
 
-// #3 la venta NO se encola como confirmada/pendiente: el screen llama createSale
-// directo (online-first) y NO usa enqueue('sale_order', ...).
-assert(sale.includes('await createSale('), 'venta usa createSale online-first');
-assert(!/enqueue\(\s*['"]sale_order['"]/.test(sale), 'la venta NO debe encolarse como sale_order');
+// #3 OFFLINE (S1): el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
+// offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
+assert(/enqueue\(\s*['"]sale_order['"]/.test(sale), 'offline debe encolar el pedido como sale_order');
+assert(/enqueue\(\s*['"]photo['"]/.test(sale), 'offline debe encolar la foto del pedido');
+const offlineIdx = sale.indexOf('if (!isOnline) {');
+const createIdx = sale.indexOf('await createSale(');
+assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
+  'la rama offline (enqueue) va antes del createSale online');
+// No se confirma offline como venta: el rótulo se deriva del estado de sync.
+assert(sale.includes('saleConfirmButtonLabel') && sale.includes('getSaleSyncState'),
+  'la etiqueta del botón refleja pendiente/enviado/error, no "confirmado" offline');
+// Pedido muerto NO restaura stock local (S1: no se descontó al encolar).
+const sync = fs.readFileSync(path.join(root, 'src/stores/useSyncStore.ts'), 'utf8');
+assert(sync.includes('sale_order_dead_no_stock_rollback'),
+  'rollback de sale_order debe ser no-op en S1 (no inflar stock)');
+
+// S1: la venta NUNCA reserva/descuenta inventario localmente (ni online ni
+// offline) — el backend valida/descuenta al confirmar en Odoo.
+assert(!/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
+  'la venta no debe descontar inventario local (S1)');
+// El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
+assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?saveSaleTicketSnapshot/.test(sale),
+  'online: snapshot del ticket después de createSale');
+assert(/sellerName:\s*employeeName/.test(sale), 'el ticket guarda el vendedor (employeeName)');
 
 // #5 insufficient_stock: el catch usa el detalle y refresca inventario real.
 assert(sale.includes('getInsufficientStockDetail'), 'el catch debe parsear insufficient_stock');

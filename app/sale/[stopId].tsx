@@ -11,7 +11,8 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
-import { describeSaleOfflineUx } from '../../src/services/saleOfflineUx';
+import { describeSaleOfflineUx, saleConfirmButtonLabel } from '../../src/services/saleOfflineUx';
+import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
@@ -85,6 +86,8 @@ function SaleScreenInner() {
   const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
 
   const isOnline = useSyncStore((s) => s.isOnline);
+  const enqueue = useSyncStore((s) => s.enqueue);
+  const syncQueue = useSyncStore((s) => s.queue);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
@@ -141,9 +144,11 @@ function SaleScreenInner() {
                      && hasAnalyticSelection && hasWarehouse
                      && hasStock && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
-  // Evidencia de campo: avisar offline ANTES de confirmar (sin habilitar venta
-  // offline ni deshabilitar el botón — la conectividad en ruta es intermitente).
+  // Aviso offline + estado del pedido. Con pedido offline pendiente (S1), el
+  // pedido se encola como sale_order y su estado se rastrea por saleOperationId.
   const saleOffline = describeSaleOfflineUx(isOnline);
+  const saleOperationId = useVisitStore((s) => s.saleOperationId);
+  const saleSync = getSaleSyncState(saleOperationId, syncQueue);
 
   // P0-2 (hardening): si la venta ya estaba confirmada (p.ej. restaurada tras
   // un crash entre confirmar y checkout), reanuda el estado post-venta para que
@@ -237,13 +242,6 @@ function SaleScreenInner() {
     }
 
     if (!stop) return;
-    if (!isOnline) {
-      Alert.alert(
-        'Venta requiere conexion',
-        'Para mantener el inventario trazable, la venta debe confirmarse directamente en Odoo. Conecta el dispositivo e intenta de nuevo.',
-      );
-      return;
-    }
     if (stop._entityType === 'lead' && !getLeadPartnerId(stop)) {
       Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
       return;
@@ -306,6 +304,45 @@ function SaleScreenInner() {
       company_id: companyId,
       effective_company_id: effectiveCompanyId,
     });
+
+    // Pedido offline pendiente (S1): sin señal, NO bloqueamos — encolamos el
+    // pedido como `sale_order` (+ foto) para enviarlo a Odoo al reconectar. NO
+    // se marca como venta confirmada ni se crea pago/stock definitivo: el
+    // dispatcher de la cola ejecuta createSale (que confirma+cobra en Odoo) solo
+    // cuando hay conexión. Idempotente por _operationId. cashclose/route-close
+    // ya bloquean el cierre/liquidación mientras haya pendientes en la cola.
+    if (!isOnline) {
+      const enqId = enqueue('sale_order', payload);
+      if (salePhotoUris[0]) {
+        enqueue('photo', {
+          stop_id: payload.stop_id,
+          localUri: salePhotoUris[0],
+          image_type: 'sale',
+        }, { dependsOn: [enqId] });
+      }
+      // checkout/ruta rastrean el pedido por este id (getSaleSyncState).
+      useVisitStore.setState({ saleOperationId: enqId });
+      await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
+        saleId: enqId,
+        customerName: stop.customer_name,
+        sellerName: employeeName,
+        paymentMethod: confirmedPaymentMethod,
+        createdAt: new Date().toISOString(),
+        lines: saleLines,
+      }));
+      setLastSaleTicketId(enqId);
+      Alert.alert(
+        'Pedido guardado',
+        'Pedido pendiente de envío. Se enviará a Odoo cuando haya conexión; no queda confirmado hasta entonces.',
+      );
+      if (shouldSkipStopCheckout(stop.id)) {
+        updateStopState(stop.id, 'done');
+        setAfterSaleAction('route');
+      } else {
+        setAfterSaleAction('checkout');
+      }
+      return;
+    }
 
     try {
       await createSale(buildSalesCreatePayload(payload));
@@ -572,9 +609,15 @@ function SaleScreenInner() {
           </View>
         )}
 
-        {/* Confirm button */}
+        {/* Confirm button. Etiqueta refleja: pendiente de envío / enviado /
+            error (pedido offline) · guardar pendiente (offline pre-confirm) ·
+            confirmado (venta online directa) · confirmar. */}
         <Button
-          label={saleConfirmed ? '✓ Pedido confirmado' : '✓ Confirmar Pedido'}
+          label={saleConfirmButtonLabel({
+            saleSyncStatus: saleSync.status,
+            isOnline,
+            saleConfirmed,
+          })}
           onPress={handleConfirm}
           fullWidth
           disabled={saleConfirmed}

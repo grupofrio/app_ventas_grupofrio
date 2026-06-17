@@ -44,6 +44,7 @@ import { formatHumanDate } from '../src/services/calendarLogic';
 import {
   createPresale, PresaleNotEnabledError, PRESALE_BACKEND_ENABLED, PRESALE_LEAD_SUPPORTED,
 } from '../src/services/presale';
+import { presaleOfflineBlockMessage } from '../src/services/secondaryFlowCopy';
 
 function makeOperationId(): string {
   return `presale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -154,7 +155,8 @@ export default function PresaleScreen() {
       return;
     }
     if (!isOnline) {
-      Alert.alert('Sin conexión', 'Conéctate para registrar la preventa.');
+      const m = presaleOfflineBlockMessage();
+      Alert.alert(m.title, m.body);
       return;
     }
     setSubmitting(true);

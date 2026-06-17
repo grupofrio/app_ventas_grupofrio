@@ -42,6 +42,7 @@ import {
   consignmentPaymentLabel, computeReturnTotal,
 } from '../../src/services/consignmentLogic';
 import { OperationGate } from '../../src/components/OperationGate';
+import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlowCopy';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 
@@ -179,7 +180,7 @@ function ConsignmentScreenInner() {
       );
       return;
     }
-    if (!isOnline) { Alert.alert('Sin conexión', 'La consignación requiere conexión.'); return; }
+    if (!isOnline) { const m = consignmentOfflineBlockMessage(); Alert.alert(m.title, m.body); return; }
     setSubmitting(true);
     (async () => {
       try {
@@ -227,7 +228,7 @@ function ConsignmentScreenInner() {
     if (submitting || !active) return;
     const built = buildCountLines(active.lines, physical);
     if (!built.ok) { Alert.alert('Falta información', built.reason); return; }
-    if (!isOnline) { Alert.alert('Sin conexión', 'La consignación requiere conexión.'); return; }
+    if (!isOnline) { const m = consignmentOfflineBlockMessage(); Alert.alert(m.title, m.body); return; }
 
     const action = closing ? 'cerrar' : 'registrar la visita de';
     Alert.alert(

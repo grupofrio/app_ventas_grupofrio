@@ -28,11 +28,29 @@
 - [ ] **insufficient_stock (backend rechaza):** alerta "Stock insuficiente (servidor)" con `pediste X, disponible Y` por línea (cuando el backend manda `data.lines`); el inventario se refresca al stock real; el carrito queda para ajustar; la venta **no** se marca exitosa.
 - [ ] **Cambio de cliente sin visita fantasma:** abrir cliente A (check-in), volver, abrir cliente B → B no hereda estado de A; si A sigue `in_progress`, B muestra "otra visita en curso" (correcto, no fantasma); si A desapareció del plan refrescado, no bloquea.
 
+## Caso de evidencia real (campo, 2026-06-17) — venta armada en modo avión
+Reporte: en `Nueva Venta` el vendedor armó subtotal $70.00 / 11.0 kg / foto capturada y, al tocar **Confirmar Pedido** con el teléfono **sin conexión**, apareció el modal "Venta requiere conexión…".
+
+**Diagnóstico: comportamiento ESPERADO y seguro** (guard de #42), confirmado en código:
+- El guard `if (!isOnline)` corre **antes** de `lockSaleConfirm()` y de `createSale()` → **no** crea venta/pago/picking, **no** marca `saleConfirmed`, **no** encola `sale_order`.
+- El carrito y la foto **se conservan** (return temprano, sin `resetVisit`); el botón sigue habilitado (`disabled={saleConfirmed}`, y `saleConfirmed` es false) → **se puede reintentar al reconectar**.
+- No hay spinner/lock que quede activo (no se llamó a `lockSaleConfirm` ni a un loading state en esa rama).
+
+**Mejora UX aplicada (sin habilitar venta offline):** banner **"Sin conexión: puedes capturar la venta, pero para confirmarla necesitas conexión con Odoo."** en la pantalla de venta + hint bajo el botón **"Conecta el dispositivo para confirmar en Odoo."** → el vendedor sabe **antes** de armar/confirmar. **No** se deshabilita el botón (la conectividad en ruta es intermitente; deshabilitarlo podría bloquear el confirm en la ventana en que sí hay señal). El modal de confirmación se mantiene como guard final.
+
+Checklist del caso:
+- [ ] **Modo avión + venta armada + foto:** banner offline visible arriba; hint bajo el botón.
+- [ ] **Confirmar offline:** modal claro; **no** se crea venta ni cola; carrito/foto intactos.
+- [ ] **Cerrar modal:** botón sigue habilitado; nada trabado.
+- [ ] **Reconectar + Confirmar:** confirma normal; **no** duplica foto/venta/operación/visita.
+
 ## Pruebas automáticas (node)
+- `tests/saleOfflineUx.test.ts` — `describeSaleOfflineUx`: online sin banner/hint; offline banner+hint claros, sin prometer venta offline.
 - `tests/insufficientStock.test.ts` — parser (con/sin líneas, fallback por mensaje, no-confusión, null-safe), `describeInsufficientStock`, y `unwrapRestResult` adjunta `data`+`code`.
 - `tests/offlineSaleWiring.test.mjs` — picker tiene guard `isOnline`; venta bloquea offline **antes** de lockear; venta **no** se encola como `sale_order`; catch cablea `getInsufficientStockDetail`/`describeInsufficientStock`.
+- `tests/offlineSaleWiring.test.mjs` — además: banner offline (`describeSaleOfflineUx`/`AlertBanner`), hint bajo botón, y que el botón **no** se deshabilita por offline.
 - `tests/visitPersistence.test.ts` (existente) — `shouldRehydrateVisit` exige `in_progress`; reset si el stop desaparece (cubre #4).
-- **typecheck limpio; tests 124/124.**
+- **typecheck limpio; tests 125/125.**
 
 ## Riesgos pendientes
 - El **detalle por línea** de `insufficient_stock` (product/requested/available) solo se ve cuando el backend lo envíe en `data.lines` — eso llega con **#116** (en staging). Mientras tanto, el fix ya **refresca el stock real** y muestra el mensaje del backend; degrada de forma segura.

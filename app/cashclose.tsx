@@ -65,6 +65,7 @@ import {
   describeBlockingReason,
   describeLiquidationButtonBlock,
 } from '../src/services/cashcloseGuard';
+import { describeCashDifference } from '../src/services/trustSignals';
 
 interface SummaryLine {
   label: string;
@@ -486,9 +487,15 @@ export default function CashCloseScreen() {
         return;
       }
       if (result.code === 'difference_warning' && !force) {
+        // Trust signal: mostrar el MONTO exacto y si falta/sobra, además del
+        // mensaje del backend, para que el vendedor no confirme a ciegas.
+        const diff = describeCashDifference({ captured: cashCaptured, expected: cashExpected });
+        const body = [diff.label, diff.action, result.message]
+          .filter((s) => !!s && s.trim().length > 0)
+          .join('\n\n');
         Alert.alert(
           'Hay diferencia en liquidacion',
-          result.message,
+          body,
           [
             { text: 'Revisar', style: 'cancel' },
             {
@@ -507,7 +514,7 @@ export default function CashCloseScreen() {
     } finally {
       setLiquidationBusy(false);
     }
-  }, [cashCaptured, loadLiquidation, loadPlan, notes, planId]);
+  }, [cashCaptured, cashExpected, loadLiquidation, loadPlan, notes, planId]);
 
   const handleConfirmLiquidation = useCallback(async () => {
     if (!canConfirmFinalLiquidation) return;

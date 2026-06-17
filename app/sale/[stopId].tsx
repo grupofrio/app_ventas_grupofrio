@@ -12,6 +12,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { describeSaleOfflineUx, saleConfirmButtonLabel } from '../../src/services/saleOfflineUx';
+import { describeSaleConfirmBlock } from '../../src/services/trustSignals';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
@@ -439,7 +440,7 @@ function SaleScreenInner() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{line.productName}</Text>
                 <Text style={styles.productInfo}>
-                  {formatCatalogPrice(line.price)} · Stock: {line.stock}
+                  {formatCatalogPrice(line.price)} · Stock: {line.stock}{!isOnline ? ' · ref.' : ''}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
@@ -520,6 +521,11 @@ function SaleScreenInner() {
             <Text style={styles.grandTotalLabel}>TOTAL</Text>
             <Text style={styles.grandTotalValue}>{formatCurrency(total)}</Text>
           </View>
+          {!isOnline && (
+            <Text style={styles.referentialNote}>
+              ⚠️ Precios y stock REFERENCIALES (sin conexión). Odoo confirma el monto al sincronizar.
+            </Text>
+          )}
         </Card>
 
         {/* Payment method */}
@@ -638,17 +644,20 @@ function SaleScreenInner() {
           <Text style={styles.validationHint}>{saleOffline.buttonHint}</Text>
         )}
 
-        {/* Validation feedback */}
-        {!canConfirm && saleLines.length > 0 && !saleConfirmed && (
-          <Text style={styles.validationHint}>
-            {!hasStock ? '⚠️ Ajusta cantidades al stock' : ''}
-            {hasStock && !salePhotoTaken ? '📸 Toma la foto' : ''}
-            {hasStock && salePhotoTaken && !salePaymentMethod ? '💰 Selecciona pago' : ''}
-            {hasStock && salePhotoTaken && salePaymentMethod && !implicitAnalytics.analytic_plaza_id ? '📍 Configura la plaza del empleado' : ''}
-            {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && !hasWarehouse ? '🏬 Configura el almacén del empleado' : ''}
-            {hasStock && salePhotoTaken && salePaymentMethod && implicitAnalytics.analytic_plaza_id && hasWarehouse && !canStartSale ? '📦 Acepta la carga pendiente' : ''}
-          </Text>
-        )}
+        {/* Validation feedback — razón única y clara de por qué está bloqueado
+            (helper puro describeSaleConfirmBlock, testeable). */}
+        {!saleConfirmed && (() => {
+          const reason = describeSaleConfirmBlock({
+            hasLines: saleLines.length > 0,
+            hasStock,
+            photoTaken: salePhotoTaken,
+            paymentSelected: !!salePaymentMethod,
+            hasPlaza: !!implicitAnalytics.analytic_plaza_id,
+            hasWarehouse,
+            routeLoadAccepted: canStartSale,
+          });
+          return reason ? <Text style={styles.validationHint}>{reason}</Text> : null;
+        })()}
       </ScrollView>
     </SafeAreaView>
   );
@@ -722,6 +731,7 @@ const styles = StyleSheet.create({
   totalLabel: { fontSize: 12, color: colors.textDim },
   totalValue: { fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text },
   divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 6 },
+  referentialNote: { fontSize: 11, color: colors.warning, fontWeight: '600', marginTop: 8, lineHeight: 15 },
   grandTotalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
   grandTotalValue: {
     fontFamily: fonts.monoBold,

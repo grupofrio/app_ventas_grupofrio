@@ -31,6 +31,7 @@ import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices }
 import { schedulePersistPriceCache } from '../../services/offlineCache';
 import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
+import { describeCatalogTrustBanner } from '../../services/trustSignals';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
@@ -510,14 +511,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         {/* Perf Fase 2C: badge discreto de datos en caché / sin conexión. */}
         <CacheStatusBadge showDetail style={{ marginHorizontal: spacing.md, marginBottom: spacing.xs }} />
 
-        {/* Banners */}
-        {isGlobalFallback && (
-          <View style={styles.fallbackBanner}>
-            <Text style={styles.fallbackText}>
-              Inventario global — stock puede no reflejar tu unidad
-            </Text>
-          </View>
-        )}
+        {/* Trust signal: aclara cuándo precio/stock son REFERENCIALES (sin
+            conexión, inventario global o precio de lista no-cliente). No
+            bloquea; solo evita que el vendedor confunda caché con confirmado. */}
+        {(() => {
+          const trust = describeCatalogTrustBanner({ isOnline, hasStockData, hasCustomPrices });
+          return trust ? (
+            <View style={styles.fallbackBanner}>
+              <Text style={styles.fallbackText}>{trust}</Text>
+            </View>
+          ) : null;
+        })()}
 
         {/* Search */}
         <View style={styles.searchWrap}>
@@ -567,7 +571,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             {priceLoading ? ' · Cargando precios...' : ''}
           </Text>
           <Text style={styles.infoText}>
-            {hasCustomPrices ? 'Precio lista cliente' : 'Precio lista'}
+            {!isOnline
+              ? 'Precio referencial'
+              : hasCustomPrices ? 'Precio cliente' : 'Precio lista'}
           </Text>
         </View>
 

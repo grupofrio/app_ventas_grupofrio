@@ -14,6 +14,7 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { SyncQueueItem } from '../src/types/sync';
 import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
+import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
 
 const typeIcons: Record<string, string> = {
@@ -119,6 +120,11 @@ export default function SyncScreen() {
             style={{ flex: 1 }}
           />
         </View>
+        {/* Razón visible de por qué "Reintentar" no está disponible. */}
+        {(() => {
+          const retryReason = describeRetryBlock({ isOnline, pendingCount, isSyncing });
+          return retryReason ? <Text style={styles.retryHint}>{retryReason}</Text> : null;
+        })()}
 
         {/* BLD-20260424-PURGE: botón visible y diferenciado para limpiar
             items DEAD. Solo aparece cuando hay items fallidos permanentemente
@@ -276,6 +282,7 @@ const styles = StyleSheet.create({
   syncLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
   syncOrderLine: { fontSize: 12, color: colors.text, fontWeight: '500', marginTop: 1 },
   syncBlockedLine: { fontSize: 12, color: '#EF4444', fontWeight: '500', marginTop: 2, lineHeight: 16 },
+  retryHint: { fontSize: 11, color: colors.textDim, marginBottom: 8, marginTop: -2 },
   syncTime: { fontSize: 11, color: colors.textDim },
   deadHint: {
     fontSize: 11, color: colors.textDim, fontStyle: 'italic',

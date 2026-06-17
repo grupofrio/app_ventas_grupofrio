@@ -17,7 +17,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Modal, Image, Dimensions, ActivityIndicator,
+  StyleSheet, Modal, Image, Dimensions, ActivityIndicator, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,6 +25,7 @@ import { useProductStore, TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
+import { useSyncStore } from '../../stores/useSyncStore';
 import { getBaseUrl } from '../../services/api';
 import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
 import { schedulePersistPriceCache } from '../../services/offlineCache';
@@ -121,6 +122,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const forecasts = useKoldStore((s) => s.forecasts);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const isOnline = useSyncStore((s) => s.isOnline);
   const isGlobalFallback = inventorySource === 'global_legacy';
 
   const [search, setSearch] = useState('');
@@ -162,6 +164,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       setPriceLoading(false);
       return;
     }
+    // Sin red y sin caché: NO disparar el RPC de precios (cuelga hasta el
+    // timeout de 45s → "se queda cargando al agregar productos"). Caemos a
+    // list_price; los precios reales se ven al reconectar/reabrir.
+    if (!isOnline) {
+      setPriceMap(new Map());
+      setPriceLoading(false);
+      return;
+    }
     let cancelled = false;
     setPriceLoading(true);
     computeCustomerPrices(partnerId, products, pricingOptions).then((map) => {
@@ -176,7 +186,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       if (!cancelled) setPriceLoading(false);
     });
     return () => { cancelled = true; };
-  }, [visible, partnerId, products, companyId, pricelistId]);
+  }, [visible, partnerId, products, companyId, pricelistId, isOnline]);
 
   const toggleView = useCallback(() => {
     const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';
@@ -186,6 +196,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
   const refreshCatalog = useCallback(async () => {
     if (!warehouseId || refreshingCatalog) return;
+    // Sin red: refrescar catálogo/precios colgaría hasta el timeout. Avisar.
+    if (!isOnline) {
+      Alert.alert('Sin conexión', 'Conéctate para actualizar catálogo y precios.');
+      return;
+    }
     setRefreshingCatalog(true);
     setPriceLoading(true);
     clearPricelistCaches();
@@ -203,7 +218,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       setPriceLoading(false);
       setRefreshingCatalog(false);
     }
-  }, [companyId, loadProducts, partnerId, pricelistId, refreshingCatalog, warehouseId]);
+  }, [companyId, loadProducts, partnerId, pricelistId, refreshingCatalog, warehouseId, isOnline]);
 
   // Demand recommendations
   const recommendations = useMemo(() => {

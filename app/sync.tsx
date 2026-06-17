@@ -215,7 +215,9 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
         {orderDetail && (orderDetail.customerName || orderDetail.total != null) && (
           <Text style={styles.syncOrderLine}>
             {orderDetail.customerName ?? 'Cliente'}
-            {orderDetail.total != null ? ` · ${formatCurrency(orderDetail.total)}` : ''}
+            {orderDetail.total != null
+              ? ` · ${formatCurrency(orderDetail.total)}${orderDetail.tone === 'sent' ? '' : ' capturado'}`
+              : ''}
           </Text>
         )}
         <Text style={styles.syncTime}>

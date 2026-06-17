@@ -19,6 +19,7 @@
 
 import { postRest } from './api';
 import { logInfo } from '../utils/logger';
+import { isAlreadyClosedResponse } from './idempotentResponse';
 
 const PWA_RUTA = 'pwa-ruta';
 
@@ -49,7 +50,21 @@ export async function closeRoute(
 
   // postRest throws on ok:false / HTTP>=400 (envelope detection, fix #16),
   // so a successful return here means the backend accepted the close.
-  const result = await postRest<unknown>(`${PWA_RUTA}/close-route`, body);
+  let result: unknown;
+  try {
+    result = await postRest<unknown>(`${PWA_RUTA}/close-route`, body);
+  } catch (error) {
+    // #116 idempotencia: reintentar un cierre que el backend YA aplicó responde
+    // `already_closed`. Para el vendedor eso es éxito (la ruta está cerrada), no
+    // un error. Robusto si llega como ok:false (throw) o por mensaje.
+    const code = (error as { code?: unknown })?.code;
+    const message = error instanceof Error ? error.message : undefined;
+    if (isAlreadyClosedResponse(typeof code === 'string' ? code : null, message)) {
+      logInfo('general', 'route_close_idempotent', { planId });
+      return { ok: true, message: 'La ruta ya estaba cerrada.', state: 'closed', km_traveled: null, warnings: [] };
+    }
+    throw error;
+  }
   const data = (result && typeof result === 'object'
     ? ((result as Record<string, unknown>).data ?? result)
     : {}) as Record<string, unknown>;

@@ -68,6 +68,10 @@ Salida: PASS/FAIL por test + resumen. T3 imprime los ids de ambas respuestas par
 - **GO / NO-GO APK QA:** **GO.** Contrato #116 soportado en código; idempotencia de cierre/liquidación corregida; typecheck/test limpios. La APK de QA es justamente el vehículo para ejecutar T1–T6.
 - **GO / NO-GO producción controlada:** **CONDICIONAL — GO tras pasar T1–T6** en la ventana de prueba coordinada. No promover a producción amplia hasta que las 6 pruebas E2E den PASS contra el backend #116 productivo. El código de la app está listo; falta la evidencia E2E real (no ejecutable de forma segura/autónoma aquí).
 
+## Decisión sobre el Hito 3 (E2E)
+
+**2026-06-17 — Yamil decidió DIFERIR la ejecución E2E (T1–T6) a Sebas** en una ventana coordinada, usando el harness ya entregado. Se acepta como entregable de esta sesión: contrato #116 validado en código (PASS), fix de idempotencia (PR #54), runbook y harness ejecutable. La ejecución real de T1–T6 con datos de prueba autorizados queda como tarea operativa pendiente (no bloqueante para APK QA; sí requisito para el GO de producción controlada).
+
 ## Riesgos restantes
 
 1. **Envoltura exacta de `already_closed`/`already_confirmed` no confirmada empíricamente.** El fix es robusto a `ok:true+code` y a `ok:false`; aun así, conviene confirmar con Sebas el shape exacto y, si difiere (p.ej. code distinto), ajustar el needle (el helper ya tiene fallback por mensaje).

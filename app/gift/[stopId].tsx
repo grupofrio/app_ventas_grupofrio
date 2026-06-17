@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 import {
   buildGiftPayload,
@@ -31,6 +32,9 @@ import {
 import { createGift } from '../../src/services/gfSalesOps';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { isSessionExpiredError } from '../../src/services/sessionError';
+import { decideGiftFailureAction } from '../../src/services/giftSubmit';
 
 interface EditableGiftLine extends GiftDraftLine {
   productName: string;
@@ -75,6 +79,8 @@ export default function GiftScreen() {
   const loadProducts = useProductStore((s) => s.loadProducts);
   const productCount = useProductStore((s) => s.productCount);
   const productsLastSync = useProductStore((s) => s.lastSync);
+  const enqueue = useSyncStore((s) => s.enqueue);
+  const isOnline = useSyncStore((s) => s.isOnline);
 
   const [lines, setLines] = useState<EditableGiftLine[]>([
     { key: makeLineKey(), productId: null, productName: '', qtyText: '' },
@@ -82,6 +88,15 @@ export default function GiftScreen() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [pickerLineKey, setPickerLineKey] = useState<string | null>(null);
+
+  // operation_id (idempotency_key) ESTABLE por intento: mismo id si el vendedor
+  // reintenta el mismo regalo (online o tras encolar offline), para que el
+  // backend deduplique. Se regenera tras un envío/encolado exitoso.
+  const operationIdRef = useRef<string | null>(null);
+  function getGiftOperationId(): string {
+    if (!operationIdRef.current) operationIdRef.current = makeAttemptId();
+    return operationIdRef.current;
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -162,7 +177,7 @@ export default function GiftScreen() {
   }
 
   async function handleSubmit() {
-    if (!stop) return;
+    if (!stop || submitting) return; // guard doble-tap
 
     if (!canSubmit || !partnerId || !mobileLocationId || !employeeAnalyticPlazaId) {
       if (submitIssues.length > 0) {
@@ -194,25 +209,60 @@ export default function GiftScreen() {
       return;
     }
 
+    // Payload construido UNA vez con operation_id estable: el intento online y
+    // el encolado offline usan el MISMO idempotency_key → el backend deduplica.
+    const payload = buildGiftPayload({
+      analyticAccountId: employeeAnalyticPlazaId,
+      idempotencyKey: getGiftOperationId(),
+      mobileLocationId,
+      partnerId,
+      visitLineId: stop.visit_line_id ?? null,
+      lines: payloadLines,
+      notes,
+    });
+
+    const navigateAfter = (message: string) => {
+      operationIdRef.current = null; // siguiente regalo = nuevo id
+      const target = from === 'checkin'
+        ? `/checkin/${stop.id}?giftSuccess=${encodeURIComponent(message)}`
+        : `/stop/${stop.id}?giftSuccess=${encodeURIComponent(message)}`;
+      router.replace(target as never);
+    };
+
+    const queueGift = () => {
+      // El dispatcher 'gift' de useSyncStore postea este payload a
+      // /gf/salesops/gift/create al recuperar conexión. No se pierde captura.
+      enqueue('gift', payload as unknown as Record<string, unknown>);
+    };
+
     setSubmitting(true);
     try {
-      const payload = buildGiftPayload({
-        analyticAccountId: employeeAnalyticPlazaId,
-        idempotencyKey: makeAttemptId(),
-        mobileLocationId,
-        partnerId,
-        visitLineId: stop.visit_line_id ?? null,
-        lines: payloadLines,
-        notes,
-      });
-
+      // Sin red: encolar directo (no perder la captura en ruta).
+      if (!isOnline) {
+        queueGift();
+        navigateAfter('Regalo guardado para sincronizar');
+        return;
+      }
       const result = await createGift(payload);
-      const target = from === 'checkin'
-        ? `/checkin/${stop.id}?giftSuccess=${encodeURIComponent(result.userMessage)}`
-        : `/stop/${stop.id}?giftSuccess=${encodeURIComponent(result.userMessage)}`;
-      router.replace(target as never);
+      navigateAfter(result.userMessage);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo registrar el regalo.';
+      const action = decideGiftFailureAction({
+        isSessionExpired: isSessionExpiredError(error),
+        isRetryable: isRetryableSyncErrorMessage(message),
+      });
+      if (action === 'session_relogin') {
+        // No encolar: sin sesión válida no es seguro. Pedir re-login.
+        Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar el regalo.');
+        return;
+      }
+      if (action === 'enqueue') {
+        queueGift();
+        Alert.alert('Sincronización pendiente', 'El regalo quedó guardado y se sincronizará al reconectar.');
+        navigateAfter('Regalo guardado para sincronizar');
+        return;
+      }
+      // 'show_error' → rechazo de validación/backend: NO encolar a ciegas.
       Alert.alert('Regalo rechazado', message);
     } finally {
       setSubmitting(false);

@@ -46,6 +46,7 @@ import {
   upsertLeadData,
   closeOffrouteVisit,
 } from '../services/gfLogistics';
+import { createGift } from '../services/gfSalesOps';
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
@@ -773,6 +774,13 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // sale_order: the legacy JSON-RPC write needed ACLs the driver
       // lacks.
       await createPayment(buildPaymentsCreatePayload(payload as Record<string, unknown>), meta);
+      break;
+
+    case 'gift':
+      // El payload encolado YA es el {meta, data} de buildGiftPayload; createGift
+      // lo postea a /gf/salesops/gift/create. La idempotencia la da
+      // meta.idempotency_key (estable por intento) — un retry no duplica.
+      await createGift(payload as Record<string, unknown>);
       break;
 
     case 'photo': {

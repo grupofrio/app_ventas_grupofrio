@@ -24,6 +24,16 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
     if (typeof result.code === 'string' && result.code.length > 0) {
       (err as Error & { code: string }).code = result.code;
     }
+    // También viaja un `error_code` dentro de `data` (p.ej. insufficient_stock).
+    // Adjuntamos el `data` del backend al error para que el caller pueda mostrar
+    // detalle por línea (available_qty real). Aditivo: no rompe a nadie.
+    if (result.data && typeof result.data === 'object') {
+      (err as Error & { data?: unknown }).data = result.data;
+      const dataCode = (result.data as Record<string, unknown>).error_code;
+      if (!(err as Error & { code?: string }).code && typeof dataCode === 'string' && dataCode) {
+        (err as Error & { code: string }).code = dataCode;
+      }
+    }
     throw err;
   }
 

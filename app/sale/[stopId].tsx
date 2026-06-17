@@ -24,6 +24,7 @@ import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
+import { getInsufficientStockDetail, describeInsufficientStock } from '../../src/services/insufficientStock';
 import {
   getEffectiveSalesCompanyId,
   getPartnerPricelistId,
@@ -318,6 +319,18 @@ function SaleScreenInner() {
       }
     } catch (error) {
       unlockSaleConfirm();
+      // insufficient_stock: el backend rechazó por stock. Refrescamos el
+      // inventario para mostrar el available_qty REAL y dejamos el carrito
+      // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
+      const insufficient = getInsufficientStockDetail(error);
+      if (insufficient) {
+        if (warehouseId) void loadProducts(warehouseId);
+        Alert.alert(
+          'Stock insuficiente (servidor)',
+          `${describeInsufficientStock(insufficient)}\n\nSe actualizó el inventario. Ajusta las cantidades e intenta de nuevo.`,
+        );
+        return;
+      }
       const message = error instanceof Error ? error.message : 'No se pudo confirmar la venta en Odoo.';
       Alert.alert('Venta rechazada', message);
       return;

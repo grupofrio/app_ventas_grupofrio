@@ -889,25 +889,16 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
 
   switch (item.type) {
     case 'sale_order': {
-      // Restore local stock for every line (add back deducted qty)
-      const lines = item.payload.lines as Array<{
-        product_id: number;
-        qty?: number;
-        quantity?: number;
-      }> | undefined;
-      if (lines && lines.length > 0) {
-        lines.forEach((line) => {
-          const quantity = typeof line.quantity === 'number' ? line.quantity : line.qty;
-          if (typeof quantity === 'number' && quantity > 0) {
-            updateLocalStock(line.product_id, quantity); // positive = restore
-          }
-        });
-        logError('sync', 'rollback_sale', {
-          id: item.id,
-          lines_restored: lines.length,
-          products: lines.map((l) => l.product_id),
-        });
-      }
+      // Pedido offline pendiente (política S1): NO se descuenta stock local al
+      // encolar (el backend valida/descuenta al confirmar en Odoo). Por lo tanto
+      // NO hay nada que restaurar si el pedido muere — restaurar aquí inflaría
+      // el inventario local. El pedido muerto queda visible en Sync y bloquea
+      // cierre/liquidación hasta resolverse. (Si se adoptara descuento optimista
+      // —S2— habría que reactivar la restauración.)
+      logError('sync', 'sale_order_dead_no_stock_rollback', {
+        id: item.id,
+        lines: Array.isArray(item.payload.lines) ? item.payload.lines.length : 0,
+      });
       break;
     }
 

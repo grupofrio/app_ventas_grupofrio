@@ -1,18 +1,17 @@
 /**
- * UX de venta sin conexión (evidencia de campo: el vendedor arma la venta y solo
- * se entera al confirmar de que necesita conexión). Helper PURO / RN-free.
+ * UX de venta sin conexión. Helper PURO / RN-free.
  *
- * Avisa ANTES (banner) y bajo el botón, sin habilitar venta offline: la venta
- * sigue siendo online-first y el guard de confirmación sigue bloqueando. NO se
- * deshabilita el botón a propósito — en campo la conectividad es intermitente y
- * un botón deshabilitado podría impedir confirmar en la ventana en que sí hay
- * señal; el guard + el modal claro cubren el caso offline de forma segura.
+ * Modelo "pedido offline pendiente de envío" (S1): sin señal el vendedor PUEDE
+ * guardar el pedido; se encola como `sale_order` y se envía a Odoo al reconectar.
+ * NUNCA se marca como venta confirmada offline ni se crea pago/stock definitivo
+ * local (eso ocurre al sincronizar, cuando Odoo acepta). El cierre/liquidación
+ * quedan bloqueados mientras haya pedidos pendientes/error en la cola.
  */
 
 export interface SaleOfflineUx {
   showBanner: boolean;
   bannerText: string;
-  /** Texto bajo el botón "Confirmar Pedido" cuando no hay conexión. */
+  /** Texto bajo el botón cuando no hay conexión (pre-guardado). */
   buttonHint: string | null;
 }
 
@@ -22,7 +21,34 @@ export function describeSaleOfflineUx(isOnline: boolean): SaleOfflineUx {
   }
   return {
     showBanner: true,
-    bannerText: 'Sin conexión: puedes capturar la venta, pero para confirmarla necesitas conexión con Odoo.',
-    buttonHint: 'Conecta el dispositivo para confirmar en Odoo.',
+    bannerText: 'Sin conexión: puedes guardar el pedido como pendiente; se enviará a Odoo al reconectar y no queda confirmado hasta entonces.',
+    buttonHint: 'El pedido se enviará a Odoo cuando vuelva la conexión.',
   };
+}
+
+export type SaleSyncStatusLike = 'none' | 'pending' | 'done' | 'failed';
+
+/**
+ * Etiqueta del botón de confirmación según el estado del pedido. Prioriza el
+ * estado real de sincronización (pedido offline encolado) sobre el lock local,
+ * para que el vendedor nunca vea "confirmado" un pedido que sigue pendiente.
+ */
+export function saleConfirmButtonLabel(input: {
+  saleSyncStatus: SaleSyncStatusLike;
+  isOnline: boolean;
+  saleConfirmed: boolean;
+}): string {
+  switch (input.saleSyncStatus) {
+    case 'pending':
+      return '⏳ Pedido pendiente de envío';
+    case 'failed':
+      return '⚠️ Error al enviar (revisa Sync)';
+    case 'done':
+      return '✓ Pedido enviado';
+    default:
+      break;
+  }
+  if (input.saleConfirmed) return '✓ Pedido confirmado';
+  if (!input.isOnline) return '💾 Guardar pedido pendiente';
+  return '✓ Confirmar Pedido';
 }

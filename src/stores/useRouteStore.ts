@@ -48,6 +48,7 @@ interface RouteState {
 
   // Actions
   loadPlan: (opts?: { force?: boolean }) => Promise<void>;
+  markPlanStarted: (planId: number) => void;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
   removeStop: (stopId: number) => void;
   addVirtualStop: (
@@ -346,6 +347,15 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     ));
     set({ stops });
     storeSave(STORAGE_KEYS.STOPS, stops);
+  },
+
+  markPlanStarted: (planId) => {
+    const plan = get().plan;
+    if (!plan || plan.plan_id !== planId) return;
+    const patched: GFPlan = { ...plan, state: 'in_progress' };
+    set({ plan: patched });
+    storeSave(STORAGE_KEYS.PLAN, patched);
+    useRouteStartStore.getState().syncFromPlan(patched);
   },
 
   reset: () => set({

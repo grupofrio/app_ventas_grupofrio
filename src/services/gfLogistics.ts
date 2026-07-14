@@ -28,6 +28,11 @@ import { todayLocalISO } from '../utils/localDate';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
+export interface StartPlanResult {
+  planId: number;
+  state: 'in_progress';
+}
+
 export interface GFSalesSummary {
   date: string;
   orders_count: number;
@@ -361,6 +366,15 @@ export async function getMyPlan(): Promise<GFPlan | null> {
     console.warn('[gfLogistics] my_plan failed:', error);
     return null;
   }
+}
+
+export async function startPlan(planId: number): Promise<StartPlanResult> {
+  const result = await postRest<any>(`${GF_BASE}/plan/start`, { plan_id: planId });
+  const data = result?.data ?? result;
+  if (Number(data?.plan_id) !== planId || data?.state !== 'in_progress') {
+    throw new Error('Odoo no confirmó el inicio de la ruta.');
+  }
+  return { planId, state: 'in_progress' };
 }
 
 export async function getPlanStops(planId: number): Promise<GFStop[]> {

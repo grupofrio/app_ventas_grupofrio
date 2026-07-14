@@ -8,6 +8,8 @@ const read = (path) => readFileSync(resolve(root, path), 'utf8').replace(/\r\n/g
 
 function main() {
   const authority = read('src/services/routeStartAuthority.ts');
+  const logistics = read('src/services/gfLogistics.ts');
+  const routeStartAction = read('src/services/routeStartAction.ts');
   const routeStartStore = read('src/stores/useRouteStartStore.ts');
   const routeStore = read('src/stores/useRouteStore.ts');
   const rehydrate = read('src/services/rehydrate.ts');
@@ -24,6 +26,66 @@ function main() {
     authority,
     /export function mergeRouteStartPlanSnapshot\(/,
     'route-start authority must expose the pure authoritative merge',
+  );
+
+  assert.match(
+    logistics,
+    /export interface StartPlanResult\s*{\s*planId:\s*number;\s*state:\s*'in_progress';\s*}/,
+    'route start transport must expose its authoritative success result',
+  );
+  assert.match(
+    logistics,
+    /postRest<[^>]+>\(`\$\{GF_BASE\}\/plan\/start`,\s*{\s*plan_id:\s*planId\s*}\)/,
+    'startPlan must POST the exact employee endpoint and payload',
+  );
+  assert.match(
+    logistics,
+    /Number\(data\?\.plan_id\)\s*!==\s*planId\s*\|\|\s*data\?\.state\s*!==\s*'in_progress'/,
+    'startPlan must validate both the matching plan and authoritative state',
+  );
+  assert.match(
+    logistics,
+    /throw new Error\('Odoo no confirmó el inicio de la ruta\.'\)/,
+    'startPlan must fail closed when Odoo does not confirm the route start',
+  );
+  assert.doesNotMatch(
+    routeStartAction,
+    /router|navigate|replace\(/,
+    'route-start orchestration must not navigate',
+  );
+
+  assert.match(
+    routeStore,
+    /markPlanStarted:\s*\(planId:\s*number\)\s*=>\s*void/,
+    'route store must expose a local authoritative start patch',
+  );
+  const markActionStart = routeStore.indexOf('markPlanStarted: (planId) => {');
+  const markActionEnd = routeStore.indexOf('\n\n  reset:', markActionStart);
+  const markAction = routeStore.slice(markActionStart, markActionEnd);
+  assert.match(
+    markAction,
+    /if \(!plan \|\| plan\.plan_id !== planId\) return;/,
+    'markPlanStarted must ignore a stale or mismatched plan identity',
+  );
+  assert.match(
+    markAction,
+    /const patched:\s*GFPlan\s*=\s*{\s*\.\.\.plan,\s*state:\s*'in_progress'\s*};/,
+    'markPlanStarted must create a new started plan object',
+  );
+  assert.match(
+    markAction,
+    /set\(\{\s*plan:\s*patched\s*}\);/,
+    'markPlanStarted must install the patched current plan',
+  );
+  assert.match(
+    markAction,
+    /storeSave\(STORAGE_KEYS\.PLAN,\s*patched\);/,
+    'markPlanStarted must persist the patched plan',
+  );
+  assert.match(
+    markAction,
+    /useRouteStartStore\.getState\(\)\.syncFromPlan\(patched\);/,
+    'markPlanStarted must synchronize route-start facts from the patched plan',
   );
 
   assert.match(

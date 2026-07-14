@@ -78,6 +78,7 @@ export async function rehydrateAppState(): Promise<{
       const isCurrentEmployeePlan = plan.driver_employee_id === currentEmployeeId;
 
       if (isTodayPlan && isCurrentEmployeePlan) {
+        useRouteStartStore.getState().syncFromPlan(plan);
         const completed = stops.filter((s) =>
           ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)
         ).length;

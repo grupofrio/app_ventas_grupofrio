@@ -7,6 +7,25 @@ interface RouteStartAuthorityModule {
     kmInitial: number | null;
     initialLoadAccepted: boolean;
   };
+  mergeRouteStartPlanSnapshot: (
+    current: {
+      planId: number | null;
+      checklistComplete: boolean;
+      kmInitial: number | null;
+      loadAccepted: boolean;
+    },
+    snapshot: {
+      planId: number;
+      planState: string;
+      kmInitial: number | null;
+      initialLoadAccepted: boolean;
+    },
+  ) => {
+    planId: number | null;
+    checklistComplete: boolean;
+    kmInitial: number | null;
+    loadAccepted: boolean;
+  };
 }
 
 async function main() {
@@ -29,6 +48,55 @@ async function main() {
     kmInitial: 399728,
     initialLoadAccepted: true,
   });
+
+  assert.equal(
+    typeof module.mergeRouteStartPlanSnapshot,
+    'function',
+    'route-start authority must export the persisted-facts merge',
+  );
+
+  assert.deepEqual(
+    module.mergeRouteStartPlanSnapshot(
+      {
+        planId: 6466,
+        checklistComplete: false,
+        kmInitial: null,
+        loadAccepted: false,
+      },
+      aleman,
+    ),
+    {
+      planId: 6466,
+      checklistComplete: false,
+      kmInitial: 399728,
+      loadAccepted: true,
+    },
+    'same-plan sync must preserve checklist progress and replace authoritative facts',
+  );
+
+  assert.deepEqual(
+    module.mergeRouteStartPlanSnapshot(
+      {
+        planId: 1,
+        checklistComplete: true,
+        kmInitial: 123456,
+        loadAccepted: true,
+      },
+      {
+        planId: 2,
+        planState: 'published',
+        kmInitial: null,
+        initialLoadAccepted: false,
+      },
+    ),
+    {
+      planId: 2,
+      checklistComplete: false,
+      kmInitial: null,
+      loadAccepted: false,
+    },
+    'new-plan sync must discard every fact belonging to the previous plan',
+  );
 
   for (const departureKm of [null, 0, -1, Number.NaN]) {
     const snapshot = module.deriveRouteStartPlanSnapshot({

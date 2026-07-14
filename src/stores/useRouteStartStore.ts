@@ -16,6 +16,11 @@ import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
 import { computeRouteStartReadiness } from '../services/routeStartLogic';
 import { RouteStartReadiness } from '../types/routeStart';
 import { logInfo } from '../utils/logger';
+import type { GFPlan } from '../types/plan';
+import {
+  deriveRouteStartPlanSnapshot,
+  mergeRouteStartPlanSnapshot,
+} from '../services/routeStartAuthority';
 
 interface RouteStartState {
   planId: number | null;
@@ -29,6 +34,7 @@ interface RouteStartState {
   setChecklistComplete: (done: boolean) => void;
   setKmInitial: (km: number | null) => void;
   setLoadAccepted: (accepted: boolean) => void;
+  syncFromPlan: (plan: GFPlan) => void;
   reset: () => void;
   hydrate: () => Promise<void>;
 }
@@ -100,6 +106,18 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
       return { loadAccepted: accepted, readiness: recompute(next) };
     });
     persist(get());
+  },
+
+  syncFromPlan: (plan) => {
+    const snapshot = deriveRouteStartPlanSnapshot(plan);
+    const current = get();
+    const next = mergeRouteStartPlanSnapshot(current, snapshot);
+    set({ ...next, readiness: recompute(next) });
+    persist(get());
+    logInfo('general', 'route_start_sync_plan', {
+      planId: snapshot.planId,
+      planState: snapshot.planState,
+    });
   },
 
   reset: () => {

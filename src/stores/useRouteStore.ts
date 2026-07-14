@@ -28,6 +28,7 @@ import {
 import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
+import { useRouteStartStore } from './useRouteStartStore';
 
 export type RouteFreshness = 'updated' | 'stale' | 'offline_cache';
 
@@ -143,6 +144,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         if (visitStore.currentStopId !== null) {
           visitStore.resetVisit();
         }
+        useRouteStartStore.getState().reset();
         set({
           plan: null,
           stops: [],
@@ -154,6 +156,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         return;
       }
 
+      useRouteStartStore.getState().syncFromPlan(plan);
       const nextToken = routePlanVersionToken(plan);
       if (!shouldReloadRouteStops({
         cachedStopsCount: cachedStops.length,

@@ -22,6 +22,26 @@ function main() {
   );
   assert.match(
     saleScreen,
+    /const \[saleSubmitting,\s*setSaleSubmitting\]/,
+    'La pantalla debe rastrear cuando la venta esta en envio para no avanzar a checkout antes de que Odoo responda',
+  );
+  assert.match(
+    saleScreen,
+    /saleConfirmed && !afterSaleAction && stop && !saleSubmitting/,
+    'La reanudacion post-venta no debe mostrar Continuar a checkout mientras createSale sigue pendiente',
+  );
+  assert.match(
+    saleScreen,
+    /setSaleSubmitting\(true\)[\s\S]*?lockSaleConfirm\(\)/,
+    'El lock de venta debe ocurrir dentro de un estado de envio activo',
+  );
+  assert.match(
+    saleScreen,
+    /await createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?setSaleSubmitting\(false\)/,
+    'La venta online debe terminar el estado de envio solo despues de que createSale responda',
+  );
+  assert.match(
+    saleScreen,
     /hasWarehouse/,
     'La pantalla de venta debe validar que el empleado tenga almacen antes de confirmar',
   );

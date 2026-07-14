@@ -16,7 +16,7 @@
  */
 
 import { odooRead, odooRpc } from './odooRpc';
-import { postRest } from './api';
+import { DEFAULT_READ_TIMEOUT_MS, postRest } from './api';
 import {
   disableServerPricingEndpointIfMissing,
   markServerPricingEndpointAvailable,
@@ -425,7 +425,9 @@ async function fetchServerSidePrices(
       payload.pricelist_id = explicitPricelistId;
     }
 
-    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload);
+    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
+      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+    });
     const data = result?.data !== undefined ? result.data : result;
     const rawPrices = data?.prices ?? data?.price_map ?? data?.items ?? data;
     const productById = new Map(products.map((product) => [product.id, product]));

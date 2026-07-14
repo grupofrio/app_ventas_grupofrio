@@ -18,7 +18,7 @@ interface Props {
   plan: GFPlan | null;
   isOnline: boolean;
   warehouseId?: number | null;
-  loadPlan: () => Promise<void>;
+  loadPlan: (opts?: { force?: boolean }) => Promise<void>;
   loadProducts: (warehouseId: number) => Promise<void> | void;
   showLoadLines?: boolean;
   showAcceptedLoads?: boolean;
@@ -49,7 +49,7 @@ export function RouteLoadAcceptanceCard({
     setAcceptingLoad(true);
     try {
       await acceptRouteLoad(plan.plan_id, pendingLoad.picking_id);
-      await loadPlan();
+      await loadPlan({ force: true });
       if (warehouseId) {
         await loadProducts(warehouseId);
       }

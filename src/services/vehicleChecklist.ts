@@ -21,6 +21,7 @@ import {
   ChecklistProgress,
   VehicleChecklistState,
 } from '../types/routeStart';
+import { getVehicleChecklistBootstrapAction } from './vehicleChecklistLogic';
 
 const PWA_RUTA = 'pwa-ruta';
 
@@ -191,14 +192,18 @@ export async function ensureChecklistReady(routePlanId: number): Promise<{
   checks: GFVehicleCheck[];
 }> {
   let header = await getVehicleChecklist(routePlanId);
+  let action = getVehicleChecklistBootstrapAction(header);
 
-  if (!header) {
+  if (action === 'create') {
     const checklistId = await createVehicleChecklist(routePlanId);
     if (checklistId > 0) {
       await initVehicleChecklist(checklistId);
     }
     header = await getVehicleChecklist(routePlanId);
-  } else if (header.state === 'draft') {
+    action = getVehicleChecklistBootstrapAction(header);
+  }
+
+  if (action === 'init' && header) {
     await initVehicleChecklist(header.id);
     header = await getVehicleChecklist(routePlanId);
   }

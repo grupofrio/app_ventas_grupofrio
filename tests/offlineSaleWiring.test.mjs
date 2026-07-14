@@ -21,11 +21,15 @@ assert(sale.includes('await createSale('), 'venta online usa createSale directo'
 // #3 OFFLINE (S1): el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
 assert(/enqueue\(\s*['"]sale_order['"]/.test(sale), 'offline debe encolar el pedido como sale_order');
-assert(/enqueue\(\s*['"]photo['"]/.test(sale), 'offline debe encolar la foto del pedido');
+assert(sale.includes('enqueueVisitPhotos'), 'venta debe usar el helper compartido para encolar evidencia');
+assert(/imageType:\s*['"]sale['"]/.test(sale), 'venta debe marcar la evidencia como imagen de venta');
+assert(!sale.includes('salePhotoUris[0]'), 'venta debe encolar todas las fotos capturadas, no solo la primera');
 const offlineIdx = sale.indexOf('if (!isOnline) {');
 const createIdx = sale.indexOf('await createSale(');
 assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
   'la rama offline (enqueue) va antes del createSale online');
+assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhotos/.test(sale),
+  'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
 // No se confirma offline como venta: el rótulo se deriva del estado de sync.
 assert(sale.includes('saleConfirmButtonLabel') && sale.includes('getSaleSyncState'),
   'la etiqueta del botón refleja pendiente/enviado/error, no "confirmado" offline');

@@ -70,6 +70,27 @@ function testBlocksSaleWhenLoadIsPending(m: RouteLoadAcceptanceModule) {
   }), true);
 }
 
+function testIgnoresAcceptedDoneEntriesInPendingLoads(m: RouteLoadAcceptanceModule) {
+  const state = m.buildRouteLoadAcceptanceState({
+    plan_id: 10,
+    load_pickings: [
+      { picking_id: 20, name: 'CIGU/OUT/00020', state: 'done', accepted: true, load_kind: 'initial' },
+    ],
+    pending_loads: [
+      { picking_id: 20, name: 'CIGU/OUT/00020', state: 'done', accepted: true, load_kind: 'initial' },
+    ],
+  });
+
+  assert.equal(state.hasPendingLoad, false);
+  assert.equal(state.pendingLoads.length, 0);
+  assert.equal(m.canStartSaleWithRouteLoad({
+    plan_id: 10,
+    pending_loads: [
+      { picking_id: 20, name: 'CIGU/OUT/00020', state: 'done', accepted: true, load_kind: 'initial' },
+    ],
+  }), true);
+}
+
 function testAcceptPayloadIncludesSpecificPicking(m: RouteLoadAcceptanceModule) {
   assert.deepEqual(m.buildRouteLoadAcceptPayload(1061, 12431), {
     plan_id: 1061,
@@ -84,6 +105,8 @@ function testFrontendWiringUsesSharedAcceptanceFlow() {
   const home = readFileSync(resolve(root, 'app/(tabs)/index.tsx'), 'utf8');
   const inventory = readFileSync(resolve(root, 'app/(tabs)/inventory.tsx'), 'utf8');
   const sale = readFileSync(resolve(root, 'app/sale/[stopId].tsx'), 'utf8');
+  const routeStart = readFileSync(resolve(root, 'app/route-start.tsx'), 'utf8');
+  const refillAccept = readFileSync(resolve(root, 'app/refill-accept.tsx'), 'utf8');
   const routeLoadAcceptanceCard = readFileSync(
     resolve(root, 'src/components/domain/RouteLoadAcceptanceCard.tsx'),
     'utf8',
@@ -139,6 +162,21 @@ function testFrontendWiringUsesSharedAcceptanceFlow() {
     /canStartSaleWithRouteLoad\(/,
     'La pantalla de venta debe bloquear confirmación cuando haya carga pendiente',
   );
+  assert.match(
+    routeLoadAcceptanceCard,
+    /loadPlan\(\{\s*force:\s*true\s*\}\)/,
+    'La tarjeta debe forzar refresh del plan después de aceptar carga',
+  );
+  assert.match(
+    routeStart,
+    /loadPlan\(\{\s*force:\s*true\s*\}\)/,
+    'Iniciar operación debe forzar refresh del plan después de aceptar carga',
+  );
+  assert.match(
+    refillAccept,
+    /loadPlan\(\{\s*force:\s*true\s*\}\)/,
+    'Recarga debe forzar refresh del plan después de aceptar carga',
+  );
 }
 
 async function main() {
@@ -149,6 +187,7 @@ async function main() {
 
   testDetectsMultiplePendingRefills(module);
   testBlocksSaleWhenLoadIsPending(module);
+  testIgnoresAcceptedDoneEntriesInPendingLoads(module);
   testAcceptPayloadIncludesSpecificPicking(module);
   testFrontendWiringUsesSharedAcceptanceFlow();
 

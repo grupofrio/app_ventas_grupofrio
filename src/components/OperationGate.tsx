@@ -2,9 +2,9 @@
  * OperationGate (P0-4 hardening).
  *
  * Wraps screens that must NOT be reachable before the start-of-operation
- * sequence is complete (sale, checkout, consignment, route-close). If the
+ * prerequisites are complete (sale, checkout, consignment, route-close). If the
  * vendor opens one of these via deep link / back navigation without having
- * done checklist + KM inicial + aceptar carga (with an active plan), the gate
+ * answered checklist + captured KM inicial + accepted carga (with an active plan), the gate
  * shows a clear block screen with a button to "Iniciar ruta" instead of
  * letting them operate out of sequence.
  *
@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from './ui/TopBar';
 import { Button } from './ui/Button';
+import { AlertBanner } from './ui/AlertBanner';
 import { colors, spacing } from '../theme/tokens';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
@@ -43,7 +44,21 @@ export function OperationGate({
   });
 
   if (result.canOperate) {
-    return <>{children}</>;
+    if (result.warnings.length === 0) {
+      return <>{children}</>;
+    }
+    return (
+      <>
+        {children}
+        <View pointerEvents="none" style={styles.warningOverlay}>
+          <AlertBanner
+            variant="warning"
+            icon="⚠️"
+            message={result.warnings.join('. ')}
+          />
+        </View>
+      </>
+    );
   }
 
   return (
@@ -53,6 +68,9 @@ export function OperationGate({
         <Text style={styles.icon}>🚦</Text>
         <Text style={styles.heading}>Ruta no iniciada</Text>
         <Text style={styles.body}>{result.reason}</Text>
+        {result.warnings.length > 0 ? (
+          <Text style={styles.warningText}>{result.warnings.join('. ')}</Text>
+        ) : null}
         <Button
           label="Ir a preparar ruta"
           variant="primary"
@@ -70,4 +88,11 @@ const styles = StyleSheet.create({
   icon: { fontSize: 48 },
   heading: { fontSize: 18, fontWeight: '700', color: colors.text },
   body: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
+  warningText: { fontSize: 12, color: colors.warning, textAlign: 'center', lineHeight: 18 },
+  warningOverlay: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    bottom: 24,
+  },
 });

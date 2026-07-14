@@ -32,7 +32,12 @@ import {
   completeVehicleChecklist,
 } from '../../src/services/vehicleChecklist';
 import { updateKm } from '../../src/services/routeKm';
-import { extractOdometerKm } from '../../src/services/routeStartLogic';
+import {
+  chooseAuthoritativeKm,
+  extractOdometerKm,
+  isChecklistAnsweredForStart,
+} from '../../src/services/routeStartLogic';
+import { buildYesNoVehicleCheckAnswer } from '../../src/services/vehicleChecklistLogic';
 import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
@@ -133,15 +138,11 @@ export default function ChecklistScreen() {
         Alert.alert('Falta respuesta', 'Selecciona Sí o No.');
         return;
       }
-      // backend computes passed; if it will be a fail, require reason
-      const willFail = check.expected_bool != null && draft.bool !== check.expected_bool;
-      if (willFail && !(draft.reason || '').trim()) {
-        Alert.alert('Motivo requerido', 'Indica el motivo cuando la respuesta no cumple.');
-        return;
-      }
-      payload = willFail
-        ? { result_bool: draft.bool, not_passed_reason: (draft.reason || '').trim() }
-        : { result_bool: draft.bool };
+      payload = buildYesNoVehicleCheckAnswer({
+        value: draft.bool,
+        expected: check.expected_bool,
+        reason: draft.reason,
+      });
     } else if (check.check_type === 'numeric') {
       const n = parseFloat(draft.numeric ?? '');
       if (!Number.isFinite(n)) {
@@ -188,8 +189,7 @@ export default function ChecklistScreen() {
       } else if (/invalid_photo|formato/i.test(msg)) {
         Alert.alert('Formato inválido', 'La foto no tiene un formato válido. Tómala de nuevo.');
       } else if (/requires.?reason|motivo/i.test(msg)) {
-        setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id] } }));
-        Alert.alert('Motivo requerido', 'Esta respuesta requiere un motivo.');
+        Alert.alert('Motivo requerido', 'El servidor pidió motivo para esta respuesta. Intenta de nuevo.');
       } else {
         Alert.alert('Error', msg);
       }
@@ -211,8 +211,8 @@ export default function ChecklistScreen() {
       const odoKm = extractOdometerKm(checks);
       if (odoKm != null && planIdNum > 0) {
         try {
-          await updateKm(planIdNum, 'departure', odoKm);
-          setKmInitialStore(odoKm);
+          const res = await updateKm(planIdNum, 'departure', odoKm);
+          setKmInitialStore(chooseAuthoritativeKm({ backendKm: res.departure_km }));
         } catch {
           // leave KM to the hub fallback; do not block completion
         }
@@ -226,7 +226,16 @@ export default function ChecklistScreen() {
       if (/checks_pending|pendiente/i.test(msg)) {
         Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
       } else if (/blocking|bloqueante/i.test(msg)) {
-        Alert.alert('Punto crítico no aprobado', 'Hay un punto obligatorio que no pasó. No puedes completar hasta resolverlo.');
+        if (isChecklistAnsweredForStart(header)) {
+          setChecklistComplete(true);
+          Alert.alert(
+            'Checklist registrado',
+            'Las respuestas quedaron guardadas. Hay puntos no aprobados, pero el estado del vehículo quedó actualizado.',
+            [{ text: 'OK', onPress: () => router.back() }],
+          );
+        } else {
+          Alert.alert('Faltan respuestas', 'Responde todos los puntos antes de continuar.');
+        }
       } else {
         Alert.alert('Error', msg);
       }
@@ -308,7 +317,7 @@ export default function ChecklistScreen() {
                   style={styles.reasonInput}
                   value={draft.reason || ''}
                   onChangeText={(t) => setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], reason: t } }))}
-                  placeholder="Motivo (requerido)"
+                  placeholder="Motivo (opcional)"
                   placeholderTextColor={colors.textDim}
                   multiline
                 />

@@ -13,6 +13,12 @@ interface LogicModule {
     answered: number; total: number; passed: number; requiredPending: number;
   };
   isChecklistComplete: (header: GFVehicleChecklist | null) => boolean;
+  isChecklistAnsweredForStart: (header: GFVehicleChecklist | null) => boolean;
+  chooseAuthoritativeKm: (input: {
+    planKm?: number | null;
+    backendKm?: number | null;
+    localKm?: number | null;
+  }) => number | null;
   isValidKm: (km: unknown) => boolean;
   calculateKmDriven: (initialKm: number | null | undefined, finalKm: number | null | undefined) => number | null;
   formatKm: (n: number | null | undefined) => string;
@@ -67,6 +73,21 @@ function testChecklistComplete(m: LogicModule) {
   assert.equal(m.isChecklistComplete(makeHeader({ state: 'completed' })), true);
 }
 
+function testChecklistAnsweredForStart(m: LogicModule) {
+  assert.equal(m.isChecklistAnsweredForStart(null), false);
+  assert.equal(m.isChecklistAnsweredForStart(makeHeader({ checks_total: 0, checks_answered: 0 })), false);
+  assert.equal(m.isChecklistAnsweredForStart(makeHeader({ state: 'completed', checks_total: 3, checks_answered: 1 })), true);
+  assert.equal(m.isChecklistAnsweredForStart(makeHeader({ state: 'in_progress', checks_total: 3, checks_answered: 3 })), true);
+  assert.equal(m.isChecklistAnsweredForStart(makeHeader({ state: 'in_progress', checks_total: 3, checks_answered: 2 })), false);
+}
+
+function testAuthoritativeKm(m: LogicModule) {
+  assert.equal(m.chooseAuthoritativeKm({ planKm: 123, backendKm: 456, localKm: 789 }), 123);
+  assert.equal(m.chooseAuthoritativeKm({ planKm: null, backendKm: 456, localKm: 789 }), 456);
+  assert.equal(m.chooseAuthoritativeKm({ planKm: undefined, backendKm: null, localKm: 789 }), null);
+  assert.equal(m.chooseAuthoritativeKm({ planKm: 0, backendKm: 456, localKm: 789 }), 456);
+}
+
 function testKmValidation(m: LogicModule) {
   assert.equal(m.isValidKm('123456'), true);
   assert.equal(m.isValidKm(98765), true);
@@ -91,9 +112,10 @@ function testReadiness(m: LogicModule) {
   assert.equal(r.checklistDone, true);
   assert.equal(r.loadAccepted, false);
 
-  // missing checklist
+  // missing checklist blocks start: answers are required, regardless of pass/fail.
   r = m.computeRouteStartReadiness({ checklistComplete: false, kmCaptured: true, loadAccepted: true });
   assert.equal(r.readyToStart, false);
+  assert.equal(r.checklistDone, false);
 
   // missing km
   r = m.computeRouteStartReadiness({ checklistComplete: true, kmCaptured: false, loadAccepted: true });
@@ -176,6 +198,8 @@ async function main() {
 
   testChecklistProgress(m);
   testChecklistComplete(m);
+  testChecklistAnsweredForStart(m);
+  testAuthoritativeKm(m);
   testKmValidation(m);
   testReadiness(m);
   testFindOdometerCheck(m);

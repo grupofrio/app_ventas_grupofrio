@@ -47,6 +47,7 @@ import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -96,6 +97,7 @@ function SaleScreenInner() {
   const [pickerVisible, setPickerVisible] = React.useState(false);
   const [lastSaleTicketId, setLastSaleTicketId] = React.useState<string | null>(null);
   const [afterSaleAction, setAfterSaleAction] = React.useState<'checkout' | 'route' | null>(null);
+  const [saleSubmitting, setSaleSubmitting] = React.useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -157,10 +159,10 @@ function SaleScreenInner() {
   // el vendedor continúe al cobro/checkout en vez de re-confirmar (evita venta
   // duplicada). No crea nada: solo reabre la guía "Continuar a checkout".
   React.useEffect(() => {
-    if (saleConfirmed && !afterSaleAction && stop) {
+    if (saleConfirmed && !afterSaleAction && stop && !saleSubmitting) {
       setAfterSaleAction(shouldSkipStopCheckout(stop.id) ? 'route' : 'checkout');
     }
-  }, [saleConfirmed, afterSaleAction, stop?.id]);
+  }, [saleConfirmed, afterSaleAction, stop?.id, saleSubmitting]);
 
   function setSaleQtyFromText(productId: number, qtyText: string) {
     const digits = qtyText.replace(/\D/g, '');
@@ -193,6 +195,7 @@ function SaleScreenInner() {
 
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
+    if (saleSubmitting) return;
 
     if (!canStartSale) {
       const pending = routeLoadState.nextPendingLoad;
@@ -251,6 +254,8 @@ function SaleScreenInner() {
     const confirmedPaymentMethod = salePaymentMethod;
     if (!confirmedPaymentMethod) return;
 
+    setSaleSubmitting(true);
+
     // V1.2: Lock to prevent duplicate
     const operationId = lockSaleConfirm();
 
@@ -265,12 +270,21 @@ function SaleScreenInner() {
     const stopPricelistId = typeof stop._pricelistId === 'number' && stop._pricelistId > 0
       ? stop._pricelistId
       : null;
-    if (!stopPricelistId) {
-      await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+    let pricelistId: number | null;
+    try {
+      if (!stopPricelistId) {
+        await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+      }
+      pricelistId =
+        stopPricelistId ??
+        peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+    } catch (error) {
+      setSaleSubmitting(false);
+      unlockSaleConfirm();
+      const message = error instanceof Error ? error.message : 'No se pudo resolver la lista de precios.';
+      Alert.alert('Venta rechazada', message);
+      return;
     }
-    const pricelistId =
-      stopPricelistId ??
-      peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
 
     // Create sale order payload with idempotency key
     const payload = {
@@ -322,13 +336,13 @@ function SaleScreenInner() {
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
       });
-      if (salePhotoUris[0]) {
-        enqueue('photo', {
-          stop_id: payload.stop_id,
-          localUri: salePhotoUris[0],
-          image_type: 'sale',
-        }, { dependsOn: [enqId] });
-      }
+      enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: salePhotoUris,
+        enqueue,
+        dependsOn: [enqId],
+        imageType: 'sale',
+      });
       // checkout/ruta rastrean el pedido por este id (getSaleSyncState).
       useVisitStore.setState({ saleOperationId: enqId });
       await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
@@ -340,6 +354,7 @@ function SaleScreenInner() {
         lines: saleLines,
       }));
       setLastSaleTicketId(enqId);
+      setSaleSubmitting(false);
       Alert.alert(
         'Pedido guardado',
         'Pedido pendiente de envío. Se enviará a Odoo cuando haya conexión; no queda confirmado hasta entonces.',
@@ -355,6 +370,12 @@ function SaleScreenInner() {
 
     try {
       await createSale(buildSalesCreatePayload(payload));
+      enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: salePhotoUris,
+        enqueue,
+        imageType: 'sale',
+      });
       await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
         saleId: operationId,
         customerName: stop.customer_name,
@@ -365,10 +386,12 @@ function SaleScreenInner() {
       }));
       setLastSaleTicketId(operationId);
       useVisitStore.setState({ saleOperationId: null });
+      setSaleSubmitting(false);
       if (warehouseId) {
         void loadProducts(warehouseId);
       }
     } catch (error) {
+      setSaleSubmitting(false);
       unlockSaleConfirm();
       // insufficient_stock: el backend rechazó por stock. Refrescamos el
       // inventario para mostrar el available_qty REAL y dejamos el carrito

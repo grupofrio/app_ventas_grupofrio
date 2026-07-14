@@ -96,6 +96,12 @@ function normalizeLoadCard(raw: any, initialPickingId: number, hasMultipleCards:
   };
 }
 
+function isPendingLoadCard(card: RouteLoadCard): boolean {
+  if (card.accepted === true) return false;
+  if (!card.state) return true;
+  return PENDING_LOAD_STATES.has(card.state);
+}
+
 export function buildRouteLoadAcceptPayload(routePlanId: number, pickingId: number): Record<string, number> {
   return {
     plan_id: Number(routePlanId),
@@ -118,7 +124,7 @@ export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceSta
 
   for (const raw of rawPending) {
     const card = normalizeLoadCard(raw, initialPickingId, hasMultipleCards);
-    if (card) cardsById.set(card.picking_id, { ...cardsById.get(card.picking_id), ...card, accepted: false });
+    if (card) cardsById.set(card.picking_id, { ...cardsById.get(card.picking_id), ...card });
   }
 
   const loadCards = Array.from(cardsById.values());
@@ -126,7 +132,8 @@ export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceSta
     ? rawPending
         .map((raw: unknown) => normalizeLoadCard(raw, initialPickingId, hasMultipleCards))
         .filter((card: RouteLoadCard | null): card is RouteLoadCard => !!card)
-    : loadCards.filter((card) => PENDING_LOAD_STATES.has(card.state) && card.accepted !== true);
+        .filter(isPendingLoadCard)
+    : loadCards.filter(isPendingLoadCard);
   const acceptedLoads = loadCards.filter((card) => card.accepted === true);
 
   return {

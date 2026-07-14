@@ -31,7 +31,14 @@ import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
-import { isValidKm, calculateKmDriven, formatKm, isAbsurdKmDriven, isAbsurdOdometer } from '../src/services/routeStartLogic';
+import {
+  chooseAuthoritativeKm,
+  isValidKm,
+  calculateKmDriven,
+  formatKm,
+  isAbsurdKmDriven,
+  isAbsurdOdometer,
+} from '../src/services/routeStartLogic';
 import {
   canCloseRoute, describeCloseSyncBlock, shouldCleanupJornadaCache,
 } from '../src/services/routeCloseGuard';
@@ -50,6 +57,7 @@ function StatusBadge({ status }: { status: StepStatus }) {
 function RouteCloseScreenInner() {
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
+  const loadPlan = useRouteStore((s) => s.loadPlan);
   const planId = plan?.plan_id ?? null;
   const planState = plan?.state ?? null;
   const isOnline = useSyncStore((s) => s.isOnline);
@@ -73,15 +81,29 @@ function RouteCloseScreenInner() {
   const [closing, setClosing] = useState(false);
   const [closed, setClosed] = useState(false);
 
-  // KM inicial source of truth: local store (Sprint A) first, then whatever
-  // the backend echoed (km-update response) or the plan carries (rehydration).
+  // KM inicial source of truth: Odoo plan first, then the backend echo from
+  // km-update. The persisted phone store is not authoritative.
   const planDepartureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
-  const kmInitial = kmInitialStore ?? kmInitialBackend ?? planDepartureKm;
+  const kmInitial = chooseAuthoritativeKm({
+    planKm: planDepartureKm,
+    backendKm: kmInitialBackend,
+    localKm: kmInitialStore,
+  });
 
   // Rehydrate KM final from the plan if the backend already stored arrival_km,
   // so re-opening the hub doesn't make a saved KM look lost (Sprint C.1).
   useFocusEffect(
     useCallback(() => {
+      if (isOnline) {
+        void loadPlan({ force: true }).then(() => {
+          const freshPlan = useRouteStore.getState().plan;
+          setKmInitialBackend(typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null);
+          const freshArrival = typeof freshPlan?.arrival_km === 'number' && freshPlan.arrival_km > 0
+            ? freshPlan.arrival_km
+            : null;
+          if (freshArrival != null) setKmFinal(freshArrival);
+        });
+      }
       if (planState === 'closed' || planState === 'reconciled' || planState === 'done') {
         setClosed(true);
       }
@@ -91,7 +113,7 @@ function RouteCloseScreenInner() {
       if (planArrival != null) {
         setKmFinal((prev) => (prev == null ? planArrival : prev));
       }
-    }, [planState, plan?.arrival_km]),
+    }, [isOnline, loadPlan, planState, plan?.arrival_km]),
   );
 
   const kmDriven = calculateKmDriven(kmInitial, kmFinal);
@@ -145,9 +167,8 @@ function RouteCloseScreenInner() {
             const res = await updateKm(planId, 'arrival', km);
             setKmFinal(res.arrival_km ?? km);
             // Backfill KM inicial from the backend echo if the store lost it.
-            if (kmInitialStore == null && res.departure_km != null && res.departure_km > 0) {
-              setKmInitialBackend(res.departure_km);
-            }
+            setKmInitialBackend(res.departure_km ?? null);
+            await loadPlan({ force: true });
             setKmFinalInput('');
           } catch (err) {
             // Backend validates arrival >= departure; show its message.

@@ -57,8 +57,25 @@ function testPricelistUsesSecureBackendPricingEndpoint() {
   );
 }
 
+function testPricelistEndpointUsesReadTimeout() {
+  const pricelist = readFileSync(resolve(REPO_ROOT, 'src/services/pricelist.ts'), 'utf8');
+  const body = extractFunctionBody(pricelist, 'fetchServerSidePrices');
+
+  assert.match(
+    pricelist,
+    /DEFAULT_READ_TIMEOUT_MS/,
+    'pricelist debe importar DEFAULT_READ_TIMEOUT_MS para lecturas de precios',
+  );
+  assert.match(
+    body,
+    /postRest<any>\(\s*`\$\{GF_BASE\}\/pricing\/by_partner`,\s*payload,\s*\{\s*timeoutMs:\s*DEFAULT_READ_TIMEOUT_MS,\s*\}/,
+    'pricing/by_partner debe usar timeout corto de lectura para no ocupar Odoo 45s',
+  );
+}
+
 function main() {
   testPricelistUsesSecureBackendPricingEndpoint();
+  testPricelistEndpointUsesReadTimeout();
   console.log('pricelist server endpoint tests: ok');
 }
 

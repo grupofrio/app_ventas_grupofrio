@@ -31,11 +31,16 @@ import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
-import { getVehicleChecklist } from '../src/services/vehicleChecklist';
+import { ensureChecklistReady } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad } from '../src/services/gfLogistics';
 import { buildRouteLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
-import { isChecklistComplete, isValidKm, isAbsurdOdometer } from '../src/services/routeStartLogic';
+import {
+  chooseAuthoritativeKm,
+  isChecklistAnsweredForStart,
+  isValidKm,
+  isAbsurdOdometer,
+} from '../src/services/routeStartLogic';
 import { computeRouteReadiness } from '../src/services/routeReadiness';
 import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
 
@@ -75,6 +80,7 @@ export default function RouteStartScreen() {
   const setKmInitialStore = useRouteStartStore((s) => s.setKmInitial);
   const setLoadAccepted = useRouteStartStore((s) => s.setLoadAccepted);
   const kmInitialStored = useRouteStartStore((s) => s.kmInitial);
+  const [kmInitialBackend, setKmInitialBackend] = useState<number | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +89,12 @@ export default function RouteStartScreen() {
 
   const [kmInput, setKmInput] = useState('');
   const [savingKm, setSavingKm] = useState(false);
+  const planDepartureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
+  const kmInitial = chooseAuthoritativeKm({
+    planKm: planDepartureKm,
+    backendKm: kmInitialBackend,
+    localKm: kmInitialStored,
+  });
 
   // Load acceptance reuses Sebas's service: the load is embedded in the plan
   // object (load_pickings / pending_loads). No extra /my-load fetch.
@@ -115,22 +127,26 @@ export default function RouteStartScreen() {
     setError(null);
     try {
       try {
-        const header = await getVehicleChecklist(planId);
-        // No checklist (no active templates) OR 0 items → treat as skipped/done.
-        const done = !header || header.checks_total === 0 || isChecklistComplete(header);
+        await loadPlan({ force: true });
+        const freshPlan = useRouteStore.getState().plan;
+        setKmInitialBackend(typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null);
+        const { header } = await ensureChecklistReady(planId);
+        // The hub creates/loads the checklist before evaluating readiness.
+        // Answers are required; pass/fail does not block route start.
+        const done = isChecklistAnsweredForStart(header);
         setChecklistStatus(done ? 'done' : 'pending');
         setChecklistComplete(done);
       } catch {
-        // If checklist endpoint fails, don't block the driver.
-        setChecklistStatus('done');
-        setChecklistComplete(true);
+        setChecklistStatus('pending');
+        setChecklistComplete(false);
+        setError('No se pudo validar el checklist de unidad. Reintenta con conexión.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo cargar el estado de inicio.');
     } finally {
       setLoading(false);
     }
-  }, [planId, isOnline, setForPlan, setChecklistComplete]);
+  }, [planId, isOnline, loadPlan, setForPlan, setChecklistComplete]);
 
   async function handleAcceptLoad() {
     if (!planId || acceptingLoad) return;
@@ -151,7 +167,7 @@ export default function RouteStartScreen() {
             setAcceptingLoad(true);
             try {
               await acceptRouteLoad(planId, pending.picking_id);
-              await loadPlan();
+              await loadPlan({ force: true });
               if (warehouseId) await loadProducts(warehouseId);
             } catch (err) {
               Alert.alert('Error al aceptar', err instanceof Error ? err.message : 'Intenta de nuevo.');
@@ -170,7 +186,7 @@ export default function RouteStartScreen() {
     }, [refresh]),
   );
 
-  const kmStatus: StepStatus = kmInitialStored != null ? 'done' : 'pending';
+  const kmStatus: StepStatus = kmInitial != null ? 'done' : 'pending';
 
   // BLD-SPRINT-A-FIX: readiness derived LIVE from the on-screen step status,
   // not from the store's readiness object. The store can momentarily lag on a
@@ -178,7 +194,7 @@ export default function RouteStartScreen() {
   // re-derives it), which previously left "Iniciar ruta" stuck disabled on a
   // new day. Live derivation is the single source of truth for the button.
   const checklistDoneLive = checklistStatus === 'done';
-  const kmDoneLive = kmInitialStored != null;
+  const kmDoneLive = kmInitial != null;
   const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
   // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
   // caché (ruta + productos) para no salir a ruta sin con qué operar. Los
@@ -221,8 +237,11 @@ export default function RouteStartScreen() {
           onPress: async () => {
             setSavingKm(true);
             try {
-              await updateKm(planId, 'departure', km);
-              setKmInitialStore(km);
+              const res = await updateKm(planId, 'departure', km);
+              const storedKm = res.departure_km ?? null;
+              setKmInitialBackend(storedKm);
+              setKmInitialStore(storedKm);
+              await loadPlan({ force: true });
               setKmInput('');
             } catch (err) {
               Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
@@ -303,29 +322,24 @@ export default function RouteStartScreen() {
         </Card>
 
         {/* Step 3: KM inicial.
-            A.1 Option A: el KM se captura UNA sola vez, en el checklist
-            (check numérico "Odómetro salida"), y se registra automáticamente
-            al completar. Aquí sólo se muestra el estado. El input manual es un
-            FALLBACK que aparece sólo si el checklist ya quedó completo pero no
-            alimentó el KM (p. ej. un template sin check de odómetro). */}
+            A.1 Option A: si el checklist trae "Odómetro salida", se registra
+            automáticamente al completar. El input manual queda disponible como
+            fallback para no depender del template del checklist. */}
         <Card>
           <View style={styles.rowBetween}>
             <Text style={styles.stepTitle}>3 · KM inicial</Text>
             <StatusBadge status={kmStatus} />
           </View>
-          {kmInitialStored != null ? (
+          {kmInitial != null ? (
             <Text style={styles.stepBody}>
-              Registrado: <Text style={styles.kmValue}>{kmInitialStored} km</Text>
-            </Text>
-          ) : checklistStatus !== 'done' ? (
-            <Text style={styles.stepBody}>
-              Se registra automáticamente al completar el checklist (odómetro de salida).
-              No necesitas capturarlo aquí.
+              Registrado en Odoo: <Text style={styles.kmValue}>{kmInitial} km</Text>
             </Text>
           ) : (
             <>
               <Text style={styles.stepBody}>
-                El checklist no registró el KM. Captúralo manualmente para continuar.
+                {checklistStatus === 'done'
+                  ? 'El checklist no registró el KM. Captúralo manualmente para continuar.'
+                  : 'Puede registrarse automáticamente al completar el checklist; si vas a operar ahora, captura el KM inicial aquí.'}
               </Text>
               <View style={styles.kmRow}>
                 <TextInput
@@ -401,6 +415,9 @@ export default function RouteStartScreen() {
           <Text style={styles.readyChecklist}>
             {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
           </Text>
+          {!checklistDoneLive && (
+            <Text style={styles.readyWarn}>⚠️ Checklist de unidad pendiente. Responde todos los puntos para actualizar el estado del vehículo.</Text>
+          )}
           {dataMinReady && dataReady.warnings.length > 0 && (
             <Text style={styles.readyWarn}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
           )}

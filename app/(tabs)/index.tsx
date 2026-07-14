@@ -266,6 +266,21 @@ export default function HomeScreen() {
               <Text style={styles.routeStartChevron}>›</Text>
             </TouchableOpacity>
 
+            {plan?.plan_id ? (
+              <TouchableOpacity
+                style={styles.inspectionCta}
+                onPress={() => router.push(`/checklist/${plan.plan_id}` as never)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.routeStartIcon}>🧾</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.routeStartTitle}>Inspección de unidad</Text>
+                  <Text style={styles.routeStartSub}>Revisar o actualizar checklist</Text>
+                </View>
+                <Text style={styles.routeStartChevron}>›</Text>
+              </TouchableOpacity>
+            ) : null}
+
             {/* BLD-20260505-ROUTEPREP: card "Preparar ruta" — invita al
                 vendedor a precargar plan/productos/precios con WiFi en
                 CEDIS antes de salir. No bloquea otras acciones; sólo
@@ -461,6 +476,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(37,99,235,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(37,99,235,0.3)',
+  },
+  inspectionCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: radii.card,
+    marginBottom: 14,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   routeStartIcon: { fontSize: 26 },
   routeStartTitle: { fontSize: 15, fontWeight: '700', color: colors.text },

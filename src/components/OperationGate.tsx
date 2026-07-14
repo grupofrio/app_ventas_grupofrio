@@ -46,6 +46,12 @@ export function OperationGate({
     loadAccepted: routeStart.readiness.loadAccepted,
     mode,
   });
+  const isTerminalPlan = plan?.state === 'closed'
+    || plan?.state === 'reconciled'
+    || plan?.state === 'done';
+  const blockHeading = isTerminalPlan ? 'Ruta finalizada' : 'Ruta no iniciada';
+  const blockActionLabel = isTerminalPlan ? 'Ir a Inicio' : 'Ir a preparar ruta';
+  const blockActionPath = isTerminalPlan ? '/(tabs)' : '/route-start';
 
   if (result.canOperate) {
     if (result.warnings.length === 0) {
@@ -70,16 +76,16 @@ export function OperationGate({
       <TopBar title={title} showBack />
       <View style={styles.center}>
         <Text style={styles.icon}>🚦</Text>
-        <Text style={styles.heading}>Ruta no iniciada</Text>
+        <Text style={styles.heading}>{blockHeading}</Text>
         <Text style={styles.body}>{result.reason}</Text>
         {result.warnings.length > 0 ? (
           <Text style={styles.warningText}>{result.warnings.join('. ')}</Text>
         ) : null}
         <Button
-          label="Ir a preparar ruta"
+          label={blockActionLabel}
           variant="primary"
           fullWidth
-          onPress={() => router.replace('/route-start' as never)}
+          onPress={() => router.replace(blockActionPath as never)}
         />
       </View>
     </SafeAreaView>

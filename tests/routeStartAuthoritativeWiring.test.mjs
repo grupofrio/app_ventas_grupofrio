@@ -170,6 +170,36 @@ function main() {
     /<OperationGate title="Cerrar ruta" mode="close">/,
     'route close must opt into idempotent close-mode gating',
   );
+  assert.match(
+    operationGate,
+    /const isTerminalPlan = plan\?\.state === 'closed'[\s\S]*?plan\?\.state === 'reconciled'[\s\S]*?plan\?\.state === 'done';/,
+    'operation gate must identify every terminal plan state explicitly',
+  );
+  assert.match(
+    operationGate,
+    /const blockHeading = isTerminalPlan \? 'Ruta finalizada' : 'Ruta no iniciada';/,
+    'terminal transaction blocks must not claim the route was never started',
+  );
+  assert.match(
+    operationGate,
+    /const blockActionLabel = isTerminalPlan \? 'Ir a Inicio' : 'Ir a preparar ruta';/,
+    'terminal transaction blocks must offer a safe home action while pre-start blocks preserve route preparation',
+  );
+  assert.match(
+    operationGate,
+    /const blockActionPath = isTerminalPlan \? '\/\(tabs\)' : '\/route-start';/,
+    'terminal transaction blocks must navigate home while pre-start blocks still navigate to route start',
+  );
+  assert.match(
+    operationGate,
+    /<Text style=\{styles\.heading\}>\{blockHeading\}<\/Text>/,
+    'operation gate must render the state-aware block heading',
+  );
+  assert.match(
+    operationGate,
+    /<Button[\s\S]*?label=\{blockActionLabel\}[\s\S]*?onPress=\{\(\) => router\.replace\(blockActionPath as never\)\}/,
+    'operation gate must wire the state-aware label and destination',
+  );
 
   console.log('route start authoritative wiring tests: ok');
 }

@@ -139,6 +139,18 @@ function run(m: Mod) {
   assert.deepEqual(preparedPublished.missing, ['confirmar inicio de ruta']);
   assert.match(preparedPublished.reason ?? '', /confirma.*iniciar ruta/i);
 
+  // API payloads are cast to GFPlan without runtime state validation. An Odoo
+  // state added ahead of the app release must fail closed with the same safe
+  // output contract instead of leaking the raw string to OperationGate.
+  const unknownRuntimeState = m.deriveOperationReadiness({
+    ...ready,
+    planState: 'cancelled' as PlanState,
+  });
+  assert.equal(unknownRuntimeState.canOperate, false);
+  assert.deepEqual(unknownRuntimeState.missing, ['estado de plan reconocido']);
+  assert.deepEqual(unknownRuntimeState.warnings, []);
+  assert.match(unknownRuntimeState.reason ?? '', /estado.*no reconocido/i);
+
   console.log('operation readiness tests: ok');
 }
 

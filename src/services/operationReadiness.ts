@@ -104,7 +104,11 @@ export function deriveOperationReadiness(input: OperationReadinessInput): Operat
 
     default: {
       const exhaustiveState: never = input.planState;
-      return exhaustiveState;
+      void exhaustiveState;
+      return blocked(
+        ['estado de plan reconocido'],
+        'El plan tiene un estado no reconocido. Actualiza la ruta antes de operar.',
+      );
     }
   }
 }

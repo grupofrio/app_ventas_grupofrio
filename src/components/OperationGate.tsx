@@ -3,12 +3,12 @@
  *
  * Wraps screens that must NOT be reachable before the start-of-operation
  * prerequisites are complete (sale, checkout, consignment, route-close). If the
- * vendor opens one of these via deep link / back navigation without having
- * answered checklist + captured KM inicial + accepted carga (with an active plan), the gate
- * shows a clear block screen with a button to "Iniciar ruta" instead of
- * letting them operate out of sequence.
+ * vendor opens one of these via deep link / back navigation before Odoo has
+ * started the route, the gate shows a clear block screen with a button to
+ * "Iniciar ruta" instead of letting them operate out of sequence.
  *
- * Reuses the readiness flags from useRouteStartStore + plan from useRouteStore.
+ * The plan state from useRouteStore is authoritative. Readiness flags from
+ * useRouteStartStore only explain missing prerequisites for the matching plan.
  * Does NOT auto-redirect in render (avoids navigation loops) — it presents an
  * explicit action.
  */
@@ -27,20 +27,24 @@ import { deriveOperationReadiness } from '../services/operationReadiness';
 
 export function OperationGate({
   title = 'Operación',
+  mode = 'transaction',
   children,
 }: {
   title?: string;
+  mode?: 'transaction' | 'close';
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const hasActivePlan = useRouteStore((s) => s.plan != null);
-  const readiness = useRouteStartStore((s) => s.readiness);
+  const plan = useRouteStore((s) => s.plan);
+  const routeStart = useRouteStartStore();
 
   const result = deriveOperationReadiness({
-    hasActivePlan,
-    checklistDone: readiness.checklistDone,
-    kmCaptured: readiness.kmCaptured,
-    loadAccepted: readiness.loadAccepted,
+    planState: plan?.state ?? null,
+    planMatchesReadiness: plan?.plan_id === routeStart.planId,
+    checklistDone: routeStart.readiness.checklistDone,
+    kmCaptured: routeStart.readiness.kmCaptured,
+    loadAccepted: routeStart.readiness.loadAccepted,
+    mode,
   });
 
   if (result.canOperate) {

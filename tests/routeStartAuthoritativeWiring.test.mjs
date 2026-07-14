@@ -12,6 +12,8 @@ function main() {
   const routeStore = read('src/stores/useRouteStore.ts');
   const rehydrate = read('src/services/rehydrate.ts');
   const routeStartScreen = read('app/route-start.tsx');
+  const operationGate = read('src/components/OperationGate.tsx');
+  const routeClose = read('app/route-close.tsx');
 
   assert.match(
     authority,
@@ -126,6 +128,47 @@ function main() {
     routeStore,
     /loadPlan:[\s\S]*?syncFromPlan\(plan\)/,
     'route-start plan refresh must update persisted readiness, not only component-local backend KM',
+  );
+
+  assert.match(
+    operationGate,
+    /const plan = useRouteStore\(\(s\) => s\.plan\);/,
+    'operation gate must read the full authoritative plan, not reduce it to presence',
+  );
+  assert.match(
+    operationGate,
+    /const routeStart = useRouteStartStore\(\);/,
+    'operation gate must read the persisted route-start plan identity and readiness together',
+  );
+  assert.match(
+    operationGate,
+    /planState:\s*plan\?\.state \?\? null,/,
+    'operation gate must pass the authoritative Odoo state to readiness',
+  );
+  assert.match(
+    operationGate,
+    /planMatchesReadiness:\s*plan\?\.plan_id === routeStart\.planId,/,
+    'operation gate must scope cached readiness facts to the current plan',
+  );
+  assert.match(
+    operationGate,
+    /mode = 'transaction'/,
+    'operation gate must default to transaction semantics',
+  );
+  assert.match(
+    operationGate,
+    /deriveOperationReadiness\(\{[\s\S]*?mode,[\s\S]*?\}\)/,
+    'operation gate must pass its operation mode to readiness',
+  );
+  assert.doesNotMatch(
+    operationGate,
+    /hasActivePlan/,
+    'operation gate must not collapse authoritative state to a truthy plan check',
+  );
+  assert.match(
+    routeClose,
+    /<OperationGate title="Cerrar ruta" mode="close">/,
+    'route close must opt into idempotent close-mode gating',
   );
 
   console.log('route start authoritative wiring tests: ok');

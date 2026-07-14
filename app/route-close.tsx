@@ -420,11 +420,11 @@ function RouteCloseScreenInner() {
   );
 }
 
-// P0-4 (hardening): solo se puede cerrar una ruta que se inició (plan activo +
-// checklist + KM inicial + carga aceptada).
+// P0-4 (hardening): Odoo must have started the route. Final server states are
+// also admitted so the screen can show its idempotent completion state.
 export default function RouteCloseScreen() {
   return (
-    <OperationGate title="Cerrar ruta">
+    <OperationGate title="Cerrar ruta" mode="close">
       <RouteCloseScreenInner />
     </OperationGate>
   );

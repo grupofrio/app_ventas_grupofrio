@@ -10,8 +10,87 @@ interface RouteLoadAcceptanceModule {
     hasPendingLoad: boolean;
     nextPendingLoad: any | null;
   };
+  buildInitialLoadAcceptanceState: (plan: any) => {
+    initialLoads: any[];
+    pendingInitialLoads: any[];
+    initialLoadAccepted: boolean;
+    nextPendingInitialLoad: any | null;
+  };
   canStartSaleWithRouteLoad: (plan: any) => boolean;
   buildRouteLoadAcceptPayload: (routePlanId: number, pickingId: number) => Record<string, number>;
+}
+
+function testBuildsInitialLoadAcceptanceState(m: RouteLoadAcceptanceModule) {
+  assert.equal(
+    typeof m.buildInitialLoadAcceptanceState,
+    'function',
+    'route load acceptance must expose initial-load-only readiness',
+  );
+
+  const pendingInitial = m.buildInitialLoadAcceptanceState({
+    load_picking_id: 20,
+    load_pickings: [
+      { picking_id: 20, state: 'assigned', accepted: false, load_kind: 'initial' },
+    ],
+    pending_loads: [
+      { picking_id: 20, state: 'assigned', accepted: false, load_kind: 'initial' },
+    ],
+  });
+  assert.equal(pendingInitial.initialLoads.length, 1);
+  assert.equal(pendingInitial.pendingInitialLoads.length, 1);
+  assert.equal(pendingInitial.initialLoadAccepted, false);
+  assert.equal(pendingInitial.nextPendingInitialLoad?.picking_id, 20);
+
+  const withoutInitial = m.buildInitialLoadAcceptanceState({
+    load_pickings: [
+      { picking_id: 30, state: 'assigned', accepted: false, load_kind: 'refill' },
+    ],
+    pending_loads: [
+      { picking_id: 30, state: 'assigned', accepted: false, load_kind: 'refill' },
+    ],
+  });
+  assert.equal(withoutInitial.initialLoads.length, 0);
+  assert.equal(withoutInitial.pendingInitialLoads.length, 0);
+  assert.equal(withoutInitial.initialLoadAccepted, true);
+  assert.equal(withoutInitial.nextPendingInitialLoad, null);
+
+  const withPendingRefill = m.buildInitialLoadAcceptanceState({
+    load_picking_id: 80,
+    load_pickings: [
+      { picking_id: 80, load_kind: 'initial', accepted: true },
+      { picking_id: 81, load_kind: 'refill', accepted: false, state: 'assigned' },
+    ],
+    pending_loads: [
+      { picking_id: 81, load_kind: 'refill', accepted: false, state: 'assigned' },
+    ],
+  });
+  assert.equal(withPendingRefill.initialLoads.length, 1);
+  assert.equal(withPendingRefill.pendingInitialLoads.length, 0);
+  assert.equal(withPendingRefill.initialLoadAccepted, true);
+  assert.equal(withPendingRefill.nextPendingInitialLoad, null);
+}
+
+function testSaleStartUsesInitialLoadReadiness(m: RouteLoadAcceptanceModule) {
+  assert.equal(m.canStartSaleWithRouteLoad({
+    load_picking_id: 80,
+    load_pickings: [
+      { picking_id: 80, load_kind: 'initial', accepted: true },
+      { picking_id: 81, load_kind: 'refill', accepted: false, state: 'assigned' },
+    ],
+    pending_loads: [
+      { picking_id: 81, load_kind: 'refill', accepted: false, state: 'assigned' },
+    ],
+  }), true);
+
+  assert.equal(m.canStartSaleWithRouteLoad({
+    load_picking_id: 20,
+    load_pickings: [
+      { picking_id: 20, load_kind: 'initial', accepted: false, state: 'assigned' },
+    ],
+    pending_loads: [
+      { picking_id: 20, load_kind: 'initial', accepted: false, state: 'assigned' },
+    ],
+  }), false);
 }
 
 function testDetectsMultiplePendingRefills(m: RouteLoadAcceptanceModule) {
@@ -186,6 +265,8 @@ async function main() {
   ) as RouteLoadAcceptanceModule;
 
   testDetectsMultiplePendingRefills(module);
+  testBuildsInitialLoadAcceptanceState(module);
+  testSaleStartUsesInitialLoadReadiness(module);
   testBlocksSaleWhenLoadIsPending(module);
   testIgnoresAcceptedDoneEntriesInPendingLoads(module);
   testAcceptPayloadIncludesSpecificPicking(module);

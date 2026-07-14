@@ -32,6 +32,13 @@ export interface RouteLoadAcceptanceState {
   nextPendingLoad: RouteLoadCard | null;
 }
 
+export interface InitialLoadAcceptanceState {
+  initialLoads: RouteLoadCard[];
+  pendingInitialLoads: RouteLoadCard[];
+  initialLoadAccepted: boolean;
+  nextPendingInitialLoad: RouteLoadCard | null;
+}
+
 function toPositiveNumber(value: unknown): number {
   if (Array.isArray(value)) return toPositiveNumber(value[0]);
   const n = Number(value || 0);
@@ -145,6 +152,19 @@ export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceSta
   };
 }
 
+export function buildInitialLoadAcceptanceState(plan: unknown): InitialLoadAcceptanceState {
+  const state = buildRouteLoadAcceptanceState(plan);
+  const initialLoads = state.loadCards.filter((card) => !card.isRefill);
+  const pendingInitialLoads = state.pendingLoads.filter((card) => !card.isRefill);
+
+  return {
+    initialLoads,
+    pendingInitialLoads,
+    initialLoadAccepted: initialLoads.length === 0 || pendingInitialLoads.length === 0,
+    nextPendingInitialLoad: pendingInitialLoads[0] || null,
+  };
+}
+
 export function canStartSaleWithRouteLoad(plan: any): boolean {
-  return !buildRouteLoadAcceptanceState(plan).hasPendingLoad;
+  return buildInitialLoadAcceptanceState(plan).initialLoadAccepted;
 }

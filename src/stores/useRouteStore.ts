@@ -10,7 +10,7 @@ import { getMyPlan, getPlanStops } from '../services/gfLogistics';
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
 import { useVisitStore } from './useVisitStore';
-import { storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
 import { removeStopById } from '../services/routeStops';
 import {
@@ -144,6 +144,11 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         if (visitStore.currentStopId !== null) {
           visitStore.resetVisit();
         }
+        await Promise.all([
+          storeRemove(STORAGE_KEYS.PLAN),
+          storeRemove(STORAGE_KEYS.STOPS),
+          storeRemove(STORAGE_KEYS.VISIT_STATE),
+        ]);
         useRouteStartStore.getState().reset();
         set({
           plan: null,
@@ -151,7 +156,11 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           isLoading: false,
           error: 'Sin plan para hoy',
           routeFreshness: 'stale',
+          lastSync: null,
           planVersionToken: null,
+          stopsCompleted: 0,
+          stopsTotal: 0,
+          progressPct: 0,
         });
         return;
       }

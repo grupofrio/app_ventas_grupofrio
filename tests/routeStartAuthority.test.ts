@@ -59,7 +59,7 @@ async function main() {
     module.mergeRouteStartPlanSnapshot(
       {
         planId: 6466,
-        checklistComplete: false,
+        checklistComplete: true,
         kmInitial: null,
         loadAccepted: false,
       },
@@ -67,7 +67,7 @@ async function main() {
     ),
     {
       planId: 6466,
-      checklistComplete: false,
+      checklistComplete: true,
       kmInitial: 399728,
       loadAccepted: true,
     },

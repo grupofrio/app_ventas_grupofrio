@@ -62,16 +62,46 @@ function main() {
 
   const noPlanBranch = routeStore.indexOf('if (!plan) {', planRead);
   const retainedCacheReturn = routeStore.indexOf("error: 'No se pudo actualizar la ruta; mostrando ruta guardada'", noPlanBranch);
+  const definitiveInvalidation = routeStore.indexOf('await Promise.all([', retainedCacheReturn);
   const definitiveReset = routeStore.indexOf('useRouteStartStore.getState().reset();', retainedCacheReturn);
   const noPlanState = routeStore.indexOf("error: 'Sin plan para hoy'", retainedCacheReturn);
   assert.ok(
-    retainedCacheReturn >= 0 && definitiveReset > retainedCacheReturn && definitiveReset < noPlanState,
-    'only the definitive online no-plan path must reset route-start facts',
+    retainedCacheReturn >= 0
+      && definitiveInvalidation > retainedCacheReturn
+      && definitiveReset > definitiveInvalidation
+      && definitiveReset < noPlanState,
+    'the definitive online no-plan path must durably invalidate route cache before resetting readiness',
+  );
+  const invalidationBlock = routeStore.slice(definitiveInvalidation, definitiveReset);
+  assert.match(
+    invalidationBlock,
+    /storeRemove\(STORAGE_KEYS\.PLAN\)/,
+    'definitive no-plan must remove the cached plan so it cannot be restored after restart',
+  );
+  assert.match(
+    invalidationBlock,
+    /storeRemove\(STORAGE_KEYS\.STOPS\)/,
+    'definitive no-plan must remove cached stops so an obsolete empty route cannot rehydrate',
+  );
+  assert.match(
+    invalidationBlock,
+    /storeRemove\(STORAGE_KEYS\.VISIT_STATE\)/,
+    'definitive no-plan must remove the persisted active visit',
   );
   assert.equal(
     (routeStore.match(/useRouteStartStore\.getState\(\)\.reset\(\);/g) || []).length,
     1,
     'offline and retained-cache paths must not reset route-start facts',
+  );
+  assert.equal(
+    (routeStore.match(/storeRemove\(STORAGE_KEYS\.(?:PLAN|STOPS|VISIT_STATE)\)/g) || []).length,
+    3,
+    'offline and retained-cache paths must not delete durable route state',
+  );
+  assert.match(
+    routeStore.slice(definitiveReset, routeStore.indexOf('return;', definitiveReset)),
+    /set\(\{[\s\S]*?plan:\s*null,[\s\S]*?stops:\s*\[\],[\s\S]*?lastSync:\s*null,[\s\S]*?planVersionToken:\s*null,[\s\S]*?stopsCompleted:\s*0,[\s\S]*?stopsTotal:\s*0,[\s\S]*?progressPct:\s*0,[\s\S]*?\}\)/,
+    'definitive no-plan must clear all in-memory route and derived progress state',
   );
 
   const validCacheBranch = rehydrate.indexOf('if (isTodayPlan && isCurrentEmployeePlan) {');

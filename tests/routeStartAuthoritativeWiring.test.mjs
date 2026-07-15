@@ -10,6 +10,7 @@ function main() {
   const authority = read('src/services/routeStartAuthority.ts');
   const logistics = read('src/services/gfLogistics.ts');
   const routeStartAction = read('src/services/routeStartAction.ts');
+  const routePlanRefresh = read('src/services/routePlanRefresh.ts');
   const routeStartStore = read('src/stores/useRouteStartStore.ts');
   const routeStore = read('src/stores/useRouteStore.ts');
   const rehydrate = read('src/services/rehydrate.ts');
@@ -210,6 +211,11 @@ function main() {
   );
   assert.match(
     routeStartScreen,
+    /const startingRouteRef = useRef\(false\);/,
+    'route-start UI must use a synchronous lock that is visible within the same render',
+  );
+  assert.match(
+    routeStartScreen,
     /const checklistComplete = useRouteStartStore\(\(s\) => s\.checklistComplete\);/,
     'live checklist readiness must come from the persisted plan-scoped fact',
   );
@@ -249,6 +255,16 @@ function main() {
   const handleStartEnd = routeStartScreen.indexOf('\n\n  async function handleSaveKm', handleStartBegin);
   const handleStart = routeStartScreen.slice(handleStartBegin, handleStartEnd);
   assert.ok(handleStartBegin >= 0, 'route-start UI must define handleStartRoute');
+  assert.match(
+    handleStart,
+    /if \(!planId \|\| startingRouteRef\.current\) return;/,
+    'the start handler must reject same-render duplicate invocations synchronously',
+  );
+  assert.match(
+    handleStart,
+    /startingRouteRef\.current = true;[\s\S]*?finally \{\s*startingRouteRef\.current = false;/,
+    'the synchronous start lock must be acquired before the mutation and released in finally',
+  );
   assert.match(
     handleStart,
     /currentPlan\?\.plan_id !== capturedPlanId/,
@@ -327,6 +343,42 @@ function main() {
     handleStart,
     /const currentReadyToStart = currentStart\.planId === capturedPlanId[\s\S]*?&& currentStart\.loadAccepted[\s\S]*?&& dataMinReady;/,
     'the programmatic start guard must use the latest authoritative load fact, not a stale render closure',
+  );
+
+  assert.match(
+    logistics,
+    /return fetchMyPlan\(postRest, `\$\{GF_BASE\}\/my_plan`, getMyPlanDate\(\)\);/,
+    'getMyPlan must delegate without collapsing transport or session failures to null',
+  );
+  assert.doesNotMatch(
+    logistics.slice(logistics.indexOf('export async function getMyPlan()'), logistics.indexOf('export async function startPlan(')),
+    /catch\s*\(/,
+    'getMyPlan must let transport and server errors reach loadPlan',
+  );
+  assert.match(
+    routeStore,
+    /const routePlanLoadFlight = createSingleFlight<void>\(\);/,
+    'route plan loads must share an in-flight refresh coordinator',
+  );
+  assert.match(
+    routeStore,
+    /loadPlan:\s*\(opts = \{\}\) => routePlanLoadFlight\.run\(async \(\) => \{/,
+    'overlapping loadPlan callers must join the active refresh promise',
+  );
+  assert.doesNotMatch(
+    routeStore,
+    /if \(get\(\)\.isLoading\) return;/,
+    'loadPlan must not resolve overlapping callers early',
+  );
+  assert.match(
+    routeStore,
+    /set\(buildRouteRefreshFailurePatch\(error\)\);/,
+    'transient refresh failures must update only failure metadata and preserve cached route state',
+  );
+  assert.match(
+    routePlanRefresh,
+    /export function createSingleFlight/,
+    'the runtime-tested single-flight coordinator must back route plan loading',
   );
 
   assert.match(

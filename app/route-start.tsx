@@ -13,7 +13,7 @@
  * offline — none of them crash the screen.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
@@ -115,6 +115,7 @@ export default function RouteStartScreen() {
   const [kmInput, setKmInput] = useState('');
   const [savingKm, setSavingKm] = useState(false);
   const [startingRoute, setStartingRoute] = useState(false);
+  const startingRouteRef = useRef(false);
   const planDepartureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
   const kmInitial = chooseAuthoritativeKm({
     planKm: planDepartureKm,
@@ -240,7 +241,7 @@ export default function RouteStartScreen() {
   const canContinue = serverStarted || canRequestStart;
 
   async function handleStartRoute() {
-    if (!planId || startingRoute) return;
+    if (!planId || startingRouteRef.current) return;
     const capturedPlanId = planId;
     const currentPlan = useRouteStore.getState().plan;
     const currentStart = useRouteStartStore.getState();
@@ -265,6 +266,7 @@ export default function RouteStartScreen() {
       return;
     }
 
+    startingRouteRef.current = true;
     setStartingRoute(true);
     try {
       await confirmAuthoritativeRouteStart({
@@ -300,6 +302,7 @@ export default function RouteStartScreen() {
         err instanceof Error ? err.message : 'Intenta de nuevo.',
       );
     } finally {
+      startingRouteRef.current = false;
       setStartingRoute(false);
     }
   }

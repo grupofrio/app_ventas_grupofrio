@@ -29,6 +29,10 @@ import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
 import { useRouteStartStore } from './useRouteStartStore';
+import {
+  buildRouteRefreshFailurePatch,
+  createSingleFlight,
+} from '../services/routePlanRefresh';
 
 export type RouteFreshness = 'updated' | 'stale' | 'offline_cache';
 
@@ -70,6 +74,8 @@ interface RouteState {
   reset: () => void;
 }
 
+const routePlanLoadFlight = createSingleFlight<void>();
+
 export const useRouteStore = create<RouteState>((set, get) => ({
   plan: null,
   stops: [],
@@ -82,9 +88,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   stopsTotal: 0,
   progressPct: 0,
 
-  loadPlan: async (opts = {}) => {
-    if (get().isLoading) return; // Prevent concurrent calls
-
+  loadPlan: (opts = {}) => routePlanLoadFlight.run(async () => {
     const isOnline = useSyncStore.getState().isOnline;
     const now = Date.now();
 
@@ -267,10 +271,9 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       storeSave(STORAGE_KEYS.PLAN, plan);
       storeSave(STORAGE_KEYS.STOPS, stops);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Error cargando plan';
-      set({ error: msg, isLoading: false });
+      set(buildRouteRefreshFailurePatch(error));
     }
-  },
+  }),
 
   /**
    * BLD-20260408-P0: Create a virtual stop for off-route sales.

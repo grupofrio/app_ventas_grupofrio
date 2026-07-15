@@ -25,6 +25,7 @@ import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
 import { isAlreadyConfirmedResponse } from './idempotentResponse';
 import { normalizePlanStopPayload } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
+import { fetchMyPlan } from './routePlanRefresh';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -346,26 +347,7 @@ function getMyPlanDate(): string {
 }
 
 export async function getMyPlan(): Promise<GFPlan | null> {
-  try {
-    // BLD-20260404-007: Backend wraps response in { ok, message, data }.
-    // When found=false, the employee has no plan assigned for today.
-    const result = await postRest<any>(`${GF_BASE}/my_plan`, {
-      date: getMyPlanDate(),
-    });
-    if (!result || typeof result !== 'object') return null;
-    if (result.ok === false) {
-      console.warn('[gfLogistics] my_plan returned ok=false:', result.message);
-      return null;
-    }
-    // Support both wrapped ({ok, data}) and unwrapped (GFPlan direct) responses.
-    const data = result.data !== undefined ? result.data : result;
-    if (!data || data.found === false) return null;
-    // data may be the plan itself or wrap it in data.plan.
-    return (data.plan ?? data) as GFPlan;
-  } catch (error) {
-    console.warn('[gfLogistics] my_plan failed:', error);
-    return null;
-  }
+  return fetchMyPlan(postRest, `${GF_BASE}/my_plan`, getMyPlanDate());
 }
 
 export async function startPlan(planId: number): Promise<StartPlanResult> {

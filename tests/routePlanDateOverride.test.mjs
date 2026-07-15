@@ -11,7 +11,7 @@ assert.match(
 
 assert.match(
   source,
-  /date:\s*getMyPlanDate\(\)/,
+  /fetchMyPlan\(postRest, `\$\{GF_BASE\}\/my_plan`, getMyPlanDate\(\)\)/,
   'getMyPlan must send the QA-overridable plan date to /my_plan',
 );
 

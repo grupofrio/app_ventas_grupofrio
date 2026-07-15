@@ -41,6 +41,7 @@ import { buildYesNoVehicleCheckAnswer } from '../../src/services/vehicleChecklis
 import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
+import { useRouteStore } from '../../src/stores/useRouteStore';
 
 interface CheckDraft {
   bool?: boolean;
@@ -50,12 +51,19 @@ interface CheckDraft {
   photoUri?: string; // local file URI of a freshly captured photo (not yet sent)
 }
 
+function isCurrentPlan(capturedPlanId: number): boolean {
+  const currentPlan = useRouteStore.getState().plan;
+  const currentStartPlanId = useRouteStartStore.getState().planId;
+  return currentPlan?.plan_id === capturedPlanId
+    && currentStartPlanId === capturedPlanId;
+}
+
 export default function ChecklistScreen() {
   const { planId } = useLocalSearchParams<{ planId: string }>();
   const planIdNum = Number(planId);
   const router = useRouter();
-  const setChecklistComplete = useRouteStartStore((s) => s.setChecklistComplete);
-  const setKmInitialStore = useRouteStartStore((s) => s.setKmInitial);
+  const setChecklistCompleteForPlan = useRouteStartStore((s) => s.setChecklistCompleteForPlan);
+  const setKmInitialForPlan = useRouteStartStore((s) => s.setKmInitialForPlan);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,25 +82,35 @@ export default function ChecklistScreen() {
     }
     setLoading(true);
     setError(null);
+    const capturedPlanId = planIdNum;
     try {
-      const { header: h, checks: c } = await ensureChecklistReady(planIdNum);
+      const { header: h, checks: c } = await ensureChecklistReady(capturedPlanId);
+      if (h.state === 'completed') {
+        setChecklistCompleteForPlan(capturedPlanId, true);
+      }
+      if (!isCurrentPlan(capturedPlanId)) return;
       setHeader(h);
       setChecks(c);
-      if (h.state === 'completed') setChecklistComplete(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo cargar el checklist.');
+      if (isCurrentPlan(capturedPlanId)) {
+        setError(err instanceof Error ? err.message : 'No se pudo cargar el checklist.');
+      }
     } finally {
-      setLoading(false);
+      if (isCurrentPlan(capturedPlanId)) {
+        setLoading(false);
+      }
     }
-  }, [planIdNum, setChecklistComplete]);
+  }, [planIdNum, setChecklistCompleteForPlan]);
 
   React.useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
 
   async function reloadChecks() {
+    const capturedPlanId = planIdNum;
     try {
-      const { header: h, checks: c } = await ensureChecklistReady(planIdNum);
+      const { header: h, checks: c } = await ensureChecklistReady(capturedPlanId);
+      if (!isCurrentPlan(capturedPlanId)) return;
       setHeader(h);
       setChecks(c);
     } catch {
@@ -200,34 +218,38 @@ export default function ChecklistScreen() {
 
   async function handleComplete() {
     if (completing) return;
+    const capturedPlanId = planIdNum;
     setCompleting(true);
     try {
       await completeVehicleChecklist(header?.id ?? 0);
-      setChecklistComplete(true);
+      setChecklistCompleteForPlan(capturedPlanId, true);
 
       // A.1 Option A: feed KM inicial from the checklist odometer numeric
       // check so the vendor doesn't capture KM twice. Best-effort: a failure
       // here does NOT fail the checklist — the hub keeps a manual KM fallback.
       const odoKm = extractOdometerKm(checks);
-      if (odoKm != null && planIdNum > 0) {
+      if (odoKm != null && capturedPlanId > 0) {
         try {
-          const res = await updateKm(planIdNum, 'departure', odoKm);
-          setKmInitialStore(chooseAuthoritativeKm({ backendKm: res.departure_km }));
+          const res = await updateKm(capturedPlanId, 'departure', odoKm);
+          setKmInitialForPlan(capturedPlanId, chooseAuthoritativeKm({ backendKm: res.departure_km }));
         } catch {
           // leave KM to the hub fallback; do not block completion
         }
       }
 
-      Alert.alert('Checklist completado', 'La inspección de unidad quedó registrada.', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      if (isCurrentPlan(capturedPlanId)) {
+        Alert.alert('Checklist completado', 'La inspección de unidad quedó registrada.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      }
     } catch (err) {
+      if (!isCurrentPlan(capturedPlanId)) return;
       const msg = err instanceof Error ? err.message : 'No se pudo completar el checklist.';
       if (/checks_pending|pendiente/i.test(msg)) {
         Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
       } else if (/blocking|bloqueante/i.test(msg)) {
         if (isChecklistAnsweredForStart(header)) {
-          setChecklistComplete(true);
+          setChecklistCompleteForPlan(capturedPlanId, true);
           Alert.alert(
             'Checklist registrado',
             'Las respuestas quedaron guardadas. Hay puntos no aprobados, pero el estado del vehículo quedó actualizado.',

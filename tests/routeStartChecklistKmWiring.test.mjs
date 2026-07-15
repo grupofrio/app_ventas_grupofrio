@@ -8,11 +8,13 @@ const read = (p) => readFileSync(resolve(root, p), 'utf8').replace(/\r\n/g, '\n'
 
 function main() {
   const routeStart = read('app/route-start.tsx');
+  const checklist = read('app/checklist/[planId].tsx');
   const routeClose = read('app/route-close.tsx');
+  const routeStartStore = read('src/stores/useRouteStartStore.ts');
 
   assert.match(
     routeStart,
-    /ensureChecklistReady\(planId\)/,
+    /ensureChecklistReady\(capturedPlanId\)/,
     'Iniciar operación debe crear/cargar el checklist, no marcar listo cuando getVehicleChecklist regresa null',
   );
   assert.doesNotMatch(
@@ -34,6 +36,141 @@ function main() {
     routeClose,
     /kmInitialStore\s*\?\?/,
     'Cierre no debe priorizar el KM local del teléfono sobre Odoo',
+  );
+
+  assert.match(
+    routeStartStore,
+    /setChecklistCompleteForPlan:\s*\(planId:\s*number,\s*done:\s*boolean\)\s*=>\s*void/,
+    'el store debe exponer escritura de checklist ligada al plan capturado',
+  );
+  assert.match(
+    routeStartStore,
+    /setKmInitialForPlan:\s*\(planId:\s*number,\s*km:\s*number\s*\|\s*null\)\s*=>\s*void/,
+    'el store debe exponer escritura de KM ligada al plan capturado',
+  );
+
+  for (const [actionName, valueName] of [
+    ['setChecklistCompleteForPlan', 'done'],
+    ['setKmInitialForPlan', 'km'],
+  ]) {
+    const start = routeStartStore.indexOf(`${actionName}: (planId, ${valueName}) => {`);
+    const end = routeStartStore.indexOf('\n\n  ', start + 1);
+    const action = routeStartStore.slice(start, end);
+    assert.ok(start >= 0, `${actionName} debe estar implementado`);
+    assert.match(
+      action,
+      /if \(get\(\)\.planId !== planId\) return;/,
+      `${actionName} debe ignorar respuestas tardías de otro plan`,
+    );
+    assert.equal((action.match(/\bset\(/g) || []).length, 1, `${actionName} debe escribir una sola vez`);
+    assert.equal((action.match(/\brecompute\(/g) || []).length, 1, `${actionName} debe recalcular una sola vez`);
+    assert.equal((action.match(/\bpersist\(/g) || []).length, 1, `${actionName} debe persistir una sola vez`);
+  }
+
+  assert.doesNotMatch(
+    routeStart,
+    /useRouteStartStore\(\(s\) => s\.setChecklistComplete\)/,
+    'route-start no debe usar el setter de checklist sin plan en rutas async',
+  );
+  assert.doesNotMatch(
+    routeStart,
+    /useRouteStartStore\(\(s\) => s\.setKmInitial\)/,
+    'route-start no debe usar el setter de KM sin plan en rutas async',
+  );
+  assert.doesNotMatch(
+    checklist,
+    /useRouteStartStore\(\(s\) => s\.setChecklistComplete\)/,
+    'checklist no debe usar el setter de checklist sin plan en rutas async',
+  );
+  assert.doesNotMatch(
+    checklist,
+    /useRouteStartStore\(\(s\) => s\.setKmInitial\)/,
+    'checklist no debe usar el setter de KM sin plan en rutas async',
+  );
+
+  assert.match(
+    routeStart,
+    /setChecklistCompleteForPlan\(capturedPlanId, done\)/,
+    'la observación async del checklist debe escribir usando el plan capturado',
+  );
+  assert.match(
+    routeStart,
+    /setKmInitialForPlan\(capturedPlanId, storedKm\)/,
+    'la respuesta async de KM del hub debe escribir usando el plan capturado',
+  );
+  assert.match(
+    checklist,
+    /setChecklistCompleteForPlan\(capturedPlanId, true\)/,
+    'completar un checklist debe escribir usando el plan capturado',
+  );
+  assert.match(
+    checklist,
+    /setKmInitialForPlan\(capturedPlanId, chooseAuthoritativeKm\(\{ backendKm: res\.departure_km \}\)\)/,
+    'el KM extraído del checklist debe escribir usando el plan capturado',
+  );
+
+  assert.match(
+    routeStart,
+    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?currentPlan\?\.plan_id === capturedPlanId[\s\S]*?currentStartPlanId === capturedPlanId/,
+    'los updates locales del hub deben comprobar ambos stores',
+  );
+  assert.match(
+    checklist,
+    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?currentPlan\?\.plan_id === capturedPlanId[\s\S]*?currentStartPlanId === capturedPlanId/,
+    'los updates locales del checklist deben comprobar ambos stores',
+  );
+
+  const refreshStart = routeStart.indexOf('const refresh = useCallback(async () => {');
+  const refreshEnd = routeStart.indexOf('\n\n  async function handleAcceptLoad', refreshStart);
+  const refresh = routeStart.slice(refreshStart, refreshEnd);
+  assert.match(
+    refresh,
+    /const capturedPlanId = planId;/,
+    'refresh debe capturar la identidad del plan antes de esperar',
+  );
+  assert.match(
+    refresh,
+    /if \(isCurrentPlan\(capturedPlanId\)\) \{[\s\S]*?setKmInitialBackend\(\{\s*planId: capturedPlanId,\s*km:/,
+    'el KM local del backend solo debe pintarse si ambos stores siguen en el plan capturado',
+  );
+  assert.match(
+    refresh,
+    /if \(isCurrentPlan\(capturedPlanId\)\) \{[\s\S]*?setChecklistStatus\(/,
+    'el estado local del checklist solo debe pintarse si ambos stores siguen en el plan capturado',
+  );
+  assert.doesNotMatch(
+    refresh,
+    /setChecklistCompleteForPlan\(capturedPlanId, false\)/,
+    'una falla transitoria no debe borrar el último hecho de checklist del plan',
+  );
+  assert.match(
+    refresh,
+    /const preservedChecklist = useRouteStartStore\.getState\(\)\.checklistComplete;[\s\S]*?setChecklistStatus\(preservedChecklist \? 'done' : 'pending'\)/,
+    'una falla transitoria debe conservar el hecho previo del checklist para el mismo plan',
+  );
+
+  const saveKmStart = routeStart.indexOf('function confirmSaveKm(km: number) {');
+  const saveKmEnd = routeStart.indexOf('\n\n  // ── Empty state', saveKmStart);
+  const saveKm = routeStart.slice(saveKmStart, saveKmEnd);
+  assert.match(
+    saveKm,
+    /const capturedPlanId = planId;/,
+    'guardar KM debe capturar el plan antes de abrir el callback async',
+  );
+  assert.match(
+    saveKm,
+    /if \(isCurrentPlan\(capturedPlanId\)\) \{\s*setKmInitialBackend\(\{ planId: capturedPlanId, km: storedKm \}\);/,
+    'la respuesta de KM solo debe actualizar la pantalla del plan capturado',
+  );
+  assert.match(
+    saveKm,
+    /if \(isCurrentPlan\(capturedPlanId\)\) \{[\s\S]*?setKmInput\(''\);/,
+    'la respuesta de KM no debe limpiar el input de un plan nuevo',
+  );
+  assert.match(
+    routeStart,
+    /backendKm:\s*kmInitialBackend\?\.planId === planId \? kmInitialBackend\.km : null/,
+    'un KM local previo nunca debe mostrarse ni habilitar un plan nuevo antes del siguiente efecto',
   );
 
   console.log('route start checklist/km wiring tests: ok');

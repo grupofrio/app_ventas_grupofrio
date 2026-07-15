@@ -32,7 +32,9 @@ interface RouteStartState {
 
   setForPlan: (planId: number) => void;
   setChecklistComplete: (done: boolean) => void;
+  setChecklistCompleteForPlan: (planId: number, done: boolean) => void;
   setKmInitial: (km: number | null) => void;
+  setKmInitialForPlan: (planId: number, km: number | null) => void;
   setLoadAccepted: (accepted: boolean) => void;
   syncFromPlan: (plan: GFPlan) => void;
   reset: () => void;
@@ -92,7 +94,25 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
     persist(get());
   },
 
+  setChecklistCompleteForPlan: (planId, done) => {
+    if (get().planId !== planId) return;
+    set((s) => {
+      const next = { ...s, checklistComplete: done };
+      return { checklistComplete: done, readiness: recompute(next) };
+    });
+    persist(get());
+  },
+
   setKmInitial: (km) => {
+    set((s) => {
+      const next = { ...s, kmInitial: km };
+      return { kmInitial: km, readiness: recompute(next) };
+    });
+    persist(get());
+  },
+
+  setKmInitialForPlan: (planId, km) => {
+    if (get().planId !== planId) return;
     set((s) => {
       const next = { ...s, kmInitial: km };
       return { kmInitial: km, readiness: recompute(next) };

@@ -16,6 +16,7 @@ function main() {
   const routeStartScreen = read('app/route-start.tsx');
   const operationGate = read('src/components/OperationGate.tsx');
   const routeClose = read('app/route-close.tsx');
+  const checklistScreen = read('app/checklist/[planId].tsx');
 
   assert.match(
     authority,
@@ -190,6 +191,143 @@ function main() {
     routeStore,
     /loadPlan:[\s\S]*?syncFromPlan\(plan\)/,
     'route-start plan refresh must update persisted readiness, not only component-local backend KM',
+  );
+
+  assert.match(
+    routeStartScreen,
+    /import \{ acceptRouteLoad, startPlan \} from '\.\.\/src\/services\/gfLogistics';/,
+    'route-start UI must use the real authoritative start transport',
+  );
+  assert.match(
+    routeStartScreen,
+    /import \{ confirmAuthoritativeRouteStart \} from '\.\.\/src\/services\/routeStartAction';/,
+    'route-start UI must use the authoritative start orchestrator',
+  );
+  assert.match(
+    routeStartScreen,
+    /const \[startingRoute, setStartingRoute\] = useState\(false\);/,
+    'route-start UI must track an in-flight mutation to prevent duplicate taps',
+  );
+  assert.match(
+    routeStartScreen,
+    /const checklistComplete = useRouteStartStore\(\(s\) => s\.checklistComplete\);/,
+    'live checklist readiness must come from the persisted plan-scoped fact',
+  );
+  assert.match(
+    routeStartScreen,
+    /const routeStartPlanId = useRouteStartStore\(\(s\) => s\.planId\);/,
+    'live readiness must compare the persisted fact identity with the current plan',
+  );
+  assert.match(
+    routeStartScreen,
+    /const checklistDoneLive = serverStarted \|\| \(routeStartPlanId === planId && checklistComplete\);/,
+    'in-progress is authoritative while pre-start checklist facts remain plan-scoped',
+  );
+  assert.match(
+    routeStartScreen,
+    /const checklistDisplayStatus: StepStatus = checklistDoneLive && checklistStatus === 'done'\s*\? 'done'\s*:\s*'pending';/,
+    'a local checklist status from plan A must render pending for plan B',
+  );
+
+  assert.match(
+    routeStartScreen,
+    /buildInitialLoadAcceptanceState\(plan\)/,
+    'daily route start must derive Step 4 from the initial load only',
+  );
+  assert.doesNotMatch(
+    routeStartScreen,
+    /buildRouteLoadAcceptanceState\(plan\)/,
+    'a pending refill must not make the daily start UI look pending',
+  );
+  assert.match(
+    routeStartScreen,
+    /const pending = initialLoadState\.nextPendingInitialLoad;/,
+    'the daily-start accept button must target only an initial load',
+  );
+
+  const handleStartBegin = routeStartScreen.indexOf('async function handleStartRoute() {');
+  const handleStartEnd = routeStartScreen.indexOf('\n\n  async function handleSaveKm', handleStartBegin);
+  const handleStart = routeStartScreen.slice(handleStartBegin, handleStartEnd);
+  assert.ok(handleStartBegin >= 0, 'route-start UI must define handleStartRoute');
+  assert.match(
+    handleStart,
+    /currentPlan\?\.plan_id !== capturedPlanId/,
+    'programmatic start calls must reject a stale rendered plan',
+  );
+  assert.match(
+    handleStart,
+    /currentPlan\.state !== 'in_progress'[\s\S]*?currentPlan\.state === 'published'/,
+    'the hard guard must allow only in-progress continuation or published readiness',
+  );
+  assert.match(
+    handleStart,
+    /await confirmAuthoritativeRouteStart\(\{/,
+    'the UI must await authoritative confirmation',
+  );
+  assert.match(
+    handleStart,
+    /start:\s*startPlan/,
+    'the UI must pass the real endpoint into the orchestrator',
+  );
+  assert.match(
+    handleStart,
+    /markStarted:\s*\(\) => useRouteStore\.getState\(\)\.markPlanStarted\(capturedPlanId\)/,
+    'the orchestrator must patch only the captured current plan',
+  );
+  const confirmation = handleStart.indexOf('await confirmAuthoritativeRouteStart({');
+  const postConfirmPlan = handleStart.indexOf('const confirmedPlan = useRouteStore.getState().plan;', confirmation);
+  const postConfirmStartId = handleStart.indexOf('const confirmedStartPlanId = useRouteStartStore.getState().planId;', postConfirmPlan);
+  const raceAlert = handleStart.indexOf('La ruta cambió mientras se iniciaba. Revisa el plan actual.', postConfirmStartId);
+  const navigation = handleStart.indexOf('router.replace(', raceAlert);
+  assert.ok(
+    confirmation >= 0
+      && postConfirmPlan > confirmation
+      && postConfirmStartId > postConfirmPlan
+      && raceAlert > postConfirmStartId
+      && navigation > raceAlert,
+    'confirmation and the same-plan/state/store race check must precede navigation',
+  );
+  assert.match(
+    handleStart,
+    /isSameStartedRoutePlan\(\{\s*capturedPlanId,\s*currentPlan:\s*confirmedPlan,\s*currentRouteStartPlanId:\s*confirmedStartPlanId,\s*\}\)/,
+    'navigation must require the same captured plan started in both stores',
+  );
+
+  assert.match(
+    routeStartScreen,
+    /label=\{serverStarted \? 'Continuar ruta' : 'Iniciar ruta'\}/,
+    'the button must continue an already started route instead of pretending it is unstarted',
+  );
+  assert.match(
+    routeStartScreen,
+    /onPress=\{handleStartRoute\}/,
+    'the button must invoke the real start handler',
+  );
+  assert.match(
+    routeStartScreen,
+    /disabled=\{startingRoute \|\| !canContinue\}/,
+    'the button must reject duplicate taps and all non-startable states',
+  );
+  assert.match(
+    routeStartScreen,
+    /loading=\{startingRoute\}/,
+    'the button must render mutation progress',
+  );
+  assert.match(
+    routeStartScreen,
+    /const serverStarted = plan\?\.state === 'in_progress';[\s\S]*?const canRequestStart = plan\?\.state === 'published' && readyToStartLive;[\s\S]*?const canContinue = serverStarted \|\| canRequestStart;/,
+    'UI eligibility must explicitly separate authoritative continuation from published readiness',
+  );
+  assert.match(
+    handleStart,
+    /buildRouteStartUiState\(\{\s*planState:\s*currentPlan\.state,\s*readyToStart:\s*currentReadyToStart,\s*\}\)/,
+    'the programmatic hard guard must use the exhaustively tested plan-state decision helper',
+  );
+
+  assert.match(
+    checklistScreen,
+    /useRouteStore\.getState\(\)\.plan[\s\S]*?useRouteStartStore\.getState\(\)\.planId/,
+    'checklist local updates must check both current plan identities after awaits',
   );
 
   assert.match(

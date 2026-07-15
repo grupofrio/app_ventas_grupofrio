@@ -6,18 +6,18 @@
 
 | Campo | Valor |
 |---|---|
-| Commit funcional compilado | `9b21e9ec7f00126522779237e89bf5dc70be7005` (`codex/fix-authoritative-route-start`) |
-| Perfil | Gradle `release` local de continuidad (`assembleRelease`) |
+| Commit funcional compilado | `eb2963b0be032b3d5f7eb641fa301d9344d6ff4e` (`codex/fix-authoritative-route-start`) |
+| Perfil | Gradle `release` local de continuidad (`clean assembleRelease`) |
 | Ambiente/URL | `grupofrio.odoo.com` (producción, salvo override de env) |
 | APK | `android/app/build/outputs/apk/release/app-release.apk` |
-| Tamaño | 68,810,652 bytes (~66 MiB) |
-| SHA-256 APK | `9bbcdfb798c6457bddc258e8b646fa550a9d1f43da28809ab1c3473fcdda1bc7` |
+| Tamaño | 68,810,656 bytes (~66 MiB) |
+| SHA-256 APK | `faf9a7cc97a87da384deafa213ebcf426398b6a3198d0e3165ea075bca7fb762` |
 | Package | `mx.grupofrio.koldfield` |
-| Version / versionCode | `1.3.1` / `2` |
+| Version / versionCode | `1.3.1` / `3` |
 | SHA-256 certificado | `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` |
 | typecheck | limpio (exit 0) |
-| tests | 135/135, 0 fallas |
-| Android build | `BUILD SUCCESSFUL in 2m 16s` (1303 tareas) |
+| tests | 136/136, 0 fallas |
+| Android build | `BUILD SUCCESSFUL in 2m 50s` (1337 tareas) |
 | Verificación del APK | limpia (exit 0) |
 
 ## Comandos y resultados
@@ -27,20 +27,23 @@ npm run typecheck
 # exit 0
 
 npm test
-# tests 135 · pass 135 · fail 0
+# tests 136 · pass 136 · fail 0
 
-npm run build:field-update:android
-# BUILD SUCCESSFUL in 2m 16s
+GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=1' npm run build:field-update:android
+# ejecuta: cd android && ./gradlew clean assembleRelease
+# BUILD SUCCESSFUL in 2m 50s
 
 npm run verify:field-update:android
 # exit 0; package, versionCode, versionName y certificado coinciden
 ```
 
-El directorio nativo `android/` está ignorado por Git y no existe de forma automática en un worktree nuevo. Para esta compilación se copió al worktree el proyecto nativo de continuidad ya existente, junto con su keystore, excluyendo `.gradle/` y todos los builds previos. Así, Gradle generó el bundle y el APK desde el código del commit indicado, sin reutilizar un APK anterior.
+El directorio nativo `android/` está ignorado por Git y no existe de forma automática en un worktree nuevo. Para esta compilación se copió al worktree el proyecto nativo de continuidad ya existente, junto con su keystore, excluyendo `.gradle/` y todos los builds previos. `android/app/build.gradle` también se actualizó localmente a `versionCode 3`. El script ejecutó `clean` antes de `assembleRelease`, por lo que Gradle generó el bundle y el APK desde el código del commit indicado, sin reutilizar un APK anterior.
+
+En esta máquina, el primer build limpio agotó el heap nativo de 2 GiB en `:app:collectReleaseDependencies`; un intento con dos workers además expuso una carrera de archivos durante dexing. La ejecución verificada usó un override temporal de 4 GiB y un solo worker, mostrado arriba. Este ajuste no cambia el contenido ni la metadata del APK.
 
 ## Estado de aceptación manual
 
-`adb devices -l` detectó `emulator-5554`. El emulador ya tenía instalada y ejecutándose una app con package `mx.grupofrio.koldfield`, versionName `1.3.1` y versionCode `2`. No se instaló ni actualizó con el APK recién generado, por lo que ese dato **no demuestra** la aceptación del artefacto de este build.
+`adb devices -l` detectó `emulator-5554`. El emulador tenía instalada y ejecutándose la versión anterior con package `mx.grupofrio.koldfield`, versionName `1.3.1` y versionCode `2`. No se instaló ni actualizó con el APK `versionCode 3` recién generado, por lo que ese dato **no demuestra** la aceptación del artefacto de este build.
 
 Prueba pendiente en dispositivo/cuenta controlados:
 

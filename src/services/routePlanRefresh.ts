@@ -12,6 +12,28 @@ interface MyPlanEnvelope {
   code?: unknown;
 }
 
+const VALID_PLAN_STATES = new Set([
+  'draft',
+  'confirmed',
+  'published',
+  'in_progress',
+  'closed',
+  'reconciled',
+  'done',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function invalidMyPlanResponse(reason: string): Error & { code: 'invalid_response' } {
+  const error = new Error(`Respuesta inválida de my_plan: ${reason}`) as Error & {
+    code: 'invalid_response';
+  };
+  error.code = 'invalid_response';
+  return error;
+}
+
 /**
  * Fetch and decode the current employee plan without confusing failures with
  * the authoritative "no plan assigned" response.
@@ -22,7 +44,9 @@ export async function fetchMyPlan(
   date: string,
 ): Promise<GFPlan | null> {
   const result = await request(endpoint, { date });
-  if (!result || typeof result !== 'object') return null;
+  if (!isRecord(result)) {
+    throw invalidMyPlanResponse('se esperaba un objeto');
+  }
 
   const envelope = result as MyPlanEnvelope;
   if (envelope.ok === false) {
@@ -36,12 +60,32 @@ export async function fetchMyPlan(
     throw error;
   }
 
-  const data = envelope.data !== undefined ? envelope.data : result;
-  if (!data || typeof data !== 'object') return null;
+  const data = Object.prototype.hasOwnProperty.call(result, 'data')
+    ? envelope.data
+    : result;
+  if (!isRecord(data)) {
+    throw invalidMyPlanResponse('data no contiene un objeto');
+  }
 
   const planPayload = data as { found?: boolean; plan?: unknown };
   if (planPayload.found === false) return null;
-  return (planPayload.plan ?? data) as GFPlan;
+
+  const candidate = Object.prototype.hasOwnProperty.call(data, 'plan')
+    ? planPayload.plan
+    : data;
+  if (!isRecord(candidate)) {
+    throw invalidMyPlanResponse('plan no contiene un objeto');
+  }
+
+  const planId = candidate.plan_id;
+  if (!Number.isInteger(planId) || Number(planId) <= 0) {
+    throw invalidMyPlanResponse('plan_id debe ser un entero positivo');
+  }
+  if (typeof candidate.state !== 'string' || !VALID_PLAN_STATES.has(candidate.state)) {
+    throw invalidMyPlanResponse('state no es válido');
+  }
+
+  return candidate as unknown as GFPlan;
 }
 
 export function buildRouteRefreshFailurePatch(error: unknown): {
@@ -56,17 +100,26 @@ export function buildRouteRefreshFailurePatch(error: unknown): {
   };
 }
 
+export interface SingleFlightContext {
+  generation: number;
+  isCurrent: () => boolean;
+}
+
 export interface SingleFlight<T> {
-  run: (task: () => Promise<T>) => Promise<T>;
+  run: (task: (context: SingleFlightContext) => Promise<T>) => Promise<T>;
+  invalidate: () => void;
 }
 
 /** Join concurrent callers to one active operation, then allow a new flight. */
 export function createSingleFlight<T>(): SingleFlight<T> {
-  let inFlight: Promise<T> | null = null;
+  let generation = 0;
+  let inFlight: { generation: number; promise: Promise<T> } | null = null;
 
   return {
     run(task) {
-      if (inFlight) return inFlight;
+      if (inFlight?.generation === generation) return inFlight.promise;
+
+      const flightGeneration = generation;
 
       let resolveFlight!: (value: T | PromiseLike<T>) => void;
       let rejectFlight!: (reason?: unknown) => void;
@@ -74,19 +127,26 @@ export function createSingleFlight<T>(): SingleFlight<T> {
         resolveFlight = resolve;
         rejectFlight = reject;
       });
-      inFlight = current;
+      inFlight = { generation: flightGeneration, promise: current };
 
       try {
-        task().then(resolveFlight, rejectFlight);
+        task({
+          generation: flightGeneration,
+          isCurrent: () => generation === flightGeneration,
+        }).then(resolveFlight, rejectFlight);
       } catch (error) {
         rejectFlight(error);
       }
 
       const clear = () => {
-        if (inFlight === current) inFlight = null;
+        if (inFlight?.promise === current) inFlight = null;
       };
       void current.then(clear, clear);
       return current;
+    },
+    invalidate() {
+      generation += 1;
+      inFlight = null;
     },
   };
 }

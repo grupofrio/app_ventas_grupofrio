@@ -88,7 +88,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   stopsTotal: 0,
   progressPct: 0,
 
-  loadPlan: (opts = {}) => routePlanLoadFlight.run(async () => {
+  loadPlan: (opts = {}) => routePlanLoadFlight.run(async (flight) => {
     const isOnline = useSyncStore.getState().isOnline;
     const now = Date.now();
 
@@ -127,6 +127,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       const cachedStops = get().stops;
       const cachedToken = get().planVersionToken ?? routePlanVersionToken(cachedPlan);
       const plan = await getMyPlan();
+      if (!flight.isCurrent()) return;
       if (!plan) {
         if (shouldKeepCachedStopsAfterEmptyRefresh({
           cachedPlan,
@@ -154,6 +155,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           storeRemove(STORAGE_KEYS.STOPS),
           storeRemove(STORAGE_KEYS.VISIT_STATE),
         ]);
+        if (!flight.isCurrent()) return;
         useRouteStartStore.getState().reset();
         set({
           plan: null,
@@ -190,6 +192,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       }
 
       const backendStops = await getPlanStops(plan.plan_id);
+      if (!flight.isCurrent()) return;
       const keepCachedStops = shouldKeepCachedStopsAfterEmptyRefresh({
         cachedPlan,
         cachedStops,
@@ -221,6 +224,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         } catch {
           // KOLD modules may not exist — non-blocking
         }
+        if (!flight.isCurrent()) return;
       }
 
       // Enrich stops with score + forecast
@@ -271,6 +275,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       storeSave(STORAGE_KEYS.PLAN, plan);
       storeSave(STORAGE_KEYS.STOPS, stops);
     } catch (error: unknown) {
+      if (!flight.isCurrent()) return;
       set(buildRouteRefreshFailurePatch(error));
     }
   }),
@@ -361,9 +366,12 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     useRouteStartStore.getState().syncFromPlan(patched);
   },
 
-  reset: () => set({
-    plan: null, stops: [], isLoading: false, error: null,
-    lastSync: null, routeFreshness: 'stale', planVersionToken: null,
-    stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
-  }),
+  reset: () => {
+    routePlanLoadFlight.invalidate();
+    set({
+      plan: null, stops: [], isLoading: false, error: null,
+      lastSync: null, routeFreshness: 'stale', planVersionToken: null,
+      stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
+    });
+  },
 }));

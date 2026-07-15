@@ -362,7 +362,7 @@ function main() {
   );
   assert.match(
     routeStore,
-    /loadPlan:\s*\(opts = \{\}\) => routePlanLoadFlight\.run\(async \(\) => \{/,
+    /loadPlan:\s*\(opts = \{\}\) => routePlanLoadFlight\.run\(async \(flight\) => \{/,
     'overlapping loadPlan callers must join the active refresh promise',
   );
   assert.doesNotMatch(
@@ -379,6 +379,26 @@ function main() {
     routePlanRefresh,
     /export function createSingleFlight/,
     'the runtime-tested single-flight coordinator must back route plan loading',
+  );
+  assert.match(
+    routePlanRefresh,
+    /invalidate:\s*\(\)\s*=>\s*void/,
+    'single-flight must expose session-generation invalidation',
+  );
+  assert.match(
+    routeStore,
+    /const plan = await getMyPlan\(\);\s*if \(!flight\.isCurrent\(\)\) return;/,
+    'an old employee plan response must be ignored immediately after transport resolution',
+  );
+  assert.match(
+    routeStore,
+    /catch \(error: unknown\) \{\s*if \(!flight\.isCurrent\(\)\) return;\s*set\(buildRouteRefreshFailurePatch\(error\)\);/,
+    'an old employee transport failure must not write into the new session',
+  );
+  assert.match(
+    routeStore,
+    /reset:\s*\(\)\s*=>\s*\{\s*routePlanLoadFlight\.invalidate\(\);\s*set\(\{/,
+    'route reset must invalidate the old employee request generation before clearing state',
   );
 
   assert.match(

@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 interface GFPlanStub {
   plan_id: number;
   state: string;
+  name?: string;
+  date?: string;
+}
+
+interface SingleFlightContext {
+  generation: number;
+  isCurrent: () => boolean;
 }
 
 interface RoutePlanRefreshModule {
@@ -17,7 +24,8 @@ interface RoutePlanRefreshModule {
     routeFreshness: 'stale';
   };
   createSingleFlight: <T>() => {
-    run: (task: () => Promise<T>) => Promise<T>;
+    run: (task: (context: SingleFlightContext) => Promise<T>) => Promise<T>;
+    invalidate: () => void;
   };
 }
 
@@ -28,7 +36,36 @@ async function loadModule(): Promise<RoutePlanRefreshModule> {
   ) as RoutePlanRefreshModule;
 }
 
-async function testAuthoritativeNoPlanIsDistinctFromFailure(module: RoutePlanRefreshModule) {
+async function testValidDirectAndWrappedPlans(module: RoutePlanRefreshModule) {
+  const endpoint = '/gf/logistics/api/employee/my_plan';
+  const date = '2026-07-14';
+  const plan = {
+    plan_id: 6466,
+    state: 'published',
+    name: 'RPLAN/2026/06466',
+    date,
+  };
+
+  for (const response of [
+    plan,
+    { found: true, plan },
+    { found: true, ...plan },
+    { ok: true, data: { found: true, plan } },
+    { ok: true, data: { found: true, ...plan } },
+  ]) {
+    let requestPayload: Record<string, unknown> | null = null;
+    const actual = await module.fetchMyPlan(async (_url, payload) => {
+      requestPayload = payload;
+      return response;
+    }, endpoint, date);
+
+    assert.equal(actual?.plan_id, plan.plan_id);
+    assert.equal(actual?.state, plan.state);
+    assert.deepEqual(requestPayload, { date });
+  }
+}
+
+async function testOnlyExplicitFoundFalseIsAuthoritativeNoPlan(module: RoutePlanRefreshModule) {
   const endpoint = '/gf/logistics/api/employee/my_plan';
   const date = '2026-07-14';
 
@@ -36,7 +73,47 @@ async function testAuthoritativeNoPlanIsDistinctFromFailure(module: RoutePlanRef
     await module.fetchMyPlan(async () => ({ ok: true, data: { found: false } }), endpoint, date),
     null,
   );
-  assert.equal(await module.fetchMyPlan(async () => null, endpoint, date), null);
+  assert.equal(await module.fetchMyPlan(async () => ({ found: false }), endpoint, date), null);
+
+  const malformedResponses = [
+    null,
+    undefined,
+    '',
+    0,
+    true,
+    [],
+    { data: null },
+    { raw: '<html>bad gateway</html>' },
+    {},
+    { ok: true },
+    { ok: true, data: {} },
+    { found: true },
+    { found: true, plan: null },
+    { state: 'published' },
+    { plan_id: 0, state: 'published' },
+    { plan_id: -1, state: 'published' },
+    { plan_id: 1.5, state: 'published' },
+    { plan_id: '6466', state: 'published' },
+    { plan_id: 6466 },
+    { plan_id: 6466, state: 'mystery' },
+    { plan_id: 6466, state: 7 },
+  ];
+
+  for (const response of malformedResponses) {
+    await assert.rejects(
+      module.fetchMyPlan(async () => response, endpoint, date),
+      (error) => (
+        error instanceof Error
+        && (error as Error & { code?: string }).code === 'invalid_response'
+      ),
+      `must reject malformed my_plan response: ${JSON.stringify(response)}`,
+    );
+  }
+}
+
+async function testTransportAndServerFailuresPropagate(module: RoutePlanRefreshModule) {
+  const endpoint = '/gf/logistics/api/employee/my_plan';
+  const date = '2026-07-14';
 
   const sessionError = Object.assign(
     new Error('Sesión expirada. Vuelve a iniciar sesión.'),
@@ -132,12 +209,64 @@ async function testOverlappingRefreshesJoinActiveRequest(module: RoutePlanRefres
   assert.equal(taskCalls, 2);
 }
 
+async function testInvalidationStartsNewGenerationAndBlocksOldWrites(
+  module: RoutePlanRefreshModule,
+) {
+  const flight = module.createSingleFlight<number>();
+  let resolveOld!: (value: number) => void;
+  let resolveNew!: (value: number) => void;
+  const oldRequest = new Promise<number>((resolve) => { resolveOld = resolve; });
+  const newRequest = new Promise<number>((resolve) => { resolveNew = resolve; });
+  const generations: number[] = [];
+  let fetchCalls = 0;
+  let visiblePlanId: number | null = null;
+
+  const oldLoad = flight.run(async (context) => {
+    fetchCalls += 1;
+    generations.push(context.generation);
+    const planId = await oldRequest;
+    if (context.isCurrent()) visiblePlanId = planId;
+    return planId;
+  });
+
+  flight.invalidate();
+  visiblePlanId = null;
+
+  const newLoad = flight.run(async (context) => {
+    fetchCalls += 1;
+    generations.push(context.generation);
+    const planId = await newRequest;
+    if (context.isCurrent()) visiblePlanId = planId;
+    return planId;
+  });
+  const joinedNewLoad = flight.run(async () => {
+    fetchCalls += 1;
+    return 9999;
+  });
+
+  assert.equal(fetchCalls, 2, 'new generation must start without waiting for old employee request');
+  assert.notEqual(generations[0], generations[1], 'reset must advance the request generation');
+
+  resolveOld(6466);
+  assert.equal(await oldLoad, 6466);
+  assert.equal(visiblePlanId, null, 'old employee request must not repopulate reset state');
+  assert.equal(fetchCalls, 2, 'settling old generation must not clear the new active flight');
+
+  resolveNew(7000);
+  assert.equal(await newLoad, 7000);
+  assert.equal(await joinedNewLoad, 7000);
+  assert.equal(visiblePlanId, 7000, 'current employee request must win');
+}
+
 async function main() {
   const module = await loadModule();
 
-  await testAuthoritativeNoPlanIsDistinctFromFailure(module);
+  await testValidDirectAndWrappedPlans(module);
+  await testOnlyExplicitFoundFalseIsAuthoritativeNoPlan(module);
+  await testTransportAndServerFailuresPropagate(module);
   await testTransientFailurePreservesEmptyStopCache(module);
   await testOverlappingRefreshesJoinActiveRequest(module);
+  await testInvalidationStartsNewGenerationAndBlocksOldWrites(module);
 
   console.log('route plan refresh tests: ok');
 }

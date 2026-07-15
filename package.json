@@ -8,7 +8,7 @@
     "android:dev": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:field-update:android": "cd android && ./gradlew assembleRelease",
+    "build:field-update:android": "cd android && ./gradlew clean assembleRelease",
     "build:dev:android": "eas build -p android --profile development",
     "build:preview:android": "eas build -p android --profile preview",
     "build:prod:android": "eas build -p android --profile production",

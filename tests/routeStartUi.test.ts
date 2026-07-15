@@ -4,6 +4,7 @@ interface RouteStartUiModule {
   buildRouteStartUiState: (input: {
     planState: string | null;
     readyToStart: boolean;
+    isOnline: boolean;
   }) => {
     serverStarted: boolean;
     canRequestStart: boolean;
@@ -12,6 +13,11 @@ interface RouteStartUiModule {
   isSameStartedRoutePlan: (input: {
     capturedPlanId: number;
     currentPlan: { plan_id: number; state: string } | null;
+    currentRouteStartPlanId: number | null;
+  }) => boolean;
+  isCurrentRoutePlan: (input: {
+    capturedPlanId: number;
+    currentPlanId: number | null;
     currentRouteStartPlanId: number | null;
   }) => boolean;
 }
@@ -23,26 +29,54 @@ async function main() {
   ) as RouteStartUiModule;
 
   assert.deepEqual(
-    module.buildRouteStartUiState({ planState: 'in_progress', readyToStart: false }),
+    module.buildRouteStartUiState({ planState: 'in_progress', readyToStart: false, isOnline: false }),
     { serverStarted: true, canRequestStart: false, canContinue: true },
     'an authoritative started plan must always be continuable',
   );
   assert.deepEqual(
-    module.buildRouteStartUiState({ planState: 'published', readyToStart: true }),
+    module.buildRouteStartUiState({ planState: 'published', readyToStart: true, isOnline: true }),
     { serverStarted: false, canRequestStart: true, canContinue: true },
     'a published plan may start only when every local prerequisite is ready',
   );
   assert.deepEqual(
-    module.buildRouteStartUiState({ planState: 'published', readyToStart: false }),
+    module.buildRouteStartUiState({ planState: 'published', readyToStart: false, isOnline: true }),
     { serverStarted: false, canRequestStart: false, canContinue: false },
     'a published plan with missing prerequisites must remain blocked',
+  );
+  assert.deepEqual(
+    module.buildRouteStartUiState({ planState: 'published', readyToStart: true, isOnline: false }),
+    { serverStarted: false, canRequestStart: false, canContinue: false },
+    'a published ready plan must not call the endpoint while offline',
   );
 
   for (const planState of [null, 'draft', 'confirmed', 'closed', 'reconciled', 'done']) {
     assert.deepEqual(
-      module.buildRouteStartUiState({ planState, readyToStart: true }),
+      module.buildRouteStartUiState({ planState, readyToStart: true, isOnline: true }),
       { serverStarted: false, canRequestStart: false, canContinue: false },
       `${planState ?? 'missing'} must never call the route-start endpoint`,
+    );
+  }
+
+  assert.equal(
+    module.isCurrentRoutePlan({
+      capturedPlanId: 6466,
+      currentPlanId: 6466,
+      currentRouteStartPlanId: 6466,
+    }),
+    true,
+    'a mutation may run only while both latest stores match its captured plan',
+  );
+  for (const [currentPlanId, currentRouteStartPlanId] of [
+    [7000, 7000],
+    [6466, 7000],
+    [7000, 6466],
+    [null, 6466],
+    [6466, null],
+  ] as const) {
+    assert.equal(
+      module.isCurrentRoutePlan({ capturedPlanId: 6466, currentPlanId, currentRouteStartPlanId }),
+      false,
+      `plan A mutation must be blocked after latest identities become ${currentPlanId}/${currentRouteStartPlanId}`,
     );
   }
 

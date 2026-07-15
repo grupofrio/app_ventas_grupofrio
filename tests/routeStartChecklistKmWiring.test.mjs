@@ -12,6 +12,12 @@ function main() {
   const routeClose = read('app/route-close.tsx');
   const routeStartStore = read('src/stores/useRouteStartStore.ts');
 
+  assert.doesNotMatch(
+    routeStart,
+    /useRouteStartStore\(\(s\) => s\.setLoadAccepted\)|\bsetLoadAccepted\(/,
+    'route-start no debe instalar carga de un render viejo con un setter sin plan',
+  );
+
   assert.match(
     routeStart,
     /ensureChecklistReady\(capturedPlanId\)/,
@@ -111,12 +117,12 @@ function main() {
 
   assert.match(
     routeStart,
-    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?currentPlan\?\.plan_id === capturedPlanId[\s\S]*?currentStartPlanId === capturedPlanId/,
+    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?isCurrentRoutePlan\(\{[\s\S]*?currentPlanId: currentPlan\?\.plan_id \?\? null,[\s\S]*?currentRouteStartPlanId: currentStartPlanId/,
     'los updates locales del hub deben comprobar ambos stores',
   );
   assert.match(
     checklist,
-    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?currentPlan\?\.plan_id === capturedPlanId[\s\S]*?currentStartPlanId === capturedPlanId/,
+    /function isCurrentPlan\(capturedPlanId: number\)[\s\S]*?isCurrentRoutePlan\(\{[\s\S]*?currentPlanId: currentPlan\?\.plan_id \?\? null,[\s\S]*?currentRouteStartPlanId: currentStartPlanId/,
     'los updates locales del checklist deben comprobar ambos stores',
   );
 
@@ -128,10 +134,17 @@ function main() {
     /const capturedPlanId = planId;/,
     'refresh debe capturar la identidad del plan antes de esperar',
   );
-  assert.match(
-    refresh,
-    /if \(isCurrentPlan\(capturedPlanId\)\) \{[\s\S]*?setKmInitialBackend\(\{\s*planId: capturedPlanId,\s*km:/,
-    'el KM local del backend solo debe pintarse si ambos stores siguen en el plan capturado',
+  const refreshLoad = refresh.indexOf('await loadPlan({ force: true });');
+  const refreshIdentityGuard = refresh.indexOf('if (!isCurrentPlan(capturedPlanId)) return;', refreshLoad);
+  const refreshChecklist = refresh.indexOf('await ensureChecklistReady(capturedPlanId)', refreshLoad);
+  assert.ok(
+    refreshLoad >= 0 && refreshIdentityGuard > refreshLoad && refreshChecklist > refreshIdentityGuard,
+    'refresh debe abortar tras loadPlan si cualquiera de los stores cambió antes de tocar checklist en servidor',
+  );
+  const refreshKmPaint = refresh.indexOf('setKmInitialBackend({', refreshIdentityGuard);
+  assert.ok(
+    refreshKmPaint > refreshIdentityGuard && refreshKmPaint < refreshChecklist,
+    'el KM local del backend solo debe pintarse tras validar ambos stores',
   );
   assert.match(
     refresh,
@@ -159,6 +172,11 @@ function main() {
   );
   assert.match(
     saveKm,
+    /onPress: async \(\) => \{\s*if \(!isCurrentPlan\(capturedPlanId\)\) \{\s*showRouteChangedAlert\(\);\s*return;\s*\}[\s\S]*?await updateKm\(capturedPlanId, 'departure', km\)/,
+    'guardar KM debe releer ambos stores inmediatamente antes de mutar Odoo',
+  );
+  assert.match(
+    saveKm,
     /if \(isCurrentPlan\(capturedPlanId\)\) \{\s*setKmInitialBackend\(\{ planId: capturedPlanId, km: storedKm \}\);/,
     'la respuesta de KM solo debe actualizar la pantalla del plan capturado',
   );
@@ -171,6 +189,15 @@ function main() {
     routeStart,
     /backendKm:\s*kmInitialBackend\?\.planId === planId \? kmInitialBackend\.km : null/,
     'un KM local previo nunca debe mostrarse ni habilitar un plan nuevo antes del siguiente efecto',
+  );
+
+  const acceptStart = routeStart.indexOf('async function handleAcceptLoad() {');
+  const acceptEnd = routeStart.indexOf('\n\n  useFocusEffect(', acceptStart);
+  const accept = routeStart.slice(acceptStart, acceptEnd);
+  assert.match(
+    accept,
+    /onPress: async \(\) => \{\s*if \(!isCurrentPlan\(capturedPlanId\)\) \{\s*showRouteChangedAlert\(\);\s*return;\s*\}[\s\S]*?await acceptRouteLoad\(capturedPlanId, pending\.picking_id\)/,
+    'aceptar carga debe releer ambos stores inmediatamente antes de mutar Odoo',
   );
 
   console.log('route start checklist/km wiring tests: ok');

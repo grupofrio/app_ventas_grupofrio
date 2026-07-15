@@ -225,8 +225,8 @@ function main() {
   );
   assert.match(
     routeStartScreen,
-    /const checklistDisplayStatus: StepStatus = checklistDoneLive && checklistStatus === 'done'\s*\? 'done'\s*:\s*'pending';/,
-    'a local checklist status from plan A must render pending for plan B',
+    /const checklistDisplayStatus: StepStatus = serverStarted\s*\? 'done'\s*:\s*\(checklistDoneLive && checklistStatus === 'done' \? 'done' : 'pending'\);/,
+    'an authoritative started plan must display checklist done while plan-scoped facts protect other plans',
   );
 
   assert.match(
@@ -315,13 +315,42 @@ function main() {
   );
   assert.match(
     routeStartScreen,
-    /const serverStarted = plan\?\.state === 'in_progress';[\s\S]*?const canRequestStart = plan\?\.state === 'published' && readyToStartLive;[\s\S]*?const canContinue = serverStarted \|\| canRequestStart;/,
+    /const serverStarted = plan\?\.state === 'in_progress';[\s\S]*?const canRequestStart = plan\?\.state === 'published' && readyToStartLive && isOnline;[\s\S]*?const canContinue = serverStarted \|\| canRequestStart;/,
     'UI eligibility must explicitly separate authoritative continuation from published readiness',
   );
   assert.match(
     handleStart,
-    /buildRouteStartUiState\(\{\s*planState:\s*currentPlan\.state,\s*readyToStart:\s*currentReadyToStart,\s*\}\)/,
+    /buildRouteStartUiState\(\{\s*planState:\s*currentPlan\.state,\s*readyToStart:\s*currentReadyToStart,\s*isOnline:\s*useSyncStore\.getState\(\)\.isOnline,\s*\}\)/,
     'the programmatic hard guard must use the exhaustively tested plan-state decision helper',
+  );
+  assert.match(
+    handleStart,
+    /const currentReadyToStart = currentStart\.planId === capturedPlanId[\s\S]*?&& currentStart\.loadAccepted[\s\S]*?&& dataMinReady;/,
+    'the programmatic start guard must use the latest authoritative load fact, not a stale render closure',
+  );
+
+  assert.match(
+    checklistScreen,
+    /const currentRoutePlanId = useRouteStore\(\(s\) => s\.plan\?\.plan_id \?\? null\);[\s\S]*?const currentStartPlanId = useRouteStartStore\(\(s\) => s\.planId\);[\s\S]*?const stalePlan = currentRoutePlanId !== planIdNum \|\| currentStartPlanId !== planIdNum;/,
+    'the checklist screen must reactively expose a stale plan instead of allowing old actions',
+  );
+  for (const mutation of [
+    'submitVehicleCheck(check.id, payload)',
+    'completeVehicleChecklist(header?.id ?? 0)',
+    "updateKm(capturedPlanId, 'departure', odoKm)",
+  ]) {
+    const mutationIndex = checklistScreen.indexOf(`await ${mutation}`);
+    const guardIndex = checklistScreen.lastIndexOf('if (!isCurrentPlan(capturedPlanId)) {', mutationIndex);
+    const previousAwait = checklistScreen.lastIndexOf('await ', mutationIndex - 1);
+    assert.ok(
+      mutationIndex >= 0 && guardIndex > previousAwait && guardIndex < mutationIndex,
+      `${mutation} must have a latest-store identity guard immediately before the server mutation`,
+    );
+  }
+  assert.match(
+    checklistScreen,
+    /if \(stalePlan\) \{[\s\S]*?Este checklist pertenece a otra ruta[\s\S]*?<Button label="Volver"[\s\S]*?router\.back\(\)/,
+    'a stale checklist must render a clear non-mutating back state',
   );
 
   assert.match(

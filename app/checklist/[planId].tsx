@@ -42,6 +42,7 @@ import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../s
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
+import { isCurrentRoutePlan } from '../../src/services/routeStartUi';
 
 interface CheckDraft {
   bool?: boolean;
@@ -54,8 +55,15 @@ interface CheckDraft {
 function isCurrentPlan(capturedPlanId: number): boolean {
   const currentPlan = useRouteStore.getState().plan;
   const currentStartPlanId = useRouteStartStore.getState().planId;
-  return currentPlan?.plan_id === capturedPlanId
-    && currentStartPlanId === capturedPlanId;
+  return isCurrentRoutePlan({
+    capturedPlanId,
+    currentPlanId: currentPlan?.plan_id ?? null,
+    currentRouteStartPlanId: currentStartPlanId,
+  });
+}
+
+function showRouteChangedAlert(): void {
+  Alert.alert('La ruta cambió', 'Este checklist pertenece a otra ruta. Vuelve al plan actual.');
 }
 
 export default function ChecklistScreen() {
@@ -64,6 +72,9 @@ export default function ChecklistScreen() {
   const router = useRouter();
   const setChecklistCompleteForPlan = useRouteStartStore((s) => s.setChecklistCompleteForPlan);
   const setKmInitialForPlan = useRouteStartStore((s) => s.setKmInitialForPlan);
+  const currentRoutePlanId = useRouteStore((s) => s.plan?.plan_id ?? null);
+  const currentStartPlanId = useRouteStartStore((s) => s.planId);
+  const stalePlan = currentRoutePlanId !== planIdNum || currentStartPlanId !== planIdNum;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +94,7 @@ export default function ChecklistScreen() {
     setLoading(true);
     setError(null);
     const capturedPlanId = planIdNum;
+    if (!isCurrentPlan(capturedPlanId)) return;
     try {
       const { header: h, checks: c } = await ensureChecklistReady(capturedPlanId);
       if (h.state === 'completed') {
@@ -103,11 +115,12 @@ export default function ChecklistScreen() {
   }, [planIdNum, setChecklistCompleteForPlan]);
 
   React.useEffect(() => {
-    void bootstrap();
-  }, [bootstrap]);
+    if (!stalePlan) void bootstrap();
+  }, [bootstrap, stalePlan]);
 
   async function reloadChecks() {
     const capturedPlanId = planIdNum;
+    if (!isCurrentPlan(capturedPlanId)) return;
     try {
       const { header: h, checks: c } = await ensureChecklistReady(capturedPlanId);
       if (!isCurrentPlan(capturedPlanId)) return;
@@ -148,6 +161,7 @@ export default function ChecklistScreen() {
 
   async function handleAnswer(check: GFVehicleCheck) {
     if (savingId) return;
+    const capturedPlanId = planIdNum;
     const draft = drafts[check.id] || {};
     let payload: Parameters<typeof submitVehicleCheck>[1];
 
@@ -196,11 +210,17 @@ export default function ChecklistScreen() {
 
     setSavingId(check.id);
     try {
+      if (!isCurrentPlan(capturedPlanId)) {
+        showRouteChangedAlert();
+        return;
+      }
       await submitVehicleCheck(check.id, payload);
+      if (!isCurrentPlan(capturedPlanId)) return;
       // clear the local photo draft after a successful send
       setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: undefined } }));
       await reloadChecks();
     } catch (err) {
+      if (!isCurrentPlan(capturedPlanId)) return;
       const msg = err instanceof Error ? err.message : 'No se pudo guardar la respuesta.';
       if (/photo_too_large|too.?large|grande|tama/i.test(msg)) {
         Alert.alert('Foto muy pesada', 'La foto es demasiado grande. Toma una nueva con menos detalle o mejor luz.');
@@ -221,6 +241,10 @@ export default function ChecklistScreen() {
     const capturedPlanId = planIdNum;
     setCompleting(true);
     try {
+      if (!isCurrentPlan(capturedPlanId)) {
+        showRouteChangedAlert();
+        return;
+      }
       await completeVehicleChecklist(header?.id ?? 0);
       setChecklistCompleteForPlan(capturedPlanId, true);
 
@@ -230,6 +254,10 @@ export default function ChecklistScreen() {
       const odoKm = extractOdometerKm(checks);
       if (odoKm != null && capturedPlanId > 0) {
         try {
+          if (!isCurrentPlan(capturedPlanId)) {
+            showRouteChangedAlert();
+            return;
+          }
           const res = await updateKm(capturedPlanId, 'departure', odoKm);
           setKmInitialForPlan(capturedPlanId, chooseAuthoritativeKm({ backendKm: res.departure_km }));
         } catch {
@@ -264,6 +292,20 @@ export default function ChecklistScreen() {
     } finally {
       setCompleting(false);
     }
+  }
+
+  if (stalePlan) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <TopBar title="Checklist de unidad" showBack />
+        <View style={styles.center}>
+          <Text style={styles.errorText}>
+            Este checklist pertenece a otra ruta. Vuelve al plan actual para continuar.
+          </Text>
+          <Button label="Volver" variant="primary" onPress={() => router.back()} />
+        </View>
+      </SafeAreaView>
+    );
   }
 
   if (loading) {

@@ -44,7 +44,11 @@ import {
 import { computeRouteReadiness } from '../src/services/routeReadiness';
 import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
 import { confirmAuthoritativeRouteStart } from '../src/services/routeStartAction';
-import { buildRouteStartUiState, isSameStartedRoutePlan } from '../src/services/routeStartUi';
+import {
+  buildRouteStartUiState,
+  isCurrentRoutePlan,
+  isSameStartedRoutePlan,
+} from '../src/services/routeStartUi';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -57,8 +61,15 @@ function StatusBadge({ status }: { status: StepStatus }) {
 function isCurrentPlan(capturedPlanId: number): boolean {
   const currentPlan = useRouteStore.getState().plan;
   const currentStartPlanId = useRouteStartStore.getState().planId;
-  return currentPlan?.plan_id === capturedPlanId
-    && currentStartPlanId === capturedPlanId;
+  return isCurrentRoutePlan({
+    capturedPlanId,
+    currentPlanId: currentPlan?.plan_id ?? null,
+    currentRouteStartPlanId: currentStartPlanId,
+  });
+}
+
+function showRouteChangedAlert(): void {
+  Alert.alert('La ruta cambió', 'La ruta cambió. Revisa el plan actual antes de continuar.');
 }
 
 export default function RouteStartScreen() {
@@ -87,7 +98,6 @@ export default function RouteStartScreen() {
   const setForPlan = useRouteStartStore((s) => s.setForPlan);
   const setChecklistCompleteForPlan = useRouteStartStore((s) => s.setChecklistCompleteForPlan);
   const setKmInitialForPlan = useRouteStartStore((s) => s.setKmInitialForPlan);
-  const setLoadAccepted = useRouteStartStore((s) => s.setLoadAccepted);
   const routeStartPlanId = useRouteStartStore((s) => s.planId);
   const checklistComplete = useRouteStartStore((s) => s.checklistComplete);
   const kmInitialStoredForPlan = useRouteStartStore((s) => s.kmInitial);
@@ -120,15 +130,6 @@ export default function RouteStartScreen() {
       ? 'skip'
       : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
 
-  // Sync the load readiness into the store whenever the plan changes.
-  React.useEffect(() => {
-    if (initialLoadState.initialLoads.length === 0) {
-      setLoadAccepted(true); // nothing to accept → not a blocker
-    } else {
-      setLoadAccepted(initialLoadState.initialLoadAccepted);
-    }
-  }, [initialLoadState, setLoadAccepted]);
-
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
     if (!planId) {
@@ -151,13 +152,12 @@ export default function RouteStartScreen() {
     setError(null);
     try {
       await loadPlan({ force: true });
+      if (!isCurrentPlan(capturedPlanId)) return;
       const freshPlan = useRouteStore.getState().plan;
-      if (isCurrentPlan(capturedPlanId)) {
-        setKmInitialBackend({
-          planId: capturedPlanId,
-          km: typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null,
-        });
-      }
+      setKmInitialBackend({
+        planId: capturedPlanId,
+        km: typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null,
+      });
       const { header } = await ensureChecklistReady(capturedPlanId);
       // The hub creates/loads the checklist before evaluating readiness.
       // Answers are required; pass/fail does not block route start.
@@ -196,6 +196,10 @@ export default function RouteStartScreen() {
         {
           text: 'Aceptar',
           onPress: async () => {
+            if (!isCurrentPlan(capturedPlanId)) {
+              showRouteChangedAlert();
+              return;
+            }
             setAcceptingLoad(true);
             try {
               await acceptRouteLoad(capturedPlanId, pending.picking_id);
@@ -222,9 +226,9 @@ export default function RouteStartScreen() {
 
   const serverStarted = plan?.state === 'in_progress';
   const checklistDoneLive = serverStarted || (routeStartPlanId === planId && checklistComplete);
-  const checklistDisplayStatus: StepStatus = checklistDoneLive && checklistStatus === 'done'
+  const checklistDisplayStatus: StepStatus = serverStarted
     ? 'done'
-    : 'pending';
+    : (checklistDoneLive && checklistStatus === 'done' ? 'done' : 'pending');
   const kmDoneLive = kmInitial != null;
   const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
   // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
@@ -232,7 +236,7 @@ export default function RouteStartScreen() {
   // precios faltantes son advertencia, no bloqueo (degradación segura).
   const dataMinReady = dataReady.minimumReady;
   const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive && dataMinReady;
-  const canRequestStart = plan?.state === 'published' && readyToStartLive;
+  const canRequestStart = plan?.state === 'published' && readyToStartLive && isOnline;
   const canContinue = serverStarted || canRequestStart;
 
   async function handleStartRoute() {
@@ -243,12 +247,13 @@ export default function RouteStartScreen() {
     const currentReadyToStart = currentStart.planId === capturedPlanId
       && currentStart.checklistComplete
       && currentStart.kmInitial != null
-      && initialLoadState.initialLoadAccepted
+      && currentStart.loadAccepted
       && dataMinReady;
     if (currentPlan?.plan_id !== capturedPlanId) return;
     const currentUiState = buildRouteStartUiState({
       planState: currentPlan.state,
       readyToStart: currentReadyToStart,
+      isOnline: useSyncStore.getState().isOnline,
     });
     if (
       !currentUiState.canContinue
@@ -333,6 +338,10 @@ export default function RouteStartScreen() {
         {
           text: 'Guardar',
           onPress: async () => {
+            if (!isCurrentPlan(capturedPlanId)) {
+              showRouteChangedAlert();
+              return;
+            }
             setSavingKm(true);
             try {
               const res = await updateKm(capturedPlanId, 'departure', km);

@@ -9,14 +9,24 @@ export interface RouteStartUiState {
 export function buildRouteStartUiState(input: {
   planState: PlanState | null;
   readyToStart: boolean;
+  isOnline: boolean;
 }): RouteStartUiState {
   const serverStarted = input.planState === 'in_progress';
-  const canRequestStart = input.planState === 'published' && input.readyToStart;
+  const canRequestStart = input.planState === 'published' && input.readyToStart && input.isOnline;
   return {
     serverStarted,
     canRequestStart,
     canContinue: serverStarted || canRequestStart,
   };
+}
+
+export function isCurrentRoutePlan(input: {
+  capturedPlanId: number;
+  currentPlanId: number | null;
+  currentRouteStartPlanId: number | null;
+}): boolean {
+  return input.currentPlanId === input.capturedPlanId
+    && input.currentRouteStartPlanId === input.capturedPlanId;
 }
 
 export function isSameStartedRoutePlan(input: {

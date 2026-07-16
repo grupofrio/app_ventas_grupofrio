@@ -30,6 +30,7 @@ No se usará un proxy nuevo ni se moverá la misma credencial a secretos de buil
 4. **Guard de regresión.** Añadir una prueba de CI que falle si cualquier entrada de release móvil (código, configuración Expo/EAS, proyectos nativos, assets o artefactos generados) contiene una credencial Odoo, sesión de servicio o RPC web directo no autorizado.
 5. **Validación.** Ejecutar pruebas automatizadas y un flujo físico controlado: login, ruta, stock, precio, venta, evidencia y sincronización offline/reconexión. Se conservará el resultado del escaneo del IPA firmado exacto como evidencia de go/no-go.
 6. **Retiro de la cuenta histórica.** Solo tras validar la migración, revocar/desactivar la cuenta de servicio antigua, invalidar sus sesiones/tokens activos, confirmar que no existen integraciones dependientes y registrar la evidencia operativa. No es suficiente conservar la cuenta rotada como fallback.
+7. **Corte de clientes heredados.** Antes de la revocación, identificar versiones móviles instaladas que dependen del camino legado, comunicar y exigir una versión mínima libre de credenciales —o aceptar explícitamente su pérdida de servicio— y completar un canario con monitoreo y soporte operativo preparados.
 
 ## Manejo de fallos y rollback
 
@@ -54,6 +55,7 @@ No se usará un proxy nuevo ni se moverá la misma credencial a secretos de buil
 | Datos controlados | Operaciones de QA identificables y limpieza confirmada | Operación Grupo Frío |
 | Sin secretos en release | CI y escaneo del IPA firmado exacto, conservados como artefacto | Frontend |
 | Cuenta histórica retirada | Revocación, sesiones invalidadas y dependencias auditadas | Administrador Odoo |
+| Corte de versiones heredadas | Versiones afectadas identificadas, versión mínima comunicada/aplicada, canario monitoreado y soporte preparado | Release owner + Operación Grupo Frío |
 | Google Maps iOS | Clave limitada a iOS y Bundle ID `mx.grupofrio.koldfield`; verificación en Google Cloud | Administrador Google Cloud |
 | TestFlight | Todos los gates anteriores aprobados y build firmado procesado | Release owner |
 
@@ -66,6 +68,7 @@ No se usará un proxy nuevo ni se moverá la misma credencial a secretos de buil
 - Un iPhone físico completa el flujo controlado con producción sin Metro.
 - CI y el escaneo del IPA firmado exacto no encuentran indicadores de la cuenta antigua ni secretos privados.
 - La cuenta histórica queda revocada/desactivada, con sesiones invalidadas y dependencias auditadas, solo después de esas verificaciones.
+- Antes de revocarla, las versiones móviles heredadas dependientes están identificadas y retiradas, actualizadas o aceptadas explícitamente como fuera de servicio; el canario y soporte confirman que el corte es operable.
 - La clave de Google Maps queda restringida y verificada antes de distribuir externamente.
 - Solo entonces se habilita la build de iOS `1.3.1` para TestFlight.
 

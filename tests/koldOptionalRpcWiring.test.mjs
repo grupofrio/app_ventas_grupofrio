@@ -8,23 +8,25 @@ function read(path) {
   return readFileSync(resolve(REPO_ROOT, path), 'utf8');
 }
 
-const api = read('src/services/api.ts');
-const odooRpc = read('src/services/odooRpc.ts');
+const employeeData = read('src/services/employeeData.ts');
+const employeeLogic = read('src/services/employeeDataLogic.ts');
+const koldStore = read('src/stores/useKoldStore.ts');
 
 assert.match(
-  api,
-  /allowFunctionalErrorResult\?: boolean/,
-  'postRpc must expose an explicit opt-in for optional callers that need raw functional-error envelopes',
+  employeeLogic,
+  /\/kold\/insights/,
+  'KOLD debe consultar un endpoint de insights agregado y scoped por sesión',
 );
 assert.match(
-  api,
-  /const errMsg = odooErrMsg \|\| \(options\.allowFunctionalErrorResult\s*\?\s*null\s*:\s*functionalErr\)/,
-  'postRpc must keep functional-error throwing as the default behavior',
+  employeeData,
+  /getKoldInsights/,
+  'el adaptador público debe exponer insights KOLD',
 );
 assert.match(
-  odooRpc,
-  /koldRead[\s\S]*postRpc<any>\([\s\S]*allowFunctionalErrorResult: true/,
-  'koldRead must opt into raw functional-error envelopes so optional ACL failures become null, not logged http_error exceptions',
+  koldStore,
+  /getKoldInsights\(partnerIds\)/,
+  'cada carga de ruta debe hacer una sola petición KOLD por lote',
 );
+assert.doesNotMatch(koldStore, /\bkoldRead\b|odooRpc/, 'KOLD no debe conservar fallback RPC/modelos');
 
-console.log('kold optional rpc wiring tests: ok');
+console.log('kold secure REST wiring tests: ok');

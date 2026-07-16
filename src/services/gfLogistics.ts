@@ -6,8 +6,8 @@
  * Checkout now also sends result_status so Odoo can close the stop.
  * Do NOT wrap with jsonrpc/params — that causes 400 errors.
  *
- * For Odoo JSON-RPC endpoints (/jsonrpc, /get_records, /api/create_update),
- * use odooRpc.ts or postRpc() from api.ts instead.
+ * Los flujos de empleado deben mantener contratos REST acotados por la sesión;
+ * no agregues alternativas genéricas de modelo para nuevas operaciones.
  *
  * Reference: useSyncStore.ts uses these same endpoints with plain payloads
  * and works correctly in production.
@@ -1230,12 +1230,12 @@ export async function signOut(): Promise<void> {
 
 // ═══ BLD-20260404-013 — Truck stock by warehouse ═══
 //
-// Tries the new gf_logistics_ops endpoint `/truck_stock` which returns
-// products scoped by the chofer's assigned warehouse. If the endpoint
-// does not exist yet (HTTP 404, gateway error, or empty/invalid payload)
-// the caller is expected to fall back to the legacy `odooRead` path.
+// Consulta el endpoint REST de gf_logistics_ops, que devuelve productos
+// acotados al almacén asignado al chofer. Una respuesta inválida o un error de
+// red se representa como inventario no disponible; no se sustituye por otra
+// consulta de modelo desde el teléfono.
 //
-// Contract (expected from Sprint 3 P4, still not deployed in backend):
+// Contract:
 //   POST /gf/logistics/api/employee/truck_stock
 //   Body: { warehouse_id?: number, mobile_location_id?: number }
 //   Response: {
@@ -1249,8 +1249,8 @@ export async function signOut(): Promise<void> {
 //     }
 //   }
 //
-// Returns `null` when the endpoint is unavailable — caller must treat
-// `null` as "fall back to existing behaviour". NEVER throws.
+// Returns `null` when the endpoint is unavailable — el caller debe mostrar o
+// conservar su estado seguro de inventario no disponible. NEVER throws.
 /**
  * BLD-20260424-STOCKMETA: la respuesta de /truck_stock ahora trae el flag
  * `has_stock_data` (commit dd78489 de Sebastián). El backend lo calcula
@@ -1284,16 +1284,15 @@ export async function fetchTruckStock(
     const data = result.data !== undefined ? result.data : result;
     const products = (data && Array.isArray(data.products)) ? data.products : null;
     if (!products) return null;
-    // Si el backend no lo manda (compat), asumimos `true` (comportamiento
-    // legacy: aceptar la lista tal cual y dejar que el cliente decida).
+    // Si el backend no lo manda por compatibilidad, se acepta la lista recibida.
     const hasStockData = typeof data?.has_stock_data === 'boolean'
       ? data.has_stock_data
       : true;
     return { products, hasStockData };
   } catch (error) {
-    // Endpoint not deployed yet, auth issue, offline, etc.
-    // We swallow so the caller transparently falls back.
-    if (__DEV__) console.warn('[gfLogistics] truck_stock unavailable, falling back:', error);
+    // Auth, conectividad o respuesta no disponible: el caller recibe null y
+    // conserva una degradación explícita sin intentar otro transporte.
+    if (__DEV__) console.warn('[gfLogistics] truck_stock unavailable:', error);
     return null;
   }
 }

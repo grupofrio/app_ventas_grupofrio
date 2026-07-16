@@ -10,10 +10,9 @@
  */
 
 import { create } from 'zustand';
-import { KoldScoreData, KoldForecastData, KoldCategory } from '../types/kold';
-import { koldRead } from '../services/odooRpc';
+import { KoldScoreData, KoldForecastData, KoldCategory, KoldPriority } from '../types/kold';
+import { getKoldInsights } from '../services/employeeData';
 import { logInfo } from '../utils/logger';
-import { todayLocalISO } from '../utils/localDate';
 
 interface KoldState {
   // Data maps (partnerId → data)
@@ -52,6 +51,23 @@ export interface KoldAlert {
 // Categories that need urgent attention
 const CRITICAL_CATEGORIES: KoldCategory[] = ['en_peligro', 'recuperacion'];
 const OPPORTUNITY_CATEGORIES: KoldCategory[] = ['diamante_en_bruto', 'oportunidad_inmediata'];
+const KOLD_CATEGORIES = new Set<KoldCategory>([
+  'joya', 'premium', 'diamante_en_bruto', 'en_peligro', 'trampa_operativa',
+  'recuperacion', 'oportunidad_inmediata', 'bajo_retorno', 'estable', 'revisar',
+]);
+const KOLD_PRIORITIES = new Set<KoldPriority>(['critica', 'alta', 'media', 'baja', 'monitoreo']);
+
+function asKoldCategory(value: string): KoldCategory {
+  return KOLD_CATEGORIES.has(value as KoldCategory) ? value as KoldCategory : 'revisar';
+}
+
+function asKoldPriority(value: string): KoldPriority {
+  return KOLD_PRIORITIES.has(value as KoldPriority) ? value as KoldPriority : 'monitoreo';
+}
+
+function asConfidenceLevel(value: string): KoldForecastData['confidence_level'] {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'low';
+}
 
 export const useKoldStore = create<KoldState>((set, get) => ({
   scores: new Map(),
@@ -64,10 +80,8 @@ export const useKoldStore = create<KoldState>((set, get) => ({
   loadForPartners: async (partnerIds: number[]) => {
     if (partnerIds.length === 0) return;
 
-    // BLD-20260424-KOLDACL: short-circuit. Si una sesión previa ya
-    // confirmó que el usuario no tiene ACL para el módulo, dejamos de
-    // pegar al endpoint para no spamear logs del backend ni gastar
-    // datos del operador. La bandera se resetea con logout / reset().
+    // Si ambos módulos ya se marcaron no disponibles en esta sesión, evitamos
+    // solicitudes repetidas. reset() reinicia este estado al cerrar sesión.
     const state = get();
     const skipScore = state.scoreModuleAvailable === false;
     const skipDemand = state.demandModuleAvailable === false;
@@ -76,81 +90,58 @@ export const useKoldStore = create<KoldState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      // Load KoldScore (defensive — module may not exist O usuario sin ACL)
-      const scoreData = skipScore
-        ? null
-        : await koldRead<KoldScoreData>(
-            'kold.customer.score',
-            [['partner_id', 'in', partnerIds], ['active', '=', true]],
-            ['id', 'partner_id', 'score_master', 'strategic_category',
-             'priority_level', 'suggested_action_text', 'explanation_text'],
-            500
-          );
-
+      // Un único endpoint agregado por lote: no se expone el nombre de los
+      // modelos ni se hacen peticiones N+1 por cliente.
+      const insights = await getKoldInsights(partnerIds);
       const scoreMap = new Map<number, KoldScoreData>();
-      // BLD-20260424-KOLDACL: koldRead ahora retorna null cuando el
-      // backend reporta `{ error, case: -3 }` (ACL denied) o módulo no
-      // disponible. En ese caso marcamos el módulo como NO disponible
-      // por el resto de la sesión.
-      const scoreAvailable = skipScore ? false : scoreData !== null;
+      const scoreAvailable = skipScore ? false : insights.scores_available;
 
-      if (scoreData) {
-        for (const s of scoreData) {
-          const pid = Array.isArray(s.partner_id) ? s.partner_id[0] : null;
-          if (pid) {
-            scoreMap.set(pid, {
-              ...s,
-              // Normalize field names from Odoo → our types
-              category: (s as any).strategic_category || 'revisar',
-              priority: (s as any).priority_level || 'monitoreo',
-              action: (s as any).suggested_action_text || '',
+      if (scoreAvailable) {
+        for (const score of insights.scores) {
+          if (score.partner_id) {
+            scoreMap.set(score.partner_id, {
+              id: score.id,
+              partner_id: [score.partner_id, ''],
+              score_master: score.score_master,
+              category: asKoldCategory(score.strategic_category),
+              priority: asKoldPriority(score.priority_level),
+              action: score.suggested_action || score.recommendation_summary,
+              explanation_text: score.recommendation_summary,
             });
           }
         }
       }
 
-      // Load KoldDemand forecasts (defensive)
-      const today = todayLocalISO();
-      const forecastData = skipDemand
-        ? null
-        : await koldRead<KoldForecastData>(
-            'kold.demand.forecast',
-            [
-              ['partner_id', 'in', partnerIds],
-              ['forecast_type', '=', 'customer_day'],
-              ['forecast_date', '>=', today],
-              ['active', '=', true],
-            ],
-            ['id', 'partner_id', 'forecast_date', 'predicted_kg', 'predicted_revenue',
-             'probability_of_purchase', 'confidence_level', 'confidence_score',
-             'lower_bound', 'upper_bound', 'explanation_text', 'customer_family'],
-            500
-          );
-
       const forecastMap = new Map<number, KoldForecastData>();
-      const demandAvailable = skipDemand ? false : forecastData !== null;
+      const demandAvailable = skipDemand ? false : insights.forecasts_available;
 
-      if (forecastData) {
-        for (const f of forecastData) {
-          const pid = Array.isArray(f.partner_id) ? f.partner_id[0] : null;
-          if (pid && !forecastMap.has(pid)) {
+      if (demandAvailable) {
+        for (const forecast of insights.forecasts) {
+          if (forecast.partner_id && !forecastMap.has(forecast.partner_id)) {
             // Take the first (most recent) forecast per partner
-            forecastMap.set(pid, f);
+            forecastMap.set(forecast.partner_id, {
+              id: forecast.id,
+              partner_id: [forecast.partner_id, ''],
+              forecast_date: forecast.forecast_date,
+              predicted_kg: forecast.predicted_kg,
+              probability_of_purchase: forecast.probability_of_purchase,
+              confidence_level: asConfidenceLevel(forecast.confidence_level),
+              confidence_score: forecast.confidence_score,
+              lower_bound: 0,
+              upper_bound: 0,
+            });
           }
         }
       }
 
-      // BLD-20260424-KOLDACL: log la transición a "no disponible" la
-      // primera vez (no en cada plan refresh). Útil para diagnóstico
-      // sin saturar el log persistido.
       if (!skipScore && !scoreAvailable) {
         logInfo('general', 'kold_score_disabled_for_session', {
-          reason: 'koldRead returned null (likely ACL or module missing)',
+          reason: 'employee kold insights reported scores unavailable',
         });
       }
       if (!skipDemand && !demandAvailable) {
         logInfo('general', 'kold_demand_disabled_for_session', {
-          reason: 'koldRead returned null (likely ACL or module missing)',
+          reason: 'employee kold insights reported forecasts unavailable',
         });
       }
 

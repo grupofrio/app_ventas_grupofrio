@@ -9,3 +9,6 @@ const client = createEmployeeDataClient({
 export const searchEmployeeDirectory = client.searchEmployeeDirectory;
 export const getEmployeeScopedLoyalty = client.getEmployeeScopedLoyalty;
 export const updateEmployeeScopedContact = client.updateEmployeeScopedContact;
+export const createEmployeeIncident = client.createEmployeeIncident;
+export const listEmployeeIncidents = client.listEmployeeIncidents;
+export const getKoldInsights = client.getKoldInsights;

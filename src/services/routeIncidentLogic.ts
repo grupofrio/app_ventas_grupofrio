@@ -78,3 +78,82 @@ export function buildIncidentPayload(input: IncidentFormInput): IncidentValidati
   if (name.length < 3) return { ok: false, reason: 'La descripción es muy corta.' };
   return { ok: true, payload: { incident_type: type, severity, name } };
 }
+
+export type EmployeeIncidentCreateRequest = {
+  operation_id: string;
+  plan_id: number;
+  incident_type: string;
+  severity: string;
+  note: string;
+};
+
+type EmployeeIncidentCreateResult = {
+  id: number;
+  operation_id?: string;
+} | null;
+
+export type IncidentSubmissionService = {
+  submit: (input: {
+    planId: number;
+    payload: CreateIncidentPayload;
+  }) => Promise<{ id: number }>;
+};
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function incidentDraftKey(planId: number, payload: CreateIncidentPayload): string {
+  return JSON.stringify([planId, payload.incident_type, payload.severity, payload.name.trim()]);
+}
+
+/**
+ * Conserva el operation_id en memoria para un mismo borrador de reporte hasta
+ * que el servidor confirme una incidencia válida. Si se pierde la respuesta
+ * después de crearla, el retry reutiliza exactamente el mismo id; después de
+ * confirmar, el siguiente envío recibe un id nuevo.
+ */
+export function createIncidentSubmissionService(input: {
+  createEmployeeIncident: (payload: EmployeeIncidentCreateRequest) => Promise<EmployeeIncidentCreateResult>;
+  createOperationId: () => string;
+}): IncidentSubmissionService {
+  const pendingOperationIds = new Map<string, string>();
+
+  return {
+    async submit({ planId, payload }) {
+      if (!isPositiveInteger(planId)) {
+        throw new Error('No hay una ruta activa para registrar la incidencia.');
+      }
+      const key = incidentDraftKey(planId, payload);
+      let operationId = pendingOperationIds.get(key);
+      if (!operationId) {
+        operationId = input.createOperationId().trim();
+        if (!operationId) {
+          throw new Error('No se pudo preparar el identificador de la incidencia.');
+        }
+        pendingOperationIds.set(key, operationId);
+      }
+
+      const result = await input.createEmployeeIncident({
+        operation_id: operationId,
+        plan_id: planId,
+        incident_type: payload.incident_type,
+        severity: payload.severity,
+        note: payload.name,
+      });
+      if (!result || !isPositiveInteger(result.id)) {
+        throw new Error('El servidor no confirmó la incidencia.');
+      }
+      if (
+        typeof result.operation_id !== 'string'
+        || !result.operation_id
+        || result.operation_id !== operationId
+      ) {
+        throw new Error('La respuesta de incidencia no coincide con operation_id.');
+      }
+
+      pendingOperationIds.delete(key);
+      return { id: result.id };
+    },
+  };
+}

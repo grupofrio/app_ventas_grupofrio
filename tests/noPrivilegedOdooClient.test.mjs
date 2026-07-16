@@ -16,6 +16,7 @@ const appConfigInputs = [
   'app.config.mjs',
   'app.config.ts',
 ];
+const supportedLockfiles = ['package-lock.json', 'npm-shrinkwrap.json'];
 const releaseInputs = [
   'app',
   'src',
@@ -24,6 +25,7 @@ const releaseInputs = [
   'ios',
   'android',
   'package.json',
+  ...supportedLockfiles,
 ];
 
 const forbidden = [
@@ -102,7 +104,8 @@ function assertReleaseScanPolicy() {
     'app.config.mjs',
     'app.config.ts',
   ]);
-  assert.equal(releaseInputs.includes('package-lock.json'), false);
+  assert.deepEqual(supportedLockfiles, ['package-lock.json', 'npm-shrinkwrap.json']);
+  assert.equal(releaseInputs.includes('package-lock.json'), true);
   assert.equal(releaseInputs.includes(selfTestPath), false);
   assert.equal(excludedDirectoryNames.has('vendor'), true);
 }
@@ -120,6 +123,12 @@ test('release inputs contain no privileged Odoo client indicators', () => {
     const contents = readFileSync(resolve(repositoryRoot, file), 'utf8');
 
     forbidden.forEach((indicator, index) => {
+      // Lockfiles are dependency metadata, where the generic pair heuristic can
+      // match non-credential package data. All executable/config inputs use it.
+      if (supportedLockfiles.includes(file) && indicatorNames[index] === 'credential-like-pair') {
+        return;
+      }
+
       if (indicator.test(contents)) {
         violations.push(`${file} [${index}:${indicatorNames[index]}]`);
       }

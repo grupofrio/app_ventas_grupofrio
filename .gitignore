@@ -44,8 +44,11 @@ yarn-error.*
 # builds
 *.apk
 *.aab
-*.ipa
 *.tar.gz
+
+# local iOS release scan artifacts
+/.ipa-scan/
+/*.ipa
 
 # env / secrets
 .env

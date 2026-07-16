@@ -14,7 +14,9 @@
     "build:prod:android": "eas build -p android --profile production",
     "verify:field-update:android": "node scripts/verify-android-release.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "test:security": "node --test --experimental-strip-types tests/noPrivilegedOdooClient.test.mjs",
+    "scan:ipa": "node scripts/scan-ios-release-secrets.mjs"
   },
   "engines": {
     "node": ">=22.6"

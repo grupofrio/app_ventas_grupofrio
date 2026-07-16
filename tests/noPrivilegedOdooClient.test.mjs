@@ -94,6 +94,56 @@ function collectFiles(rootPath, versionedFiles, files = []) {
   return files;
 }
 
+function isCredentialContext(key) {
+  return /(?:credential|auth|login|user(?:name)?|password|passwd)/i.test(key);
+}
+
+function isEmailLike(value) {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(value);
+}
+
+function isSecretLike(value) {
+  return typeof value === 'string' && value.length >= 8 && !isEmailLike(value);
+}
+
+function containsCredentialPair(value, contextKey = '') {
+  if (Array.isArray(value)) {
+    if (
+      isCredentialContext(contextKey) &&
+      value.some(isEmailLike) &&
+      value.some(isSecretLike)
+    ) {
+      return true;
+    }
+
+    return value.some((item) => containsCredentialPair(item, contextKey));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const entries = Object.entries(value);
+  const scalarValues = entries.map(([, item]) => item);
+  if (
+    (isCredentialContext(contextKey) || entries.some(([key]) => isCredentialContext(key))) &&
+    scalarValues.some(isEmailLike) &&
+    scalarValues.some(isSecretLike)
+  ) {
+    return true;
+  }
+
+  return entries.some(([key, item]) => containsCredentialPair(item, key));
+}
+
+function hasLockfileCredentialPair(contents) {
+  try {
+    return containsCredentialPair(JSON.parse(contents));
+  } catch {
+    return true;
+  }
+}
+
 function assertReleaseScanPolicy() {
   assert.deepEqual(appConfigInputs, [
     'config',
@@ -110,6 +160,19 @@ function assertReleaseScanPolicy() {
   assert.equal(excludedDirectoryNames.has('vendor'), true);
 }
 
+test('lockfile credential pairs require an explicit credential context', () => {
+  const pairIndicator = forbidden[indicatorNames.indexOf('credential-like-pair')];
+  const fixtureEmail = 'fixture-user@example.invalid';
+  const fixtureValue = 'fixture-password-not-real';
+  const dependencyMetadata = JSON.stringify({ maintainers: [fixtureEmail, fixtureValue] });
+  const explicitCredentials = JSON.stringify({ credentials: [fixtureEmail, fixtureValue] });
+
+  assert.equal(pairIndicator.test(dependencyMetadata), true);
+  assert.equal(hasLockfileCredentialPair(dependencyMetadata), false);
+  assert.equal(pairIndicator.test(explicitCredentials), true);
+  assert.equal(hasLockfileCredentialPair(explicitCredentials), true);
+});
+
 test('release inputs contain no privileged Odoo client indicators', () => {
   assertReleaseScanPolicy();
   const versionedFiles = versionedReleaseFiles();
@@ -123,13 +186,13 @@ test('release inputs contain no privileged Odoo client indicators', () => {
     const contents = readFileSync(resolve(repositoryRoot, file), 'utf8');
 
     forbidden.forEach((indicator, index) => {
-      // Lockfiles are dependency metadata, where the generic pair heuristic can
-      // match non-credential package data. All executable/config inputs use it.
-      if (supportedLockfiles.includes(file) && indicatorNames[index] === 'credential-like-pair') {
-        return;
-      }
+      const isCredentialPair = indicatorNames[index] === 'credential-like-pair';
+      const lockfileMatch = supportedLockfiles.includes(file) && isCredentialPair;
+      const hasViolation = lockfileMatch
+        ? hasLockfileCredentialPair(contents)
+        : indicator.test(contents);
 
-      if (indicator.test(contents)) {
+      if (hasViolation) {
         violations.push(`${file} [${index}:${indicatorNames[index]}]`);
       }
     });

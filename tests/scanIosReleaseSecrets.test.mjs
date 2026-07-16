@@ -9,6 +9,7 @@ import { scanIpa } from '../scripts/scan-ios-release-secrets.mjs';
 const DIRECTORY_MODE = 0o040755;
 const FILE_MODE = 0o100644;
 const SYMLINK_MODE = 0o120777;
+const SOCKET_MODE = 0o140777;
 const fakeRevokedValue = 'fixture-revoked-value-not-real';
 
 function crc32(contents) {
@@ -208,5 +209,94 @@ test('scanner rejects symbolic links before extraction', () => {
       assertGenericError('IPA archive is malformed or unsafe'),
     );
     assertExtractorCleanup(directory);
+  });
+});
+
+test('scanner rejects archives over a declared entry-count limit before extraction', () => {
+  withFixtureDirectory((directory) => {
+    const ipaPath = createStoredIpa(directory, 'entry-limit', applicationEntries());
+
+    assert.throws(
+      () =>
+        scanIpa(ipaPath, {
+          environment: {},
+          limits: { maxArchiveEntries: 2 },
+          temporaryParent: directory,
+        }),
+      assertGenericError('IPA archive is malformed or unsafe'),
+    );
+    assertExtractorCleanup(directory);
+  });
+});
+
+test('scanner rejects archives over a declared uncompressed-size limit before extraction', () => {
+  withFixtureDirectory((directory) => {
+    const ipaPath = createStoredIpa(directory, 'size-limit', applicationEntries());
+
+    assert.throws(
+      () =>
+        scanIpa(ipaPath, {
+          environment: {},
+          limits: { maxUncompressedBytes: 1 },
+          temporaryParent: directory,
+        }),
+      assertGenericError('IPA archive is malformed or unsafe'),
+    );
+    assertExtractorCleanup(directory);
+  });
+});
+
+test('scanner rejects other special file types before extraction', () => {
+  withFixtureDirectory((directory) => {
+    const ipaPath = createStoredIpa(directory, 'special-type', [
+      ...applicationEntries(),
+      { name: 'Payload/Probe.app/unsafe-socket', contents: '', mode: SOCKET_MODE },
+    ]);
+
+    assert.throws(
+      () => scanIpa(ipaPath, { environment: {}, temporaryParent: directory }),
+      assertGenericError('IPA archive is malformed or unsafe'),
+    );
+    assertExtractorCleanup(directory);
+  });
+});
+
+test('scanner reports a generic failure when private cleanup cannot complete', () => {
+  withFixtureDirectory((directory) => {
+    const ipaPath = createStoredIpa(directory, 'cleanup-failure', applicationEntries());
+
+    assert.throws(
+      () =>
+        scanIpa(ipaPath, {
+          cleanup: () => {
+            throw new Error('fixture cleanup failure');
+          },
+          environment: {},
+          temporaryParent: directory,
+        }),
+      assertGenericError('Unable to clean IPA scan files', 'fixture cleanup failure'),
+    );
+  });
+});
+
+test('scanner still fails when cleanup fails after a source detection', () => {
+  withFixtureDirectory((directory) => {
+    const ipaPath = createStoredIpa(
+      directory,
+      'cleanup-after-detection',
+      applicationEntries('/web/session/authenticate'),
+    );
+
+    assert.throws(
+      () =>
+        scanIpa(ipaPath, {
+          cleanup: () => {
+            throw new Error('fixture cleanup failure');
+          },
+          environment: {},
+          temporaryParent: directory,
+        }),
+      assertGenericError('Unable to clean IPA scan files', 'fixture cleanup failure'),
+    );
   });
 });

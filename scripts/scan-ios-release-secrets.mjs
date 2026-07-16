@@ -1,5 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
@@ -11,16 +22,19 @@ const sourceIndicators = [
   'setServiceCredentials',
 ];
 const secretEnvNames = ['KOLD_REVOKED_ODOO_LOGIN', 'KOLD_REVOKED_ODOO_PASSWORD'];
-const maxArchiveBytes = 256 * 1024 * 1024;
-const maxArchiveEntries = 10_000;
-const maxUncompressedBytes = 512 * 1024 * 1024;
-const maxEntryUncompressedBytes = 128 * 1024 * 1024;
+const defaultLimits = Object.freeze({
+  maxArchiveBytes: 256 * 1024 * 1024,
+  maxArchiveEntries: 10_000,
+  maxUncompressedBytes: 512 * 1024 * 1024,
+  maxEntryUncompressedBytes: 128 * 1024 * 1024,
+});
 const centralDirectorySignature = 0x02014b50;
 const endOfCentralDirectorySignature = 0x06054b50;
 const regularFileMode = 0o100000;
 const directoryMode = 0o040000;
 const fileTypeMask = 0o170000;
 const malformedArchiveMessage = 'IPA archive is malformed or unsafe';
+const cleanupFailureMessage = 'Unable to clean IPA scan files';
 
 function malformedArchiveError() {
   return new Error(malformedArchiveMessage);
@@ -28,6 +42,20 @@ function malformedArchiveError() {
 
 function isIpaPath(ipaPath) {
   return typeof ipaPath === 'string' && ipaPath.toLowerCase().endsWith('.ipa');
+}
+
+function resolveLimits(overrides = {}) {
+  const limits = { ...defaultLimits };
+
+  for (const [name, value] of Object.entries(overrides)) {
+    if (!(name in limits) || !Number.isSafeInteger(value) || value <= 0) {
+      throw malformedArchiveError();
+    }
+
+    limits[name] = value;
+  }
+
+  return limits;
 }
 
 function assertSafeEntryName(entryName) {
@@ -66,7 +94,7 @@ function findEndOfCentralDirectory(archive) {
   throw malformedArchiveError();
 }
 
-function parseCentralDirectory(archive) {
+function parseCentralDirectory(archive, limits) {
   const endOffset = findEndOfCentralDirectory(archive);
 
   if (endOffset + 22 > archive.length) {
@@ -86,7 +114,7 @@ function parseCentralDirectory(archive) {
     centralDirectoryDisk !== 0 ||
     entriesOnDisk !== totalEntries ||
     totalEntries === 0xffff ||
-    totalEntries > maxArchiveEntries ||
+    totalEntries > limits.maxArchiveEntries ||
     centralDirectoryEnd > endOffset
   ) {
     throw malformedArchiveError();
@@ -110,12 +138,17 @@ function parseCentralDirectory(archive) {
     const externalAttributes = archive.readUInt32LE(cursor + 38);
     const entryEnd = cursor + 46 + nameLength + extraLength + commentLength;
 
-    if (entryEnd > centralDirectoryEnd || flags & 0x1 || uncompressedSize > maxEntryUncompressedBytes) {
+    if (
+      entryEnd > centralDirectoryEnd ||
+      flags & 0x1 ||
+      compressedSize > limits.maxArchiveBytes ||
+      uncompressedSize > limits.maxEntryUncompressedBytes
+    ) {
       throw malformedArchiveError();
     }
 
     totalUncompressedSize += uncompressedSize;
-    if (totalUncompressedSize > maxUncompressedBytes || compressedSize > maxArchiveBytes) {
+    if (totalUncompressedSize > limits.maxUncompressedBytes) {
       throw malformedArchiveError();
     }
 
@@ -148,21 +181,21 @@ function parseCentralDirectory(archive) {
   return entries;
 }
 
-function preflightArchive(ipaPath, archiveSize) {
-  if (archiveSize > maxArchiveBytes) {
-    throw malformedArchiveError();
-  }
-
+function preflightArchive(ipaPath, limits) {
   try {
+    if (statSync(ipaPath).size > limits.maxArchiveBytes) {
+      throw malformedArchiveError();
+    }
+
     const listedEntries = execFileSync('unzip', ['-Z1', ipaPath], {
       encoding: 'utf8',
-      maxBuffer: maxArchiveEntries * 1024,
+      maxBuffer: Math.min(limits.maxArchiveEntries * 1024, 16 * 1024 * 1024),
       stdio: 'pipe',
     })
       .replaceAll('\r', '')
       .split('\n')
       .filter(Boolean);
-    const centralEntries = parseCentralDirectory(readFileSync(ipaPath));
+    const centralEntries = parseCentralDirectory(readFileSync(ipaPath), limits);
 
     if (
       listedEntries.length === 0 ||
@@ -222,50 +255,96 @@ function revokedSecretValues(environment) {
     .filter((value) => typeof value === 'string' && value.length > 0);
 }
 
-function readIpaFile(ipaPath) {
+function copyInputToPrivateArchive(ipaPath, temporaryDirectory) {
+  const privateArchivePath = join(temporaryDirectory, 'input.ipa');
+
   try {
-    if (!statSync(ipaPath).isFile()) {
+    if (!lstatSync(ipaPath).isFile()) {
       throw new Error('not a file');
     }
+
+    copyFileSync(ipaPath, privateArchivePath);
+    chmodSync(privateArchivePath, 0o600);
+    return privateArchivePath;
   } catch {
     throw new Error('Unable to read IPA');
   }
 }
 
-export function scanIpa(ipaPath, { environment = process.env, temporaryParent = tmpdir() } = {}) {
+function makeTreeWritable(path) {
+  const stats = lstatSync(path);
+
+  if (stats.isSymbolicLink()) {
+    return;
+  }
+
+  if (stats.isDirectory()) {
+    chmodSync(path, 0o700);
+    for (const entry of readdirSync(path)) {
+      makeTreeWritable(join(path, entry));
+    }
+  } else {
+    chmodSync(path, 0o600);
+  }
+}
+
+function cleanupTemporaryDirectory(temporaryDirectory) {
+  try {
+    makeTreeWritable(temporaryDirectory);
+    rmSync(temporaryDirectory, {
+      force: true,
+      maxRetries: 3,
+      recursive: true,
+      retryDelay: 100,
+    });
+
+    if (existsSync(temporaryDirectory)) {
+      throw new Error('temporary directory remains');
+    }
+  } catch {
+    throw new Error(cleanupFailureMessage);
+  }
+}
+
+export function scanIpa(
+  ipaPath,
+  {
+    cleanup = cleanupTemporaryDirectory,
+    environment = process.env,
+    limits: limitOverrides,
+    temporaryParent = tmpdir(),
+  } = {},
+) {
   if (!isIpaPath(ipaPath)) {
     throw new Error('Expected one .ipa file path');
   }
 
+  const limits = resolveLimits(limitOverrides);
   const resolvedIpaPath = resolve(ipaPath);
-  readIpaFile(resolvedIpaPath);
-
-  let archiveSize;
-  try {
-    archiveSize = statSync(resolvedIpaPath).size;
-  } catch {
-    throw new Error('Unable to read IPA');
-  }
-
-  preflightArchive(resolvedIpaPath, archiveSize);
-
   let temporaryDirectory;
+
   try {
     try {
       temporaryDirectory = mkdtempSync(join(temporaryParent, 'app-ventas-ipa-'));
+      chmodSync(temporaryDirectory, 0o700);
     } catch {
       throw new Error('Unable to prepare IPA scan');
     }
 
+    const privateArchivePath = copyInputToPrivateArchive(resolvedIpaPath, temporaryDirectory);
+    preflightArchive(privateArchivePath, limits);
+
+    const extractionDirectory = join(temporaryDirectory, 'extracted');
     try {
-      execFileSync('unzip', ['-qq', '-n', resolvedIpaPath, '-d', temporaryDirectory], {
+      mkdirSync(extractionDirectory, { mode: 0o700 });
+      execFileSync('unzip', ['-qq', '-n', privateArchivePath, '-d', extractionDirectory], {
         stdio: 'pipe',
       });
     } catch {
       throw new Error('Unable to extract IPA');
     }
 
-    const payloadDirectory = join(temporaryDirectory, 'Payload');
+    const payloadDirectory = join(extractionDirectory, 'Payload');
     let appDirectories;
     try {
       appDirectories = readdirSync(payloadDirectory, { withFileTypes: true })
@@ -308,9 +387,9 @@ export function scanIpa(ipaPath, { environment = process.env, temporaryParent = 
   } finally {
     if (temporaryDirectory) {
       try {
-        rmSync(temporaryDirectory, { recursive: true, force: true });
+        cleanup(temporaryDirectory);
       } catch {
-        // The scanner never reports cleanup paths or archive contents.
+        throw new Error(cleanupFailureMessage);
       }
     }
   }

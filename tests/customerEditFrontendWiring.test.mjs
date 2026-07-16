@@ -89,6 +89,16 @@ function main() {
     /x_wa_phone/,
     'el servicio de contacto no debe leer ni escribir x_wa_phone (dominio del bot)',
   );
+  assert.match(
+    contactService,
+    /updateEmployeeScopedContact/,
+    'customer_update debe usar el endpoint scoped de contacto',
+  );
+  assert.doesNotMatch(
+    contactService,
+    /odooRpc|postRpc/,
+    'customer_update no debe usar RPC privilegiado',
+  );
 
   const syncStore = readFileSync(syncStorePath, 'utf8');
   const customerUpdateBlock = syncStore.match(/case 'customer_update':[\s\S]*?break;/)?.[0] ?? '';

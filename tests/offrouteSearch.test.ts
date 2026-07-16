@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 interface OffrouteSearchModule {
   BASIC_CUSTOMER_FIELDS: string[];
@@ -60,6 +62,13 @@ interface OffrouteSearchModule {
     customerLongitude: number | null;
     googleMapsUrl: string | null;
   }>;
+  normalizeOffrouteDirectoryRecords?: (
+    customers: unknown[],
+    leads: unknown[],
+  ) => {
+    customers: Array<Record<string, unknown>>;
+    leads: Array<Record<string, unknown>>;
+  };
 }
 
 function testCustomerMapping(module: OffrouteSearchModule) {
@@ -159,6 +168,91 @@ async function testCustomerFieldFallbackKeepsResults(module: OffrouteSearchModul
   assert.deepEqual(calls, [module.CUSTOMER_FIELDS, module.BASIC_CUSTOMER_FIELDS]);
 }
 
+function testSearchUsesEmployeeScopedDirectory() {
+  const source = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearch.ts'), 'utf8');
+  assert.match(source, /searchEmployeeDirectory/, 'la búsqueda debe usar directorio scoped');
+  assert.doesNotMatch(source, /odooRpc|odooRead/, 'la búsqueda no debe usar ORM/RPC directo');
+  assert.doesNotMatch(source, /buildCustomerSearchDomain\(q/, 'la búsqueda no debe construir dominio client-side');
+  assert.match(source, /normalizeOffrouteDirectoryRecords\(customers,\s*leads\)/, 'los datos REST desconocidos deben normalizarse antes de mapearlos');
+}
+
+function testDirectoryNormalizerDropsUnsafeFieldsBeforeUiMapping(module: OffrouteSearchModule) {
+  const normalize = module.normalizeOffrouteDirectoryRecords;
+  assert.equal(typeof normalize, 'function', 'debe normalizar la respuesta no confiable del directorio');
+  if (typeof normalize !== 'function') return;
+
+  const normalized = normalize(
+    [
+      {
+        id: 10,
+        name: 'Cliente seguro',
+        mobile: '7331112233',
+        phone: { unsafe: true },
+        google_maps_url: { unsafe: true },
+        partner_latitude: '18.3',
+        partner_longitude: -99.5,
+        pricelist_id: [7, 42],
+        property_product_pricelist: ['bad', 'No usar'],
+      },
+      { id: '11', name: 'Cliente inválido' },
+    ],
+    [
+      {
+        id: 20,
+        name: 'Lead seguro',
+        partner_name: ['unsafe'],
+        phone: ['unsafe'],
+        mobile: '7330001122',
+        partner_id: 88,
+      },
+      { id: 21, name: 99, partner_id: [3, 'No usar'] },
+    ],
+  );
+
+  assert.deepEqual(normalized, {
+    customers: [{
+      id: 10,
+      name: 'Cliente seguro',
+      mobile: '7331112233',
+      partner_longitude: -99.5,
+      pricelist_id: [7, ''],
+    }],
+    leads: [{
+      id: 20,
+      name: 'Lead seguro',
+      mobile: '7330001122',
+      partner_id: [88, ''],
+    }],
+  });
+
+  const results = module.buildOffrouteResults(normalized.customers as never[], normalized.leads as never[]);
+  assert.deepEqual(results, [{
+    id: 10,
+    entityType: 'customer',
+    name: 'Cliente seguro',
+    subtitle: '',
+    contact: '7331112233',
+    partnerId: 10,
+    pricelistId: 7,
+    pricelistName: null,
+    customerLatitude: null,
+    customerLongitude: -99.5,
+    googleMapsUrl: null,
+  }, {
+    id: 20,
+    entityType: 'lead',
+    name: 'Lead seguro',
+    subtitle: '',
+    contact: '7330001122',
+    partnerId: 88,
+    pricelistId: null,
+    pricelistName: null,
+    customerLatitude: null,
+    customerLongitude: null,
+    googleMapsUrl: null,
+  }]);
+}
+
 function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) {
   const domain = module.buildCustomerSearchDomain('demo', 820);
 
@@ -188,6 +282,8 @@ async function main() {
   testMixedResultsKeepTypes(module);
   await testCustomerFieldFallbackKeepsResults(module);
   testCustomerDomainSearchesMobileAndEmail(module);
+  testSearchUsesEmployeeScopedDirectory();
+  testDirectoryNormalizerDropsUnsafeFieldsBeforeUiMapping(module);
   console.log('offroute search tests: ok');
 }
 

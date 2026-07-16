@@ -72,6 +72,119 @@ export const CUSTOMER_FIELDS = [
   ...CUSTOMER_LOCATION_FIELDS,
 ];
 
+const CUSTOMER_STRING_FIELDS = [
+  'street',
+  'city',
+  'phone',
+  'mobile',
+  'email',
+  'vat',
+  'google_maps_url',
+] as const;
+
+const LEAD_STRING_FIELDS = [
+  'partner_name',
+  'phone',
+  'mobile',
+  'email_from',
+  'street',
+  'city',
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function copySafeStrings(
+  source: Record<string, unknown>,
+  fields: readonly string[],
+): Record<string, string> {
+  const copied: Record<string, string> = {};
+  for (const field of fields) {
+    if (typeof source[field] === 'string') {
+      copied[field] = source[field] as string;
+    }
+  }
+  return copied;
+}
+
+function normalizePricelistReference(
+  value: unknown,
+): [number, string] | number | false | null | undefined {
+  if (value === false || value === null) return value;
+  const directId = positiveInteger(value);
+  if (directId) return directId;
+  if (!Array.isArray(value)) return undefined;
+  const id = positiveInteger(value[0]);
+  if (!id) return undefined;
+  return [id, typeof value[1] === 'string' ? value[1] : ''];
+}
+
+function normalizeLeadPartnerReference(value: unknown): [number, string] | false {
+  const directId = positiveInteger(value);
+  if (directId) return [directId, ''];
+  if (!Array.isArray(value)) return false;
+  const id = positiveInteger(value[0]);
+  if (!id) return false;
+  return [id, typeof value[1] === 'string' ? value[1] : ''];
+}
+
+function normalizeDirectoryCustomer(value: unknown): OffrouteCustomerRecord | null {
+  if (!isRecord(value)) return null;
+  const id = positiveInteger(value.id);
+  const name = typeof value.name === 'string' && value.name.trim().length > 0 ? value.name : null;
+  if (!id || !name) return null;
+
+  const customer: OffrouteCustomerRecord = {
+    id,
+    name,
+    ...copySafeStrings(value, CUSTOMER_STRING_FIELDS),
+  };
+  if (typeof value.partner_latitude === 'number' && Number.isFinite(value.partner_latitude)) {
+    customer.partner_latitude = value.partner_latitude;
+  }
+  if (typeof value.partner_longitude === 'number' && Number.isFinite(value.partner_longitude)) {
+    customer.partner_longitude = value.partner_longitude;
+  }
+  const pricelist = normalizePricelistReference(value.pricelist_id);
+  if (pricelist !== undefined) customer.pricelist_id = pricelist;
+  const propertyPricelist = normalizePricelistReference(value.property_product_pricelist);
+  if (propertyPricelist !== undefined) customer.property_product_pricelist = propertyPricelist;
+  return customer;
+}
+
+function normalizeDirectoryLead(value: unknown): OffrouteLeadRecord | null {
+  if (!isRecord(value)) return null;
+  const id = positiveInteger(value.id);
+  const name = typeof value.name === 'string' && value.name.trim().length > 0 ? value.name : null;
+  if (!id || !name) return null;
+
+  return {
+    id,
+    name,
+    ...copySafeStrings(value, LEAD_STRING_FIELDS),
+    partner_id: normalizeLeadPartnerReference(value.partner_id),
+  };
+}
+
+export function normalizeOffrouteDirectoryRecords(
+  customers: unknown[],
+  leads: unknown[],
+): { customers: OffrouteCustomerRecord[]; leads: OffrouteLeadRecord[] } {
+  return {
+    customers: customers
+      .map(normalizeDirectoryCustomer)
+      .filter((customer): customer is OffrouteCustomerRecord => customer !== null),
+    leads: leads
+      .map(normalizeDirectoryLead)
+      .filter((lead): lead is OffrouteLeadRecord => lead !== null),
+  };
+}
+
 export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
   const q = query.trim();
   const domain: unknown[] = [

@@ -72,8 +72,13 @@ function main() {
 
   assert.match(
     offrouteSearch,
+    /searchEmployeeDirectory/,
+    'la búsqueda de visita especial debe usar el directorio scoped del empleado',
+  );
+  assert.doesNotMatch(
+    offrouteSearch,
     /x_analytic_un_id/,
-    'la búsqueda de visita especial debe filtrar por plaza analítica',
+    'la plaza analítica debe derivarse del token en servidor, no del móvil',
   );
 
   // P1 review (Sebas): la tarjeta de la LISTA debe abrir el cliente vía

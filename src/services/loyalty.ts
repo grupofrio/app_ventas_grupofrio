@@ -6,12 +6,11 @@
  * vive como campos de `res.partner` (ver loyaltyLogic.ts). NO hay endpoint
  * dedicado ni modelo de redención → MVP de SOLO LECTURA.
  *
- * Se lee vía `odooRpc('res.partner','search_read')` (sesión Odoo autenticada),
- * el mismo camino que pricelist.ts — `/get_records` corre como público y no lee
- * res.partner de forma confiable. Sin cambios de backend.
+ * Se lee mediante el endpoint scoped del empleado. El servidor valida que el
+ * partner pertenece al alcance de la sesión antes de exponer sus datos.
  */
 
-import { odooRpc } from './odooRpc';
+import { getEmployeeScopedLoyalty } from './employeeData';
 import {
   parsePartnerLoyalty,
   PARTNER_LOYALTY_FIELDS,
@@ -27,18 +26,11 @@ export {
 } from './loyaltyLogic';
 
 /**
- * Lee la lealtad de un cliente desde Odoo (search_read, sesión autenticada).
- * Devuelve null si no se encuentra el partner. Lanza si la sesión/red falla
+ * Lee la lealtad de un cliente desde el endpoint scoped del empleado.
+ * Devuelve null si no se encuentra el partner. Lanza si red/autorización falla
  * (el caller muestra error/offline). Solo lectura.
  */
 export async function fetchPartnerLoyalty(partnerId: number): Promise<PartnerLoyalty | null> {
   if (!partnerId || partnerId <= 0) return null;
-  const rows = await odooRpc<Array<Record<string, unknown>>>(
-    'res.partner',
-    'search_read',
-    [[['id', '=', partnerId]]],
-    { fields: PARTNER_LOYALTY_FIELDS, limit: 1 },
-  );
-  const row = Array.isArray(rows) ? rows[0] : null;
-  return parsePartnerLoyalty(row);
+  return parsePartnerLoyalty(await getEmployeeScopedLoyalty(partnerId));
 }

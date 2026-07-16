@@ -140,8 +140,9 @@ export async function syncCustomerContactUpdate(
   payload: Record<string, unknown>,
 ): Promise<boolean> {
   const args = buildCustomerContactOdooWriteArgs(payload);
-  const { odooRpc } = await import('./odooRpc');
-  return await odooRpc<boolean>('res.partner', 'write', args);
+  const { updateEmployeeScopedContact } = await import('./employeeData');
+  const customer = await updateEmployeeScopedContact(args[0][0], args[1]);
+  return customer !== null;
 }
 
 export function buildCustomerContactStopPatch(form: CustomerContactForm): Partial<GFStop> {

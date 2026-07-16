@@ -3,6 +3,8 @@
  * no hay sesión o está incompleta; aviso offline honesto en login.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 interface Mod {
   isRestorableSession: (saved: unknown) => { ok: boolean; reason: string };
@@ -34,6 +36,10 @@ function run(m: Mod) {
   assert.match(notice, /sin conexión/i);
   assert.match(notice, /internet/i);
   assert.match(notice, /restaura/i);
+
+  const authStore = readFileSync(resolve(process.cwd(), 'src/stores/useAuthStore.ts'), 'utf8');
+  assert.match(authStore, /from ['"]\.\.\/services\/extractEmployeeAnalyticPlaza['"]/, 'la plaza debe extraerse del login con el módulo puro');
+  assert.doesNotMatch(authStore, /employeeAnalytics|fetchEmployeeAnalyticPlaza/, 'auth no debe consultar hr.employee');
 
   console.log('auth offline tests: ok');
 }

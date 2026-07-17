@@ -58,6 +58,7 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
+import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
 // ═══ Constants ═══
 
@@ -87,6 +88,14 @@ function schedulePersist(): void {
     void useSyncStore.getState().persistQueue();
   }, PERSIST_DEBOUNCE_MS);
 }
+
+// PR-1 — Despertador de backoff. Un ÚNICO timer que dispara processQueue cuando
+// vence el next_retry_at del ítem-en-error más próximo. Sin esto, un ítem que
+// falló por red (status='error') calculaba su next_retry_at pero nadie volvía a
+// invocar processQueue: quedaba esperando indefinidamente a un enqueue nuevo o a
+// un flanco de reconexión. El timer NO es un segundo procesador: solo invoca el
+// processQueue existente, que se auto-protege con el guard isSyncing.
+let _wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -137,6 +146,11 @@ interface SyncState {
 
   // V2: Sync processor with priority
   processQueue: () => Promise<void>;
+
+  // PR-1: backoff wake timer (arms a single timer for the soonest retryable
+  // error item; fires processQueue when its backoff elapses).
+  scheduleWake: () => void;
+  clearWakeTimer: () => void;
 
   // V2: helpers for diagnostics
   getQueueSummary: () => QueueSummary;
@@ -395,6 +409,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         total: restored.length,
         syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
       });
+      // Arma el despertador de backoff para ítems en error rehidratados, que de
+      // otro modo esperarían a un enqueue o a un flanco de reconexión.
+      get().scheduleWake();
     }
   },
 
@@ -419,7 +436,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     };
 
     const candidates = queue.filter(isReady);
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
+      // arma el despertador para cuando venza el más próximo.
+      get().scheduleWake();
+      return;
+    }
 
     set({ isSyncing: true });
     const cycleStart = Date.now();
@@ -429,97 +451,171 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     logInfo('sync', 'cycle_start', { candidates: candidates.length });
 
-    // ── STEP 1: Separate by priority ──
-    const p1 = candidates.filter((i) => i.priority === 1);
-    const p2 = candidates.filter((i) => i.priority === 2);
-    const p3 = candidates.filter((i) => i.priority === 3);
+    // P2 (Codex): todo el cuerpo del ciclo va en try/finally. processOneItem y
+    // processGpsBatch ya capturan sus propios errores, pero un throw inesperado
+    // FUERA de ellos (p.ej. en el ordenamiento/DAG o en un helper) no debe dejar
+    // isSyncing colgado en true — eso neutralizaría TODOS los despertadores
+    // futuros por el guard `if (!isOnline || isSyncing) return`.
+    let hadUnhandledCycleError = false;
+    try {
+      // ── STEP 1: Separate by priority ──
+      const p1 = candidates.filter((i) => i.priority === 1);
+      const p2 = candidates.filter((i) => i.priority === 2);
+      const p3 = candidates.filter((i) => i.priority === 3);
 
-    // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
-    const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
-    for (const item of orderedP1) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
+      // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
+      const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+      for (const item of orderedP1) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
 
-      // If a business item fails and its retries are now >= MAX_RETRIES,
-      // we don't stop the whole cycle — other independent items can proceed.
-    }
+        // If a business item fails and its retries are now >= MAX_RETRIES,
+        // we don't stop the whole cycle — other independent items can proceed.
+      }
 
-    // ── STEP 3: Process P2 (media) — serial, FIFO ──
-    const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
-      .slice(0, MAX_ITEMS_PER_CYCLE - processed);
-    for (const item of orderedP2) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
-    }
+      // ── STEP 3: Process P2 (media) — serial, FIFO ──
+      const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
+        .slice(0, MAX_ITEMS_PER_CYCLE - processed);
+      for (const item of orderedP2) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
+      }
 
-    // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
-    const gpsItems = p3.filter((i) => i.type === 'gps')
-      .sort((a, b) => a.created_at - b.created_at);
-    const otherP3 = p3.filter((i) => i.type !== 'gps')
-      .sort((a, b) => a.created_at - b.created_at);
+      // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
+      const gpsItems = p3.filter((i) => i.type === 'gps')
+        .sort((a, b) => a.created_at - b.created_at);
+      const otherP3 = p3.filter((i) => i.type !== 'gps')
+        .sort((a, b) => a.created_at - b.created_at);
 
-    // GPS: batch processing
-    if (gpsItems.length > 0) {
-      const gpsResult = await processGpsBatch(gpsItems, get, set);
-      processed += gpsResult.processed;
-      succeeded += gpsResult.succeeded;
-      failed += gpsResult.failed;
-    }
+      // GPS: batch processing
+      if (gpsItems.length > 0) {
+        const gpsResult = await processGpsBatch(gpsItems, get, set);
+        processed += gpsResult.processed;
+        succeeded += gpsResult.succeeded;
+        failed += gpsResult.failed;
+      }
 
-    // Other P3 (client_event etc): serial
-    for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
-    }
+      // Other P3 (client_event etc): serial
+      for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
+      }
 
-    // ── End of cycle ──
-    const cycleEnd = Date.now();
-    const metrics: CycleMetrics = {
-      cycle_start: cycleStart,
-      cycle_end: cycleEnd,
-      cycle_duration_ms: cycleEnd - cycleStart,
-      items_processed: processed,
-      items_succeeded: succeeded,
-      items_failed: failed,
-      items_by_priority: {
-        1: orderedP1.length,
-        2: orderedP2.length,
-        3: gpsItems.length + otherP3.length,
-      },
-    };
+      // ── End of cycle ──
+      const cycleEnd = Date.now();
+      const metrics: CycleMetrics = {
+        cycle_start: cycleStart,
+        cycle_end: cycleEnd,
+        cycle_duration_ms: cycleEnd - cycleStart,
+        items_processed: processed,
+        items_succeeded: succeeded,
+        items_failed: failed,
+        items_by_priority: {
+          1: orderedP1.length,
+          2: orderedP2.length,
+          3: gpsItems.length + otherP3.length,
+        },
+      };
+      set({ lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
 
-    set({ isSyncing: false, lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
-    get().persistQueue();
+      logInfo('sync', 'cycle_complete', {
+        duration_ms: metrics.cycle_duration_ms,
+        processed,
+        succeeded,
+        failed,
+        p1: orderedP1.length,
+        p2: orderedP2.length,
+        p3_gps: gpsItems.length,
+        p3_other: otherP3.length,
+      });
 
-    logInfo('sync', 'cycle_complete', {
-      duration_ms: metrics.cycle_duration_ms,
-      processed,
-      succeeded,
-      failed,
-      p1: orderedP1.length,
-      p2: orderedP2.length,
-      p3_gps: gpsItems.length,
-      p3_other: otherP3.length,
-    });
-
-    // Photo janitor (fire-and-forget, unchanged from V1)
-    if (PHOTO_JANITOR_ENABLED) {
-      try {
-        const referenced = new Set<string>();
-        for (const i of get().queue) {
-          if (i.type === 'photo' && i.status !== 'done') {
-            const uri = i.payload?.localUri as string | undefined;
-            if (uri) referenced.add(uri);
+      // Photo janitor (fire-and-forget, unchanged from V1)
+      if (PHOTO_JANITOR_ENABLED) {
+        try {
+          const referenced = new Set<string>();
+          for (const i of get().queue) {
+            if (i.type === 'photo' && i.status !== 'done') {
+              const uri = i.payload?.localUri as string | undefined;
+              if (uri) referenced.add(uri);
+            }
           }
-        }
-        cleanupOrphanPhotos(referenced).catch(() => {});
-      } catch {}
+          cleanupOrphanPhotos(referenced).catch(() => {});
+        } catch {}
+      }
+    } catch (err: unknown) {
+      hadUnhandledCycleError = true;
+      const message = err instanceof Error ? err.message : 'unhandled sync cycle error';
+      logError('sync', 'cycle_unhandled_error', { message });
+    } finally {
+      // Garantías pase lo que pase: liberar el mutex isSyncing y persistir la cola.
+      set({ isSyncing: false });
+      get().persistQueue();
+
+      // P2 (Codex): decidir el siguiente paso con la MISMA lógica de dependencias
+      // que processQueue. Si quedó trabajo elegible con deps satisfechas — p.ej.
+      // un `pending` encolado DURANTE el ciclo, cuyo setTimeout de enqueue cayó
+      // mientras isSyncing=true y regresó por guard — re-drenamos en el próximo
+      // tick. Si solo quedan errores en backoff, armamos el timer.
+      //
+      // P1+P2 (Codex): tras un throw INESPERADO (hadUnhandledCycleError) la
+      // política es IDLE DURO. Ni drain_now (setTimeout(0) → re-entra → re-lanza
+      // → loop instantáneo, P1) ni scheduleWake (si hay un `error` con backoff
+      // ya vencido y el throw ocurre ANTES de procesarlo, sus retries nunca
+      // avanzan hacia dead y el timer re-armaría un loop sostenido de ~250 ms,
+      // P2). decidePostCycleActionAfterCycle devuelve siempre 'idle' en ese
+      // caso; aquí además limpiamos cualquier wake timer pendiente. La cola
+      // queda a la espera de un evento EXTERNO: foreground, reconexión, enqueue
+      // nuevo o reintento manual — con el error ya logueado para diagnóstico.
+      const action = decidePostCycleActionAfterCycle({
+        hadUnhandledCycleError,
+        queue: get().queue,
+        now: Date.now(),
+        maxRetries: MAX_RETRIES,
+        depsSatisfied: areSyncDependenciesSatisfied,
+      });
+      if (hadUnhandledCycleError) {
+        get().clearWakeTimer();
+        logWarn('sync', 'post_cycle_redrain_skipped_after_error', { next: 'idle' });
+      } else if (action === 'drain_now') {
+        setTimeout(() => { void get().processQueue(); }, 0);
+      } else {
+        get().scheduleWake();
+      }
+    }
+  },
+
+  // ═══ PR-1: Backoff wake timer ═══
+
+  scheduleWake: () => {
+    // Siempre reemplaza el timer vigente (idempotente): recalcula el ítem-en-
+    // error más próximo con el estado actual de la cola.
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
+    }
+    const { queue, isOnline } = get();
+    // Offline: no tiene sentido agendar; el flanco de reconexión re-arma.
+    if (!isOnline) return;
+    const delay = nextWakeDelayMs(queue, { maxRetries: MAX_RETRIES, now: Date.now() });
+    if (delay == null) return;
+    _wakeTimer = setTimeout(() => {
+      _wakeTimer = null;
+      // Solo dispara el processQueue existente (guard isSyncing evita ciclos
+      // concurrentes). El re-armado lo hace el propio processQueue al terminar.
+      void get().processQueue();
+    }, delay);
+  },
+
+  clearWakeTimer: () => {
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
     }
   },
 

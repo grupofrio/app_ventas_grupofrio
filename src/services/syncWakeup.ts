@@ -79,6 +79,45 @@ export function hasEligibleWorkNow(
   return queue.some((i) => isEligibleNow(i, now, maxRetries));
 }
 
+type EligibleFields = Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'>;
+type DepFields = Pick<SyncQueueItem, 'id' | 'status' | 'dependsOn'>;
+
+/**
+ * ¿Este ítem se procesaría con PROGRESO ahora mismo? = elegible ahora Y con sus
+ * dependencias satisfechas. Excluir un `pending` con dependencia insatisfecha es
+ * lo que evita el busy-loop del re-drenaje post-ciclo: ese pending nunca cambia
+ * de estado, así que re-drenar en bucle no avanzaría nada.
+ */
+export function hasImmediateDrainableWork(
+  queue: Array<EligibleFields & DepFields>,
+  now: number,
+  maxRetries: number,
+  depsSatisfied: (item: DepFields, queue: DepFields[]) => boolean,
+): boolean {
+  return queue.some((i) => isEligibleNow(i, now, maxRetries) && depsSatisfied(i, queue));
+}
+
+export type PostCycleAction = 'drain_now' | 'schedule_wake' | 'idle';
+
+/**
+ * Decisión al TERMINAR un ciclo de processQueue:
+ *  - 'drain_now'     → queda trabajo elegible con deps satisfechas (p.ej. un
+ *                      pending encolado durante el ciclo): re-drenar ya.
+ *  - 'schedule_wake' → solo quedan errores en backoff futuro: armar el timer.
+ *  - 'idle'          → nada pendiente: limpiar cualquier timer.
+ * Pura para poder probar la lógica sin cablear todo processQueue.
+ */
+export function decidePostCycleAction(
+  queue: Array<EligibleFields & DepFields>,
+  now: number,
+  maxRetries: number,
+  depsSatisfied: (item: DepFields, queue: DepFields[]) => boolean,
+): PostCycleAction {
+  if (hasImmediateDrainableWork(queue, now, maxRetries, depsSatisfied)) return 'drain_now';
+  if (nextWakeDelayMs(queue, { maxRetries, now }) != null) return 'schedule_wake';
+  return 'idle';
+}
+
 export interface WakeDelayOpts {
   maxRetries: number;
   now: number;

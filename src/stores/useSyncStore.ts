@@ -58,7 +58,7 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
-import { nextWakeDelayMs } from '../services/syncWakeup';
+import { nextWakeDelayMs, decidePostCycleAction } from '../services/syncWakeup';
 
 // ═══ Constants ═══
 
@@ -451,101 +451,128 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     logInfo('sync', 'cycle_start', { candidates: candidates.length });
 
-    // ── STEP 1: Separate by priority ──
-    const p1 = candidates.filter((i) => i.priority === 1);
-    const p2 = candidates.filter((i) => i.priority === 2);
-    const p3 = candidates.filter((i) => i.priority === 3);
+    // P2 (Codex): todo el cuerpo del ciclo va en try/finally. processOneItem y
+    // processGpsBatch ya capturan sus propios errores, pero un throw inesperado
+    // FUERA de ellos (p.ej. en el ordenamiento/DAG o en un helper) no debe dejar
+    // isSyncing colgado en true — eso neutralizaría TODOS los despertadores
+    // futuros por el guard `if (!isOnline || isSyncing) return`.
+    try {
+      // ── STEP 1: Separate by priority ──
+      const p1 = candidates.filter((i) => i.priority === 1);
+      const p2 = candidates.filter((i) => i.priority === 2);
+      const p3 = candidates.filter((i) => i.priority === 3);
 
-    // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
-    const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
-    for (const item of orderedP1) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
+      // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
+      const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+      for (const item of orderedP1) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
 
-      // If a business item fails and its retries are now >= MAX_RETRIES,
-      // we don't stop the whole cycle — other independent items can proceed.
-    }
+        // If a business item fails and its retries are now >= MAX_RETRIES,
+        // we don't stop the whole cycle — other independent items can proceed.
+      }
 
-    // ── STEP 3: Process P2 (media) — serial, FIFO ──
-    const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
-      .slice(0, MAX_ITEMS_PER_CYCLE - processed);
-    for (const item of orderedP2) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
-    }
+      // ── STEP 3: Process P2 (media) — serial, FIFO ──
+      const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
+        .slice(0, MAX_ITEMS_PER_CYCLE - processed);
+      for (const item of orderedP2) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
+      }
 
-    // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
-    const gpsItems = p3.filter((i) => i.type === 'gps')
-      .sort((a, b) => a.created_at - b.created_at);
-    const otherP3 = p3.filter((i) => i.type !== 'gps')
-      .sort((a, b) => a.created_at - b.created_at);
+      // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
+      const gpsItems = p3.filter((i) => i.type === 'gps')
+        .sort((a, b) => a.created_at - b.created_at);
+      const otherP3 = p3.filter((i) => i.type !== 'gps')
+        .sort((a, b) => a.created_at - b.created_at);
 
-    // GPS: batch processing
-    if (gpsItems.length > 0) {
-      const gpsResult = await processGpsBatch(gpsItems, get, set);
-      processed += gpsResult.processed;
-      succeeded += gpsResult.succeeded;
-      failed += gpsResult.failed;
-    }
+      // GPS: batch processing
+      if (gpsItems.length > 0) {
+        const gpsResult = await processGpsBatch(gpsItems, get, set);
+        processed += gpsResult.processed;
+        succeeded += gpsResult.succeeded;
+        failed += gpsResult.failed;
+      }
 
-    // Other P3 (client_event etc): serial
-    for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
-      const result = await processOneItem(item, get, set);
-      processed++;
-      if (result) succeeded++;
-      else failed++;
-    }
+      // Other P3 (client_event etc): serial
+      for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
+        const result = await processOneItem(item, get, set);
+        processed++;
+        if (result) succeeded++;
+        else failed++;
+      }
 
-    // ── End of cycle ──
-    const cycleEnd = Date.now();
-    const metrics: CycleMetrics = {
-      cycle_start: cycleStart,
-      cycle_end: cycleEnd,
-      cycle_duration_ms: cycleEnd - cycleStart,
-      items_processed: processed,
-      items_succeeded: succeeded,
-      items_failed: failed,
-      items_by_priority: {
-        1: orderedP1.length,
-        2: orderedP2.length,
-        3: gpsItems.length + otherP3.length,
-      },
-    };
+      // ── End of cycle ──
+      const cycleEnd = Date.now();
+      const metrics: CycleMetrics = {
+        cycle_start: cycleStart,
+        cycle_end: cycleEnd,
+        cycle_duration_ms: cycleEnd - cycleStart,
+        items_processed: processed,
+        items_succeeded: succeeded,
+        items_failed: failed,
+        items_by_priority: {
+          1: orderedP1.length,
+          2: orderedP2.length,
+          3: gpsItems.length + otherP3.length,
+        },
+      };
+      set({ lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
 
-    set({ isSyncing: false, lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
-    get().persistQueue();
+      logInfo('sync', 'cycle_complete', {
+        duration_ms: metrics.cycle_duration_ms,
+        processed,
+        succeeded,
+        failed,
+        p1: orderedP1.length,
+        p2: orderedP2.length,
+        p3_gps: gpsItems.length,
+        p3_other: otherP3.length,
+      });
 
-    // Re-arma el despertador para los ítems que quedaron en error/backoff tras
-    // este ciclo (o lo limpia si ya no hay ninguno).
-    get().scheduleWake();
-
-    logInfo('sync', 'cycle_complete', {
-      duration_ms: metrics.cycle_duration_ms,
-      processed,
-      succeeded,
-      failed,
-      p1: orderedP1.length,
-      p2: orderedP2.length,
-      p3_gps: gpsItems.length,
-      p3_other: otherP3.length,
-    });
-
-    // Photo janitor (fire-and-forget, unchanged from V1)
-    if (PHOTO_JANITOR_ENABLED) {
-      try {
-        const referenced = new Set<string>();
-        for (const i of get().queue) {
-          if (i.type === 'photo' && i.status !== 'done') {
-            const uri = i.payload?.localUri as string | undefined;
-            if (uri) referenced.add(uri);
+      // Photo janitor (fire-and-forget, unchanged from V1)
+      if (PHOTO_JANITOR_ENABLED) {
+        try {
+          const referenced = new Set<string>();
+          for (const i of get().queue) {
+            if (i.type === 'photo' && i.status !== 'done') {
+              const uri = i.payload?.localUri as string | undefined;
+              if (uri) referenced.add(uri);
+            }
           }
-        }
-        cleanupOrphanPhotos(referenced).catch(() => {});
-      } catch {}
+          cleanupOrphanPhotos(referenced).catch(() => {});
+        } catch {}
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'unhandled sync cycle error';
+      logError('sync', 'cycle_unhandled_error', { message });
+    } finally {
+      // Garantías pase lo que pase: liberar el mutex isSyncing y persistir la cola.
+      set({ isSyncing: false });
+      get().persistQueue();
+
+      // P2 (Codex): decidir el siguiente paso con la MISMA lógica de dependencias
+      // que processQueue. Si quedó trabajo elegible con deps satisfechas — p.ej.
+      // un `pending` encolado DURANTE el ciclo, cuyo setTimeout de enqueue cayó
+      // mientras isSyncing=true y regresó por guard — re-drenamos en el próximo
+      // tick. Si solo quedan errores en backoff, armamos el timer. El re-drenaje
+      // se auto-protege con isSyncing (no hay ciclo concurrente); un pending con
+      // dependencia insatisfecha NO cuenta como elegible, evitando el busy-loop.
+      const action = decidePostCycleAction(
+        get().queue,
+        Date.now(),
+        MAX_RETRIES,
+        areSyncDependenciesSatisfied,
+      );
+      if (action === 'drain_now') {
+        setTimeout(() => { void get().processQueue(); }, 0);
+      } else {
+        get().scheduleWake();
+      }
     }
   },
 

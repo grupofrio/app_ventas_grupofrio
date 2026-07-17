@@ -15,11 +15,13 @@ export function enqueueVisitPhotos({
   photoUris,
   enqueue,
   dependsOn,
+  imageType = 'visit',
 }: {
   stopId: number;
   photoUris: string[];
   enqueue: EnqueuePhoto;
   dependsOn?: string[];
+  imageType?: string;
 }): string[] {
   return photoUris.map((localUri) =>
     enqueue(
@@ -27,7 +29,7 @@ export function enqueueVisitPhotos({
       {
         stop_id: stopId,
         localUri,
-        image_type: 'visit',
+        image_type: imageType,
       },
       dependsOn && dependsOn.length > 0 ? { dependsOn } : undefined,
     )

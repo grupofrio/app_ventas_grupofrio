@@ -2,13 +2,13 @@
  * OperationGate (P0-4 hardening).
  *
  * Wraps screens that must NOT be reachable before the start-of-operation
- * sequence is complete (sale, checkout, consignment, route-close). If the
- * vendor opens one of these via deep link / back navigation without having
- * done checklist + KM inicial + aceptar carga (with an active plan), the gate
- * shows a clear block screen with a button to "Iniciar ruta" instead of
- * letting them operate out of sequence.
+ * prerequisites are complete (sale, checkout, consignment, route-close). If the
+ * vendor opens one of these via deep link / back navigation before Odoo has
+ * started the route, the gate shows a clear block screen with a button to
+ * "Iniciar ruta" instead of letting them operate out of sequence.
  *
- * Reuses the readiness flags from useRouteStartStore + plan from useRouteStore.
+ * The plan state from useRouteStore is authoritative. Readiness flags from
+ * useRouteStartStore only explain missing prerequisites for the matching plan.
  * Does NOT auto-redirect in render (avoids navigation loops) — it presents an
  * explicit action.
  */
@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from './ui/TopBar';
 import { Button } from './ui/Button';
+import { AlertBanner } from './ui/AlertBanner';
 import { colors, spacing } from '../theme/tokens';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
@@ -26,24 +27,48 @@ import { deriveOperationReadiness } from '../services/operationReadiness';
 
 export function OperationGate({
   title = 'Operación',
+  mode = 'transaction',
   children,
 }: {
   title?: string;
+  mode?: 'transaction' | 'close';
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const hasActivePlan = useRouteStore((s) => s.plan != null);
-  const readiness = useRouteStartStore((s) => s.readiness);
+  const plan = useRouteStore((s) => s.plan);
+  const routeStart = useRouteStartStore();
 
   const result = deriveOperationReadiness({
-    hasActivePlan,
-    checklistDone: readiness.checklistDone,
-    kmCaptured: readiness.kmCaptured,
-    loadAccepted: readiness.loadAccepted,
+    planState: plan?.state ?? null,
+    planMatchesReadiness: plan?.plan_id === routeStart.planId,
+    checklistDone: routeStart.readiness.checklistDone,
+    kmCaptured: routeStart.readiness.kmCaptured,
+    loadAccepted: routeStart.readiness.loadAccepted,
+    mode,
   });
+  const isTerminalPlan = plan?.state === 'closed'
+    || plan?.state === 'reconciled'
+    || plan?.state === 'done';
+  const blockHeading = isTerminalPlan ? 'Ruta finalizada' : 'Ruta no iniciada';
+  const blockActionLabel = isTerminalPlan ? 'Ir a Inicio' : 'Ir a preparar ruta';
+  const blockActionPath = isTerminalPlan ? '/(tabs)' : '/route-start';
 
   if (result.canOperate) {
-    return <>{children}</>;
+    if (result.warnings.length === 0) {
+      return <>{children}</>;
+    }
+    return (
+      <>
+        {children}
+        <View pointerEvents="none" style={styles.warningOverlay}>
+          <AlertBanner
+            variant="warning"
+            icon="⚠️"
+            message={result.warnings.join('. ')}
+          />
+        </View>
+      </>
+    );
   }
 
   return (
@@ -51,13 +76,16 @@ export function OperationGate({
       <TopBar title={title} showBack />
       <View style={styles.center}>
         <Text style={styles.icon}>🚦</Text>
-        <Text style={styles.heading}>Ruta no iniciada</Text>
+        <Text style={styles.heading}>{blockHeading}</Text>
         <Text style={styles.body}>{result.reason}</Text>
+        {result.warnings.length > 0 ? (
+          <Text style={styles.warningText}>{result.warnings.join('. ')}</Text>
+        ) : null}
         <Button
-          label="Ir a preparar ruta"
+          label={blockActionLabel}
           variant="primary"
           fullWidth
-          onPress={() => router.replace('/route-start' as never)}
+          onPress={() => router.replace(blockActionPath as never)}
         />
       </View>
     </SafeAreaView>
@@ -70,4 +98,11 @@ const styles = StyleSheet.create({
   icon: { fontSize: 48 },
   heading: { fontSize: 18, fontWeight: '700', color: colors.text },
   body: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
+  warningText: { fontSize: 12, color: colors.warning, textAlign: 'center', lineHeight: 18 },
+  warningOverlay: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    bottom: 24,
+  },
 });

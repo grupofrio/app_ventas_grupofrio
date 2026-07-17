@@ -2,7 +2,7 @@
  * Pure helper para evitar refetch redundante en useFocusEffect. RN-free.
  *
  * Las pantallas de ruta/home re-disparan loadPlan al recuperar foco (volver de
- * un cliente). loadPlan ya deduplica concurrencia (guard isLoading), pero igual
+ * un cliente). loadPlan ya une llamadas concurrentes al refresh activo, pero igual
  * conviene NO re-pedir si los datos son muy recientes. Esta función decide si
  * vale la pena refetch según `lastSync`:
  *   - nunca cargado (null) → sí (primera carga),

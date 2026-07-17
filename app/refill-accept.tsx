@@ -57,7 +57,7 @@ export default function RefillAcceptScreen() {
     if (!isOnline) return;
     setRefreshing(true);
     try {
-      await loadPlan();
+      await loadPlan({ force: true });
     } finally {
       setRefreshing(false);
     }
@@ -80,13 +80,13 @@ export default function RefillAcceptScreen() {
             setAccepting(true);
             try {
               await acceptRouteLoad(planId, pending.picking_id);
-              await loadPlan();
+              await loadPlan({ force: true });
               if (warehouseId) await loadProducts(warehouseId);
               Alert.alert('Recarga aceptada', `${pending.name} quedó confirmada.`);
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Intenta de nuevo.';
               if (/ya.*acept|already/i.test(msg)) {
-                await loadPlan();
+                await loadPlan({ force: true });
                 Alert.alert('Ya estaba aceptada', 'Esta recarga ya había sido aceptada.');
               } else {
                 Alert.alert('Error al aceptar', msg);

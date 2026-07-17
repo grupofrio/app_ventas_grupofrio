@@ -10,7 +10,7 @@ import { getMyPlan, getPlanStops } from '../services/gfLogistics';
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
 import { useVisitStore } from './useVisitStore';
-import { storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
 import { removeStopById } from '../services/routeStops';
 import {
@@ -28,6 +28,11 @@ import {
 import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
+import { useRouteStartStore } from './useRouteStartStore';
+import {
+  buildRouteRefreshFailurePatch,
+  createSingleFlight,
+} from '../services/routePlanRefresh';
 
 export type RouteFreshness = 'updated' | 'stale' | 'offline_cache';
 
@@ -47,6 +52,7 @@ interface RouteState {
 
   // Actions
   loadPlan: (opts?: { force?: boolean }) => Promise<void>;
+  markPlanStarted: (planId: number) => void;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
   removeStop: (stopId: number) => void;
   addVirtualStop: (
@@ -68,6 +74,8 @@ interface RouteState {
   reset: () => void;
 }
 
+const routePlanLoadFlight = createSingleFlight<void>();
+
 export const useRouteStore = create<RouteState>((set, get) => ({
   plan: null,
   stops: [],
@@ -80,9 +88,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   stopsTotal: 0,
   progressPct: 0,
 
-  loadPlan: async (opts = {}) => {
-    if (get().isLoading) return; // Prevent concurrent calls
-
+  loadPlan: (opts = {}) => routePlanLoadFlight.run(async (flight) => {
     const isOnline = useSyncStore.getState().isOnline;
     const now = Date.now();
 
@@ -121,6 +127,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       const cachedStops = get().stops;
       const cachedToken = get().planVersionToken ?? routePlanVersionToken(cachedPlan);
       const plan = await getMyPlan();
+      if (!flight.isCurrent()) return;
       if (!plan) {
         if (shouldKeepCachedStopsAfterEmptyRefresh({
           cachedPlan,
@@ -143,17 +150,29 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         if (visitStore.currentStopId !== null) {
           visitStore.resetVisit();
         }
+        await Promise.all([
+          storeRemove(STORAGE_KEYS.PLAN),
+          storeRemove(STORAGE_KEYS.STOPS),
+          storeRemove(STORAGE_KEYS.VISIT_STATE),
+        ]);
+        if (!flight.isCurrent()) return;
+        useRouteStartStore.getState().reset();
         set({
           plan: null,
           stops: [],
           isLoading: false,
           error: 'Sin plan para hoy',
           routeFreshness: 'stale',
+          lastSync: null,
           planVersionToken: null,
+          stopsCompleted: 0,
+          stopsTotal: 0,
+          progressPct: 0,
         });
         return;
       }
 
+      useRouteStartStore.getState().syncFromPlan(plan);
       const nextToken = routePlanVersionToken(plan);
       if (!shouldReloadRouteStops({
         cachedStopsCount: cachedStops.length,
@@ -173,6 +192,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       }
 
       const backendStops = await getPlanStops(plan.plan_id);
+      if (!flight.isCurrent()) return;
       const keepCachedStops = shouldKeepCachedStopsAfterEmptyRefresh({
         cachedPlan,
         cachedStops,
@@ -204,6 +224,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         } catch {
           // KOLD modules may not exist — non-blocking
         }
+        if (!flight.isCurrent()) return;
       }
 
       // Enrich stops with score + forecast
@@ -254,10 +275,10 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       storeSave(STORAGE_KEYS.PLAN, plan);
       storeSave(STORAGE_KEYS.STOPS, stops);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Error cargando plan';
-      set({ error: msg, isLoading: false });
+      if (!flight.isCurrent()) return;
+      set(buildRouteRefreshFailurePatch(error));
     }
-  },
+  }),
 
   /**
    * BLD-20260408-P0: Create a virtual stop for off-route sales.
@@ -336,9 +357,21 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     storeSave(STORAGE_KEYS.STOPS, stops);
   },
 
-  reset: () => set({
-    plan: null, stops: [], isLoading: false, error: null,
-    lastSync: null, routeFreshness: 'stale', planVersionToken: null,
-    stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
-  }),
+  markPlanStarted: (planId) => {
+    const plan = get().plan;
+    if (!plan || plan.plan_id !== planId) return;
+    const patched: GFPlan = { ...plan, state: 'in_progress' };
+    set({ plan: patched });
+    storeSave(STORAGE_KEYS.PLAN, patched);
+    useRouteStartStore.getState().syncFromPlan(patched);
+  },
+
+  reset: () => {
+    routePlanLoadFlight.invalidate();
+    set({
+      plan: null, stops: [], isLoading: false, error: null,
+      lastSync: null, routeFreshness: 'stale', planVersionToken: null,
+      stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
+    });
+  },
 }));

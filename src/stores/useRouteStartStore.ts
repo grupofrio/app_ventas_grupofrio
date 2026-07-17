@@ -16,6 +16,11 @@ import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
 import { computeRouteStartReadiness } from '../services/routeStartLogic';
 import { RouteStartReadiness } from '../types/routeStart';
 import { logInfo } from '../utils/logger';
+import type { GFPlan } from '../types/plan';
+import {
+  deriveRouteStartPlanSnapshot,
+  mergeRouteStartPlanSnapshot,
+} from '../services/routeStartAuthority';
 
 interface RouteStartState {
   planId: number | null;
@@ -27,8 +32,11 @@ interface RouteStartState {
 
   setForPlan: (planId: number) => void;
   setChecklistComplete: (done: boolean) => void;
+  setChecklistCompleteForPlan: (planId: number, done: boolean) => void;
   setKmInitial: (km: number | null) => void;
+  setKmInitialForPlan: (planId: number, km: number | null) => void;
   setLoadAccepted: (accepted: boolean) => void;
+  syncFromPlan: (plan: GFPlan) => void;
   reset: () => void;
   hydrate: () => Promise<void>;
 }
@@ -86,7 +94,25 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
     persist(get());
   },
 
+  setChecklistCompleteForPlan: (planId, done) => {
+    if (get().planId !== planId) return;
+    set((s) => {
+      const next = { ...s, checklistComplete: done };
+      return { checklistComplete: done, readiness: recompute(next) };
+    });
+    persist(get());
+  },
+
   setKmInitial: (km) => {
+    set((s) => {
+      const next = { ...s, kmInitial: km };
+      return { kmInitial: km, readiness: recompute(next) };
+    });
+    persist(get());
+  },
+
+  setKmInitialForPlan: (planId, km) => {
+    if (get().planId !== planId) return;
     set((s) => {
       const next = { ...s, kmInitial: km };
       return { kmInitial: km, readiness: recompute(next) };
@@ -100,6 +126,18 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
       return { loadAccepted: accepted, readiness: recompute(next) };
     });
     persist(get());
+  },
+
+  syncFromPlan: (plan) => {
+    const snapshot = deriveRouteStartPlanSnapshot(plan);
+    const current = get();
+    const next = mergeRouteStartPlanSnapshot(current, snapshot);
+    set({ ...next, readiness: recompute(next) });
+    persist(get());
+    logInfo('general', 'route_start_sync_plan', {
+      planId: snapshot.planId,
+      planState: snapshot.planState,
+    });
   },
 
   reset: () => {

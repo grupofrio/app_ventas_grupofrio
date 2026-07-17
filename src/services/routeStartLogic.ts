@@ -5,8 +5,9 @@
  * NOTE on load acceptance: KoldField already has load-acceptance logic in
  * `routeLoadAcceptance.ts` (buildRouteLoadAcceptanceState + acceptRouteLoad,
  * shipped by Sebas). Sprint A REUSES that — it does not reimplement the load
- * card parsing here. This file only owns checklist progress, KM validation,
- * and overall readiness composition.
+ * card parsing here. This file owns checklist progress, KM validation, and
+ * readiness composition. Checklist is required for route start, but the gate is
+ * based on answers captured, not whether every answer passed.
  */
 
 import type {
@@ -31,6 +32,27 @@ export function computeChecklistProgress(
 
 export function isChecklistComplete(header: GFVehicleChecklist | null): boolean {
   return !!header && header.state === 'completed';
+}
+
+export function isChecklistAnsweredForStart(header: GFVehicleChecklist | null): boolean {
+  if (!header) return false;
+  if (isChecklistComplete(header)) return true;
+  if (header.checks_total <= 0) return false;
+  return header.checks_answered >= header.checks_total;
+}
+
+function positiveKm(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+export function chooseAuthoritativeKm(input: {
+  planKm?: number | null;
+  backendKm?: number | null;
+  localKm?: number | null;
+}): number | null {
+  return positiveKm(input.planKm) ?? positiveKm(input.backendKm);
 }
 
 /**
@@ -125,7 +147,8 @@ export function extractOdometerKm(checks: GFVehicleCheck[]): number | null {
 
 /**
  * Compute overall readiness for "Iniciar ruta".
- * All three prerequisites must be satisfied.
+ * Checklist must be answered, but answers may pass or fail; the purpose is to
+ * keep vehicle state current before operating.
  */
 export function computeRouteStartReadiness(input: {
   checklistComplete: boolean;

@@ -13,7 +13,7 @@
  * offline — none of them crash the screen.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
@@ -31,13 +31,24 @@ import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
-import { getVehicleChecklist } from '../src/services/vehicleChecklist';
+import { ensureChecklistReady } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
-import { acceptRouteLoad } from '../src/services/gfLogistics';
-import { buildRouteLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
-import { isChecklistComplete, isValidKm, isAbsurdOdometer } from '../src/services/routeStartLogic';
+import { acceptRouteLoad, startPlan } from '../src/services/gfLogistics';
+import { buildInitialLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
+import {
+  chooseAuthoritativeKm,
+  isChecklistAnsweredForStart,
+  isValidKm,
+  isAbsurdOdometer,
+} from '../src/services/routeStartLogic';
 import { computeRouteReadiness } from '../src/services/routeReadiness';
 import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
+import { confirmAuthoritativeRouteStart } from '../src/services/routeStartAction';
+import {
+  buildRouteStartUiState,
+  isCurrentRoutePlan,
+  isSameStartedRoutePlan,
+} from '../src/services/routeStartUi';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -45,6 +56,20 @@ function StatusBadge({ status }: { status: StepStatus }) {
   if (status === 'done') return <Badge label="✓ Listo" variant="green" />;
   if (status === 'skip') return <Badge label="Sin pendiente" variant="dim" />;
   return <Badge label="Pendiente" variant="orange" />;
+}
+
+function isCurrentPlan(capturedPlanId: number): boolean {
+  const currentPlan = useRouteStore.getState().plan;
+  const currentStartPlanId = useRouteStartStore.getState().planId;
+  return isCurrentRoutePlan({
+    capturedPlanId,
+    currentPlanId: currentPlan?.plan_id ?? null,
+    currentRouteStartPlanId: currentStartPlanId,
+  });
+}
+
+function showRouteChangedAlert(): void {
+  Alert.alert('La ruta cambió', 'La ruta cambió. Revisa el plan actual antes de continuar.');
 }
 
 export default function RouteStartScreen() {
@@ -71,10 +96,16 @@ export default function RouteStartScreen() {
   });
 
   const setForPlan = useRouteStartStore((s) => s.setForPlan);
-  const setChecklistComplete = useRouteStartStore((s) => s.setChecklistComplete);
-  const setKmInitialStore = useRouteStartStore((s) => s.setKmInitial);
-  const setLoadAccepted = useRouteStartStore((s) => s.setLoadAccepted);
-  const kmInitialStored = useRouteStartStore((s) => s.kmInitial);
+  const setChecklistCompleteForPlan = useRouteStartStore((s) => s.setChecklistCompleteForPlan);
+  const setKmInitialForPlan = useRouteStartStore((s) => s.setKmInitialForPlan);
+  const routeStartPlanId = useRouteStartStore((s) => s.planId);
+  const checklistComplete = useRouteStartStore((s) => s.checklistComplete);
+  const kmInitialStoredForPlan = useRouteStartStore((s) => s.kmInitial);
+  const kmInitialStored = routeStartPlanId === planId ? kmInitialStoredForPlan : null;
+  const [kmInitialBackend, setKmInitialBackend] = useState<{
+    planId: number;
+    km: number | null;
+  } | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,21 +114,22 @@ export default function RouteStartScreen() {
 
   const [kmInput, setKmInput] = useState('');
   const [savingKm, setSavingKm] = useState(false);
+  const [startingRoute, setStartingRoute] = useState(false);
+  const startingRouteRef = useRef(false);
+  const planDepartureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
+  const kmInitial = chooseAuthoritativeKm({
+    planKm: planDepartureKm,
+    backendKm: kmInitialBackend?.planId === planId ? kmInitialBackend.km : null,
+    localKm: kmInitialStored,
+  });
 
   // Load acceptance reuses Sebas's service: the load is embedded in the plan
   // object (load_pickings / pending_loads). No extra /my-load fetch.
-  const loadState = React.useMemo(() => buildRouteLoadAcceptanceState(plan), [plan]);
+  const initialLoadState = React.useMemo(() => buildInitialLoadAcceptanceState(plan), [plan]);
   const loadStatus: StepStatus =
-    loadState.loadCards.length === 0 ? 'skip' : (loadState.hasPendingLoad ? 'pending' : 'done');
-
-  // Sync the load readiness into the store whenever the plan changes.
-  React.useEffect(() => {
-    if (loadState.loadCards.length === 0) {
-      setLoadAccepted(true); // nothing to accept → not a blocker
-    } else {
-      setLoadAccepted(!loadState.hasPendingLoad);
-    }
-  }, [loadState, setLoadAccepted]);
+    initialLoadState.initialLoads.length === 0
+      ? 'skip'
+      : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
 
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
@@ -105,7 +137,13 @@ export default function RouteStartScreen() {
       setLoading(false);
       return;
     }
-    setForPlan(planId);
+    const capturedPlanId = planId;
+    setForPlan(capturedPlanId);
+    const currentStart = useRouteStartStore.getState();
+    setChecklistStatus(
+      currentStart.planId === capturedPlanId && currentStart.checklistComplete ? 'done' : 'pending',
+    );
+    setKmInitialBackend(null);
     if (!isOnline) {
       setError(null);
       setLoading(false);
@@ -114,44 +152,59 @@ export default function RouteStartScreen() {
     setLoading(true);
     setError(null);
     try {
-      try {
-        const header = await getVehicleChecklist(planId);
-        // No checklist (no active templates) OR 0 items → treat as skipped/done.
-        const done = !header || header.checks_total === 0 || isChecklistComplete(header);
+      await loadPlan({ force: true });
+      if (!isCurrentPlan(capturedPlanId)) return;
+      const freshPlan = useRouteStore.getState().plan;
+      setKmInitialBackend({
+        planId: capturedPlanId,
+        km: typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null,
+      });
+      const { header } = await ensureChecklistReady(capturedPlanId);
+      // The hub creates/loads the checklist before evaluating readiness.
+      // Answers are required; pass/fail does not block route start.
+      const done = isChecklistAnsweredForStart(header);
+      setChecklistCompleteForPlan(capturedPlanId, done);
+      if (isCurrentPlan(capturedPlanId)) {
         setChecklistStatus(done ? 'done' : 'pending');
-        setChecklistComplete(done);
-      } catch {
-        // If checklist endpoint fails, don't block the driver.
-        setChecklistStatus('done');
-        setChecklistComplete(true);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo cargar el estado de inicio.');
+    } catch {
+      if (isCurrentPlan(capturedPlanId)) {
+        const preservedChecklist = useRouteStartStore.getState().checklistComplete;
+        setChecklistStatus(preservedChecklist ? 'done' : 'pending');
+        setError('No se pudo validar el checklist de unidad. Reintenta con conexión.');
+      }
     } finally {
-      setLoading(false);
+      if (isCurrentPlan(capturedPlanId)) {
+        setLoading(false);
+      }
     }
-  }, [planId, isOnline, setForPlan, setChecklistComplete]);
+  }, [planId, isOnline, loadPlan, setForPlan, setChecklistCompleteForPlan]);
 
   async function handleAcceptLoad() {
     if (!planId || acceptingLoad) return;
-    const pending = loadState.nextPendingLoad;
+    const capturedPlanId = planId;
+    const pending = initialLoadState.nextPendingInitialLoad;
     if (!pending?.picking_id) return;
     if (!isOnline) {
       Alert.alert('Sin conexión', 'Conéctate al WiFi del CEDIS para aceptar la carga.');
       return;
     }
     Alert.alert(
-      pending.isRefill ? 'Aceptar refill' : 'Aceptar carga',
+      'Aceptar carga',
       `¿Confirmas que recibiste el producto de "${pending.name}"?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Aceptar',
           onPress: async () => {
+            if (!isCurrentPlan(capturedPlanId)) {
+              showRouteChangedAlert();
+              return;
+            }
             setAcceptingLoad(true);
             try {
-              await acceptRouteLoad(planId, pending.picking_id);
-              await loadPlan();
+              await acceptRouteLoad(capturedPlanId, pending.picking_id);
+              await loadPlan({ force: true });
               if (warehouseId) await loadProducts(warehouseId);
             } catch (err) {
               Alert.alert('Error al aceptar', err instanceof Error ? err.message : 'Intenta de nuevo.');
@@ -170,21 +223,89 @@ export default function RouteStartScreen() {
     }, [refresh]),
   );
 
-  const kmStatus: StepStatus = kmInitialStored != null ? 'done' : 'pending';
+  const kmStatus: StepStatus = kmInitial != null ? 'done' : 'pending';
 
-  // BLD-SPRINT-A-FIX: readiness derived LIVE from the on-screen step status,
-  // not from the store's readiness object. The store can momentarily lag on a
-  // plan/day change (setForPlan resets loadAccepted before the load effect
-  // re-derives it), which previously left "Iniciar ruta" stuck disabled on a
-  // new day. Live derivation is the single source of truth for the button.
-  const checklistDoneLive = checklistStatus === 'done';
-  const kmDoneLive = kmInitialStored != null;
+  const serverStarted = plan?.state === 'in_progress';
+  const checklistDoneLive = serverStarted || (routeStartPlanId === planId && checklistComplete);
+  const checklistDisplayStatus: StepStatus = serverStarted
+    ? 'done'
+    : (checklistDoneLive && checklistStatus === 'done' ? 'done' : 'pending');
+  const kmDoneLive = kmInitial != null;
   const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
   // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
   // caché (ruta + productos) para no salir a ruta sin con qué operar. Los
   // precios faltantes son advertencia, no bloqueo (degradación segura).
   const dataMinReady = dataReady.minimumReady;
   const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive && dataMinReady;
+  const canRequestStart = plan?.state === 'published' && readyToStartLive && isOnline;
+  const canContinue = serverStarted || canRequestStart;
+
+  async function handleStartRoute() {
+    if (!planId || startingRouteRef.current) return;
+    const capturedPlanId = planId;
+    const currentPlan = useRouteStore.getState().plan;
+    const currentStart = useRouteStartStore.getState();
+    const currentReadyToStart = currentStart.planId === capturedPlanId
+      && currentStart.checklistComplete
+      && currentStart.kmInitial != null
+      && currentStart.loadAccepted
+      && dataMinReady;
+    if (currentPlan?.plan_id !== capturedPlanId) return;
+    const currentUiState = buildRouteStartUiState({
+      planState: currentPlan.state,
+      readyToStart: currentReadyToStart,
+      isOnline: useSyncStore.getState().isOnline,
+    });
+    if (
+      !currentUiState.canContinue
+      || (
+        currentPlan.state !== 'in_progress'
+        && !(currentPlan.state === 'published' && currentReadyToStart)
+      )
+    ) {
+      return;
+    }
+
+    startingRouteRef.current = true;
+    setStartingRoute(true);
+    try {
+      await confirmAuthoritativeRouteStart({
+        planId: capturedPlanId,
+        currentState: currentPlan.state,
+        start: startPlan,
+        refresh: async () => {
+          await loadPlan({ force: true });
+          return useRouteStore.getState().plan;
+        },
+        markStarted: () => useRouteStore.getState().markPlanStarted(capturedPlanId),
+      });
+
+      const confirmedPlan = useRouteStore.getState().plan;
+      const confirmedStartPlanId = useRouteStartStore.getState().planId;
+      const stillSameStartedPlan = isSameStartedRoutePlan({
+        capturedPlanId,
+        currentPlan: confirmedPlan,
+        currentRouteStartPlanId: confirmedStartPlanId,
+      });
+      if (!stillSameStartedPlan) {
+        Alert.alert(
+          'La ruta cambió',
+          'La ruta cambió mientras se iniciaba. Revisa el plan actual.',
+        );
+        return;
+      }
+
+      router.replace({ pathname: '/(tabs)/route', params: { view: 'map' } } as never);
+    } catch (err) {
+      Alert.alert(
+        'No se pudo iniciar la ruta',
+        err instanceof Error ? err.message : 'Intenta de nuevo.',
+      );
+    } finally {
+      startingRouteRef.current = false;
+      setStartingRoute(false);
+    }
+  }
 
   async function handleSaveKm() {
     if (!planId) return;
@@ -211,6 +332,7 @@ export default function RouteStartScreen() {
 
   function confirmSaveKm(km: number) {
     if (!planId) return;
+    const capturedPlanId = planId;
     Alert.alert(
       'Confirmar KM inicial',
       `Vas a registrar ${km} km como kilometraje de salida. Esto se guarda en el servidor.`,
@@ -219,11 +341,22 @@ export default function RouteStartScreen() {
         {
           text: 'Guardar',
           onPress: async () => {
+            if (!isCurrentPlan(capturedPlanId)) {
+              showRouteChangedAlert();
+              return;
+            }
             setSavingKm(true);
             try {
-              await updateKm(planId, 'departure', km);
-              setKmInitialStore(km);
-              setKmInput('');
+              const res = await updateKm(capturedPlanId, 'departure', km);
+              const storedKm = res.departure_km ?? null;
+              setKmInitialForPlan(capturedPlanId, storedKm);
+              if (isCurrentPlan(capturedPlanId)) {
+                setKmInitialBackend({ planId: capturedPlanId, km: storedKm });
+              }
+              await loadPlan({ force: true });
+              if (isCurrentPlan(capturedPlanId)) {
+                setKmInput('');
+              }
             } catch (err) {
               Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
             } finally {
@@ -288,14 +421,14 @@ export default function RouteStartScreen() {
         <Card>
           <View style={styles.rowBetween}>
             <Text style={styles.stepTitle}>2 · Checklist de unidad</Text>
-            {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <StatusBadge status={checklistStatus} />}
+            {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <StatusBadge status={checklistDisplayStatus} />}
           </View>
           <Text style={styles.stepBody}>
             Revisa el estado de la unidad antes de salir (llantas, gas, kit, etc.).
           </Text>
           <Button
-            label={checklistStatus === 'done' ? 'Ver checklist' : 'Hacer checklist'}
-            variant={checklistStatus === 'done' ? 'secondary' : 'primary'}
+            label={checklistDisplayStatus === 'done' ? 'Ver checklist' : 'Hacer checklist'}
+            variant={checklistDisplayStatus === 'done' ? 'secondary' : 'primary'}
             onPress={() => router.push(`/checklist/${planId}` as never)}
             fullWidth
             disabled={!isOnline}
@@ -303,29 +436,24 @@ export default function RouteStartScreen() {
         </Card>
 
         {/* Step 3: KM inicial.
-            A.1 Option A: el KM se captura UNA sola vez, en el checklist
-            (check numérico "Odómetro salida"), y se registra automáticamente
-            al completar. Aquí sólo se muestra el estado. El input manual es un
-            FALLBACK que aparece sólo si el checklist ya quedó completo pero no
-            alimentó el KM (p. ej. un template sin check de odómetro). */}
+            A.1 Option A: si el checklist trae "Odómetro salida", se registra
+            automáticamente al completar. El input manual queda disponible como
+            fallback para no depender del template del checklist. */}
         <Card>
           <View style={styles.rowBetween}>
             <Text style={styles.stepTitle}>3 · KM inicial</Text>
             <StatusBadge status={kmStatus} />
           </View>
-          {kmInitialStored != null ? (
+          {kmInitial != null ? (
             <Text style={styles.stepBody}>
-              Registrado: <Text style={styles.kmValue}>{kmInitialStored} km</Text>
-            </Text>
-          ) : checklistStatus !== 'done' ? (
-            <Text style={styles.stepBody}>
-              Se registra automáticamente al completar el checklist (odómetro de salida).
-              No necesitas capturarlo aquí.
+              Registrado en Odoo: <Text style={styles.kmValue}>{kmInitial} km</Text>
             </Text>
           ) : (
             <>
               <Text style={styles.stepBody}>
-                El checklist no registró el KM. Captúralo manualmente para continuar.
+                {checklistDisplayStatus === 'done'
+                  ? 'El checklist no registró el KM. Captúralo manualmente para continuar.'
+                  : 'Puede registrarse automáticamente al completar el checklist; si vas a operar ahora, captura el KM inicial aquí.'}
               </Text>
               <View style={styles.kmRow}>
                 <TextInput
@@ -362,13 +490,13 @@ export default function RouteStartScreen() {
           ) : (
             <>
               <Text style={styles.stepBody}>
-                Pendiente: {loadState.nextPendingLoad?.name || 'carga asignada'}
-                {loadState.nextPendingLoad?.lines?.length
-                  ? `  ·  ${loadState.nextPendingLoad.lines.length} producto(s)`
+                Pendiente: {initialLoadState.nextPendingInitialLoad?.name || 'carga asignada'}
+                {initialLoadState.nextPendingInitialLoad?.lines?.length
+                  ? `  ·  ${initialLoadState.nextPendingInitialLoad.lines.length} producto(s)`
                   : ''}
               </Text>
               <Button
-                label={acceptingLoad ? 'Aceptando…' : (loadState.nextPendingLoad?.isRefill ? 'Aceptar refill' : 'Aceptar carga')}
+                label={acceptingLoad ? 'Aceptando…' : 'Aceptar carga'}
                 variant="primary"
                 onPress={handleAcceptLoad}
                 fullWidth
@@ -394,29 +522,30 @@ export default function RouteStartScreen() {
         </Card>
 
         {/* Readiness summary (live-derived — see BLD-SPRINT-A-FIX) */}
-        <View style={[styles.readyCard, readyToStartLive ? styles.readyOk : styles.readyPending]}>
+        <View style={[styles.readyCard, canContinue ? styles.readyOk : styles.readyPending]}>
           <Text style={styles.readyTitle}>
-            {readyToStartLive ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar'}
+            {serverStarted
+              ? '✅ Ruta iniciada'
+              : (canRequestStart ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar')}
           </Text>
           <Text style={styles.readyChecklist}>
             {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
           </Text>
+          {!checklistDoneLive && (
+            <Text style={styles.readyWarn}>⚠️ Checklist de unidad pendiente. Responde todos los puntos para actualizar el estado del vehículo.</Text>
+          )}
           {dataMinReady && dataReady.warnings.length > 0 && (
             <Text style={styles.readyWarn}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
           )}
           <Button
-            label="Iniciar ruta"
+            label={serverStarted ? 'Continuar ruta' : 'Iniciar ruta'}
             variant="success"
-            onPress={() => {
-              // BLD-ROUTE-MAP: "Iniciar ruta" abre la pestaña Ruta forzando el
-              // MAPA como pantalla principal (?view=map), aunque el vendedor
-              // hubiera dejado la lista en una visita anterior.
-              router.replace({ pathname: '/(tabs)/route', params: { view: 'map' } } as never);
-            }}
+            onPress={handleStartRoute}
             fullWidth
-            disabled={!readyToStartLive}
+            disabled={startingRoute || !canContinue}
+            loading={startingRoute}
           />
-          {!readyToStartLive && (
+          {!canContinue && (
             <Text style={styles.readyHint}>
               {!dataMinReady && dataReady.blockReason
                 ? dataReady.blockReason

@@ -8,7 +8,7 @@ const EXPECTED = {
   apkPath: path.resolve('android/app/build/outputs/apk/release/app-release.apk'),
   metadataPath: path.resolve('android/app/build/outputs/apk/release/output-metadata.json'),
   applicationId: 'mx.grupofrio.koldfield',
-  versionCode: '2',
+  versionCode: '3',
   versionName: '1.3.1',
   certSha256: 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c',
 };

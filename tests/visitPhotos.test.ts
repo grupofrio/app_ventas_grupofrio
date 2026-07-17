@@ -11,6 +11,7 @@ interface VisitPhotosModule {
       opts?: { dependsOn?: string[] },
     ) => string;
     dependsOn?: string[];
+    imageType?: string;
   }) => string[];
 }
 
@@ -73,6 +74,31 @@ function testEnqueueCreatesOneUploadPerPhoto(module: VisitPhotosModule) {
   }
 }
 
+function testEnqueueAllowsSaleEvidenceImageType(module: VisitPhotosModule) {
+  const calls: Array<{
+    type: 'photo';
+    payload: Record<string, unknown>;
+    opts?: { dependsOn?: string[] };
+  }> = [];
+
+  const ids = module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://sale-photo-1.jpg', 'file://sale-photo-2.jpg'],
+    imageType: 'sale',
+    enqueue: (type, payload, opts) => {
+      calls.push({ type, payload, opts });
+      return `sale-photo-${calls.length}`;
+    },
+  });
+
+  assert.deepEqual(ids, ['sale-photo-1', 'sale-photo-2']);
+  assert.deepEqual(calls.map((call) => call.payload.image_type), ['sale', 'sale']);
+  assert.deepEqual(calls.map((call) => call.payload.localUri), [
+    'file://sale-photo-1.jpg',
+    'file://sale-photo-2.jpg',
+  ]);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -82,6 +108,7 @@ async function main() {
 
   testAppendKeepsEveryCapturedPhoto(module);
   testEnqueueCreatesOneUploadPerPhoto(module);
+  testEnqueueAllowsSaleEvidenceImageType(module);
   console.log('visit photos tests: ok');
 }
 

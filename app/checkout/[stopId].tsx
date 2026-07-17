@@ -166,6 +166,17 @@ function CheckoutScreenInner() {
       saleSyncState = getSaleSyncState(saleOperationId, useSyncStore.getState().queue);
     }
     const salePending = saleSyncState.status === 'pending';
+    const saleInFlightWithoutQueue =
+      total > 0 && !!saleOperationId && saleSyncState.status === 'none';
+
+    if (saleInFlightWithoutQueue) {
+      Alert.alert(
+        'Venta en proceso',
+        'Espera a que termine de guardarse la venta antes de cerrar la visita. Si tarda demasiado, vuelve a la venta y reintenta con señal.',
+      );
+      setCheckingOut(false);
+      return;
+    }
 
     if (saleSyncState.status === 'failed') {
       // BLD-20260506-CHECKOUT-SALE-RETRY: ofrecer reintento operativo en

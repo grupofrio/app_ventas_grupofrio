@@ -563,13 +563,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // mientras isSyncing=true y regresó por guard — re-drenamos en el próximo
       // tick. Si solo quedan errores en backoff, armamos el timer.
       //
-      // P1 (Codex, delta c681257): tras un throw INESPERADO y determinístico que
-      // no cambió el estado de ningún ítem (hadUnhandledCycleError), el mismo
-      // pending seguiría "elegible" y drain_now → setTimeout(0) haría loop
-      // infinito instantáneo. decidePostCycleActionAfterCycle NUNCA devuelve
-      // drain_now en ese caso: arma el wake de backoff (errores acotados por
-      // retries) o queda idle esperando un wake externo (reconexión/foreground/
-      // reintento manual), con el error ya logueado para diagnóstico.
+      // P1+P2 (Codex): tras un throw INESPERADO (hadUnhandledCycleError) la
+      // política es IDLE DURO. Ni drain_now (setTimeout(0) → re-entra → re-lanza
+      // → loop instantáneo, P1) ni scheduleWake (si hay un `error` con backoff
+      // ya vencido y el throw ocurre ANTES de procesarlo, sus retries nunca
+      // avanzan hacia dead y el timer re-armaría un loop sostenido de ~250 ms,
+      // P2). decidePostCycleActionAfterCycle devuelve siempre 'idle' en ese
+      // caso; aquí además limpiamos cualquier wake timer pendiente. La cola
+      // queda a la espera de un evento EXTERNO: foreground, reconexión, enqueue
+      // nuevo o reintento manual — con el error ya logueado para diagnóstico.
       const action = decidePostCycleActionAfterCycle({
         hadUnhandledCycleError,
         queue: get().queue,
@@ -577,12 +579,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         maxRetries: MAX_RETRIES,
         depsSatisfied: areSyncDependenciesSatisfied,
       });
-      if (action === 'drain_now') {
+      if (hadUnhandledCycleError) {
+        get().clearWakeTimer();
+        logWarn('sync', 'post_cycle_redrain_skipped_after_error', { next: 'idle' });
+      } else if (action === 'drain_now') {
         setTimeout(() => { void get().processQueue(); }, 0);
       } else {
-        if (hadUnhandledCycleError) {
-          logWarn('sync', 'post_cycle_redrain_skipped_after_error', { next: action });
-        }
         get().scheduleWake();
       }
     }

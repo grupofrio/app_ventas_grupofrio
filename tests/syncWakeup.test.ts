@@ -215,26 +215,38 @@ function testAfterCycleGuard(m: Mod, deps: DepsMod) {
       depsSatisfied: satisfied,
     });
 
-  // CASO P1: error inesperado + pending elegible → NUNCA 'drain_now'.
-  // Sin errores en backoff, no hay nada que agendar → 'idle' (espera wake
-  // externo). Esto es lo que corta el loop de re-drenaje instantáneo.
+  // POLÍTICA IDLE DURO (P1+P2 Codex): tras un error inesperado del ciclo,
+  // SIEMPRE 'idle' — sin drain_now (loop instantáneo) y sin schedule_wake
+  // (si el throw ocurre antes de procesar un `error` vencido, sus retries no
+  // avanzan y el timer re-armaría un loop sostenido de ~250 ms).
+
+  // 1. error inesperado + pending elegible → 'idle'
   assert.equal(run(true, [qitem('pending')]), 'idle');
-  assert.notEqual(run(true, [qitem('pending')]), 'drain_now');
 
-  // error inesperado + error en backoff futuro → 'schedule_wake' (los errores
-  // avanzan por retries acotados; no es loop instantáneo).
-  assert.equal(run(true, [qitem('error', { retries: 1, next: NOW + 5_000 })]), 'schedule_wake');
+  // 2. error inesperado + error de backoff FUTURO → 'idle' (no timer)
+  assert.equal(run(true, [qitem('error', { retries: 1, next: NOW + 5_000 })]), 'idle');
 
-  // error inesperado + pending elegible + error → sigue SIN 'drain_now':
-  // arma el wake por el error, nunca re-drena inmediato.
+  // 3. error inesperado + error VENCIDO → 'idle' (el caso del loop de 250 ms:
+  //    retries no avanzarían nunca; NO se agenda timer)
+  assert.equal(run(true, [qitem('error', { retries: 1, next: NOW - 1_000 })]), 'idle');
+
+  // 4. error inesperado + pending + error vencido → 'idle'
   assert.equal(
-    run(true, [qitem('pending'), qitem('error', { retries: 1, next: NOW + 2_000 })]),
-    'schedule_wake',
+    run(true, [qitem('pending'), qitem('error', { retries: 1, next: NOW - 1_000 })]),
+    'idle',
+  );
+  // (y con mezcla de futuro+vencido+pending, también 'idle')
+  assert.equal(
+    run(true, [
+      qitem('pending'),
+      qitem('error', { retries: 1, next: NOW - 1_000 }),
+      qitem('error', { retries: 2, next: NOW + 9_000 }),
+    ]),
+    'idle',
   );
 
-  // FLUJO NORMAL (sin error) conserva la lógica: pending elegible → 'drain_now'.
+  // 5. FLUJO NORMAL (sin error) conserva la lógica:
   assert.equal(run(false, [qitem('pending')]), 'drain_now');
-  // ...y errores en backoff → 'schedule_wake'; nada → 'idle'.
   assert.equal(run(false, [qitem('error', { retries: 1, next: NOW + 5_000 })]), 'schedule_wake');
   assert.equal(run(false, []), 'idle');
   console.log('after-cycle guard: ok');

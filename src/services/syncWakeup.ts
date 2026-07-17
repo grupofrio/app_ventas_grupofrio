@@ -128,24 +128,29 @@ export interface PostCycleParams {
 }
 
 /**
- * Decisión post-ciclo endurecida contra el P1 de re-drenaje infinito (Codex).
+ * Decisión post-ciclo endurecida contra el re-drenaje automático tras un error
+ * INESPERADO del ciclo (P1 + P2 de Codex).
  *
- * Si el ciclo cayó en `catch` por un error INESPERADO y determinístico ANTES de
- * que ningún ítem cambie de estado (p.ej. en `computeProcessingOrder`, un helper
- * o el logger), la cola conserva el mismo `pending` elegible. Devolver
- * `drain_now` agendaría un `setTimeout(0)` que re-entra a processQueue, vuelve a
- * lanzar, y hace loop instantáneo. Por eso, tras un error inesperado **nunca**
- * devolvemos `drain_now`: solo armamos el wake de backoff si hay errores (que
- * avanzan por retries acotados hacia `dead`), o `idle` para esperar un wake
- * externo (reconexión / foreground / reintento manual) y diagnosticar el error.
+ * Si el ciclo cayó en `catch` por un throw determinístico ANTES de que ningún
+ * ítem cambie de estado (p.ej. en `computeProcessingOrder`, un helper o el
+ * logger), la cola conserva exactamente el mismo trabajo "elegible":
+ *  - `drain_now` haría `setTimeout(0)` → re-entra → re-lanza → loop instantáneo
+ *    (P1 original).
+ *  - `schedule_wake` tampoco es seguro: si además hay un ítem `error` con
+ *    backoff ya vencido, el throw ocurre antes de procesarlo, sus `retries`
+ *    NUNCA avanzan hacia `dead`, y el timer re-armaría cada ~minDelay (250 ms)
+ *    un loop sostenido de timers/logs (P2 del re-review).
+ *
+ * Por eso, tras un error inesperado la política es **idle duro**: no re-drenar,
+ * no agendar timer. La cola queda a la espera de un evento EXTERNO — foreground,
+ * reconexión, enqueue nuevo o reintento manual — y el error queda logueado
+ * (`cycle_unhandled_error`) para diagnóstico.
  *
  * Sin error, mantiene la lógica normal (`drain_now` incluido).
  */
 export function decidePostCycleActionAfterCycle(params: PostCycleParams): PostCycleAction {
   const { hadUnhandledCycleError, queue, now, maxRetries, depsSatisfied } = params;
-  if (hadUnhandledCycleError) {
-    return nextWakeDelayMs(queue, { maxRetries, now }) != null ? 'schedule_wake' : 'idle';
-  }
+  if (hadUnhandledCycleError) return 'idle';
   return decidePostCycleAction(queue, now, maxRetries, depsSatisfied);
 }
 

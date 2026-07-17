@@ -1,5 +1,7 @@
 # KoldField — Auditoría de Experiencia Operativa del Vendedor en Ruta
 
+> **Documento histórico.** Este corte auditó `main@d071959` el 2026-06-17 y ya no representa el estado actual. Para decisiones, prioridades y preguntas vigentes usa la [auditoría operativa vigente](./KOLDFIELD_FIELD_AUDIT_CURRENT.md), revalidada el 2026-07-17 contra `main@4cb062f`.
+
 **Fecha:** 2026-06-17 · **Rama:** `main` · **Commit auditado:** `d071959` · **PRs abiertos:** ninguno
 **Typecheck:** ✅ exit 0 · **Tests:** ✅ 125/125
 

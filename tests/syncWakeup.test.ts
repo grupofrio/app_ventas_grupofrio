@@ -202,6 +202,44 @@ function testPostCycle(m: Mod, deps: DepsMod) {
   console.log('post-cycle decision: ok');
 }
 
+// ── Guard P1 (Codex delta): tras error inesperado NO re-drenar inmediato ──
+function testAfterCycleGuard(m: Mod, deps: DepsMod) {
+  const { decidePostCycleActionAfterCycle } = m;
+  const satisfied = deps.areSyncDependenciesSatisfied;
+  const run = (hadUnhandledCycleError: boolean, queue: QItem[]) =>
+    decidePostCycleActionAfterCycle({
+      hadUnhandledCycleError,
+      queue,
+      now: NOW,
+      maxRetries: MAX,
+      depsSatisfied: satisfied,
+    });
+
+  // CASO P1: error inesperado + pending elegible → NUNCA 'drain_now'.
+  // Sin errores en backoff, no hay nada que agendar → 'idle' (espera wake
+  // externo). Esto es lo que corta el loop de re-drenaje instantáneo.
+  assert.equal(run(true, [qitem('pending')]), 'idle');
+  assert.notEqual(run(true, [qitem('pending')]), 'drain_now');
+
+  // error inesperado + error en backoff futuro → 'schedule_wake' (los errores
+  // avanzan por retries acotados; no es loop instantáneo).
+  assert.equal(run(true, [qitem('error', { retries: 1, next: NOW + 5_000 })]), 'schedule_wake');
+
+  // error inesperado + pending elegible + error → sigue SIN 'drain_now':
+  // arma el wake por el error, nunca re-drena inmediato.
+  assert.equal(
+    run(true, [qitem('pending'), qitem('error', { retries: 1, next: NOW + 2_000 })]),
+    'schedule_wake',
+  );
+
+  // FLUJO NORMAL (sin error) conserva la lógica: pending elegible → 'drain_now'.
+  assert.equal(run(false, [qitem('pending')]), 'drain_now');
+  // ...y errores en backoff → 'schedule_wake'; nada → 'idle'.
+  assert.equal(run(false, [qitem('error', { retries: 1, next: NOW + 5_000 })]), 'schedule_wake');
+  assert.equal(run(false, []), 'idle');
+  console.log('after-cycle guard: ok');
+}
+
 async function main() {
   const m = (await import(
     // @ts-ignore -- import.meta solo existe en el runtime de test, no en la app.
@@ -216,6 +254,7 @@ async function main() {
   testNetTransition(m);
   testWakeDelay(m);
   testPostCycle(m, deps);
+  testAfterCycleGuard(m, deps);
   console.log('syncWakeup tests: ok');
 }
 

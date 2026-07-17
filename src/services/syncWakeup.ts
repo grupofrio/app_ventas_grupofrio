@@ -118,6 +118,37 @@ export function decidePostCycleAction(
   return 'idle';
 }
 
+export interface PostCycleParams {
+  /** true si el ciclo cayó en el catch de processQueue (throw INESPERADO). */
+  hadUnhandledCycleError: boolean;
+  queue: Array<EligibleFields & DepFields>;
+  now: number;
+  maxRetries: number;
+  depsSatisfied: (item: DepFields, queue: DepFields[]) => boolean;
+}
+
+/**
+ * Decisión post-ciclo endurecida contra el P1 de re-drenaje infinito (Codex).
+ *
+ * Si el ciclo cayó en `catch` por un error INESPERADO y determinístico ANTES de
+ * que ningún ítem cambie de estado (p.ej. en `computeProcessingOrder`, un helper
+ * o el logger), la cola conserva el mismo `pending` elegible. Devolver
+ * `drain_now` agendaría un `setTimeout(0)` que re-entra a processQueue, vuelve a
+ * lanzar, y hace loop instantáneo. Por eso, tras un error inesperado **nunca**
+ * devolvemos `drain_now`: solo armamos el wake de backoff si hay errores (que
+ * avanzan por retries acotados hacia `dead`), o `idle` para esperar un wake
+ * externo (reconexión / foreground / reintento manual) y diagnosticar el error.
+ *
+ * Sin error, mantiene la lógica normal (`drain_now` incluido).
+ */
+export function decidePostCycleActionAfterCycle(params: PostCycleParams): PostCycleAction {
+  const { hadUnhandledCycleError, queue, now, maxRetries, depsSatisfied } = params;
+  if (hadUnhandledCycleError) {
+    return nextWakeDelayMs(queue, { maxRetries, now }) != null ? 'schedule_wake' : 'idle';
+  }
+  return decidePostCycleAction(queue, now, maxRetries, depsSatisfied);
+}
+
 export interface WakeDelayOpts {
   maxRetries: number;
   now: number;

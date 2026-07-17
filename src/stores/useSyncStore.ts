@@ -58,7 +58,7 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
-import { nextWakeDelayMs, decidePostCycleAction } from '../services/syncWakeup';
+import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
 // ═══ Constants ═══
 
@@ -456,6 +456,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     // FUERA de ellos (p.ej. en el ordenamiento/DAG o en un helper) no debe dejar
     // isSyncing colgado en true — eso neutralizaría TODOS los despertadores
     // futuros por el guard `if (!isOnline || isSyncing) return`.
+    let hadUnhandledCycleError = false;
     try {
       // ── STEP 1: Separate by priority ──
       const p1 = candidates.filter((i) => i.priority === 1);
@@ -548,6 +549,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         } catch {}
       }
     } catch (err: unknown) {
+      hadUnhandledCycleError = true;
       const message = err instanceof Error ? err.message : 'unhandled sync cycle error';
       logError('sync', 'cycle_unhandled_error', { message });
     } finally {
@@ -559,18 +561,28 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // que processQueue. Si quedó trabajo elegible con deps satisfechas — p.ej.
       // un `pending` encolado DURANTE el ciclo, cuyo setTimeout de enqueue cayó
       // mientras isSyncing=true y regresó por guard — re-drenamos en el próximo
-      // tick. Si solo quedan errores en backoff, armamos el timer. El re-drenaje
-      // se auto-protege con isSyncing (no hay ciclo concurrente); un pending con
-      // dependencia insatisfecha NO cuenta como elegible, evitando el busy-loop.
-      const action = decidePostCycleAction(
-        get().queue,
-        Date.now(),
-        MAX_RETRIES,
-        areSyncDependenciesSatisfied,
-      );
+      // tick. Si solo quedan errores en backoff, armamos el timer.
+      //
+      // P1 (Codex, delta c681257): tras un throw INESPERADO y determinístico que
+      // no cambió el estado de ningún ítem (hadUnhandledCycleError), el mismo
+      // pending seguiría "elegible" y drain_now → setTimeout(0) haría loop
+      // infinito instantáneo. decidePostCycleActionAfterCycle NUNCA devuelve
+      // drain_now en ese caso: arma el wake de backoff (errores acotados por
+      // retries) o queda idle esperando un wake externo (reconexión/foreground/
+      // reintento manual), con el error ya logueado para diagnóstico.
+      const action = decidePostCycleActionAfterCycle({
+        hadUnhandledCycleError,
+        queue: get().queue,
+        now: Date.now(),
+        maxRetries: MAX_RETRIES,
+        depsSatisfied: areSyncDependenciesSatisfied,
+      });
       if (action === 'drain_now') {
         setTimeout(() => { void get().processQueue(); }, 0);
       } else {
+        if (hadUnhandledCycleError) {
+          logWarn('sync', 'post_cycle_redrain_skipped_after_error', { next: action });
+        }
         get().scheduleWake();
       }
     }

@@ -58,6 +58,7 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
+import { nextWakeDelayMs } from '../services/syncWakeup';
 
 // ═══ Constants ═══
 
@@ -87,6 +88,14 @@ function schedulePersist(): void {
     void useSyncStore.getState().persistQueue();
   }, PERSIST_DEBOUNCE_MS);
 }
+
+// PR-1 — Despertador de backoff. Un ÚNICO timer que dispara processQueue cuando
+// vence el next_retry_at del ítem-en-error más próximo. Sin esto, un ítem que
+// falló por red (status='error') calculaba su next_retry_at pero nadie volvía a
+// invocar processQueue: quedaba esperando indefinidamente a un enqueue nuevo o a
+// un flanco de reconexión. El timer NO es un segundo procesador: solo invoca el
+// processQueue existente, que se auto-protege con el guard isSyncing.
+let _wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -137,6 +146,11 @@ interface SyncState {
 
   // V2: Sync processor with priority
   processQueue: () => Promise<void>;
+
+  // PR-1: backoff wake timer (arms a single timer for the soonest retryable
+  // error item; fires processQueue when its backoff elapses).
+  scheduleWake: () => void;
+  clearWakeTimer: () => void;
 
   // V2: helpers for diagnostics
   getQueueSummary: () => QueueSummary;
@@ -395,6 +409,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         total: restored.length,
         syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
       });
+      // Arma el despertador de backoff para ítems en error rehidratados, que de
+      // otro modo esperarían a un enqueue o a un flanco de reconexión.
+      get().scheduleWake();
     }
   },
 
@@ -419,7 +436,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     };
 
     const candidates = queue.filter(isReady);
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
+      // arma el despertador para cuando venza el más próximo.
+      get().scheduleWake();
+      return;
+    }
 
     set({ isSyncing: true });
     const cycleStart = Date.now();
@@ -497,6 +519,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     set({ isSyncing: false, lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
     get().persistQueue();
 
+    // Re-arma el despertador para los ítems que quedaron en error/backoff tras
+    // este ciclo (o lo limpia si ya no hay ninguno).
+    get().scheduleWake();
+
     logInfo('sync', 'cycle_complete', {
       duration_ms: metrics.cycle_duration_ms,
       processed,
@@ -520,6 +546,35 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         }
         cleanupOrphanPhotos(referenced).catch(() => {});
       } catch {}
+    }
+  },
+
+  // ═══ PR-1: Backoff wake timer ═══
+
+  scheduleWake: () => {
+    // Siempre reemplaza el timer vigente (idempotente): recalcula el ítem-en-
+    // error más próximo con el estado actual de la cola.
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
+    }
+    const { queue, isOnline } = get();
+    // Offline: no tiene sentido agendar; el flanco de reconexión re-arma.
+    if (!isOnline) return;
+    const delay = nextWakeDelayMs(queue, { maxRetries: MAX_RETRIES, now: Date.now() });
+    if (delay == null) return;
+    _wakeTimer = setTimeout(() => {
+      _wakeTimer = null;
+      // Solo dispara el processQueue existente (guard isSyncing evita ciclos
+      // concurrentes). El re-armado lo hace el propio processQueue al terminar.
+      void get().processQueue();
+    }, delay);
+  },
+
+  clearWakeTimer: () => {
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
     }
   },
 

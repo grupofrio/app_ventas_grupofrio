@@ -58,6 +58,7 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
+import { computeLocalStockReversal } from '../services/stockRollback';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
 // ═══ Constants ═══
@@ -991,9 +992,36 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
 // ═══ Rollback V2 — sale_order + unload + refill ═══
 
+/** Marca el ítem como ya-revertido en la cola, para evitar doble rollback. */
+function markLocalStockRolledBack(id: string): void {
+  const queue = useSyncStore.getState().queue.map((i) =>
+    i.id === id ? { ...i, payload: { ...i.payload, _localStockRolledBack: true } } : i,
+  );
+  useSyncStore.setState({ queue });
+  void useSyncStore.getState().persistQueue();
+}
+
 function rollbackFailedOperation(item: SyncQueueItem): void {
   const updateLocalStock = useProductStore.getState().updateLocalStock;
 
+  // PR-3a: rollback GENÉRICO por `_localStockDelta`, independiente del `type`.
+  // Cubre unload (encolado como 'prospection', que antes caía en `default` y NO
+  // revertía → stock fantasma). Idempotente: computeLocalStockReversal devuelve
+  // [] si ya se revirtió (`_localStockRolledBack`), y aquí marcamos el flag tras
+  // revertir. Si hay delta, esta ruta es autoritativa (no cae al switch por-type).
+  const reversal = computeLocalStockReversal(item.payload);
+  if (reversal.length > 0) {
+    reversal.forEach((r) => updateLocalStock(r.product_id, r.qty));
+    markLocalStockRolledBack(item.id);
+    logError('sync', 'rollback_local_stock_delta', {
+      id: item.id,
+      type: item.type,
+      entries: reversal.length,
+    });
+    return;
+  }
+  // Sin delta (o ya revertido): mantener el rollback legacy por-type para ítems
+  // que aún no llevan `_localStockDelta` (p.ej. rehidratados de versiones previas).
   switch (item.type) {
     case 'sale_order': {
       // Pedido offline pendiente (política S1): NO se descuenta stock local al

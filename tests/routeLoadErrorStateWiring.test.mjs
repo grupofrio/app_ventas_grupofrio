@@ -33,12 +33,29 @@ assert(/classifyRouteLoadError\(error\)/.test(gf), 'clasifica el error en el cat
 // El wrapper compat sigue existiendo (callers que solo quieren el array).
 assert(/export async function getPlanStops\(/.test(gf), 'getPlanStops (compat) sigue existiendo');
 
+// P2 (Codex): respuesta exitosa MALFORMADA no se convierte en ok+[]. Solo un
+// array explícito de stops (extractPlanStopsArray.found) cuenta como 'ok'.
+assert(gf.includes('extractPlanStopsArray'), 'getPlanStopsResult usa extractPlanStopsArray');
+assert(/!extracted\.found[\s\S]*?status:\s*'stops_error'/.test(gf),
+  'respuesta exitosa sin array de stops válido → stops_error, NO ok+[]');
+// Ya no existe el pickStops que devolvía [] ante shapes inesperados.
+assert(!/const pickStops = /.test(gf), 'se eliminó pickStops (colapsaba malformado a [])');
+
 // #3 loadPlan guarda loadOutcome
 assert(/loadOutcome:/.test(store), 'el store expone loadOutcome');
 assert(/status:\s*'no_plan'/.test(store), 'no_plan real setea status no_plan');
 assert(store.includes('getPlanStopsResult'), 'loadPlan usa getPlanStopsResult');
 assert(store.includes('classifyRouteLoadError'), 'el catch de loadPlan clasifica el error');
+// P2 (Codex): empty_route SOLO cuando el stops result es 'ok' con 0 paradas —
+// nunca cuando fue stops_error/invalid. Se deriva de la rama:
+//   stopsResult.status !== 'ok' ? {status:...} : total === 0 ? empty_route : null
 assert(/status:\s*'empty_route'/.test(store), 'ruta ok con 0 paradas = empty_route');
+assert(/stopsResult\.status !== 'ok'[\s\S]*?:\s*total === 0[\s\S]*?'empty_route'/.test(store),
+  'empty_route solo si stopsResult.status === ok (no ante stops_error)');
+
+// P3 (Codex): reset limpia loadOutcome.
+assert(/reset:\s*\(\)\s*=>\s*\{[\s\S]*?loadOutcome:\s*null/.test(store),
+  'reset() debe limpiar loadOutcome a null');
 
 // #4 route-start: copy diferenciado + retry
 assert(routeStart.includes('describeRouteLoad'), 'route-start usa copy diferenciado');

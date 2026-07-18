@@ -411,6 +411,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     routePlanLoadFlight.invalidate();
     set({
       plan: null, stops: [], isLoading: false, error: null,
+      loadOutcome: null,
       lastSync: null, routeFreshness: 'stale', planVersionToken: null,
       stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
     });

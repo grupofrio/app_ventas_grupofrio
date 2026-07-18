@@ -29,7 +29,7 @@ import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
 import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
 import { isAlreadyConfirmedResponse } from './idempotentResponse';
-import { normalizePlanStopPayload } from './planStopPayload';
+import { normalizePlanStopPayload, extractPlanStopsArray } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
 
@@ -412,16 +412,19 @@ export async function getPlanStopsResult(planId: number): Promise<PlanStopsResul
       return { status, stops: [], message };
     }
 
-    const pickStops = (): any[] => {
-      if (Array.isArray(result)) return result as any[];
-      if (!result || typeof result !== 'object') return [];
-      const data = result.data !== undefined ? result.data : result;
-      if (data && Array.isArray(data.stops)) return data.stops as any[];
-      if (Array.isArray(data)) return data as any[];
-      return [];
-    };
-
-    const rawStops = pickStops();
+    // P2 (Codex): SOLO un array explícito de stops cuenta como 'ok' (aunque []).
+    // Una respuesta exitosa pero malformada (data vacío/null, sin `stops`, shape
+    // inesperado) NO es ruta vacía real → stops_error, no ok+[].
+    const extracted = extractPlanStopsArray(result);
+    if (!extracted.found) {
+      logWarn('general', 'plan_stops_invalid_shape', {
+        endpoint: 'gf/logistics/api/employee/plan/stops',
+        plan_id: planId,
+        note: 'Respuesta exitosa sin array de stops válido; NO se trata como ruta vacía.',
+      });
+      return { status: 'stops_error', stops: [], message: null };
+    }
+    const rawStops = extracted.stops as any[];
 
     // Log de muestreo de campos de stops (diagnóstico lead/customer).
     try {

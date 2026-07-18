@@ -3,7 +3,7 @@
  * Return product to warehouse at end of day.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,7 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { fonts } from '../src/theme/typography';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { buildLocalStockDelta } from '../src/services/stockRollback';
 
 const UNLOAD_REASONS = ['Fin de ruta', 'Producto danado', 'Merma', 'Otro'];
 
@@ -24,6 +25,16 @@ export default function UnloadScreen() {
 
   const [reason, setReason] = useState('Fin de ruta');
   const [returnQtys, setReturnQtys] = useState<Record<number, number>>({});
+  // Idempotencia: guard doble-tap + operation_id ESTABLE por intento (paridad
+  // con refill). El backend puede deduplicar; un backend que lo ignore no rompe.
+  const submittingRef = useRef(false);
+  const operationIdRef = useRef<string | null>(null);
+  function getUnloadOperationId(): string {
+    if (!operationIdRef.current) {
+      operationIdRef.current = `unload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    return operationIdRef.current;
+  }
 
   const productsWithStock = products.filter((p) => p.qty_available > 0);
 
@@ -36,6 +47,7 @@ export default function UnloadScreen() {
   }
 
   function handleConfirm() {
+    if (submittingRef.current) return; // guard doble-tap
     const lines = Object.entries(returnQtys)
       .filter(([, qty]) => qty > 0)
       .map(([id, qty]) => ({ product_id: Number(id), qty }));
@@ -45,18 +57,26 @@ export default function UnloadScreen() {
       return;
     }
 
-    // Enqueue
+    submittingRef.current = true;
+
+    // PR-3a: NO se cambia el ruteo (sigue 'prospection' → PR-3b). Se adjunta un
+    // `_localStockDelta` explícito (unload descuenta → sign -1) para que el
+    // rollback genérico pueda revertir el stock local si el ítem muere en sync,
+    // aunque el type sea 'prospection'. `operation_id` estable para idempotencia.
     enqueue('prospection', {
       type: 'unload',
       model: 'van.unload.request',
+      operation_id: getUnloadOperationId(),
       lines,
       reason,
       timestamp: Date.now(),
+      _localStockDelta: buildLocalStockDelta(lines, -1),
     });
 
-    // Update local stock
+    // Descuento optimista de stock local (consistente con _localStockDelta).
     lines.forEach((l) => updateLocalStock(l.product_id, -l.qty));
 
+    operationIdRef.current = null; // siguiente devolución = nuevo id
     Alert.alert('Devolucion registrada', 'Los productos fueron devueltos.');
     router.back();
   }

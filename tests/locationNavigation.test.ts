@@ -6,6 +6,8 @@ interface LocationNavigationModule {
     google_maps_url?: string;
     customer_latitude?: number;
     customer_longitude?: number;
+    street?: string | null;
+    city?: string | null;
   }) => {
     primaryUrl: string | null;
     fallbackUrl: string | null;
@@ -53,6 +55,36 @@ function testReturnsNullWhenNoLocation(module: LocationNavigationModule) {
   assert.equal(urls.fallbackUrl, null);
 }
 
+function testAddressFallbackWhenNoGeo(module: LocationNavigationModule) {
+  // Sin geo pero con dirección textual → navega por texto (no null).
+  const urls = module.buildStopNavigationUrls({
+    customer_name: 'Abarrotes Estrada',
+    street: 'Av. Juárez 100',
+    city: 'Puebla',
+  });
+  assert.equal(
+    urls.primaryUrl,
+    'https://www.google.com/maps/dir/?api=1&destination=' +
+      encodeURIComponent('Av. Juárez 100, Puebla'),
+  );
+  assert.equal(urls.fallbackUrl, null);
+}
+
+function testGeoBeatsAddress(module: LocationNavigationModule) {
+  // Con geo Y dirección, la geo manda para el primary; el fallback es geo.
+  const urls = module.buildStopNavigationUrls({
+    customer_name: 'Cliente',
+    customer_latitude: 19.4,
+    customer_longitude: -99.1,
+    street: 'Av. Juárez 100',
+  });
+  assert.equal(
+    urls.primaryUrl,
+    'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1&destination_place_id=Cliente',
+  );
+  assert.equal(urls.fallbackUrl, 'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1');
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -63,6 +95,8 @@ async function main() {
   testUsesGoogleMapsUrlFirst(module);
   testBuildsCoordsFallback(module);
   testReturnsNullWhenNoLocation(module);
+  testAddressFallbackWhenNoGeo(module);
+  testGeoBeatsAddress(module);
   console.log('location navigation tests: ok');
 }
 

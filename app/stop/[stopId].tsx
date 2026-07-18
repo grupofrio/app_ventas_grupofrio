@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -34,6 +34,8 @@ import { describeGeoStatus } from '../../src/services/trustSignals';
 import { logInfo } from '../../src/utils/logger';
 import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
 import { getLeadActionVisibility, getLeadPartnerId } from '../../src/services/leadVisit';
+import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
+import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
 import {
   hasContactPhone,
   MISSING_PHONE_CTA_LABEL,
@@ -157,6 +159,29 @@ export default function StopDetailScreen() {
   const showMissingPhoneNotice =
     stop._entityType !== 'lead' && !!editablePartnerId && !hasContactPhone(stop);
 
+  const address = formatCustomerAddress(stop, stop);
+
+  function handleOpenLocation() {
+    if (!stop) return;
+    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
+    if (!primaryUrl) {
+      Alert.alert(
+        'Sin ubicación',
+        'Este cliente no tiene dirección ni coordenadas registradas para navegar.',
+      );
+      return;
+    }
+    Linking.openURL(primaryUrl).catch(() => {
+      if (fallbackUrl) {
+        Linking.openURL(fallbackUrl).catch(() => {
+          Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
+        });
+      } else {
+        Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
+      }
+    });
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title={stop.customer_name} showBack />
@@ -179,13 +204,34 @@ export default function StopDetailScreen() {
               {stop.customer_ref && (
                 <Text style={typography.dim}>Ref: {stop.customer_ref}</Text>
               )}
-              <Button
-                label="Editar cliente"
-                variant="secondary"
-                small
-                onPress={openCustomerEditor}
-                style={{ alignSelf: 'flex-start', marginTop: 10 }}
-              />
+              <Text
+                style={[
+                  typography.dim,
+                  { marginTop: 4 },
+                  !address.hasAddress && styles.addressMuted,
+                ]}
+              >
+                📍 {address.text}
+              </Text>
+              {address.reference ? (
+                <Text style={[typography.dimSmall, { marginTop: 2 }]}>
+                  🔖 {address.reference}
+                </Text>
+              ) : null}
+              <View style={styles.headerActions}>
+                <Button
+                  label="🗺️ Abrir en Maps"
+                  variant="secondary"
+                  small
+                  onPress={handleOpenLocation}
+                />
+                <Button
+                  label="Editar cliente"
+                  variant="secondary"
+                  small
+                  onPress={openCustomerEditor}
+                />
+              </View>
             </View>
           </View>
           {showMissingPhoneNotice && (
@@ -341,6 +387,8 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   customerHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  headerActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  addressMuted: { fontStyle: 'italic', opacity: 0.7 },
   moduleNote: {
     fontSize: 11, color: colors.textDim, fontStyle: 'italic', marginTop: 6,
   },

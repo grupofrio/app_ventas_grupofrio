@@ -98,6 +98,8 @@ export default function OffRouteScreen() {
       google_maps_url: result.googleMapsUrl ?? undefined,
       customer_latitude: result.customerLatitude ?? undefined,
       customer_longitude: result.customerLongitude ?? undefined,
+      street: result.street,
+      city: result.city,
     });
 
     if (!urls.primaryUrl) {
@@ -168,6 +170,8 @@ export default function OffRouteScreen() {
           customerLatitude: result.customerLatitude,
           customerLongitude: result.customerLongitude,
           googleMapsUrl: result.googleMapsUrl,
+          street: result.street,
+          city: result.city,
         },
       );
       updateStopState(virtualStopId, 'in_progress');
@@ -192,6 +196,8 @@ export default function OffRouteScreen() {
           customer_latitude: result.customerLatitude ?? undefined,
           customer_longitude: result.customerLongitude ?? undefined,
           google_maps_url: result.googleMapsUrl ?? undefined,
+          street: result.street ?? undefined,
+          city: result.city ?? undefined,
         },
         0, 0, // lat/lon — GPS will provide real values if available
       );

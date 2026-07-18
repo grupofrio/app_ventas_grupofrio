@@ -34,6 +34,9 @@ export interface CreateVirtualStopInput {
   customerLatitude?: number | null;
   customerLongitude?: number | null;
   googleMapsUrl?: string | null;
+  /** Dirección textual disponible (p.ej. de la búsqueda off-route). */
+  street?: string | null;
+  city?: string | null;
   /** Only overridden by tests — production always uses Date.now(). */
   now?: number;
 }
@@ -60,6 +63,10 @@ export function createVirtualStop(input: CreateVirtualStopInput): GFStop {
     customer_latitude: input.customerLatitude ?? undefined,
     customer_longitude: input.customerLongitude ?? undefined,
     google_maps_url: input.googleMapsUrl ?? undefined,
+    // Preservar la dirección off-route para poder mostrarla en la parada
+    // (antes se perdía aquí). Solo se setean si vienen no vacías.
+    street: input.street ?? undefined,
+    city: input.city ?? undefined,
     _virtualCreatedAt: now,
   };
 }

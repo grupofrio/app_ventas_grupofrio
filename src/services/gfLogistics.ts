@@ -13,8 +13,14 @@
  * and works correctly in production.
  */
 
-import { postRest } from './api';
+import { postRest, DEFAULT_READ_TIMEOUT_MS } from './api';
 import { GFPlan, GFStop } from '../types/plan';
+import {
+  classifyRouteLoadError,
+  isAccessDeniedMessage,
+  backendMessageOf,
+  type RouteLoadStatus,
+} from './routeLoadOutcome';
 import { CheckoutResultStatus } from './checkoutResult';
 // BLD-008: optional client event metadata. Feature-flagged inside the
 // helper — safe to pass from anywhere.
@@ -347,7 +353,15 @@ function getMyPlanDate(): string {
 }
 
 export async function getMyPlan(): Promise<GFPlan | null> {
-  return fetchMyPlan(postRest, `${GF_BASE}/my_plan`, getMyPlanDate());
+  // PR-2: cargar el plan es una LECTURA — usar el timeout corto (10s), no el de
+  // mutación (45s). Antes, en WiFi congestionado del CEDIS el operador esperaba
+  // 45s antes de ver el error. fetchMyPlan lanza en error de red/servidor y solo
+  // devuelve null cuando el backend dice found:false (ausencia real de plan).
+  return fetchMyPlan(
+    (url, data) => postRest(url, data, { timeoutMs: DEFAULT_READ_TIMEOUT_MS }),
+    `${GF_BASE}/my_plan`,
+    getMyPlanDate(),
+  );
 }
 
 export async function startPlan(planId: number): Promise<StartPlanResult> {
@@ -359,45 +373,48 @@ export async function startPlan(planId: number): Promise<StartPlanResult> {
   return { planId, state: 'in_progress' };
 }
 
-export async function getPlanStops(planId: number): Promise<GFStop[]> {
+export interface PlanStopsResult {
+  /** 'ok' | 'access_denied' | 'stops_error' | 'timeout' | 'network_error' | 'server_error' | 'invalid_response' */
+  status: RouteLoadStatus;
+  stops: GFStop[];
+  /** Mensaje del backend si lo hay (p.ej. motivo de acceso denegado). */
+  message: string | null;
+}
+
+/**
+ * PR-2: variante discriminada de getPlanStops. En vez de tragar TODO fallo a
+ * `[]` (que produce "ruta vacía silenciosa"), devuelve el motivo real —
+ * access_denied / timeout / network / server / invalid — para que la UI
+ * distinga "plan sin paradas" de "no pudimos cargar las paradas".
+ */
+export async function getPlanStopsResult(planId: number): Promise<PlanStopsResult> {
   try {
-    // BLD-20260405-021: backend wraps the response in
-    //   { ok, message, data: { found, plan, stops: [...] } }
-    // just like /my_plan (see BLD-20260404-007). The previous impl
-    // expected a bare array and silently returned [] against every
-    // wrapped payload, leaving the driver without visible stops
-    // (symptom: route appears in the app but "0 paradas" counter).
-    // We support both shapes so older backends still work.
-    //
-    // BLD-20260424-CLEANUP: el helper inferEntityType (BUGB) que vivía
-    // aquí se eliminó porque el backend (commit dd78489 de Sebastián)
-    // ya manda _entityType, _leadId y _partnerId directamente en cada
-    // stop. Verificado en logs de campo del 2026-04-24. El cliente
-    // ahora consume los campos del backend tal cual.
-    const result = await postRest<any>(`${GF_BASE}/plan/stops`, {
-      plan_id: planId,
-    });
+    // Lectura: timeout corto (10s), no el de mutación (45s).
+    // BLD-20260405-021: backend envuelve en { ok, message, data:{ stops:[...] }}.
+    // Soportamos ambas formas (envuelta y array pelado) por compatibilidad.
+    const result = await postRest<any>(
+      `${GF_BASE}/plan/stops`,
+      { plan_id: planId },
+      { timeoutMs: DEFAULT_READ_TIMEOUT_MS },
+    );
+
+    // ok:false → NO ocultar: clasificar acceso denegado vs fallo de stops.
+    if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === false) {
+      const message = typeof result.message === 'string' ? result.message : null;
+      const status: RouteLoadStatus = isAccessDeniedMessage(message) ? 'access_denied' : 'stops_error';
+      logWarn('general', 'plan_stops_access_denied', {
+        endpoint: 'gf/logistics/api/employee/plan/stops',
+        plan_id: planId,
+        message,
+        status,
+        note: 'No se cargaron stops por respuesta ok:false del backend.',
+      });
+      return { status, stops: [], message };
+    }
 
     const pickStops = (): any[] => {
       if (Array.isArray(result)) return result as any[];
       if (!result || typeof result !== 'object') return [];
-      if (result.ok === false) {
-        // BLD-20260425-NOPLAN: NO ocultamos el error real del backend.
-        // Antes era console.warn (no llega al export del operador). Ahora
-        // logWarn estructurado con plan_id + message para que se vea en
-        // los logs persistidos y en el debug-export del dispositivo. Esto
-        // es lo que cubre los reportes "ruta abre pero stops vacíos" sin
-        // explicación: queda evidencia clara de que /plan/stops devolvió
-        // ok:false (típicamente "No tienes acceso a este plan" cuando el
-        // plan ya cambió de estado o se reasignó).
-        logWarn('general', 'plan_stops_access_denied', {
-          endpoint: 'gf/logistics/api/employee/plan/stops',
-          plan_id: planId,
-          message: typeof result.message === 'string' ? result.message : null,
-          note: 'No se cargaron stops por respuesta ok:false del backend.',
-        });
-        return [];
-      }
       const data = result.data !== undefined ? result.data : result;
       if (data && Array.isArray(data.stops)) return data.stops as any[];
       if (Array.isArray(data)) return data as any[];
@@ -406,9 +423,7 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
 
     const rawStops = pickStops();
 
-    // Log de muestreo de campos de stops. Útil para diagnóstico cuando
-    // un operador reporta que un lead aparece como customer (o vice
-    // versa). Solo dispara una vez por carga de plan, no es spammy.
+    // Log de muestreo de campos de stops (diagnóstico lead/customer).
     try {
       logInfo('general', 'plan_stops_sample', {
         plan_id: planId,
@@ -427,20 +442,28 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
       // logger defensivo: nunca debe romper el plan
     }
 
-    return rawStops
+    const stops = rawStops
       .filter((stop): stop is Record<string, unknown> => !!stop && typeof stop === 'object')
       .map(normalizePlanStopPayload);
+    return { status: 'ok', stops, message: null };
   } catch (error) {
-    // BLD-20260425-NOPLAN: log estructurado del fallo de red/servidor
-    // para que aparezca en el export del operador. Mantenemos el return []
-    // para no romper el caller, pero la causa queda registrada.
+    // Clasificar el fallo real (timeout/red/servidor/invalid) — antes se
+    // colapsaba a [] y se perdía la causa para la UI.
+    const classified = classifyRouteLoadError(error);
+    const status: RouteLoadStatus = classified === 'unknown_error' ? 'stops_error' : classified;
     logWarn('general', 'plan_stops_request_failed', {
       endpoint: 'gf/logistics/api/employee/plan/stops',
       plan_id: planId,
+      status,
       message: error instanceof Error ? error.message : String(error),
     });
-    return [];
+    return { status, stops: [], message: backendMessageOf(error) };
   }
+}
+
+/** Compat: devuelve solo el array de paradas (callers que no necesitan el motivo). */
+export async function getPlanStops(planId: number): Promise<GFStop[]> {
+  return (await getPlanStopsResult(planId)).stops;
 }
 
 // ═══ Stop Operations ═══

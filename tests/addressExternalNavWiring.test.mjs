@@ -56,13 +56,14 @@ assert(/no es ruta por calles/.test(routeMap), 'RouteMap debe aclarar que la lí
 assert(/no es ruta por calles/.test(map), 'map.tsx debe aclarar que la línea no es ruta');
 assert(/showOrderLegend/.test(routeMap), 'RouteMap solo muestra la leyenda con línea recta visible');
 
-// #7 map.tsx unificado con el helper (sin URIs nativas duplicadas).
-assert(map.includes('buildStopNavigationUrls'), 'map.tsx usa el helper compartido');
-assert(!/google\.navigation:/.test(map), 'map.tsx no debe duplicar URIs nativas');
-assert(!/maps:\/\/app\?daddr=/.test(map), 'map.tsx no debe duplicar URIs nativas de iOS');
+// #7 map.tsx usa el helper para web/dirección PERO conserva la navegación
+// nativa Android (P2 Codex): no perder google.navigation al reusar el helper.
+assert(map.includes('buildStopNavigationUrls'), 'map.tsx usa el helper para web/dirección');
+assert(/google\.navigation:q=/.test(map), 'map.tsx conserva navegación nativa Android');
 
-// #8 el helper tiene fallback por dirección (no solo geo).
+// #8 el helper: fallback por dirección REAL, sin place_id con nombre (P3).
 assert(nav.includes('formatCustomerAddress'), 'el helper usa la dirección para el fallback');
 assert(/formatted\.hasAddress/.test(nav), 'el helper navega por dirección cuando no hay geo');
+assert(!/destination_place_id=/.test(nav), 'el helper no emite destination_place_id=<valor> (P3)');
 
 console.log('address + external nav wiring tests: ok');

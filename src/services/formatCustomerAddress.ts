@@ -3,9 +3,14 @@
  * para una parada/cliente, con degradación explícita (PR dirección + nav).
  *
  * Regla de degradación:
- *   1. si hay dirección textual (o referencia/landmark) → mostrarla;
- *   2. si NO hay dirección pero sí geo válida            → "Ubicación por GPS";
- *   3. si no hay ni dirección ni geo                     → "Sin dirección registrada".
+ *   1. si hay dirección textual REAL (street/city/…/address) → mostrarla;
+ *   2. si NO hay dirección pero sí geo válida                → "Ubicación por GPS";
+ *   3. si no hay ni dirección ni geo                         → "Sin dirección registrada".
+ *
+ * P2 (Codex): `reference` / `landmark` / `location_reference` NO son dirección:
+ * nunca cuentan como texto principal ni ponen hasAddress=true, y NO se usan como
+ * destino de navegación. Se devuelven SIEMPRE por separado (campo `reference`)
+ * para mostrarse como pista secundaria, coexista o no con una dirección real.
  *
  * Puro / RN-free / node-testable. NO asume que los campos nuevos ya llegan del
  * backend: todos son opcionales (forward-compatible). Hoy la mayoría vendrá
@@ -99,7 +104,8 @@ export function formatCustomerAddress(
 ): FormattedCustomerAddress {
   const f = fields ?? {};
   const mainAddress = composeAddressText(f);
-  const referenceText = firstNonEmpty(f.location_reference, f.reference, f.landmark);
+  // Referencia operativa — SIEMPRE secundaria, nunca dirección principal.
+  const referenceText = firstNonEmpty(f.location_reference, f.reference, f.landmark) || null;
 
   if (mainAddress) {
     return {
@@ -111,14 +117,11 @@ export function formatCustomerAddress(
     };
   }
 
-  // Sin dirección postal pero con referencia/landmark: sigue siendo info útil.
-  if (referenceText) {
-    return { kind: 'address', text: referenceText, reference: null, hasAddress: true };
-  }
-
+  // Sin dirección real: la referencia NO cuenta como dirección (hasAddress=false)
+  // y se devuelve aparte. El texto principal es el fallback de geo/none.
   if (hasValidGeo(geo)) {
-    return { kind: 'geo', text: ADDRESS_FALLBACK_GEO, reference: null, hasAddress: false };
+    return { kind: 'geo', text: ADDRESS_FALLBACK_GEO, reference: referenceText, hasAddress: false };
   }
 
-  return { kind: 'none', text: ADDRESS_FALLBACK_NONE, reference: null, hasAddress: false };
+  return { kind: 'none', text: ADDRESS_FALLBACK_NONE, reference: referenceText, hasAddress: false };
 }

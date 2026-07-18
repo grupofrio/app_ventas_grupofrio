@@ -4,7 +4,7 @@
  */
 
 import React, { useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -77,24 +77,51 @@ export default function MapScreen() {
       .map((s) => ({ latitude: s.customer_latitude!, longitude: s.customer_longitude! })),
   [stopsWithCoords]);
 
-  // Navigate to external maps — unificado con el helper compartido
-  // (buildStopNavigationUrls): geo → dirección textual → null controlado. Antes
-  // este archivo duplicaba URIs nativas y no tenía fallback por dirección.
+  // Navigate to external maps.
+  // P2 (Codex): con coordenadas se PRESERVA la navegación turn-by-turn NATIVA
+  // (Android google.navigation: / iOS maps://), con fallback a la URL web del
+  // helper compartido. Sin geo, se usa la dirección textual REAL del helper
+  // (nunca referencia/landmark). Sin ninguna, Alert claro.
   const openNavigation = useCallback((stop: GFStop) => {
     const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
-    if (!primaryUrl) {
-      Alert.alert('Sin ubicación', 'Esta parada no tiene dirección ni coordenadas registradas.');
-      return;
-    }
-    Linking.openURL(primaryUrl).catch(() => {
-      if (fallbackUrl) {
-        Linking.openURL(fallbackUrl).catch(() =>
+    const lat = stop.customer_latitude;
+    const lon = stop.customer_longitude;
+    const hasCoords = lat != null && lon != null;
+
+    const openWebFallback = () => {
+      const web = primaryUrl
+        ?? fallbackUrl
+        ?? (hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}` : null);
+      if (web) {
+        Linking.openURL(web).catch(() =>
           Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.'),
         );
       } else {
         Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
       }
-    });
+    };
+
+    if (hasCoords) {
+      const nativeUrl = Platform.select({
+        ios: `maps://app?daddr=${lat},${lon}`,
+        android: `google.navigation:q=${lat},${lon}`,
+      });
+      if (nativeUrl) {
+        Linking.openURL(nativeUrl).catch(openWebFallback);
+      } else {
+        openWebFallback();
+      }
+      return;
+    }
+
+    // Sin geo: dirección textual real (helper) o Alert.
+    if (primaryUrl) {
+      Linking.openURL(primaryUrl).catch(() =>
+        Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.'),
+      );
+      return;
+    }
+    Alert.alert('Sin ubicación', 'Esta parada no tiene dirección ni coordenadas registradas.');
   }, []);
 
   // P0-4 (hardening): NO abrir venta directa desde el mapa. Se enruta al hub del

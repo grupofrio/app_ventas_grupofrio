@@ -8,6 +8,8 @@ interface LocationNavigationModule {
     customer_longitude?: number;
     street?: string | null;
     city?: string | null;
+    landmark?: string | null;
+    location_reference?: string | null;
   }) => {
     primaryUrl: string | null;
     fallbackUrl: string | null;
@@ -29,20 +31,19 @@ function testUsesGoogleMapsUrlFirst(module: LocationNavigationModule) {
   );
 }
 
-function testBuildsCoordsFallback(module: LocationNavigationModule) {
+function testBuildsCoordsUrl(module: LocationNavigationModule) {
   const urls = module.buildStopNavigationUrls({
     customer_name: 'Prospecto Centro',
     customer_latitude: 19.4,
     customer_longitude: -99.1,
   });
 
-  assert.equal(
-    urls.primaryUrl,
-    'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1&destination_place_id=Prospecto%20Centro',
-  );
-  assert.equal(
-    urls.fallbackUrl,
-    'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1',
+  // P3 (Codex): destino por lat/lon SIN destination_place_id (no era Place ID).
+  assert.equal(urls.primaryUrl, 'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1');
+  assert.equal(urls.fallbackUrl, null);
+  assert.ok(
+    !(urls.primaryUrl ?? '').includes('destination_place_id'),
+    'no debe emitir destination_place_id=customer_name',
   );
 }
 
@@ -71,18 +72,26 @@ function testAddressFallbackWhenNoGeo(module: LocationNavigationModule) {
 }
 
 function testGeoBeatsAddress(module: LocationNavigationModule) {
-  // Con geo Y dirección, la geo manda para el primary; el fallback es geo.
+  // Con geo Y dirección, la geo manda para el primary (sin place_id).
   const urls = module.buildStopNavigationUrls({
     customer_name: 'Cliente',
     customer_latitude: 19.4,
     customer_longitude: -99.1,
     street: 'Av. Juárez 100',
   });
-  assert.equal(
-    urls.primaryUrl,
-    'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1&destination_place_id=Cliente',
-  );
-  assert.equal(urls.fallbackUrl, 'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1');
+  assert.equal(urls.primaryUrl, 'https://www.google.com/maps/dir/?api=1&destination=19.4,-99.1');
+  assert.equal(urls.fallbackUrl, null);
+}
+
+function testNoNavForReferenceOnly(module: LocationNavigationModule) {
+  // P2 (Codex): referencia/landmark NO sirve como destino de navegación textual.
+  const urls = module.buildStopNavigationUrls({
+    customer_name: 'Sin dirección real',
+    landmark: 'junto al OXXO',
+    location_reference: 'portón azul',
+  });
+  assert.equal(urls.primaryUrl, null);
+  assert.equal(urls.fallbackUrl, null);
 }
 
 async function main() {
@@ -93,10 +102,11 @@ async function main() {
   ) as LocationNavigationModule;
 
   testUsesGoogleMapsUrlFirst(module);
-  testBuildsCoordsFallback(module);
+  testBuildsCoordsUrl(module);
   testReturnsNullWhenNoLocation(module);
   testAddressFallbackWhenNoGeo(module);
   testGeoBeatsAddress(module);
+  testNoNavForReferenceOnly(module);
   console.log('location navigation tests: ok');
 }
 

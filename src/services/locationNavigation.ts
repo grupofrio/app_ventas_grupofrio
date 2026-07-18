@@ -27,36 +27,34 @@ export function buildStopNavigationUrls(stop: LocationLike): {
   const lon = stop.customer_longitude;
   const hasCoords = lat != null && lon != null;
 
+  // P3 (Codex): destino por lat/lon SIN destination_place_id — antes se pasaba
+  // el customer_name como place_id, que NO es un Place ID real y podía resolver
+  // mal en Google Maps.
   const coordsUrl = hasCoords
     ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`
     : null;
 
-  // Fallback por dirección textual (solo si hay dirección real).
+  // Fallback por dirección textual REAL (formatCustomerAddress ya excluye
+  // referencia/landmark: hasAddress solo es true con dirección postal).
   const formatted = formatCustomerAddress(stop, stop);
   const addressUrl = formatted.hasAddress
     ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(formatted.text)}`
     : null;
 
-  // Mejor URL secundaria disponible: coordenadas primero, luego dirección.
-  const fallbackUrl = coordsUrl ?? addressUrl;
-
   if (stop.google_maps_url) {
-    return { primaryUrl: stop.google_maps_url, fallbackUrl };
+    // Mejor secundaria: coordenadas primero, luego dirección real.
+    return { primaryUrl: stop.google_maps_url, fallbackUrl: coordsUrl ?? addressUrl };
   }
 
   if (hasCoords) {
-    const label = encodeURIComponent(stop.customer_name);
-    return {
-      primaryUrl: `${coordsUrl}&destination_place_id=${label}`,
-      fallbackUrl: coordsUrl,
-    };
+    return { primaryUrl: coordsUrl, fallbackUrl: null };
   }
 
-  // Sin geo pero con dirección: navegar por texto.
+  // Sin geo pero con dirección REAL: navegar por texto.
   if (addressUrl) {
     return { primaryUrl: addressUrl, fallbackUrl: null };
   }
 
-  // Ni geo ni dirección: null controlado (las pantallas muestran Alert claro).
+  // Ni geo ni dirección real: null controlado (las pantallas muestran Alert).
   return { primaryUrl: null, fallbackUrl: null };
 }

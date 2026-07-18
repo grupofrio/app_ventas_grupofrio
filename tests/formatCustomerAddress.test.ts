@@ -28,19 +28,34 @@ function testPartialAddress(m: Mod) {
 }
 
 function testReference(m: Mod) {
-  // referencia como línea secundaria cuando hay dirección
+  // P2 (Codex): referencia/landmark NUNCA es dirección principal ni hasAddress.
+
+  // (3) dirección real + referencia → dirección como principal, referencia aparte
   const r = m.formatCustomerAddress(
     { street: 'Av. 5', location_reference: 'portón azul frente a la primaria' },
     null,
   );
   assert.equal(r.kind, 'address');
+  assert.equal(r.hasAddress, true);
   assert.equal(r.text, 'Av. 5');
   assert.equal(r.reference, 'portón azul frente a la primaria');
-  // solo referencia (sin dirección postal) → se vuelve la línea principal
-  const r2 = m.formatCustomerAddress({ landmark: 'junto al OXXO' }, null);
-  assert.equal(r2.kind, 'address');
-  assert.equal(r2.text, 'junto al OXXO');
-  assert.equal(r2.reference, null);
+
+  // (1) SOLO landmark, sin dirección ni geo → 'none' + referencia aparte
+  const only = m.formatCustomerAddress({ landmark: 'junto al OXXO' }, null);
+  assert.equal(only.kind, 'none');
+  assert.equal(only.hasAddress, false, 'landmark NO cuenta como dirección');
+  assert.equal(only.text, m.ADDRESS_FALLBACK_NONE);
+  assert.equal(only.reference, 'junto al OXXO');
+
+  // (2) referencia + geo, sin dirección → 'geo' + referencia aparte
+  const geoRef = m.formatCustomerAddress(
+    { reference: 'frente a la primaria' },
+    { customer_latitude: 19.4, customer_longitude: -99.1 },
+  );
+  assert.equal(geoRef.kind, 'geo');
+  assert.equal(geoRef.hasAddress, false);
+  assert.equal(geoRef.text, m.ADDRESS_FALLBACK_GEO);
+  assert.equal(geoRef.reference, 'frente a la primaria');
   console.log('reference: ok');
 }
 

@@ -347,8 +347,14 @@ function main() {
 
   assert.match(
     logistics,
-    /return fetchMyPlan\(postRest, `\$\{GF_BASE\}\/my_plan`, getMyPlanDate\(\)\);/,
+    /return fetchMyPlan\([\s\S]*?`\$\{GF_BASE\}\/my_plan`,[\s\S]*?getMyPlanDate\(\)/,
     'getMyPlan must delegate without collapsing transport or session failures to null',
+  );
+  // PR-2: la carga del plan es una LECTURA — timeout corto (10s), no el de mutación.
+  assert.match(
+    logistics.slice(logistics.indexOf('export async function getMyPlan()'), logistics.indexOf('export async function startPlan(')),
+    /timeoutMs:\s*DEFAULT_READ_TIMEOUT_MS/,
+    'getMyPlan must use the read timeout, not the 45s mutation timeout',
   );
   assert.doesNotMatch(
     logistics.slice(logistics.indexOf('export async function getMyPlan()'), logistics.indexOf('export async function startPlan(')),
@@ -372,8 +378,14 @@ function main() {
   );
   assert.match(
     routeStore,
-    /set\(buildRouteRefreshFailurePatch\(error\)\);/,
+    /\.\.\.buildRouteRefreshFailurePatch\(error\),/,
     'transient refresh failures must update only failure metadata and preserve cached route state',
+  );
+  // PR-2: además del patch (que conserva la caché), se guarda el outcome clasificado.
+  assert.match(
+    routeStore,
+    /loadOutcome:\s*\{\s*status:\s*classifyRouteLoadError\(error\)/,
+    'a transient failure must record the classified load outcome for route-start',
   );
   assert.match(
     routePlanRefresh,
@@ -392,7 +404,7 @@ function main() {
   );
   assert.match(
     routeStore,
-    /catch \(error: unknown\) \{\s*if \(!flight\.isCurrent\(\)\) return;\s*set\(buildRouteRefreshFailurePatch\(error\)\);/,
+    /catch \(error: unknown\) \{\s*if \(!flight\.isCurrent\(\)\) return;\s*(?:\/\/[^\n]*\n\s*)*set\(\{\s*\.\.\.buildRouteRefreshFailurePatch\(error\)/,
     'an old employee transport failure must not write into the new session',
   );
   assert.match(

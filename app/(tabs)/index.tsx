@@ -28,6 +28,7 @@ import { preloadRouteCustomerPrices } from '../../src/services/pricelist';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
+import { isStandardNoPlanError } from '../../src/services/routeLoadOutcome';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -144,7 +145,8 @@ export default function HomeScreen() {
   // El backend custom puede mandar mensajes diferentes (data.found:false →
   // "Sin plan para hoy"; otros casos → mensaje real). Mostramos siempre el
   // mensaje del backend como subtítulo cuando exista, sin ocultarlo.
-  const isStandardNoPlan = !planError || /sin plan/i.test(planError);
+  // PR-2: criterio compartido con route-start (helper puro reusado).
+  const isStandardNoPlan = isStandardNoPlanError(planError);
 
   // BLD-SPRINT-A.1: CTA "Iniciar operación" con 3 estados para no confundir:
   //  - ruta ya en marcha (alguna parada en curso/hecha) → "Ver ruta"

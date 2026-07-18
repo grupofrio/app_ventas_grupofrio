@@ -5,7 +5,12 @@
 
 import { create } from 'zustand';
 import { GFPlan, GFStop } from '../types/plan';
-import { getMyPlan, getPlanStops } from '../services/gfLogistics';
+import { getMyPlan, getPlanStopsResult } from '../services/gfLogistics';
+import {
+  classifyRouteLoadError,
+  backendMessageOf,
+  type RouteLoadOutcome,
+} from '../services/routeLoadOutcome';
 // CROSS-STORE DEP: loads KOLD intelligence on route load. Documented in V1.3.1.
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
@@ -41,6 +46,12 @@ interface RouteState {
   stops: GFStop[];
   isLoading: boolean;
   error: string | null;
+  /**
+   * PR-2: resultado estructurado de la última carga de ruta, para que la UI
+   * distinga no_plan real de timeout/red/servidor/stops. `error` (string) se
+   * conserva por compatibilidad con Home; `loadOutcome` es la fuente rica.
+   */
+  loadOutcome: RouteLoadOutcome | null;
   lastSync: number | null; // timestamp
   routeFreshness: RouteFreshness;
   planVersionToken: string | null;
@@ -83,6 +94,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   stops: [],
   isLoading: false,
   error: null,
+  loadOutcome: null,
   lastSync: null,
   routeFreshness: 'stale',
   planVersionToken: null,
@@ -99,6 +111,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       set({
         isLoading: false,
         error: get().plan ? null : 'Sin conexion',
+        loadOutcome: get().plan ? null : { status: 'network_error', message: null },
         routeFreshness: 'offline_cache',
       });
       return;
@@ -145,6 +158,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           set({
             isLoading: false,
             error: 'No se pudo actualizar la ruta; mostrando ruta guardada',
+            loadOutcome: null, // hay ruta cacheada usable; no es estado de error de pantalla
             routeFreshness: 'stale',
           });
           return;
@@ -164,6 +178,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           stops: [],
           isLoading: false,
           error: 'Sin plan para hoy',
+          loadOutcome: { status: 'no_plan', message: null },
           routeFreshness: 'stale',
           lastSync: null,
           planVersionToken: null,
@@ -185,6 +200,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           plan,
           isLoading: false,
           error: null,
+          loadOutcome: null,
           lastSync: now,
           routeFreshness: 'updated',
           planVersionToken: nextToken,
@@ -193,7 +209,8 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         return;
       }
 
-      const backendStops = await getPlanStops(plan.plan_id);
+      const stopsResult = await getPlanStopsResult(plan.plan_id);
+      const backendStops = stopsResult.stops;
       if (!flight.isCurrent()) return;
       const keepCachedStops = shouldKeepCachedStopsAfterEmptyRefresh({
         cachedPlan,
@@ -258,6 +275,19 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         visitStore.resetVisit();
       }
 
+      // PR-2: si las paradas FALLARON y no hay caché para mostrar, NO es una
+      // ruta vacía silenciosa — surface el motivo real (stops_error/access_denied
+      // /timeout/…). Con caché mostrada, el operador sigue operando (loadOutcome
+      // null). Ruta ok con 0 paradas = empty_route real.
+      const stopsOutcome: RouteLoadOutcome | null =
+        keepCachedStops
+          ? null
+          : stopsResult.status !== 'ok'
+            ? { status: stopsResult.status, message: stopsResult.message }
+            : total === 0
+              ? { status: 'empty_route', message: null }
+              : null;
+
       set({
         plan,
         stops,
@@ -265,6 +295,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         error: keepCachedStops
           ? 'No se pudo actualizar paradas; mostrando ruta guardada'
           : null,
+        loadOutcome: stopsOutcome,
         lastSync: now,
         routeFreshness: keepCachedStops ? 'stale' : 'updated',
         planVersionToken: nextToken,
@@ -278,7 +309,13 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       storeSave(STORAGE_KEYS.STOPS, stops);
     } catch (error: unknown) {
       if (!flight.isCurrent()) return;
-      set(buildRouteRefreshFailurePatch(error));
+      // PR-2: además del patch (error string + stale), guardar el estado
+      // estructurado para que route-start muestre copy diferenciado + retry, en
+      // vez de "No tienes ruta asignada" ante un timeout/red/servidor.
+      set({
+        ...buildRouteRefreshFailurePatch(error),
+        loadOutcome: { status: classifyRouteLoadError(error), message: backendMessageOf(error) },
+      });
     }
   }),
 
@@ -374,6 +411,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     routePlanLoadFlight.invalidate();
     set({
       plan: null, stops: [], isLoading: false, error: null,
+      loadOutcome: null,
       lastSync: null, routeFreshness: 'stale', planVersionToken: null,
       stopsCompleted: 0, stopsTotal: 0, progressPct: 0,
     });

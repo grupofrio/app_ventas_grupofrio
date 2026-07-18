@@ -42,6 +42,7 @@ import {
   isAbsurdOdometer,
 } from '../src/services/routeStartLogic';
 import { computeRouteReadiness } from '../src/services/routeReadiness';
+import { describeRouteLoad, isErrorStatus } from '../src/services/routeLoadOutcome';
 import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
 import { confirmAuthoritativeRouteStart } from '../src/services/routeStartAction';
 import {
@@ -76,6 +77,7 @@ export default function RouteStartScreen() {
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
   const loadPlan = useRouteStore((s) => s.loadPlan);
+  const loadOutcome = useRouteStore((s) => s.loadOutcome);
   const planId = plan?.plan_id ?? null;
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -368,18 +370,31 @@ export default function RouteStartScreen() {
     );
   }
 
-  // ── Empty state: no plan ────────────────────────────────────────────────
+  // ── Empty state: no plan O fallo de carga ───────────────────────────────
+  // PR-2: distinguir ausencia REAL de plan (no_plan) de un fallo de carga
+  // (timeout/red/servidor). El copy y el ícono se derivan del loadOutcome, y
+  // se ofrece Reintentar — nunca mostrar "No tienes ruta" ante un timeout.
   if (!planId) {
+    const copy = describeRouteLoad(loadOutcome);
+    const isError = loadOutcome ? isErrorStatus(loadOutcome.status) : false;
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Iniciar operación" showBack />
         <View style={styles.center}>
-          <Text style={styles.emptyIcon}>📭</Text>
-          <Text style={styles.emptyTitle}>No tienes ruta asignada hoy</Text>
-          <Text style={styles.emptyBody}>
-            Cuando tu supervisor publique tu plan, aquí podrás hacer el checklist,
-            registrar KM y aceptar tu carga.
-          </Text>
+          <Text style={styles.emptyIcon}>{isError ? '⚠️' : '📭'}</Text>
+          <Text style={styles.emptyTitle}>{copy.title}</Text>
+          <Text style={styles.emptyBody}>{copy.body}</Text>
+          {copy.showRetry && (
+            <TouchableOpacity
+              onPress={() => { void loadPlan({ force: true }); }}
+              style={styles.retryBtn}
+              disabled={!isOnline}
+            >
+              <Text style={styles.retryBtnText}>
+                {isOnline ? 'Reintentar' : 'Sin conexión'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -402,6 +417,22 @@ export default function RouteStartScreen() {
             <Text style={styles.errorText}>{error}</Text>
             <TouchableOpacity onPress={() => void refresh()} style={styles.retryBtn}>
               <Text style={styles.retryBtnText}>Reintentar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* PR-2: plan cargado pero sus paradas fallaron (o acceso denegado):
+            surface el motivo real con retry, en vez de una ruta vacía silenciosa. */}
+        {loadOutcome && isErrorStatus(loadOutcome.status) && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{describeRouteLoad(loadOutcome).title}</Text>
+            <Text style={styles.errorBody}>{describeRouteLoad(loadOutcome).body}</Text>
+            <TouchableOpacity
+              onPress={() => { void loadPlan({ force: true }); }}
+              style={styles.retryBtn}
+              disabled={!isOnline}
+            >
+              <Text style={styles.retryBtnText}>{isOnline ? 'Reintentar' : 'Sin conexión'}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -575,6 +606,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,68,68,0.07)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)',
   },
   errorText: { fontSize: 12, color: '#EF4444', marginBottom: 8 },
+  errorBody: { fontSize: 12, color: colors.textDim, marginBottom: 8 },
   retryBtn: { alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 14, borderRadius: radii.button, backgroundColor: colors.primary },
   retryBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },

@@ -143,7 +143,14 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
     && userLat != null && userLon != null
     && navigationTargetLat != null && navigationTargetLon != null;
 
+  // La polyline punteada conecta las paradas en orden de visita — NO es una
+  // ruta navegable por calles. Mostramos una aclaración cuando esa línea recta
+  // es lo único visible (sin ruta por calles real), para no confundir al
+  // operador. Si hay road route (Directions), esa sí es ruta y no se aclara.
+  const showOrderLegend = polylineCoords.length > 1 && !hasRoadRoute;
+
   return (
+    <>
     <MapView
       ref={(r) => { mapRef.current = r; }}
       provider={PROVIDER_GOOGLE}
@@ -186,6 +193,14 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
 
       {markers}
     </MapView>
+    {showOrderLegend && (
+      <View style={styles.orderLegend} pointerEvents="none">
+        <Text style={styles.orderLegendText}>
+          Línea punteada = orden de visita · no es ruta por calles
+        </Text>
+      </View>
+    )}
+    </>
   );
 });
 
@@ -200,4 +215,10 @@ const styles = StyleSheet.create({
     borderColor: colors.text, borderWidth: 3,
   },
   markerText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  orderLegend: {
+    position: 'absolute', top: 10, alignSelf: 'center',
+    backgroundColor: 'rgba(15,20,25,0.82)', paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 14, maxWidth: '92%',
+  },
+  orderLegendText: { color: '#FFFFFF', fontSize: 11, fontWeight: '600', textAlign: 'center' },
 });

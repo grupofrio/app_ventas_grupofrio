@@ -15,6 +15,7 @@ import type { GFStop } from '../../types/plan';
 import { colors, radii, spacing, stopStateColors } from '../../theme/tokens';
 import { fonts } from '../../theme/typography';
 import { stopStatusMeta, formatDistance, RouteProgress } from '../../services/routeMapLogic';
+import { formatCustomerAddress } from '../../services/formatCustomerAddress';
 
 interface Props {
   progress: RouteProgress;
@@ -47,6 +48,7 @@ export function RouteStopPanel(props: Props) {
   const focus = selectedStop ?? nextStop;
   const focusMeta = focus ? stopStatusMeta(focus.state) : null;
   const dist = formatDistance(distanceMeters);
+  const focusAddress = focus ? formatCustomerAddress(focus, focus) : null;
 
   return (
     <View style={styles.wrap}>
@@ -77,6 +79,14 @@ export function RouteStopPanel(props: Props) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.focusName} numberOfLines={1}>{focus.customer_name}</Text>
+              {focusAddress && (
+                <Text
+                  style={[styles.focusAddress, !focusAddress.hasAddress && styles.focusAddressMuted]}
+                  numberOfLines={2}
+                >
+                  📍 {focusAddress.text}
+                </Text>
+              )}
               <Text style={styles.focusMeta}>
                 {navigationActive ? '🧭 Navegando' : selectedStop ? 'Seleccionado' : 'Siguiente'} · {focusMeta?.label}
                 {dist ? ` · ${dist}` : ''}
@@ -91,8 +101,12 @@ export function RouteStopPanel(props: Props) {
             <Text style={styles.openClientText}>👤 Abrir cliente</Text>
           </TouchableOpacity>
           <View style={styles.actionRow}>
+            {/* Navegación EXTERNA (Google Maps): conecta la prop onNavigate, que
+                antes estaba muerta. Es la opción que sí sirve para navegar en
+                calle. "Iniciar navegación" es la traza interna (referencia). */}
+            <PanelButton label="📍 Maps" onPress={() => onNavigate(focus)} />
             {navigationActive ? (
-              <PanelButton label="⏹ Detener navegación" onPress={onStopNavigation} active />
+              <PanelButton label="⏹ Detener" onPress={onStopNavigation} active />
             ) : (
               <PanelButton label="🧭 Iniciar navegación" onPress={onStartNavigation} />
             )}
@@ -185,6 +199,8 @@ const styles = StyleSheet.create({
   seqDot: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   seqDotText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   focusName: { fontSize: 16, fontWeight: '700', color: colors.text },
+  focusAddress: { fontSize: 12, color: colors.text, marginTop: 2 },
+  focusAddressMuted: { color: colors.textDim, fontStyle: 'italic' },
   focusMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
   actionRow: { flexDirection: 'row', gap: 8 },
   openClientBtn: {

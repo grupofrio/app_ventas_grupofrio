@@ -12,6 +12,7 @@ import { ScoreRing } from '../ui/ScoreRing';
 import { colors, radii, stopStateColors } from '../../theme/tokens';
 import { typography } from '../../theme/typography';
 import { getStopTypeLabel } from '../../services/routePresentation';
+import { formatCustomerAddress } from '../../services/formatCustomerAddress';
 
 interface StopCardProps {
   stop: GFStop;
@@ -43,6 +44,7 @@ export function StopCard({ stop, index }: StopCardProps) {
   const borderColor = stopStateColors[stop.state] || colors.textDim;
   const isDone = ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(stop.state);
   const stopTypeLabel = getStopTypeLabel(stop);
+  const address = formatCustomerAddress(stop, stop);
 
   return (
     <TouchableOpacity
@@ -64,6 +66,12 @@ export function StopCard({ stop, index }: StopCardProps) {
               {stop.customer_name}
             </Text>
           </View>
+          <Text
+            style={[typography.dimSmall, !address.hasAddress && styles.addressMuted]}
+            numberOfLines={1}
+          >
+            📍 {address.text}
+          </Text>
           <View style={styles.badges}>
             <Badge
               label={stateLabels[stop.state] || stop.state}
@@ -139,5 +147,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     flexWrap: 'wrap',
+  },
+  addressMuted: {
+    fontStyle: 'italic',
+    opacity: 0.7,
   },
 });

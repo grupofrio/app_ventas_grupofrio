@@ -38,6 +38,11 @@ export interface OffrouteSearchResult {
   customerLatitude: number | null;
   customerLongitude: number | null;
   googleMapsUrl: string | null;
+  // Dirección textual cruda (res.partner / crm.lead). Antes solo sobrevivía
+  // dentro de `subtitle` y se perdía al crear la parada virtual; ahora se
+  // conserva para poder mostrarla en la parada (formatCustomerAddress).
+  street: string | null;
+  city: string | null;
 }
 
 export const BASIC_CUSTOMER_FIELDS = [
@@ -149,6 +154,8 @@ export function buildOffrouteResults(
         customerLatitude: typeof customer.partner_latitude === 'number' ? customer.partner_latitude : null,
         customerLongitude: typeof customer.partner_longitude === 'number' ? customer.partner_longitude : null,
         googleMapsUrl: customer.google_maps_url || null,
+        street: customer.street || null,
+        city: customer.city || null,
       };
     }),
     ...leads.map((lead) => ({
@@ -163,6 +170,8 @@ export function buildOffrouteResults(
       customerLatitude: null,
       customerLongitude: null,
       googleMapsUrl: null,
+      street: lead.street || null,
+      city: lead.city || null,
     })),
   ];
 }

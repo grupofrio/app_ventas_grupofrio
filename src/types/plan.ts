@@ -101,6 +101,22 @@ export interface GFStop {
   customer_latitude?: number;
   customer_longitude?: number;
   google_maps_url?: string;
+  // Dirección textual del partner — OPCIONALES / forward-compatible. Hoy el
+  // endpoint plan/stops no las manda (llegan undefined) y la UI degrada a
+  // "Sin dirección registrada" / "Ubicación por GPS". Cuando el serializer de
+  // Odoo las incluya, aparecen solas (el normalizador hace spread completo).
+  // Ver src/services/formatCustomerAddress.ts.
+  street?: string | null;
+  street2?: string | null;
+  city?: string | null;
+  zip?: string | null;
+  state_name?: string | null;
+  country?: string | null;
+  address?: string | null;
+  display_address?: string | null;
+  formatted_address?: string | null;
+  location_reference?: string | null;
+  landmark?: string | null;
   state: StopState;
   route_sequence?: number;
   source_model: 'gf.route.stop';

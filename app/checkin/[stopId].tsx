@@ -24,6 +24,7 @@ import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
@@ -309,6 +310,8 @@ export default function CheckinScreen() {
   const actionVisibility = getLeadActionVisibility(stop);
   const showCollect = stop._entityType !== 'lead';
 
+  const address = formatCustomerAddress(stop, stop);
+
   // Determine if customer has coordinates
   const hasCustomerCoords = !!(stop.customer_latitude && stop.customer_longitude);
   const canSkipGeofence = allowOffDistanceVisits && hasCustomerCoords;
@@ -344,10 +347,21 @@ export default function CheckinScreen() {
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
           <Text style={styles.customerName}>{stop.customer_name}</Text>
           {stop.customer_ref && (
-            <Text style={[typography.dimSmall, { textAlign: 'center', marginBottom: 12 }]}>
+            <Text style={[typography.dimSmall, { textAlign: 'center' }]}>
               Ref: {stop.customer_ref}
             </Text>
           )}
+          {/* Dirección para validar que llegó al cliente correcto ANTES de
+              hacer check-in (clave para clientes sin letrero claro). */}
+          <Text
+            style={[
+              typography.dimSmall,
+              { textAlign: 'center', marginTop: 4, marginBottom: 12 },
+              !address.hasAddress && styles.addressMuted,
+            ]}
+          >
+            📍 {address.text}{address.reference ? ` · 🔖 ${address.reference}` : ''}
+          </Text>
 
           {/* GPS Status Card */}
           <View style={[styles.geoCard, { borderColor: gpsStatusInfo.color + '40' }]}>
@@ -606,6 +620,7 @@ const styles = StyleSheet.create({
     textAlign: 'center', fontSize: 15, fontWeight: '700',
     color: colors.text, paddingVertical: 10,
   },
+  addressMuted: { fontStyle: 'italic', opacity: 0.7 },
   // Geofence card (pre check-in)
   geoCard: {
     flexDirection: 'row', alignItems: 'center',

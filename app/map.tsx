@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { TopBar } from '../src/components/ui/TopBar';
+import { buildStopNavigationUrls } from '../src/services/locationNavigation';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { colors, spacing, radii } from '../src/theme/tokens';
@@ -76,22 +77,51 @@ export default function MapScreen() {
       .map((s) => ({ latitude: s.customer_latitude!, longitude: s.customer_longitude! })),
   [stopsWithCoords]);
 
-  // Navigate to external maps
+  // Navigate to external maps.
+  // P2 (Codex): con coordenadas se PRESERVA la navegación turn-by-turn NATIVA
+  // (Android google.navigation: / iOS maps://), con fallback a la URL web del
+  // helper compartido. Sin geo, se usa la dirección textual REAL del helper
+  // (nunca referencia/landmark). Sin ninguna, Alert claro.
   const openNavigation = useCallback((stop: GFStop) => {
-    if (!stop.customer_latitude || !stop.customer_longitude) {
-      Alert.alert('Sin coordenadas', 'Esta parada no tiene ubicacion.');
+    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
+    const lat = stop.customer_latitude;
+    const lon = stop.customer_longitude;
+    const hasCoords = lat != null && lon != null;
+
+    const openWebFallback = () => {
+      const web = primaryUrl
+        ?? fallbackUrl
+        ?? (hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}` : null);
+      if (web) {
+        Linking.openURL(web).catch(() =>
+          Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.'),
+        );
+      } else {
+        Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
+      }
+    };
+
+    if (hasCoords) {
+      const nativeUrl = Platform.select({
+        ios: `maps://app?daddr=${lat},${lon}`,
+        android: `google.navigation:q=${lat},${lon}`,
+      });
+      if (nativeUrl) {
+        Linking.openURL(nativeUrl).catch(openWebFallback);
+      } else {
+        openWebFallback();
+      }
       return;
     }
-    const label = encodeURIComponent(stop.customer_name);
-    const url = Platform.select({
-      ios: `maps://app?daddr=${stop.customer_latitude},${stop.customer_longitude}&q=${label}`,
-      android: `google.navigation:q=${stop.customer_latitude},${stop.customer_longitude}`,
-    });
-    if (url) Linking.openURL(url).catch(() => {
-      Linking.openURL(
-        `https://www.google.com/maps/dir/?api=1&destination=${stop.customer_latitude},${stop.customer_longitude}`
+
+    // Sin geo: dirección textual real (helper) o Alert.
+    if (primaryUrl) {
+      Linking.openURL(primaryUrl).catch(() =>
+        Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.'),
       );
-    });
+      return;
+    }
+    Alert.alert('Sin ubicación', 'Esta parada no tiene dirección ni coordenadas registradas.');
   }, []);
 
   // P0-4 (hardening): NO abrir venta directa desde el mapa. Se enruta al hub del
@@ -184,6 +214,11 @@ export default function MapScreen() {
             <Text style={styles.legendText}>{STATUS_LABELS[key]}</Text>
           </View>
         ))}
+        {routeCoords.length > 1 && (
+          <Text style={styles.legendCaption}>
+            Línea punteada = orden de visita · no es ruta por calles
+          </Text>
+        )}
       </View>
 
       {/* Navigate to next pending */}
@@ -233,6 +268,10 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 8, marginVertical: 2 },
   legendDot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
   legendText: { fontSize: 10, color: colors.textDim },
+  legendCaption: {
+    width: '100%', textAlign: 'center', fontSize: 10, color: colors.textDim,
+    fontStyle: 'italic', marginTop: 4,
+  },
   actionsWrap: {
     gap: 8,
     marginBottom: 16,

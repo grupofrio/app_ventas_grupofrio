@@ -171,7 +171,10 @@ interface SyncState {
   migrateLegacyRefillUnload: () => { migrated: number; reverted: number };
   discardLegacyRefillUnload: (id: string) => boolean;
   clearLegacyMigrationNotice: () => void;
-  consumeLegacyRefreshPending: () => boolean;
+  // Refresh autoritativo: `has` LEE (no consume); `markCompleted` limpia SOLO
+  // tras un refresh exitoso. La bandera es DURABLE (sobrevive cierres/errores).
+  hasLegacyRefreshPending: () => boolean;
+  markLegacyRefreshCompleted: () => void;
 
   // V2: helpers for diagnostics
   getQueueSummary: () => QueueSummary;
@@ -436,6 +439,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // otro modo esperarían a un enqueue o a un flanco de reconexión.
       get().scheduleWake();
     }
+    // Rehidrata la bandera DURABLE de refresh autoritativo pendiente: si una
+    // migración previa retiró eventos legacy pero la app cerró (o el refresh
+    // falló) antes de recargar inventario, el pending sobrevive y se reintenta
+    // en la próxima reconexión/foreground.
+    const refreshPending = await storeLoad<boolean>(STORAGE_KEYS.LEGACY_REFRESH_PENDING);
+    if (refreshPending === true) {
+      set({ legacyRefreshPending: true });
+    }
   },
 
   // ═══ V2: Priority-based Sync Processor ═══
@@ -686,6 +697,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       legacyRefreshPending: true,
     });
     get().persistQueue();
+    void storeSave(STORAGE_KEYS.LEGACY_REFRESH_PENDING, true); // marca DURABLE
     logWarn('sync', 'legacy_refill_unload_migrated', { migrated: legacy.length, reverted });
     return { migrated: legacy.length, reverted };
   },
@@ -716,18 +728,21 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       legacyRefreshPending: true,
     });
     get().persistQueue();
+    void storeSave(STORAGE_KEYS.LEGACY_REFRESH_PENDING, true); // marca DURABLE
     logWarn('sync', 'legacy_refill_unload_discarded', { id, type: item.type });
     return true;
   },
 
   clearLegacyMigrationNotice: () => set({ legacyMigrationNoticeCount: 0 }),
 
-  // Consume (una sola vez) la bandera de refresh autoritativo pendiente. El
-  // llamador (connectivity, en reconexión/foreground) recarga el inventario.
-  consumeLegacyRefreshPending: () => {
-    if (!get().legacyRefreshPending) return false;
+  // LEE (no consume) si hay refresh autoritativo pendiente.
+  hasLegacyRefreshPending: () => get().legacyRefreshPending,
+
+  // Limpia la bandera SOLO tras un refresh EXITOSO (borra también la marca
+  // durable). Si el refresh falla o no hay warehouse, NO se llama → se reintenta.
+  markLegacyRefreshCompleted: () => {
     set({ legacyRefreshPending: false });
-    return true;
+    void storeSave(STORAGE_KEYS.LEGACY_REFRESH_PENDING, false);
   },
 
   // ═══ Diagnostics helpers ═══

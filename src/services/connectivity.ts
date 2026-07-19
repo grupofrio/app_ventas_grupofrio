@@ -23,6 +23,8 @@ import { useSyncStore } from '../stores/useSyncStore';
 import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { shouldWakeOnNetTransition, NetSnapshot } from './syncWakeup';
+import { createLegacyRefreshRunner } from './legacyRefreshRunner';
+import { logWarn } from '../utils/logger';
 
 let netUnsubscribe: (() => void) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
@@ -41,28 +43,39 @@ function isOnlineFromState(state: NetInfoState | NetSnapshot): boolean {
   return !!(state.isConnected && state.isInternetReachable !== false);
 }
 
+/**
+ * Runner del refresh autoritativo de inventario pendiente tras migrar eventos
+ * legacy refill/unload. Contrato: la bandera DURABLE `legacyRefreshPending` solo
+ * se limpia (`markLegacyRefreshCompleted`) DESPUÉS de un `loadProducts` exitoso.
+ * `loadProducts` del store TRAGA sus errores (setea `error` y resuelve), así que
+ * aquí derivamos el éxito del estado `error` posterior y lanzamos si falló, para
+ * que el runner conserve el pending y reintente en la próxima reconexión.
+ * El guard in-flight (dentro del runner) evita dos refresh simultáneos si los
+ * eventos de red y foreground caen juntos.
+ */
+const legacyRefreshRunner = createLegacyRefreshRunner({
+  hasPending: () => useSyncStore.getState().hasLegacyRefreshPending(),
+  getWarehouseId: () => useAuthStore.getState().warehouseId,
+  loadProducts: async (warehouseId: number) => {
+    await useProductStore.getState().loadProducts(warehouseId);
+    const err = useProductStore.getState().error;
+    if (err) throw new Error(err); // fuerza 'failed' → conserva pending para retry
+  },
+  markCompleted: () => useSyncStore.getState().markLegacyRefreshCompleted(),
+  onError: (error) =>
+    logWarn('inventory', 'legacy_authoritative_refresh_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    }),
+});
+
 /** Dispara el drenaje de la cola sin duplicar ciclos (guard isSyncing). */
 function wakeQueue(): void {
   const store = useSyncStore.getState();
   store.processQueue();
   store.scheduleWake();
-  maybeAuthoritativeRefreshAfterLegacyMigration();
-}
-
-/**
- * Tras migrar eventos legacy de recarga/devolución (que revirtieron stock local
- * de forma optimista), forzamos UNA recarga autoritativa del inventario al
- * reconectar/volver a foreground: el servidor es la fuente de verdad y corrige
- * cualquier desfase que dejara la reversión local. `consumeLegacyRefreshPending`
- * garantiza que ocurra una sola vez por migración.
- */
-function maybeAuthoritativeRefreshAfterLegacyMigration(): void {
-  const sync = useSyncStore.getState();
-  if (!sync.consumeLegacyRefreshPending()) return;
-  const warehouseId = useAuthStore.getState().warehouseId;
-  if (warehouseId) {
-    void useProductStore.getState().loadProducts(warehouseId);
-  }
+  // Fire-and-forget: NO bloquea processQueue. El runner maneja pending durable,
+  // guard in-flight, ausencia de warehouse y éxito/fallo (retry si falla).
+  void legacyRefreshRunner.run();
 }
 
 export function startConnectivityMonitor(): void {

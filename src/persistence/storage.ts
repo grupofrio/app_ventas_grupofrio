@@ -105,6 +105,10 @@ export const STORAGE_KEYS = {
 
   // Sync queue
   SYNC_QUEUE: 'sync:queue',
+  // Marca DURABLE de refresh autoritativo de inventario pendiente tras migrar
+  // eventos legacy refill/unload. Debe sobrevivir cierres de app y errores de
+  // red hasta lograr un loadProducts exitoso (entonces se limpia).
+  LEGACY_REFRESH_PENDING: 'sync:legacyRefreshPending',
 
   // Timestamps
   LAST_FULL_SYNC: 'meta:lastFullSync',

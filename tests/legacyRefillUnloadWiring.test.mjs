@@ -55,7 +55,12 @@ assert(/return true/.test(guardBlock[0]), '#12 el guard trata el ítem como mane
 // ── #9: el store expone la migración y el descarte ───────────────────────────
 assert(/migrateLegacyRefillUnload:/.test(store), '#9 el store expone migrateLegacyRefillUnload');
 assert(/discardLegacyRefillUnload:/.test(store), '#9 el store expone discardLegacyRefillUnload');
-assert(/legacyRefreshPending/.test(store), '#10 el store rastrea el refresh pendiente');
+// #10 contrato corregido: LEE sin consumir + limpia SOLO tras éxito + durable.
+assert(/hasLegacyRefreshPending:/.test(store), '#10 el store expone hasLegacyRefreshPending (peek)');
+assert(/markLegacyRefreshCompleted:/.test(store), '#10 el store limpia solo tras éxito');
+assert(!/consumeLegacyRefreshPending/.test(store), 'la semántica consume-antes-de-éxito fue eliminada');
+assert(/LEGACY_REFRESH_PENDING/.test(store), '#10 el store persiste la marca durable de refresh');
+assert(/storeSave\(STORAGE_KEYS\.LEGACY_REFRESH_PENDING/.test(store), '#10 la marca durable se persiste');
 
 // ── rollback legacy por-type ELIMINADO (queda el genérico por delta) ─────────
 assert(!/rollback_unload/.test(store), 'el rollback legacy por-type de unload fue eliminado');
@@ -66,10 +71,16 @@ assert(/computeLocalStockReversal\(item\.payload\)/.test(store), 'el rollback ge
 const rehydrate = read('src/services/rehydrate.ts');
 assert(/migrateLegacyRefillUnload\(\)/.test(rehydrate), 'rehydrate dispara la migración legacy');
 
-// ── #10: refresh autoritativo de inventario al reconectar ────────────────────
+// ── #10: refresh autoritativo de inventario al reconectar (vía runner) ───────
 const connectivity = read('src/services/connectivity.ts');
-assert(/consumeLegacyRefreshPending\(\)/.test(connectivity), '#10 connectivity consume el flag de refresh');
+assert(/createLegacyRefreshRunner/.test(connectivity), '#10 connectivity usa el runner del refresh');
+assert(/legacyRefreshRunner\.run\(\)/.test(connectivity), '#10 wakeQueue dispara el refresh (fire-and-forget)');
+assert(/hasLegacyRefreshPending\(\)/.test(connectivity), '#10 el runner LEE el pending (peek, no consume)');
+assert(/markLegacyRefreshCompleted\(\)/.test(connectivity), '#10 limpia solo tras éxito');
 assert(/loadProducts\(warehouseId\)/.test(connectivity), '#10 connectivity recarga inventario autoritativo');
+assert(!/consumeLegacyRefreshPending/.test(connectivity), 'connectivity ya no usa consume-antes-de-éxito');
+// #9 (processQueue): el refresh es fire-and-forget y separado del drenaje.
+assert(/store\.processQueue\(\)/.test(connectivity), '#9 processQueue sigue independiente del refresh');
 
 // ── copy de refill retirado; sync.tsx ya no usa syncItemLabel ────────────────
 const copy = read('src/services/secondaryFlowCopy.ts');

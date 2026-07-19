@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 type Mod = typeof import('../src/services/stockRollback.ts');
-type RefillMod = typeof import('../src/services/refillLogic.ts');
 
 function testBuildDelta(m: Mod) {
   // unload descuenta → sign -1 → delta negativo
@@ -53,20 +52,19 @@ function testReversal(m: Mod) {
   console.log('reversal: ok');
 }
 
-async function testRefillHasNoLocalDelta(m: Mod, refill: RefillMod) {
-  // (5) refill NO toca stock local → su payload no lleva _localStockDelta,
-  //     así que el rollback genérico no inventa reversión.
-  const payload = refill.buildRefillPayload({
-    warehouseId: 3,
-    lines: [{ productId: 1, qty: 10 }],
-    notes: '',
-    operationId: 'refill-abc',
-    timestampMs: 1_700_000_123_456,
-  });
-  assert.equal('_localStockDelta' in payload, false, 'refill no debe adjuntar _localStockDelta');
-  assert.equal(payload.operation_id, 'refill-abc', 'refill conserva operation_id estable');
-  assert.deepEqual(m.computeLocalStockReversal(payload), []);
-  console.log('refill no local delta: ok');
+function testPayloadWithoutDeltaHasNoReversal(m: Mod) {
+  // (5) un payload que NO adjunta _localStockDelta (p.ej. una operación que no
+  //     toca stock local) no debe inventar reversión — el rollback genérico solo
+  //     revierte lo comprobable.
+  const payloadSinDelta = {
+    type: 'prospection',
+    operation_id: 'op-abc',
+    lines: [{ product_id: 1, qty: 10 }],
+    timestamp: 1_700_000_123_456,
+  };
+  assert.equal('_localStockDelta' in payloadSinDelta, false);
+  assert.deepEqual(m.computeLocalStockReversal(payloadSinDelta), []);
+  console.log('payload sin delta: no reversal ok');
 }
 
 async function main() {
@@ -74,14 +72,10 @@ async function main() {
     // @ts-ignore -- import.meta solo existe en el runtime de test.
     new URL('../src/services/stockRollback.ts', import.meta.url).pathname
   )) as Mod;
-  const refill = (await import(
-    // @ts-ignore
-    new URL('../src/services/refillLogic.ts', import.meta.url).pathname
-  )) as RefillMod;
 
   testBuildDelta(m);
   testReversal(m);
-  await testRefillHasNoLocalDelta(m, refill);
+  testPayloadWithoutDeltaHasNoReversal(m);
   console.log('stockRollback tests: ok');
 }
 

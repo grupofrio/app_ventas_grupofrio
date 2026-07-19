@@ -20,6 +20,8 @@
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { AppState, AppStateStatus } from 'react-native';
 import { useSyncStore } from '../stores/useSyncStore';
+import { useProductStore } from '../stores/useProductStore';
+import { useAuthStore } from '../stores/useAuthStore';
 import { shouldWakeOnNetTransition, NetSnapshot } from './syncWakeup';
 
 let netUnsubscribe: (() => void) | null = null;
@@ -44,6 +46,23 @@ function wakeQueue(): void {
   const store = useSyncStore.getState();
   store.processQueue();
   store.scheduleWake();
+  maybeAuthoritativeRefreshAfterLegacyMigration();
+}
+
+/**
+ * Tras migrar eventos legacy de recarga/devolución (que revirtieron stock local
+ * de forma optimista), forzamos UNA recarga autoritativa del inventario al
+ * reconectar/volver a foreground: el servidor es la fuente de verdad y corrige
+ * cualquier desfase que dejara la reversión local. `consumeLegacyRefreshPending`
+ * garantiza que ocurra una sola vez por migración.
+ */
+function maybeAuthoritativeRefreshAfterLegacyMigration(): void {
+  const sync = useSyncStore.getState();
+  if (!sync.consumeLegacyRefreshPending()) return;
+  const warehouseId = useAuthStore.getState().warehouseId;
+  if (warehouseId) {
+    void useProductStore.getState().loadProducts(warehouseId);
+  }
 }
 
 export function startConnectivityMonitor(): void {

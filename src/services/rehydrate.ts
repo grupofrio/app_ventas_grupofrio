@@ -123,6 +123,20 @@ export async function rehydrateAppState(): Promise<{
     productCount = await useProductStore.getState().hydrateFromCache(warehouseId);
     const restoredPrices = await hydratePriceCacheFromDisk();
 
+    // 4. Migración de compatibilidad (UNA versión): descarta de la cola cualquier
+    // evento legacy de recarga/devolución (flujo retirado), revierte su delta de
+    // stock local de forma idempotente y arma el aviso no bloqueante + el refresh
+    // autoritativo pendiente. Corre DESPUÉS de rehidratar la cola y el catálogo
+    // para que la reversión alcance los productos; el guard de processOneItem es
+    // la segunda red por si algún evento se procesa antes.
+    const legacyMigration = useSyncStore.getState().migrateLegacyRefillUnload();
+    if (legacyMigration.migrated > 0) {
+      console.log(
+        `[rehydrate] legacy refill/unload migrated: ${legacyMigration.migrated} ` +
+        `(reverted ${legacyMigration.reverted} local-stock entries)`
+      );
+    }
+
     console.log(
       `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}, prices=${restoredPrices}`
     );

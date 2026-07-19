@@ -6,7 +6,9 @@
  * - GPS batch processing with concurrent-5 fallback
  * - Backoff with jitter: 2s / 8s / 30s (±20%)
  * - 'dead' status after MAX_RETRIES with rollback
- * - Rollback for sale_order, unload, AND refill
+ * - Rollback GENÉRICO por `_localStockDelta` (independiente del type)
+ * - Migración/guard de eventos legacy refill/unload (retirados del producto):
+ *   nunca se reenvían; se revierte el stock local y se descartan de la cola.
  * - Structured logging (no __DEV__ guards on critical logs)
  * - Crash recovery: syncing → pending on rehydrate
  *
@@ -59,6 +61,12 @@ import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import {
+  isLegacyRefillUnloadItem,
+  planLegacyReversal,
+  partitionLegacyRefillUnload,
+  consumedFlagForSource,
+} from '../services/legacyRefillUnloadMigration';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
 // ═══ Constants ═══
@@ -124,6 +132,12 @@ interface SyncState {
   errorCount: number;
   deadCount: number;
 
+  // Migración legacy refill/unload: cuántas solicitudes antiguas se descartaron
+  // (para el aviso NO bloqueante) y si hay que forzar un refresh autoritativo de
+  // inventario al reconectar (el delta local revertido lo confirma el servidor).
+  legacyMigrationNoticeCount: number;
+  legacyRefreshPending: boolean;
+
   // V2: cycle metrics (for observability)
   lastCycleMetrics: CycleMetrics | null;
 
@@ -152,6 +166,12 @@ interface SyncState {
   // error item; fires processQueue when its backoff elapses).
   scheduleWake: () => void;
   clearWakeTimer: () => void;
+
+  // Migración/guard de eventos legacy refill/unload.
+  migrateLegacyRefillUnload: () => { migrated: number; reverted: number };
+  discardLegacyRefillUnload: (id: string) => boolean;
+  clearLegacyMigrationNotice: () => void;
+  consumeLegacyRefreshPending: () => boolean;
 
   // V2: helpers for diagnostics
   getQueueSummary: () => QueueSummary;
@@ -206,6 +226,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   pendingCount: 0,
   errorCount: 0,
   deadCount: 0,
+  legacyMigrationNoticeCount: 0,
+  legacyRefreshPending: false,
   lastCycleMetrics: null,
 
   // ═══ Enqueue ═══
@@ -620,6 +642,94 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
   },
 
+  // ═══ Migración/guard de eventos legacy refill/unload ═══
+
+  // Migra TODA la cola: revierte el stock local de los eventos legacy de
+  // recarga/devolución y los retira. Idempotente y seguro ante cierre a mitad:
+  //   Fase 1 — MARCA el consumo (`_localStockRolledBack`/`_legacyStockRestored`)
+  //            y persiste ANTES de tocar stock, para que una reejecución tras un
+  //            cierre a mitad NUNCA vuelva a revertir (a lo sumo pierde una
+  //            reversión, que el refresh autoritativo corrige).
+  //   Fase 2 — aplica la reversión al stock local.
+  //   Fase 3 — retira los legacy de la cola, arma el aviso y el refresh pendiente.
+  migrateLegacyRefillUnload: () => {
+    const { legacy } = partitionLegacyRefillUnload(get().queue);
+    if (legacy.length === 0) return { migrated: 0, reverted: 0 };
+
+    const plans = new Map<string, ReturnType<typeof planLegacyReversal>>();
+    const flagged = get().queue.map((item) => {
+      if (!isLegacyRefillUnloadItem(item)) return item;
+      const plan = planLegacyReversal(item);
+      plans.set(item.id, plan);
+      const flag = plan ? consumedFlagForSource(plan.source) : null;
+      if (flag) return { ...item, payload: { ...item.payload, [flag]: true } };
+      return item;
+    });
+    set({ queue: flagged });
+    get().persistQueue(); // marca durable antes de tocar stock
+
+    const updateLocalStock = useProductStore.getState().updateLocalStock;
+    let reverted = 0;
+    for (const plan of plans.values()) {
+      if (!plan) continue;
+      for (const r of plan.reversal) {
+        updateLocalStock(r.product_id, r.qty);
+        reverted += 1;
+      }
+    }
+
+    const kept = get().queue.filter((i) => !isLegacyRefillUnloadItem(i));
+    set({
+      queue: kept,
+      ...computeCounts(kept),
+      legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + legacy.length,
+      legacyRefreshPending: true,
+    });
+    get().persistQueue();
+    logWarn('sync', 'legacy_refill_unload_migrated', { migrated: legacy.length, reverted });
+    return { migrated: legacy.length, reverted };
+  },
+
+  // Descarta UN ítem legacy (usado por el guard del dispatcher si un evento en
+  // memoria llega a procesarse). Mismo contrato idempotente que la migración.
+  discardLegacyRefillUnload: (id) => {
+    const item = get().queue.find((i) => i.id === id);
+    if (!item || !isLegacyRefillUnloadItem(item)) return false;
+    const plan = planLegacyReversal(item);
+    const flag = plan ? consumedFlagForSource(plan.source) : null;
+    if (flag) {
+      const marked = get().queue.map((i) =>
+        i.id === id ? { ...i, payload: { ...i.payload, [flag]: true } } : i,
+      );
+      set({ queue: marked });
+      get().persistQueue();
+    }
+    if (plan && plan.reversal.length > 0) {
+      const updateLocalStock = useProductStore.getState().updateLocalStock;
+      plan.reversal.forEach((r) => updateLocalStock(r.product_id, r.qty));
+    }
+    const kept = get().queue.filter((i) => i.id !== id);
+    set({
+      queue: kept,
+      ...computeCounts(kept),
+      legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + 1,
+      legacyRefreshPending: true,
+    });
+    get().persistQueue();
+    logWarn('sync', 'legacy_refill_unload_discarded', { id, type: item.type });
+    return true;
+  },
+
+  clearLegacyMigrationNotice: () => set({ legacyMigrationNoticeCount: 0 }),
+
+  // Consume (una sola vez) la bandera de refresh autoritativo pendiente. El
+  // llamador (connectivity, en reconexión/foreground) recarga el inventario.
+  consumeLegacyRefreshPending: () => {
+    if (!get().legacyRefreshPending) return false;
+    set({ legacyRefreshPending: false });
+    return true;
+  },
+
   // ═══ Diagnostics helpers ═══
 
   getQueueSummary: (): QueueSummary => {
@@ -657,6 +767,16 @@ async function processOneItem(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): Promise<boolean> {
+  // Guard temporal (compat una versión): un evento legacy de recarga/devolución
+  // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra
+  // (revierte stock local + descarta de la cola) y se trata como manejado, sin
+  // bloquear el resto del ciclo, la sincronización ni el Corte.
+  if (isLegacyRefillUnloadItem(item)) {
+    get().discardLegacyRefillUnload(item.id);
+    logWarn('sync', 'legacy_dispatch_guard', { id: item.id, type: item.type });
+    return true;
+  }
+
   if (!areSyncDependenciesSatisfied(item, get().queue)) {
     logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
     return false;
@@ -934,24 +1054,15 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }, meta);
       break;
 
+    // NOTA: los antiguos case 'refill'/'unload' (que posteaban a los modelos van
+    // de recarga/descarga vía /api/create_update) se ELIMINARON. El flujo se
+    // retiró: la recarga la crea Almacén y el vendedor la acepta; la devolución
+    // (vendible + merma) se captura en el Corte. Cualquier evento legacy que quede
+    // en cola lo intercepta el guard de processOneItem (isLegacyRefillUnloadItem) y
+    // se migra (revierte stock + descarta); nunca llega a este dispatcher.
+
     // V2 types — basic dispatchers. Payloads follow the same
     // postRpc pattern. Backend contracts TBD per endpoint.
-    case 'refill':
-      await postRpc('/api/create_update', {
-        model: 'van.refill.request',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
-    case 'unload':
-      await postRpc('/api/create_update', {
-        model: 'van.unload',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
     case 'collection':
       await postRpc('/api/create_update', {
         model: 'account.payment',
@@ -990,7 +1101,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
   }
 }
 
-// ═══ Rollback V2 — sale_order + unload + refill ═══
+// ═══ Rollback V2 — genérico por `_localStockDelta` (+ sale_order) ═══
 
 /** Marca el ítem como ya-revertido en la cola, para evitar doble rollback. */
 function markLocalStockRolledBack(id: string): void {
@@ -1005,10 +1116,9 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
   const updateLocalStock = useProductStore.getState().updateLocalStock;
 
   // PR-3a: rollback GENÉRICO por `_localStockDelta`, independiente del `type`.
-  // Cubre unload (encolado como 'prospection', que antes caía en `default` y NO
-  // revertía → stock fantasma). Idempotente: computeLocalStockReversal devuelve
-  // [] si ya se revirtió (`_localStockRolledBack`), y aquí marcamos el flag tras
-  // revertir. Si hay delta, esta ruta es autoritativa (no cae al switch por-type).
+  // Idempotente: computeLocalStockReversal devuelve [] si ya se revirtió
+  // (`_localStockRolledBack`), y aquí marcamos el flag tras revertir. Si hay
+  // delta, esta ruta es autoritativa (no cae al switch por-type).
   const reversal = computeLocalStockReversal(item.payload);
   if (reversal.length > 0) {
     reversal.forEach((r) => updateLocalStock(r.product_id, r.qty));
@@ -1020,8 +1130,9 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
     });
     return;
   }
-  // Sin delta (o ya revertido): mantener el rollback legacy por-type para ítems
-  // que aún no llevan `_localStockDelta` (p.ej. rehidratados de versiones previas).
+  // Sin delta (o ya revertido): rollback por-type para ítems que aún no llevan
+  // `_localStockDelta`. Los antiguos case 'unload'/'refill' se ELIMINARON (el
+  // flujo se retiró; los eventos legacy los intercepta el guard antes de morir).
   switch (item.type) {
     case 'sale_order': {
       // Pedido offline pendiente (política S1): NO se descuenta stock local al
@@ -1034,36 +1145,6 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
         id: item.id,
         lines: Array.isArray(item.payload.lines) ? item.payload.lines.length : 0,
       });
-      break;
-    }
-
-    case 'unload': {
-      // V2: Unload deducts stock locally. On failure, restore it.
-      const unloadLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
-      if (unloadLines && unloadLines.length > 0) {
-        unloadLines.forEach((line) => {
-          updateLocalStock(line.product_id, line.qty); // positive = restore
-        });
-        logError('sync', 'rollback_unload', {
-          id: item.id,
-          lines_restored: unloadLines.length,
-        });
-      }
-      break;
-    }
-
-    case 'refill': {
-      // V2: Refill ADDS stock locally. On failure, REMOVE it.
-      const refillLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
-      if (refillLines && refillLines.length > 0) {
-        refillLines.forEach((line) => {
-          updateLocalStock(line.product_id, -line.qty); // negative = remove added stock
-        });
-        logError('sync', 'rollback_refill', {
-          id: item.id,
-          lines_reversed: refillLines.length,
-        });
-      }
       break;
     }
 

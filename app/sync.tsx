@@ -15,7 +15,6 @@ import { SyncQueueItem } from '../src/types/sync';
 import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
 import { describeRetryBlock } from '../src/services/trustSignals';
-import { syncItemLabel } from '../src/services/secondaryFlowCopy';
 import { formatCurrency } from '../src/utils/time';
 
 const typeIcons: Record<string, string> = {
@@ -205,8 +204,7 @@ export default function SyncScreen() {
 
 function SyncItem({ item }: { item: SyncQueueItem }) {
   const icon = typeIcons[item.type] || '📦';
-  // Etiqueta específica para refill (prospection con payload van.refill.request).
-  const label = syncItemLabel(item, typeLabels[item.type] || item.type);
+  const label = typeLabels[item.type] || item.type;
   const orderDetail = describeSaleOrderItem(item);
   const badge = statusBadge[item.status] || statusBadge.pending;
   // BLD-20260617-DEAD-CASCADE: un dependiente (p.ej. foto) que murió porque su

@@ -29,6 +29,7 @@ import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
 import { isStandardNoPlanError } from '../../src/services/routeLoadOutcome';
+import { legacyMigrationNoticeCopy } from '../../src/services/legacyRefillUnloadMigration';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -48,6 +49,10 @@ export default function HomeScreen() {
   const planError = useRouteStore((s) => s.error);
   const planLastSync = useRouteStore((s) => s.lastSync);
   const isOnline = useSyncStore((s) => s.isOnline);
+  // Aviso NO bloqueante: solicitudes legacy de recarga/devolución descartadas
+  // por la migración de compatibilidad. Se descarta al tocarlo.
+  const legacyNoticeCount = useSyncStore((s) => s.legacyMigrationNoticeCount);
+  const clearLegacyNotice = useSyncStore((s) => s.clearLegacyMigrationNotice);
   const salesSummary = useSalesStore((s) => s.summary);
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const products = useProductStore((s) => s.products);
@@ -196,6 +201,20 @@ export default function HomeScreen() {
           />
         }
       >
+        {legacyNoticeCount > 0 ? (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={clearLegacyNotice}
+            accessibilityRole="button"
+            accessibilityLabel="Descartar aviso de solicitudes antiguas"
+          >
+            <AlertBanner
+              variant="info"
+              icon="ℹ️"
+              message={`${legacyMigrationNoticeCopy(legacyNoticeCount).body} (toca para descartar)`}
+            />
+          </TouchableOpacity>
+        ) : null}
         {showNoPlanState ? (
           /* BLD-20260425-NOPLAN: EmptyState dedicado cuando no hay plan
              para hoy. Reemplaza KPIs/mapa/paradas para que el operador no

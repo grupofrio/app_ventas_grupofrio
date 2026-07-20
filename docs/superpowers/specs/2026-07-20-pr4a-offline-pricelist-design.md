@@ -14,13 +14,13 @@ La venta conservará la mejor tarifa confiable disponible localmente:
 
 1. La tarifa explícita de la parada, si existe.
 2. En su ausencia, una tarifa positiva ya confirmada en la caché del cliente.
-3. Si ninguna existe, `null`; `buildSalesCreatePayload` omitirá `pricelist_id` y el backend la resolverá al sincronizar.
+3. Si ninguna existe, `null`; el ítem de cola conservará ese valor y `buildSalesCreatePayload` omitirá `pricelist_id` del contrato REST cuando se sincronice.
 
 ## Problema actual
 
 `app/sale/[stopId].tsx` resuelve la tarifa antes de separar la ruta online de la offline. Cuando la parada no trae una tarifa explícita, la confirmación llama a `getPartnerPricelistId` aun con `isOnline === false`. Esto introduce una dependencia de red en un flujo que debe ser enteramente local y puede retrasar o impedir que la venta se encole.
 
-El flujo actual ya dispone de `peekResolvedPartnerPricelistId`, que solo consulta el estado local rehidratado. Esa lectura sí es segura offline.
+El flujo actual ya dispone de `peekResolvedPartnerPricelistId`, que solo consulta el mapa local en memoria, ya sea rehidratado o poblado durante la sesión. Esa lectura sí es segura offline.
 
 ## Alcance aprobado
 
@@ -64,7 +64,7 @@ interface SalePricelistDecision {
 }
 ```
 
-La función normalizará ambos identificadores y solo considerará válidos los enteros positivos. La matriz de decisión será:
+La función aplicará el mismo criterio positivo que usa actualmente la pantalla (`typeof value === 'number' && value > 0`) para evitar cambiar el comportamiento online como parte de PR-4a. La matriz de decisión será:
 
 | Conectividad | Tarifa de parada | Tarifa en caché | Tarifa elegida inicialmente | Ejecutar resolvedor |
 | --- | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ La función normalizará ambos identificadores y solo considerará válidos los 
 | offline | ausente | ausente | `null` | no |
 | online | ausente | cualquiera | caché o `null` | sí |
 
-En el último caso se conserva el comportamiento online actual: se llama al resolvedor existente, que puede responder desde su propia caché o actualizarla mediante Odoo. Después se vuelve a leer `peekResolvedPartnerPricelistId` y se ejecuta nuevamente la decisión con el valor actualizado.
+En el último caso se conserva el comportamiento online actual: se llama al resolvedor existente, que puede responder desde su propia caché o actualizarla mediante Odoo. La decisión se calcula una sola vez. Después de resolver, la pantalla vuelve a leer `peekResolvedPartnerPricelistId`, aplica el mismo criterio positivo al valor leído y lo usa directamente como tarifa final. No se vuelve a evaluar `shouldResolvePartnerPricelist` ni se crea un ciclo de resolución.
 
 ### Integración en la confirmación de venta
 
@@ -83,7 +83,7 @@ Dentro de `handleConfirm`, el orden será:
 2. Leer la tarifa confirmada en caché con `peekResolvedPartnerPricelistId`.
 3. Calcular la decisión pura.
 4. Ejecutar `getPartnerPricelistId` solo cuando `shouldResolvePartnerPricelist` sea verdadero.
-5. Si se ejecutó el resolvedor, volver a leer la caché y recalcular la decisión.
+5. Si se ejecutó el resolvedor, volver a leer la caché y usar directamente ese valor normalizado como tarifa final.
 6. Construir el payload con la tarifa elegida.
 7. Continuar por el flujo online u offline existente.
 
@@ -91,7 +91,9 @@ La decisión no moverá ni alterará el bloqueo de confirmación, la captura de 
 
 ### Contrato sin tarifa local
 
-Cuando una venta offline no tenga tarifa explícita ni una tarifa positiva confirmada en caché, la decisión devolverá `pricelistId: null`. El comportamiento existente de `buildSalesCreatePayload` omitirá `pricelist_id`; no se enviará un valor inventado ni una tarifa de compañía no confirmada. El backend seguirá siendo responsable de asignar la tarifa al procesar la operación.
+Cuando una venta offline no tenga tarifa explícita ni una tarifa positiva confirmada en caché, la decisión devolverá `pricelistId: null`. La pantalla seguirá encolando el payload crudo con `pricelist_id: null`; PR-4a no aplicará el builder antes de `enqueue` ni modificará el contrato persistido de la cola.
+
+Al despachar posteriormente el ítem `sale_order`, `processSyncItem` seguirá llamando a `buildSalesCreatePayload`. En ese límite cola → REST, el builder existente omitirá el valor nulo y el backend recibirá el contrato sin `pricelist_id`, por lo que seguirá siendo responsable de asignar la tarifa. No se enviará un valor inventado ni una tarifa de compañía no confirmada.
 
 ### Errores
 
@@ -103,11 +105,12 @@ El manejo de errores del resolvedor online permanece sin cambios. Si falla, la c
 
 La implementación seguirá TDD e incluirá:
 
-1. Pruebas unitarias de la matriz completa de la función pura, incluyendo identificadores inválidos.
-2. Una prueba de cableado que demuestre que `getPartnerPricelistId` queda condicionado por la decisión y no se ejecuta en el camino offline.
-3. Una prueba que preserve el comportamiento online sin tarifa explícita.
-4. La suite existente de tarifa, payload y venta offline.
-5. Verificación de tipos y suite completa del repositorio.
+1. Pruebas unitarias de la matriz completa de la función pura, incluyendo valores nulos, cero, negativos y `NaN`; deben comprobar expresamente `shouldResolvePartnerPricelist === false` offline.
+2. Una prueba de cableado sobre la pantalla que asegure que la llamada a `getPartnerPricelistId` está dentro del guard `shouldResolvePartnerPricelist` producido por la decisión. El repositorio usa inspecciones estructurales de texto para este nivel; no se exigirá un spy de runtime ni una orquestación inyectable fuera del alcance aprobado.
+3. Una prueba de cableado que preserve el camino online sin tarifa explícita: la decisión habilita el resolvedor y la lectura posterior de caché produce la tarifa final.
+4. Una prueba contractual de `buildSalesCreatePayload` con `pricelist_id: null` que confirme que el contrato REST lo omite, sin cambiar el payload crudo que persiste la cola.
+5. La suite existente de tarifa, payload y venta offline.
+6. Verificación de tipos y suite completa del repositorio.
 
 La validación manual final será confirmar una venta en modo avión y comprobar que se encola como `sale_order` sin espera ni intento de RPC de tarifa.
 
@@ -116,6 +119,6 @@ La validación manual final será confirmar una venta en modo avión y comprobar
 - Una venta offline nunca llama a `getPartnerPricelistId` durante la confirmación.
 - Una tarifa explícita de la parada conserva precedencia online y offline.
 - Una venta offline puede reutilizar una tarifa positiva confirmada en caché.
-- Sin tarifa local confiable, el payload offline omite `pricelist_id` y la venta se encola normalmente.
-- El flujo online conserva la resolución actual de tarifa del cliente.
+- Sin tarifa local confiable, el ítem offline se encola normalmente con `pricelist_id: null` y el contrato REST posterior omite ese campo.
+- Para identificadores que cumplen el criterio positivo actual, el flujo online conserva la resolución vigente de tarifa del cliente.
 - No cambian los contratos de cola, payload, stock, idempotencia ni interfaz.

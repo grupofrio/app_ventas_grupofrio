@@ -169,9 +169,17 @@ export interface DurableMigrationSteps {
   ) => void;
 }
 
+// SOLO 'completed' es éxito (ok:true). `reverted_removal_unpersisted` es ok:FALSE:
+// la operación NO está completada (el evento sigue en cola), aunque sea
+// recuperable (pending + marcas de consumo durables, stock ya revertido). Tratarla
+// como éxito hacía que el procesador la considerara "manejada" y programara
+// drain_now → redrenaje agresivo si el storage seguía fallando.
 export type DurableMigrationResult =
-  | { ok: true; phase: 'completed' | 'reverted_removal_unpersisted' }
-  | { ok: false; phase: 'pending_persist_failed' | 'mark_persist_failed' };
+  | { ok: true; phase: 'completed' }
+  | {
+      ok: false;
+      phase: 'pending_persist_failed' | 'mark_persist_failed' | 'reverted_removal_unpersisted';
+    };
 
 export async function runDurableLegacyMigration(
   steps: DurableMigrationSteps,
@@ -192,12 +200,13 @@ export async function runDurableLegacyMigration(
   }
   // 3. Reversión local (segura: flags de consumo ya durables → sin doble revert).
   steps.applyReversal();
-  // 4. Retiro final. Si falla, queda RECUPERABLE (pending + marcas durables).
+  // 4. Retiro final. Si falla: RECUPERABLE pero NO completado → ok:false. El
+  //    procesador debe DIFERIR con backoff (no drain_now, no dead, no reenvío).
   try {
     await steps.removeAndPersist();
   } catch (error) {
     steps.onPhaseError('persist_final', error);
-    return { ok: true, phase: 'reverted_removal_unpersisted' };
+    return { ok: false, phase: 'reverted_removal_unpersisted' };
   }
   return { ok: true, phase: 'completed' };
 }

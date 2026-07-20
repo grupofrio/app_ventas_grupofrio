@@ -80,6 +80,10 @@ const GPS_BATCH_SIZE = 50;
 const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
 const BACKOFF_JITTER = 0.2;
 
+// Backoff de un ítem legacy DIFERIDO por fallo de persistencia final. Fijo (no
+// escalante) y != 0ms: reintenta con cadencia moderada sin redrenaje agresivo.
+const LEGACY_DEFER_BACKOFF_MS = 8000;
+
 // Perf Fase 1B: ventana para AGRUPAR las persistencias de la cola por
 // transiciones de estado (markDone/markError/markDead/clearDone/clearDead y
 // post-ciclo). Antes cada mutación reescribía TODO el JSON de la cola; con un
@@ -171,7 +175,13 @@ interface SyncState {
   // Migración/guard de eventos legacy refill/unload. Async: la reparación
   // pendiente se persiste durablemente ANTES de retirar cola o tocar stock.
   migrateLegacyRefillUnload: () => Promise<{ migrated: number; reverted: number; ok: boolean }>;
-  discardLegacyRefillUnload: (id: string) => Promise<{ ok: boolean }>;
+  discardLegacyRefillUnload: (
+    id: string,
+  ) => Promise<{ status: 'completed' | 'deferred' | 'not_legacy' }>;
+  // Difiere un ítem legacy cuya persistencia final falló: status='error' con
+  // backoff y retries=0 (NUNCA llega a dead), fuera de la elegibilidad inmediata
+  // → no dispara drain_now; se reintenta cuando venza el backoff.
+  deferLegacyMigrationItem: (id: string) => void;
   clearLegacyMigrationNotice: () => void;
   // Refresh autoritativo: `has` LEE (no consume); `markCompleted` limpia SOLO
   // tras un refresh exitoso, de forma DURABLE (persiste false y espera confirmación
@@ -485,6 +495,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     let processed = 0;
     let succeeded = 0;
     let failed = 0;
+    // P1 (Codex): un ítem legacy DIFERIDO por fallo de persistencia final NO debe
+    // disparar drain_now (redrenaje agresivo si el storage sigue fallando). Se
+    // rastrea aquí y se usa en la decisión post-ciclo para forzar backoff.
+    let hadDeferredStorageFailure = false;
+    const tally = (o: ProcessItemOutcome): void => {
+      processed++;
+      if (o === 'handled') succeeded++;
+      else if (o === 'deferred') hadDeferredStorageFailure = true;
+      else failed++; // 'failed' | 'dependency_wait'
+    };
 
     logInfo('sync', 'cycle_start', { candidates: candidates.length });
 
@@ -503,11 +523,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
       const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
-
+        tally(await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,
         // we don't stop the whole cycle — other independent items can proceed.
       }
@@ -516,10 +532,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
         .slice(0, MAX_ITEMS_PER_CYCLE - processed);
       for (const item of orderedP2) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
+        tally(await processOneItem(item, get, set));
       }
 
       // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
@@ -538,10 +551,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
       // Other P3 (client_event etc): serial
       for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
+        tally(await processOneItem(item, get, set));
       }
 
       // ── End of cycle ──
@@ -609,8 +619,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // caso; aquí además limpiamos cualquier wake timer pendiente. La cola
       // queda a la espera de un evento EXTERNO: foreground, reconexión, enqueue
       // nuevo o reintento manual — con el error ya logueado para diagnóstico.
+      // P1 (Codex, ronda final): si hubo un legacy DIFERIDO por fallo de
+      // persistencia final, NUNCA drain_now — usar backoff. Sin esto, el legacy
+      // seguía en cola y (si quedaba elegible) re-disparaba drain_now → storage
+      // falla → drain_now, en bucle. El ítem diferido queda en 'error'+backoff
+      // (fuera de la elegibilidad inmediata), y scheduleWake lo reintenta al vencer.
       const action = decidePostCycleActionAfterCycle({
         hadUnhandledCycleError,
+        hadDeferredStorageFailure,
         queue: get().queue,
         now: Date.now(),
         maxRetries: MAX_RETRIES,
@@ -622,6 +638,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       } else if (action === 'drain_now') {
         setTimeout(() => { void get().processQueue(); }, 0);
       } else {
+        if (hadDeferredStorageFailure) {
+          logWarn('sync', 'post_cycle_backoff_after_deferred_storage', { next: 'schedule_wake' });
+        }
         get().scheduleWake();
       }
     }
@@ -673,13 +692,33 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   // Descarta UN ítem legacy (guard del dispatcher). MISMA operación durable que
-  // la migración (un solo helper); devuelve ok=false si la persistencia crítica
-  // falló, para que el guard NO lo marque procesado y se reintente.
+  // la migración (un solo helper). status='deferred' si la persistencia crítica
+  // falló → el guard NO lo marca procesado y lo difiere con backoff.
   discardLegacyRefillUnload: async (id) => {
     const item = get().queue.find((i) => i.id === id);
-    if (!item || !isLegacyRefillUnloadItem(item)) return { ok: false };
+    if (!item || !isLegacyRefillUnloadItem(item)) return { status: 'not_legacy' };
     const res = await durableMigrateLegacy(get, set, [item]);
-    return { ok: res.ok };
+    return { status: res.status };
+  },
+
+  // Difiere un ítem legacy con backoff SIN mandarlo a dead: status='error',
+  // retries=0 (nunca alcanza MAX_RETRIES), next_retry_at futuro (fuera de la
+  // elegibilidad inmediata → no drain_now). El reintento re-ejecuta la operación
+  // durable; el stock NO se re-revierte (flag de consumo ya durable).
+  deferLegacyMigrationItem: (id) => {
+    const newQueue = get().queue.map((i) =>
+      i.id === id
+        ? {
+            ...i,
+            status: 'error' as SyncItemStatus,
+            error_message: 'legacy migration deferred (storage)',
+            retries: 0, // NO acumula → nunca dead; el guard intercepta antes de enviar
+            next_retry_at: Date.now() + LEGACY_DEFER_BACKOFF_MS,
+          }
+        : i,
+    );
+    set({ queue: newQueue, ...computeCounts(newQueue) });
+    schedulePersist();
   },
 
   clearLegacyMigrationNotice: () => set({ legacyMigrationNoticeCount: 0 }),
@@ -734,7 +773,7 @@ async function durableMigrateLegacy(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
   events: SyncQueueItem[],
-): Promise<{ migrated: number; reverted: number; ok: boolean }> {
+): Promise<{ migrated: number; reverted: number; ok: boolean; status: 'completed' | 'deferred' }> {
   const ids = new Set(events.map((e) => e.id));
   const reversalEntries: Array<{ product_id: number; qty: number }> = [];
   const consumedFlagById = new Map<string, '_localStockRolledBack' | '_legacyStockRestored' | null>();
@@ -782,44 +821,63 @@ async function durableMigrateLegacy(
   });
 
   const ok = result.ok;
+  // 'completed' = retirado y persistido. Cualquier otra fase = 'deferred': el
+  // evento sigue en cola, NO se considera manejado, se reintenta con backoff.
+  const status: 'completed' | 'deferred' = result.phase === 'completed' ? 'completed' : 'deferred';
   logWarn('sync', 'legacy_refill_unload_migrated', {
     migrated: ok ? events.length : 0,
     reverted: ok ? reversalEntries.length : 0,
     phase: result.phase,
     ok,
+    status,
   });
   return {
     migrated: ok ? events.length : 0,
     reverted: ok ? reversalEntries.length : 0,
     ok,
+    status,
   };
 }
 
 // ═══ Individual item processor ═══
 
+// Resultado explícito del procesador de un ítem (P1 Codex):
+//  - 'handled'         → completado (o descartado con reparación durable); cuenta éxito.
+//  - 'failed'          → error real (markError/markDead); cuenta fallo.
+//  - 'deferred'        → legacy cuya persistencia final falló: sigue en cola con
+//                        backoff, NO manejado, NO enviado, NO re-revertido, y NO
+//                        debe disparar drain_now.
+//  - 'dependency_wait' → esperando una dependencia; no es fallo real.
+type ProcessItemOutcome = 'handled' | 'failed' | 'deferred' | 'dependency_wait';
+
 async function processOneItem(
   item: SyncQueueItem,
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
-): Promise<boolean> {
+): Promise<ProcessItemOutcome> {
   // Guard temporal (compat una versión): un evento legacy de recarga/devolución
   // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra con la
-  // MISMA operación durable que el rehidratado. Solo se trata como manejado si la
-  // persistencia crítica de la reparación pendiente confirmó; si falló, se
-  // conserva para retry (no se envía, no se marca procesado) sin bloquear al resto.
+  // MISMA operación durable que el rehidratado.
   if (isLegacyRefillUnloadItem(item)) {
     const res = await get().discardLegacyRefillUnload(item.id);
-    if (res.ok) {
+    if (res.status === 'completed') {
       logWarn('sync', 'legacy_dispatch_guard', { id: item.id, type: item.type });
-      return true;
+      return 'handled';
     }
-    logWarn('sync', 'legacy_dispatch_guard_deferred', { id: item.id, type: item.type });
-    return false; // durable falló → conservar; nunca se envía (sigue siendo legacy)
+    if (res.status === 'deferred') {
+      // Persistencia final falló: reparación pendiente + marcas + reversión ya
+      // durables. Diferir con backoff (nunca dead, nunca reenvío, nunca doble
+      // reversión). NO devolver 'handled' (evitaría el drain_now agresivo).
+      get().deferLegacyMigrationItem(item.id);
+      logWarn('sync', 'legacy_dispatch_guard_deferred', { id: item.id, type: item.type });
+      return 'deferred';
+    }
+    return 'handled'; // not_legacy (ya no está / no es legacy): nada que hacer
   }
 
   if (!areSyncDependenciesSatisfied(item, get().queue)) {
     logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
-    return false;
+    return 'dependency_wait';
   }
 
   // Mark as syncing
@@ -842,7 +900,7 @@ async function processOneItem(
       }
     }
 
-    return true;
+    return 'handled';
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
@@ -862,7 +920,7 @@ async function processOneItem(
       get().markError(item.id, msg);
     }
 
-    return false;
+    return 'failed';
   }
 }
 

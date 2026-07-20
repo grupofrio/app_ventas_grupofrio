@@ -53,6 +53,31 @@ export function shouldWakeOnNetTransition(prev: NetSnapshot, next: NetSnapshot):
   return false;
 }
 
+/** warehouseId válido = número > 0 (null/undefined/0 = aún no asignado). */
+function isValidWarehouseId(id: number | null | undefined): id is number {
+  return typeof id === 'number' && id > 0;
+}
+
+/**
+ * ¿Esta transición de warehouseId debe disparar el refresh autoritativo pendiente?
+ * (P2 Codex). Dispara SOLO si hay refresh pendiente Y el warehouse pasó a un valor
+ * válido nuevo:
+ *  - null/undefined/0 → válido (apareció el almacén tras el arranque), o
+ *  - válido → OTRO válido distinto (cambió de almacén: el runner revalidará que la
+ *    carga corresponda al warehouse esperado y no limpiará con otro almacén).
+ * Sin pending o con el MISMO warehouse (7→7) no dispara → no carga innecesaria.
+ */
+export function shouldWakeOnWarehouseTransition(
+  prev: number | null | undefined,
+  next: number | null | undefined,
+  hasPending: boolean,
+): boolean {
+  if (!hasPending) return false;
+  if (!isValidWarehouseId(next)) return false;
+  if (!isValidWarehouseId(prev)) return true; // apareció un warehouse válido
+  return prev !== next;                        // cambió de un válido a otro válido
+}
+
 /**
  * ¿Está listo AHORA para procesarse? Espeja `isReady` de `processQueue`:
  *  - pending → listo, o
@@ -121,6 +146,13 @@ export function decidePostCycleAction(
 export interface PostCycleParams {
   /** true si el ciclo cayó en el catch de processQueue (throw INESPERADO). */
   hadUnhandledCycleError: boolean;
+  /**
+   * true si algún ítem legacy fue DIFERIDO por fallo de persistencia final
+   * (P1 Codex). En ese caso NUNCA se re-drena de inmediato (drain_now): el ítem
+   * quedó en 'error'+backoff y debe reintentarse con `schedule_wake`, no en 0 ms.
+   * Evita el bucle: storage falla → drain_now → storage falla → drain_now.
+   */
+  hadDeferredStorageFailure?: boolean;
   queue: Array<EligibleFields & DepFields>;
   now: number;
   maxRetries: number;
@@ -149,8 +181,13 @@ export interface PostCycleParams {
  * Sin error, mantiene la lógica normal (`drain_now` incluido).
  */
 export function decidePostCycleActionAfterCycle(params: PostCycleParams): PostCycleAction {
-  const { hadUnhandledCycleError, queue, now, maxRetries, depsSatisfied } = params;
+  const { hadUnhandledCycleError, hadDeferredStorageFailure, queue, now, maxRetries, depsSatisfied } = params;
   if (hadUnhandledCycleError) return 'idle';
+  // Fallo de persistencia diferido: prohibido drain_now (evita el redrenaje
+  // agresivo). Reintentar por backoff si hay algo que agendar; si no, idle.
+  if (hadDeferredStorageFailure) {
+    return nextWakeDelayMs(queue, { maxRetries, now }) != null ? 'schedule_wake' : 'idle';
+  }
   return decidePostCycleAction(queue, now, maxRetries, depsSatisfied);
 }
 

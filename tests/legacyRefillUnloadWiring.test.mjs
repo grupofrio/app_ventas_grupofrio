@@ -47,14 +47,40 @@ assert(!/van\.unload/.test(store), '#6 el store no debe referir van.unload');
 // ── #11 / #12 / #14 / #15: guard del dispatcher — intercepta, awaits durable,
 //     no envía si la persistencia crítica falla, y NO bloquea al resto ─────────
 assert(/isLegacyRefillUnloadItem\(item\)/.test(store), '#11 processOneItem tiene el guard legacy');
-const guardBlock = store.match(/if \(isLegacyRefillUnloadItem\(item\)\)[\s\S]{0,520}?\n\s{2}\}/);
+const guardBlock = store.match(/if \(isLegacyRefillUnloadItem\(item\)\)[\s\S]{0,1000}?\n\s{2}\}/);
 assert(guardBlock, '#12 el guard existe como bloque');
 assert(/await get\(\)\.discardLegacyRefillUnload\(item\.id\)/.test(guardBlock[0]),
   '#14 el guard AWAITa la operación durable (misma que la migración)');
-assert(/res\.ok/.test(guardBlock[0]), '#14 el guard decide según el resultado durable');
-assert(/return true/.test(guardBlock[0]), '#12 solo trata como manejado si la reparación quedó durable');
-assert(/return false/.test(guardBlock[0]),
-  '#15 si la persistencia crítica falla, NO lo marca procesado (conserva para retry, no bloquea al resto)');
+assert(/res\.status === 'completed'/.test(guardBlock[0]), 'el guard decide según el status durable');
+assert(/return 'handled'/.test(guardBlock[0]), '#12 solo maneja si la reparación quedó durable (completed)');
+assert(/res\.status === 'deferred'/.test(guardBlock[0]), '#14 detecta el diferido por fallo de persistencia');
+assert(/deferLegacyMigrationItem\(item\.id\)/.test(guardBlock[0]),
+  'P1 el guard DIFIERE con backoff (no dead, no reenvío, no drain_now)');
+assert(/return 'deferred'/.test(guardBlock[0]),
+  '#15 no lo marca manejado; conserva con backoff sin bloquear al resto');
+
+// ── P1: el diferido NO puede disparar drain_now ──────────────────────────────
+assert(/hadDeferredStorageFailure/.test(store),
+  'P1 el ciclo rastrea el fallo de persistencia diferido');
+assert(/deferLegacyMigrationItem:/.test(store), 'P1 el store expone deferLegacyMigrationItem (backoff, no dead)');
+// el diferido se marca error con retries:0 (nunca dead) y next_retry_at (backoff).
+const deferBlock = store.match(/deferLegacyMigrationItem: \(id\) =>[\s\S]{0,700}?schedulePersist\(\);/);
+assert(deferBlock, 'deferLegacyMigrationItem existe');
+assert(/retries: 0/.test(deferBlock[0]), 'P1 el diferido NO acumula retries (nunca dead)');
+assert(/next_retry_at: Date\.now\(\) \+ LEGACY_DEFER_BACKOFF_MS/.test(deferBlock[0]),
+  'P1 el diferido usa backoff (no 0 ms)');
+// la decisión post-ciclo recibe la señal para forzar backoff en vez de drain_now.
+assert(/hadDeferredStorageFailure,\n\s*queue: get\(\)\.queue/.test(store)
+  || /decidePostCycleActionAfterCycle\(\{[\s\S]{0,120}hadDeferredStorageFailure/.test(store),
+  'P1 la señal se pasa a decidePostCycleActionAfterCycle');
+// no existe ok:true para reverted_removal_unpersisted (nunca éxito).
+const migSvc = read('src/services/legacyRefillUnloadMigration.ts');
+assert(/reverted_removal_unpersisted/.test(migSvc), 'existe la fase reverted_removal_unpersisted');
+assert(!/ok: true, phase: 'reverted_removal_unpersisted'/.test(migSvc),
+  'reverted_removal_unpersisted NUNCA es ok:true');
+// syncWakeup: la decisión prohíbe drain_now cuando hubo diferido.
+const wakeup = read('src/services/syncWakeup.ts');
+assert(/hadDeferredStorageFailure/.test(wakeup), 'decidePostCycleActionAfterCycle contempla el diferido');
 
 // ── #9: el store expone la migración durable y el descarte ───────────────────
 assert(/migrateLegacyRefillUnload: async/.test(store), '#9 migrateLegacyRefillUnload es async (durable)');
@@ -98,6 +124,21 @@ assert(!/consumeLegacyRefreshPending/.test(connectivity), 'connectivity ya no us
 assert(!/loadProducts\(warehouseId\)/.test(connectivity), 'ya no usa loadProducts crudo (no autoritativo)');
 // #9/#15 (processQueue): el refresh es fire-and-forget y separado del drenaje.
 assert(/store\.processQueue\(\)/.test(connectivity), 'processQueue sigue independiente del refresh');
+
+// ── P2: suscripción REAL a warehouseId (única + cleanup) ─────────────────────
+assert(/useAuthStore\.subscribe\(/.test(connectivity), 'P2 connectivity se suscribe al store de auth');
+assert(/shouldWakeOnWarehouseTransition\(/.test(connectivity), 'P2 usa el helper de transición de warehouse');
+assert(/authUnsubscribe/.test(connectivity), 'P2 guarda el unsubscribe para limpiarlo');
+// una sola suscripción (guard) + cleanup en stopConnectivityMonitor.
+assert(/if \(!authUnsubscribe\)/.test(connectivity), 'P2 suscripción ÚNICA (guard)');
+const stopBlock = connectivity.match(/export function stopConnectivityMonitor[\s\S]{0,600}?\n\}/);
+assert(stopBlock && /authUnsubscribe\(\);\s*\n\s*authUnsubscribe = null;/.test(stopBlock[0]),
+  'P2 stopConnectivityMonitor limpia la suscripción');
+assert(/requestLegacyAuthoritativeRefresh\(\)/.test(connectivity),
+  'P2 reutiliza el runner singleton (no crea uno nuevo)');
+// singleton: un solo createLegacyRefreshRunner en el módulo.
+assert((connectivity.match(/createLegacyRefreshRunner\(/g) || []).length === 1,
+  'P2 un ÚNICO runner singleton compartido');
 
 // ── storage: variantes ESTRICTAS que rechazan en fallo ───────────────────────
 const storage = read('src/persistence/storage.ts');

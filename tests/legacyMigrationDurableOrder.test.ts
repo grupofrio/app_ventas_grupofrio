@@ -72,11 +72,12 @@ async function main() {
     assert.ok(!calls.includes('remove'));
   }
 
-  // #4 falla persistir cola final → reversión HECHA, pero recuperable (ok:true).
+  // #4 falla persistir cola final → reversión HECHA, recuperable, pero NO
+  // completado: ok=FALSE (no debe tratarse como éxito → sin drain_now).
   {
     const { calls, steps } = makeSteps('final');
     const res = await runDurableLegacyMigration(steps);
-    assert.deepEqual(res, { ok: true, phase: 'reverted_removal_unpersisted' });
+    assert.deepEqual(res, { ok: false, phase: 'reverted_removal_unpersisted' });
     assert.deepEqual(calls, ['pending', 'marked', 'reversal', 'remove', 'error:persist_final']);
   }
 

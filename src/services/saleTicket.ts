@@ -192,7 +192,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     body {
       width: 58mm;
       margin: 0;
-      padding: 4mm 3mm;
+      padding: 4mm 0;
       color: #111111;
       background: #ffffff;
       font-family: monospace;

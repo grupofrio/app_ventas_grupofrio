@@ -52,6 +52,7 @@ test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
   assert.match(html, /RFC:\s*SPG230420F52/);
   assert.match(html, /size:\s*58mm auto/);
   assert.match(html, /width:\s*58mm/);
+  assert.match(html, /body\s*\{[^}]*padding:\s*4mm 0;/);
   assert.match(html, /Cliente &amp; Socios &lt;test&gt;/);
   assert.match(html, /Vendedor &amp; Uno &lt;test&gt;/);
   assert.match(html, /Bolsa &lt;5kg&gt; &amp; hielo/);

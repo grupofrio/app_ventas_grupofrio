@@ -211,6 +211,37 @@ export async function runDurableLegacyMigration(
   return { ok: true, phase: 'completed' };
 }
 
+// ── Handler ÚNICO del resultado de una migración durable (P2 Codex) ──────────
+//
+// Usado por processOneItem (dispatcher) Y migrateLegacyRefillUnload (rehydrate) Y
+// discard: NO duplicar la decisión de defer/wake. Semántica:
+//  - `completed` → 'completed' (ya retirado); despierta el runner (pending sigue
+//    true hasta el refresh autoritativo).
+//  - cualquier otra fase → 'deferred': difiere el lote con backoff (status='error',
+//    retries=0 → nunca dead, next_retry_at futuro → fuera de elegibilidad).
+//  - el refresh solo se despierta si el pending quedó DURABLE, es decir en toda
+//    fase EXCEPTO `pending_persist_failed` (donde el paso 1 falló).
+export interface MigrationResultEffects {
+  /** Difiere el lote con backoff (status='error', retries=0). */
+  defer: () => void;
+  /** Despierta el runner del refresh autoritativo (tras pending durable). */
+  notifyRefreshPending: () => void;
+}
+
+export function handleDurableMigrationResult(
+  result: DurableMigrationResult,
+  effects: MigrationResultEffects,
+): 'completed' | 'deferred' {
+  // Wake DESPUÉS de crear pending durable (todas las fases salvo la que no lo creó).
+  if (result.phase !== 'pending_persist_failed') {
+    effects.notifyRefreshPending();
+  }
+  if (result.ok) return 'completed';
+  // No completado → diferir con backoff (nunca elegible de inmediato → sin drain_now).
+  effects.defer();
+  return 'deferred';
+}
+
 /** Copy del aviso NO bloqueante al usuario tras migrar/descartar solicitudes legacy. */
 export function legacyMigrationNoticeCopy(count: number): { title: string; body: string } {
   const n = count > 0 ? count : 0;

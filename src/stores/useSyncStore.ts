@@ -67,6 +67,7 @@ import {
   partitionLegacyRefillUnload,
   consumedFlagForSource,
   runDurableLegacyMigration,
+  handleDurableMigrationResult,
 } from '../services/legacyRefillUnloadMigration';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
@@ -110,6 +111,20 @@ function schedulePersist(): void {
 // un flanco de reconexión. El timer NO es un segundo procesador: solo invoca el
 // processQueue existente, que se auto-protege con el guard isSyncing.
 let _wakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+// P2 (Codex): "waker" INYECTADO del refresh autoritativo. connectivity registra
+// aquí `requestLegacyAuthoritativeRefresh` (runner singleton). Se invoca DESPUÉS
+// de que una migración deja `legacyRefreshPending=true` durable + en memoria, para
+// cerrar la carrera runner-preventivo/dispatcher. Inyección (no import) para NO
+// crear ciclo useSyncStore↔connectivity. Runtime-safe si aún no hay waker (no-op).
+let _legacyRefreshWaker: (() => void) | null = null;
+function notifyRefreshPendingReady(): void {
+  try {
+    _legacyRefreshWaker?.();
+  } catch {
+    // el wake nunca debe romper la migración
+  }
+}
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -178,10 +193,9 @@ interface SyncState {
   discardLegacyRefillUnload: (
     id: string,
   ) => Promise<{ status: 'completed' | 'deferred' | 'not_legacy' }>;
-  // Difiere un ítem legacy cuya persistencia final falló: status='error' con
-  // backoff y retries=0 (NUNCA llega a dead), fuera de la elegibilidad inmediata
-  // → no dispara drain_now; se reintenta cuando venza el backoff.
-  deferLegacyMigrationItem: (id: string) => void;
+  // P2: connectivity inyecta aquí el disparador del refresh autoritativo (runner
+  // singleton). Toda migración que deje pending durable lo invoca al terminar.
+  setLegacyRefreshWaker: (waker: (() => void) | null) => void;
   clearLegacyMigrationNotice: () => void;
   // Refresh autoritativo: `has` LEE (no consume); `markCompleted` limpia SOLO
   // tras un refresh exitoso, de forma DURABLE (persiste false y espera confirmación
@@ -701,24 +715,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     return { status: res.status };
   },
 
-  // Difiere un ítem legacy con backoff SIN mandarlo a dead: status='error',
-  // retries=0 (nunca alcanza MAX_RETRIES), next_retry_at futuro (fuera de la
-  // elegibilidad inmediata → no drain_now). El reintento re-ejecuta la operación
-  // durable; el stock NO se re-revierte (flag de consumo ya durable).
-  deferLegacyMigrationItem: (id) => {
-    const newQueue = get().queue.map((i) =>
-      i.id === id
-        ? {
-            ...i,
-            status: 'error' as SyncItemStatus,
-            error_message: 'legacy migration deferred (storage)',
-            retries: 0, // NO acumula → nunca dead; el guard intercepta antes de enviar
-            next_retry_at: Date.now() + LEGACY_DEFER_BACKOFF_MS,
-          }
-        : i,
-    );
-    set({ queue: newQueue, ...computeCounts(newQueue) });
-    schedulePersist();
+  setLegacyRefreshWaker: (waker) => {
+    _legacyRefreshWaker = waker;
   },
 
   clearLegacyMigrationNotice: () => set({ legacyMigrationNoticeCount: 0 }),
@@ -821,9 +819,13 @@ async function durableMigrateLegacy(
   });
 
   const ok = result.ok;
-  // 'completed' = retirado y persistido. Cualquier otra fase = 'deferred': el
-  // evento sigue en cola, NO se considera manejado, se reintenta con backoff.
-  const status: 'completed' | 'deferred' = result.phase === 'completed' ? 'completed' : 'deferred';
+  // Handler ÚNICO del resultado (P2): difiere TODO el lote con backoff si quedó
+  // deferred (también en rehydrate, no solo en el dispatcher) y despierta el runner
+  // tras dejar pending durable. Sin duplicar la lógica de defer/wake.
+  const status = handleDurableMigrationResult(result, {
+    defer: () => deferLegacyEvents(get, set, [...ids]),
+    notifyRefreshPending: notifyRefreshPendingReady,
+  });
   logWarn('sync', 'legacy_refill_unload_migrated', {
     migrated: ok ? events.length : 0,
     reverted: ok ? reversalEntries.length : 0,
@@ -837,6 +839,38 @@ async function durableMigrateLegacy(
     ok,
     status,
   };
+}
+
+// Difiere un LOTE de ítems legacy con backoff SIN mandarlos a dead: status='error',
+// retries=0 (nunca alcanza MAX_RETRIES), next_retry_at futuro (fuera de la
+// elegibilidad inmediata → no drain_now). El reintento re-ejecuta la operación
+// durable; el stock NO se re-revierte (flag de consumo ya durable). Único punto de
+// defer, compartido por rehydrate y dispatcher (vía durableMigrateLegacy).
+function deferLegacyEvents(
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+  ids: string[],
+): void {
+  if (ids.length === 0) return;
+  const idSet = new Set(ids);
+  const retryAt = Date.now() + LEGACY_DEFER_BACKOFF_MS;
+  const newQueue = get().queue.map((i) =>
+    idSet.has(i.id)
+      ? {
+          ...i,
+          status: 'error' as SyncItemStatus,
+          error_message: 'legacy migration deferred (storage)',
+          retries: 0, // NO acumula → nunca dead; el guard intercepta antes de enviar
+          next_retry_at: retryAt,
+        }
+      : i,
+  );
+  set({ queue: newQueue, ...computeCounts(newQueue) });
+  schedulePersist();
+  // Arma el despertador de backoff AHORA: en rehydrate el defer ocurre fuera de un
+  // ciclo de processQueue (no hay decisión post-ciclo que lo agende), así que sin
+  // esto el reintento esperaría a un evento externo. Idempotente en el dispatcher.
+  get().scheduleWake();
 }
 
 // ═══ Individual item processor ═══
@@ -859,20 +893,16 @@ async function processOneItem(
   // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra con la
   // MISMA operación durable que el rehidratado.
   if (isLegacyRefillUnloadItem(item)) {
+    // discardLegacyRefillUnload → durableMigrateLegacy YA difiere con backoff y
+    // despierta el runner (handler único). Aquí solo mapeamos el status al
+    // resultado del ciclo: 'deferred' evita el drain_now agresivo.
     const res = await get().discardLegacyRefillUnload(item.id);
-    if (res.status === 'completed') {
-      logWarn('sync', 'legacy_dispatch_guard', { id: item.id, type: item.type });
-      return 'handled';
-    }
     if (res.status === 'deferred') {
-      // Persistencia final falló: reparación pendiente + marcas + reversión ya
-      // durables. Diferir con backoff (nunca dead, nunca reenvío, nunca doble
-      // reversión). NO devolver 'handled' (evitaría el drain_now agresivo).
-      get().deferLegacyMigrationItem(item.id);
       logWarn('sync', 'legacy_dispatch_guard_deferred', { id: item.id, type: item.type });
       return 'deferred';
     }
-    return 'handled'; // not_legacy (ya no está / no es legacy): nada que hacer
+    logWarn('sync', 'legacy_dispatch_guard', { id: item.id, type: item.type, status: res.status });
+    return 'handled'; // completed o not_legacy: nada más que hacer
   }
 
   if (!areSyncDependenciesSatisfied(item, get().queue)) {

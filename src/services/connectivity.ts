@@ -85,6 +85,13 @@ export function requestLegacyAuthoritativeRefresh(): void {
   void legacyRefreshRunner.run();
 }
 
+// P2 (Codex): registrar el disparador en el store por INYECCIÓN (no import
+// inverso → sin ciclo useSyncStore↔connectivity). Toda migración que deje
+// `legacyRefreshPending=true` durable invoca este waker al terminar, cerrando la
+// carrera "runner-preventivo ve pending=false → dispatcher fija pending=true".
+// Se hace al cargar el módulo (connectivity se importa temprano vía rehydrate).
+useSyncStore.getState().setLegacyRefreshWaker(requestLegacyAuthoritativeRefresh);
+
 /** Dispara el drenaje de la cola sin duplicar ciclos (guard isSyncing). */
 function wakeQueue(): void {
   const store = useSyncStore.getState();

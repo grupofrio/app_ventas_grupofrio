@@ -51,23 +51,24 @@ const guardBlock = store.match(/if \(isLegacyRefillUnloadItem\(item\)\)[\s\S]{0,
 assert(guardBlock, '#12 el guard existe como bloque');
 assert(/await get\(\)\.discardLegacyRefillUnload\(item\.id\)/.test(guardBlock[0]),
   '#14 el guard AWAITa la operación durable (misma que la migración)');
-assert(/res\.status === 'completed'/.test(guardBlock[0]), 'el guard decide según el status durable');
-assert(/return 'handled'/.test(guardBlock[0]), '#12 solo maneja si la reparación quedó durable (completed)');
 assert(/res\.status === 'deferred'/.test(guardBlock[0]), '#14 detecta el diferido por fallo de persistencia');
-assert(/deferLegacyMigrationItem\(item\.id\)/.test(guardBlock[0]),
-  'P1 el guard DIFIERE con backoff (no dead, no reenvío, no drain_now)');
 assert(/return 'deferred'/.test(guardBlock[0]),
   '#15 no lo marca manejado; conserva con backoff sin bloquear al resto');
+assert(/return 'handled'/.test(guardBlock[0]), '#12 completed/not_legacy → handled');
+// el guard NO difiere aparte: durableMigrateLegacy es el ÚNICO punto de defer.
+assert(!/deferLegacy/.test(guardBlock[0]), 'el defer no se duplica en el guard');
 
-// ── P1: el diferido NO puede disparar drain_now ──────────────────────────────
+// ── P1/P2: defer por LOTE (rehydrate + dispatcher) vía handler único ─────────
 assert(/hadDeferredStorageFailure/.test(store),
   'P1 el ciclo rastrea el fallo de persistencia diferido');
-assert(/deferLegacyMigrationItem:/.test(store), 'P1 el store expone deferLegacyMigrationItem (backoff, no dead)');
+assert(/handleDurableMigrationResult/.test(store),
+  'P2 usa el handler ÚNICO de resultado (defer + wake) en durableMigrateLegacy');
+assert(/function deferLegacyEvents/.test(store), 'P2-1 existe el defer por lote compartido');
 // el diferido se marca error con retries:0 (nunca dead) y next_retry_at (backoff).
-const deferBlock = store.match(/deferLegacyMigrationItem: \(id\) =>[\s\S]{0,700}?schedulePersist\(\);/);
-assert(deferBlock, 'deferLegacyMigrationItem existe');
+const deferBlock = store.match(/function deferLegacyEvents[\s\S]{0,800}?schedulePersist\(\);/);
+assert(deferBlock, 'deferLegacyEvents existe');
 assert(/retries: 0/.test(deferBlock[0]), 'P1 el diferido NO acumula retries (nunca dead)');
-assert(/next_retry_at: Date\.now\(\) \+ LEGACY_DEFER_BACKOFF_MS/.test(deferBlock[0]),
+assert(/next_retry_at: retryAt/.test(deferBlock[0]) && /LEGACY_DEFER_BACKOFF_MS/.test(deferBlock[0]),
   'P1 el diferido usa backoff (no 0 ms)');
 // la decisión post-ciclo recibe la señal para forzar backoff en vez de drain_now.
 assert(/hadDeferredStorageFailure,\n\s*queue: get\(\)\.queue/.test(store)
@@ -139,6 +140,15 @@ assert(/requestLegacyAuthoritativeRefresh\(\)/.test(connectivity),
 // singleton: un solo createLegacyRefreshRunner en el módulo.
 assert((connectivity.match(/createLegacyRefreshRunner\(/g) || []).length === 1,
   'P2 un ÚNICO runner singleton compartido');
+
+// ── P2-2: wake DESPUÉS de crear pending (waker inyectado, sin ciclo) ─────────
+assert(/setLegacyRefreshWaker\(requestLegacyAuthoritativeRefresh\)/.test(connectivity),
+  'P2-2 connectivity inyecta el waker en el store (sin import inverso)');
+assert(/notifyRefreshPendingReady/.test(store), 'P2-2 el store despierta el runner tras pending durable');
+assert(/_legacyRefreshWaker/.test(store), 'P2-2 el waker inyectado se guarda en el store');
+// no import runtime de connectivity desde el store (evita ciclo).
+assert(!/from '\.\.\/services\/connectivity'/.test(store) && !/require\(.*connectivity/.test(store),
+  'P2-2 el store NO importa connectivity (sin ciclo runtime)');
 
 // ── storage: variantes ESTRICTAS que rechazan en fallo ───────────────────────
 const storage = read('src/persistence/storage.ts');

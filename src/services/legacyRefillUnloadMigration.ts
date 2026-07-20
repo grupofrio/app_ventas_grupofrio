@@ -136,6 +136,72 @@ export function partitionLegacyRefillUnload<T extends LegacyQueueItemLike>(queue
   return { legacy, kept };
 }
 
+// ── Orquestador DURABLE del retiro de eventos legacy (P1-1) ──────────────────
+//
+// Orden obligatorio, con la reparación pendiente durable ANTES de retirar la cola
+// o tocar stock, para que NUNCA se pierda la necesidad de refresh:
+//   1. persistir durablemente LEGACY_REFRESH_PENDING=true (estricto);
+//   2. marcar los eventos como consumidos y persistir la cola (estricto);
+//   3. aplicar la reversión local (idempotente: solo tras marcar/persistir);
+//   4. retirar los eventos y persistir la cola final.
+//
+// Fallos:
+//   - (1) falla  → nada tocado: no se marca, no se revierte, no se retira; retry.
+//   - (2) falla  → pending ya durable; eventos intactos y SIN reversión; retry limpio.
+//   - (4) falla  → pending durable + eventos marcados consumidos + reversión hecha;
+//                  RECUPERABLE: al reiniciar se re-migra sin doble reversión (los
+//                  flags de consumo hacen que planLegacyReversal devuelva 'none').
+// Un único helper compartido por la migración (rehidratado) y el guard del
+// dispatcher, para no duplicar la lógica durable.
+
+export interface DurableMigrationSteps {
+  /** 1. Persistir durablemente pending=true (estricto: rechaza en fallo). */
+  persistPendingTrue: () => Promise<void>;
+  /** 2. Marcar eventos consumidos + persistir la cola (estricto). */
+  markConsumedAndPersist: () => Promise<void>;
+  /** 3. Aplicar reversión local (idempotente). Solo tras (2) exitoso. */
+  applyReversal: () => void;
+  /** 4. Retirar eventos + persistir la cola final. */
+  removeAndPersist: () => Promise<void>;
+  onPhaseError: (
+    phase: 'persist_pending' | 'persist_marked' | 'persist_final',
+    error: unknown,
+  ) => void;
+}
+
+export type DurableMigrationResult =
+  | { ok: true; phase: 'completed' | 'reverted_removal_unpersisted' }
+  | { ok: false; phase: 'pending_persist_failed' | 'mark_persist_failed' };
+
+export async function runDurableLegacyMigration(
+  steps: DurableMigrationSteps,
+): Promise<DurableMigrationResult> {
+  // 1. La reparación pendiente debe quedar durable ANTES de tocar cola/stock.
+  try {
+    await steps.persistPendingTrue();
+  } catch (error) {
+    steps.onPhaseError('persist_pending', error);
+    return { ok: false, phase: 'pending_persist_failed' };
+  }
+  // 2. Marcar consumido + persistir. Si falla, no se toca stock (retry limpio).
+  try {
+    await steps.markConsumedAndPersist();
+  } catch (error) {
+    steps.onPhaseError('persist_marked', error);
+    return { ok: false, phase: 'mark_persist_failed' };
+  }
+  // 3. Reversión local (segura: flags de consumo ya durables → sin doble revert).
+  steps.applyReversal();
+  // 4. Retiro final. Si falla, queda RECUPERABLE (pending + marcas durables).
+  try {
+    await steps.removeAndPersist();
+  } catch (error) {
+    steps.onPhaseError('persist_final', error);
+    return { ok: true, phase: 'reverted_removal_unpersisted' };
+  }
+  return { ok: true, phase: 'completed' };
+}
+
 /** Copy del aviso NO bloqueante al usuario tras migrar/descartar solicitudes legacy. */
 export function legacyMigrationNoticeCopy(count: number): { title: string; body: string } {
   const n = count > 0 ? count : 0;

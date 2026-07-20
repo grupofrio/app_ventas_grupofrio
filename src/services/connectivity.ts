@@ -55,27 +55,40 @@ function isOnlineFromState(state: NetInfoState | NetSnapshot): boolean {
  */
 const legacyRefreshRunner = createLegacyRefreshRunner({
   hasPending: () => useSyncStore.getState().hasLegacyRefreshPending(),
+  isOnline: () => useSyncStore.getState().isOnline,
   getWarehouseId: () => useAuthStore.getState().warehouseId,
-  loadProducts: async (warehouseId: number) => {
-    await useProductStore.getState().loadProducts(warehouseId);
-    const err = useProductStore.getState().error;
-    if (err) throw new Error(err); // fuerza 'failed' → conserva pending para retry
-  },
+  // P1-2: resultado AUTORITATIVO explícito (fuente scoped, warehouse correcto).
+  loadAuthoritative: (warehouseId: number) =>
+    useProductStore.getState().loadProductsAuthoritative(warehouseId),
+  // Limpieza durable verificable (async): rechaza si no se pudo persistir el false.
   markCompleted: () => useSyncStore.getState().markLegacyRefreshCompleted(),
   onError: (error) =>
     logWarn('inventory', 'legacy_authoritative_refresh_failed', {
       message: error instanceof Error ? error.message : String(error),
     }),
+  onNonAuthoritative: (result) =>
+    logWarn('inventory', 'legacy_refresh_non_authoritative', {
+      reason: result.ok ? undefined : result.reason,
+      source: result.source,
+    }),
 });
+
+/**
+ * Dispara UN intento de refresh autoritativo pendiente. El runner protege por
+ * pending / online / warehouse / in-flight, así que es seguro llamarlo en
+ * cualquier punto de despertar (reconexión, foreground, fin de bootstrap).
+ * Fire-and-forget: nunca bloquea processQueue ni lanza.
+ */
+export function requestLegacyAuthoritativeRefresh(): void {
+  void legacyRefreshRunner.run();
+}
 
 /** Dispara el drenaje de la cola sin duplicar ciclos (guard isSyncing). */
 function wakeQueue(): void {
   const store = useSyncStore.getState();
   store.processQueue();
   store.scheduleWake();
-  // Fire-and-forget: NO bloquea processQueue. El runner maneja pending durable,
-  // guard in-flight, ausencia de warehouse y éxito/fallo (retry si falla).
-  void legacyRefreshRunner.run();
+  requestLegacyAuthoritativeRefresh();
 }
 
 export function startConnectivityMonitor(): void {

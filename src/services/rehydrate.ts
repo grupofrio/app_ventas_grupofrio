@@ -29,6 +29,7 @@ import {
 // V2: Error persistence & periodic flush
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 import { todayLocalISO } from '../utils/localDate';
+import { requestLegacyAuthoritativeRefresh } from './connectivity';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -129,13 +130,19 @@ export async function rehydrateAppState(): Promise<{
     // autoritativo pendiente. Corre DESPUÉS de rehidratar la cola y el catálogo
     // para que la reversión alcance los productos; el guard de processOneItem es
     // la segunda red por si algún evento se procesa antes.
-    const legacyMigration = useSyncStore.getState().migrateLegacyRefillUnload();
-    if (legacyMigration.migrated > 0) {
+    const legacyMigration = await useSyncStore.getState().migrateLegacyRefillUnload();
+    if (legacyMigration.migrated > 0 || !legacyMigration.ok) {
       console.log(
-        `[rehydrate] legacy refill/unload migrated: ${legacyMigration.migrated} ` +
-        `(reverted ${legacyMigration.reverted} local-stock entries)`
+        `[rehydrate] legacy refill/unload migration: migrated=${legacyMigration.migrated} ` +
+        `reverted=${legacyMigration.reverted} ok=${legacyMigration.ok}`
       );
     }
+
+    // P2: si quedó un refresh autoritativo pendiente (esta corrida o una previa
+    // rehidratada durablemente), dispararlo AHORA sin esperar una transición
+    // futura de NetInfo. El runner protege por pending/online/warehouse/in-flight,
+    // así que también intenta en arranque-online; reconexión/foreground reintentan.
+    requestLegacyAuthoritativeRefresh();
 
     console.log(
       `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}, prices=${restoredPrices}`

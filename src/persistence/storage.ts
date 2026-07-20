@@ -47,6 +47,20 @@ export async function storeRemove(key: string): Promise<void> {
   }
 }
 
+// ── Variantes ESTRICTAS (rechazan en fallo) ──────────────────────────────────
+// Los `store*` normales absorben el error (log + resolve) para no romper flujos
+// tolerantes. Para transiciones CRÍTICAS (durabilidad de reparaciones pendientes)
+// se necesita observar el fallo y abortar; estas variantes propagan la excepción.
+
+export async function storeSaveStrict<T>(key: string, data: T): Promise<void> {
+  const serialized = JSON.stringify(data);
+  await AsyncStorage.setItem(`${PREFIX}${key}`, serialized);
+}
+
+export async function storeRemoveStrict(key: string): Promise<void> {
+  await AsyncStorage.removeItem(`${PREFIX}${key}`);
+}
+
 export async function storeClear(): Promise<void> {
   try {
     const allKeys = await AsyncStorage.getAllKeys();

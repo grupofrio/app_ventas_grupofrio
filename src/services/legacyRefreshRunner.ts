@@ -2,37 +2,68 @@
  * legacyRefreshRunner — orquestador PURO del refresh autoritativo de inventario
  * pendiente tras migrar eventos legacy refill/unload. RN-free / node-testable.
  *
- * Contrato corregido (Codex): la bandera `legacyRefreshPending` SOLO se limpia
- * DESPUÉS de un `loadProducts` exitoso. Nunca semántica "consume" antes del éxito.
- *   - sin pending           → no hace nada;
- *   - ya hay uno in-flight  → no dispara un segundo (guard);
- *   - sin warehouseId       → conserva pending, reintenta luego;
- *   - loadProducts resuelve → marca completado (limpia la bandera durable);
- *   - loadProducts rechaza  → conserva pending, loggea, permite retry.
- *
- * El guard in-flight vive en el closure del runner: se fija SÍNCRONAMENTE antes
- * del primer await, así dos wakeups simultáneos (red + foreground) producen un
- * único refresh en vuelo.
+ * Contrato (Codex, ronda final):
+ *  - la bandera `legacyRefreshPending` SOLO se limpia tras (a) una carga de
+ *    inventario AUTORITATIVA para el warehouse esperado Y (b) la limpieza durable
+ *    de la bandera confirmada. Nunca por Promise resuelta ni por `error === null`;
+ *  - éxito de carga NO autoritativo (p.ej. `global_legacy`, warehouse distinto) →
+ *    conserva pending y reintenta;
+ *  - carga autoritativa pero limpieza durable fallida → `completion_persist_failed`,
+ *    pending se conserva (retry seguro; a lo sumo repite el refresh);
+ *  - guards: sin pending / offline / sin warehouse / ya in-flight;
+ *  - guard in-flight fijado SÍNCRONAMENTE antes del primer await → dos wakeups
+ *    simultáneos (red + foreground) producen un único refresh.
  */
+
+/** Resultado EXPLÍCITO de una carga de inventario (no inferir éxito por error/null). */
+export type InventoryLoadResult =
+  | {
+      ok: true;
+      authoritative: true;
+      warehouseId: number;
+      source: 'truck_stock' | 'stock_quant';
+    }
+  | {
+      ok: false;
+      authoritative: false;
+      reason:
+        | 'network_error'
+        | 'global_legacy_fallback'
+        | 'warehouse_mismatch'
+        | 'missing_warehouse'
+        | 'unknown';
+      source?: string;
+    };
 
 export type LegacyRefreshOutcome =
   | 'skipped_no_pending'
+  | 'skipped_offline'
   | 'skipped_in_flight'
   | 'skipped_no_warehouse'
+  | 'skipped_not_authoritative'
+  | 'completion_persist_failed'
   | 'refreshed'
   | 'failed';
 
 export interface LegacyRefreshDeps {
-  /** Lee (sin consumir) si hay refresh pendiente. */
+  /** LEE (sin consumir) si hay refresh pendiente. */
   hasPending: () => boolean;
+  /** Estado de conexión (no reintentar refresh offline). */
+  isOnline: () => boolean;
   /** warehouseId actual (null si auth/almacén aún no está disponible). */
   getWarehouseId: () => number | null | undefined;
-  /** Recarga autoritativa del inventario. Debe rechazar si falla. */
-  loadProducts: (warehouseId: number) => Promise<unknown>;
-  /** Limpia la bandera pendiente. Solo se invoca tras un refresh EXITOSO. */
-  markCompleted: () => void;
-  /** Log opcional de fallo (no lanza). */
+  /** Carga autoritativa; devuelve resultado tipado (nunca infiere éxito). */
+  loadAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
+  /**
+   * Limpia la bandera pendiente de forma DURABLE (persiste false/elimina la key,
+   * espera confirmación, y solo entonces limpia memoria). Debe RECHAZAR si la
+   * limpieza durable falla, para que el runner conserve el pending.
+   */
+  markCompleted: () => Promise<void>;
+  /** Log de fallo de carga/limpieza (no lanza). */
   onError?: (error: unknown) => void;
+  /** Log de carga no autoritativa (no lanza). */
+  onNonAuthoritative?: (result: InventoryLoadResult) => void;
 }
 
 export interface LegacyRefreshRunner {
@@ -46,6 +77,7 @@ export function createLegacyRefreshRunner(deps: LegacyRefreshDeps): LegacyRefres
 
   async function run(): Promise<LegacyRefreshOutcome> {
     if (!deps.hasPending()) return 'skipped_no_pending';
+    if (!deps.isOnline()) return 'skipped_offline'; // offline: conserva pending
     // Guard in-flight: fijado antes de cualquier await → un solo refresh a la vez.
     if (inFlight) return 'skipped_in_flight';
     const warehouseId = deps.getWarehouseId();
@@ -53,12 +85,27 @@ export function createLegacyRefreshRunner(deps: LegacyRefreshDeps): LegacyRefres
 
     inFlight = true;
     try {
-      await deps.loadProducts(warehouseId);
-      deps.markCompleted(); // limpia SOLO tras éxito
+      let result: InventoryLoadResult;
+      try {
+        result = await deps.loadAuthoritative(warehouseId);
+      } catch (error) {
+        deps.onError?.(error);
+        return 'failed'; // conserva pending
+      }
+      // Éxito SOLO si autoritativo para el warehouse esperado (no global_legacy).
+      if (!result.ok || !result.authoritative || result.warehouseId !== warehouseId) {
+        deps.onNonAuthoritative?.(result);
+        return 'skipped_not_authoritative'; // conserva pending
+      }
+      // Inventario autoritativo cargado → limpieza durable, y solo si esa
+      // limpieza confirma se considera 'refreshed'.
+      try {
+        await deps.markCompleted();
+      } catch (error) {
+        deps.onError?.(error);
+        return 'completion_persist_failed'; // pending se conserva; retry seguro
+      }
       return 'refreshed';
-    } catch (error) {
-      deps.onError?.(error); // conserva pending para retry en la próxima reconexión/foreground
-      return 'failed';
     } finally {
       inFlight = false;
     }

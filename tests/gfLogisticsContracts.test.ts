@@ -113,6 +113,31 @@ function testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module: ContractsModu
   });
 }
 
+function testSalesPayloadOmitsNullPricelistWithoutMutatingQueuedPayload(module: ContractsModule) {
+  const queuedPayload: Record<string, unknown> = {
+    operation_id: 'sale-offline-uuid-1',
+    partner_id: 52738,
+    warehouse_id: 8,
+    pricelist_id: null,
+    lines: [
+      { product_id: 987, quantity: 2 },
+    ],
+  };
+
+  const actual = module.buildSalesCreatePayload(queuedPayload);
+
+  assert.equal(queuedPayload.pricelist_id, null);
+  assert.equal('pricelist_id' in actual, false);
+  assert.deepEqual(actual, {
+    operation_id: 'sale-offline-uuid-1',
+    partner_id: 52738,
+    warehouse_id: 8,
+    lines: [
+      { product_id: 987, quantity: 2, discount: 0 },
+    ],
+  });
+}
+
 function testSalesPayloadKeepsOffrouteVisitIdForCorte(module: ContractsModule) {
   const actual = module.buildSalesCreatePayload({
     operation_id: 'sale-uuid-127',
@@ -188,6 +213,7 @@ async function main() {
   testSalesPayloadLetsBackendComputePricelistPrice(module);
   testSalesPayloadCanRequestAccountMoveCreation(module);
   testSalesPayloadOmitsVirtualStopAndEmptyOptionals(module);
+  testSalesPayloadOmitsNullPricelistWithoutMutatingQueuedPayload(module);
   testSalesPayloadKeepsOffrouteVisitIdForCorte(module);
   testPaymentPayloadMatchesKnownContractFields(module);
   testPaymentPayloadKeepsJournalWhenMethodLineIsUnavailable(module);

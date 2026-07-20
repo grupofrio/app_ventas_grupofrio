@@ -35,6 +35,7 @@ import {
   getPartnerPricelistId,
   peekResolvedPartnerPricelistId,
 } from '../../src/services/pricelist';
+import { decideSalePricelist } from '../../src/services/salePricelistDecision';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
@@ -270,14 +271,28 @@ function SaleScreenInner() {
     const stopPricelistId = typeof stop._pricelistId === 'number' && stop._pricelistId > 0
       ? stop._pricelistId
       : null;
-    let pricelistId: number | null;
+    const cachedPricelistId = peekResolvedPartnerPricelistId(
+      salePartnerId,
+      { companyId: effectiveCompanyId },
+    );
+    const pricelistDecision = decideSalePricelist({
+      isOnline,
+      stopPricelistId,
+      cachedPricelistId,
+    });
+    let pricelistId = pricelistDecision.pricelistId;
     try {
-      if (!stopPricelistId) {
+      if (pricelistDecision.shouldResolvePartnerPricelist) {
         await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+        const resolvedPricelistId = peekResolvedPartnerPricelistId(
+          salePartnerId,
+          { companyId: effectiveCompanyId },
+        );
+        pricelistId =
+          typeof resolvedPricelistId === 'number' && resolvedPricelistId > 0
+            ? resolvedPricelistId
+            : null;
       }
-      pricelistId =
-        stopPricelistId ??
-        peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
     } catch (error) {
       setSaleSubmitting(false);
       unlockSaleConfirm();

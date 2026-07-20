@@ -2,6 +2,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
+function extractBracedBlockAfter(source, marker) {
+  const markerIndex = source.indexOf(marker);
+  assert.notEqual(markerIndex, -1, `no se encontro el marcador: ${marker}`);
+
+  const openBraceIndex = source.indexOf('{', markerIndex + marker.length);
+  assert.notEqual(openBraceIndex, -1, `no se encontro el bloque de: ${marker}`);
+
+  let depth = 0;
+  for (let index = openBraceIndex; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openBraceIndex + 1, index);
+    }
+  }
+
+  throw new Error(`bloque sin cierre para: ${marker}`);
+}
+
 /**
  * Wiring de venta offline (modelo "pedido pendiente de envío", S1):
  *  #1 ProductPicker no cuelga sin red; #2 online sigue siendo createSale directo;
@@ -10,6 +29,37 @@ import assert from 'node:assert/strict';
 const root = process.cwd();
 const picker = fs.readFileSync(path.join(root, 'src/components/domain/ProductPicker.tsx'), 'utf8');
 const sale = fs.readFileSync(path.join(root, 'app/sale/[stopId].tsx'), 'utf8');
+
+// PR-4a: la confirmación offline decide la tarifa solo con datos locales.
+assert(
+  sale.includes("from '../../src/services/salePricelistDecision'"),
+  'venta debe importar la decisión pura de tarifa',
+);
+assert.match(
+  sale,
+  /const pricelistDecision = decideSalePricelist\(\{[\s\S]*?isOnline,[\s\S]*?stopPricelistId,[\s\S]*?cachedPricelistId,[\s\S]*?\}\);/,
+  'venta debe decidir con conectividad, tarifa de parada y cache local',
+);
+const resolverGuardBody = extractBracedBlockAfter(
+  sale,
+  'if (pricelistDecision.shouldResolvePartnerPricelist)',
+);
+const resolverCalls = sale.match(/\bgetPartnerPricelistId\s*\(/g) ?? [];
+assert.equal(
+  resolverCalls.length,
+  1,
+  'debe existir una sola llamada al resolvedor de tarifa',
+);
+assert.equal(
+  (resolverGuardBody.match(/\bgetPartnerPricelistId\s*\(/g) ?? []).length,
+  1,
+  'la unica llamada al resolvedor debe quedar dentro del guard de la decision',
+);
+assert.match(
+  resolverGuardBody,
+  /\bawait\s+getPartnerPricelistId\([\s\S]*?const resolvedPricelistId = peekResolvedPartnerPricelistId\([\s\S]*?pricelistId =/,
+  'online debe releer la tarifa segura de cache despues de resolver',
+);
 
 // #1 ProductPicker: guard isOnline antes del fetch de precios (no cuelga offline).
 assert(picker.includes('useSyncStore'), 'ProductPicker debe leer isOnline');

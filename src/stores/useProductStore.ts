@@ -27,6 +27,7 @@ import {
 } from '../services/persistentCache';
 import { todayLocalISO } from '../utils/localDate';
 import { schedulePersistPriceCache } from '../services/offlineCache';
+import type { InventoryLoadResult } from '../services/legacyRefreshRunner';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
 
@@ -43,6 +44,9 @@ interface ProductState {
   error: string | null;
   lastSync: number | null;
   inventorySource: InventorySource | null;
+  /** warehouseId al que corresponde la ÚLTIMA carga exitosa (para verificar que
+   * un refresh es autoritativo para el almacén esperado). null si no hay carga. */
+  loadedWarehouseId: number | null;
   /**
    * BLD-20260424-STOCKMETA: viene del flag `has_stock_data` que Sebastián
    * agregó al endpoint /truck_stock. true = el almacén tiene stock real
@@ -68,6 +72,13 @@ interface ProductState {
 
   // Actions
   loadProducts: (warehouseId: number) => Promise<void>;
+  /**
+   * Carga de inventario con RESULTADO AUTORITATIVO explícito (P1-2). Envuelve
+   * loadProducts y devuelve si la carga fue autoritativa para el warehouse
+   * esperado (fuente scoped, no `global_legacy`, sin error de red). El consumidor
+   * NO debe inferir éxito por Promise resuelta ni por `error === null`.
+   */
+  loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
   updateLocalStock: (productId: number, qtyChange: number) => void;
   getProduct: (productId: number) => TruckProduct | undefined;
   /**
@@ -148,6 +159,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   error: null,
   lastSync: null,
   inventorySource: null,
+  loadedWarehouseId: null,
   hasStockData: null,
   fromCache: false,
   cachedAtMs: null,
@@ -322,6 +334,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         inventorySource: source,
+        loadedWarehouseId: warehouseId,
         hasStockData,
         // Carga fresca de red → ya no provienen del caché.
         fromCache: false,
@@ -355,6 +368,41 @@ export const useProductStore = create<ProductState>((set, get) => ({
       set({ error: msg, isLoading: false });
       logWarn('inventory', 'load_failed', { error: msg });
     }
+  },
+
+  // P1-2: carga con resultado AUTORITATIVO explícito. loadProducts absorbe sus
+  // errores (setea `error`, resuelve) y puede terminar en `global_legacy` (lista
+  // global sin scope de almacén). Aquí NO inferimos éxito por Promise/error null:
+  // exigimos fuente scoped (truck_stock/stock_quant), sin error, y que el
+  // warehouseId cargado coincida con el solicitado.
+  loadProductsAuthoritative: async (warehouseId: number): Promise<InventoryLoadResult> => {
+    if (!warehouseId || warehouseId <= 0) {
+      return { ok: false, authoritative: false, reason: 'missing_warehouse' };
+    }
+    try {
+      await get().loadProducts(warehouseId);
+    } catch (e) {
+      logWarn('inventory', 'authoritative_load_threw', {
+        message: e instanceof Error ? e.message : String(e),
+      });
+      return { ok: false, authoritative: false, reason: 'network_error' };
+    }
+    const err = get().error;
+    const source = get().inventorySource;
+    const loadedWh = get().loadedWarehouseId;
+    if (err) {
+      return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
+    }
+    if (source === 'global_legacy') {
+      return { ok: false, authoritative: false, reason: 'global_legacy_fallback', source };
+    }
+    if (loadedWh !== warehouseId) {
+      return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
+    }
+    if (source === 'truck_stock' || source === 'stock_quant') {
+      return { ok: true, authoritative: true, warehouseId, source };
+    }
+    return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };
   },
 
   /**

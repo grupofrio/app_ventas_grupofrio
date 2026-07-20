@@ -6,7 +6,9 @@
  * - GPS batch processing with concurrent-5 fallback
  * - Backoff with jitter: 2s / 8s / 30s (±20%)
  * - 'dead' status after MAX_RETRIES with rollback
- * - Rollback for sale_order, unload, AND refill
+ * - Rollback GENÉRICO por `_localStockDelta` (independiente del type)
+ * - Migración/guard de eventos legacy refill/unload (retirados del producto):
+ *   nunca se reenvían; se revierte el stock local y se descartan de la cola.
  * - Structured logging (no __DEV__ guards on critical logs)
  * - Crash recovery: syncing → pending on rehydrate
  *
@@ -25,7 +27,7 @@ import {
   SyncPriority,
   SYNC_PRIORITY_MAP,
 } from '../types/sync';
-import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
+import { storeSave, storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { postRest, postRpc } from '../services/api';
 import {
@@ -59,6 +61,14 @@ import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import {
+  isLegacyRefillUnloadItem,
+  planLegacyReversal,
+  partitionLegacyRefillUnload,
+  consumedFlagForSource,
+  runDurableLegacyMigration,
+  handleDurableMigrationResult,
+} from '../services/legacyRefillUnloadMigration';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 
 // ═══ Constants ═══
@@ -70,6 +80,10 @@ const GPS_BATCH_SIZE = 50;
 // Backoff: 2s, 8s, 30s with ±20% jitter
 const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
 const BACKOFF_JITTER = 0.2;
+
+// Backoff de un ítem legacy DIFERIDO por fallo de persistencia final. Fijo (no
+// escalante) y != 0ms: reintenta con cadencia moderada sin redrenaje agresivo.
+const LEGACY_DEFER_BACKOFF_MS = 8000;
 
 // Perf Fase 1B: ventana para AGRUPAR las persistencias de la cola por
 // transiciones de estado (markDone/markError/markDead/clearDone/clearDead y
@@ -98,6 +112,20 @@ function schedulePersist(): void {
 // processQueue existente, que se auto-protege con el guard isSyncing.
 let _wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
+// P2 (Codex): "waker" INYECTADO del refresh autoritativo. connectivity registra
+// aquí `requestLegacyAuthoritativeRefresh` (runner singleton). Se invoca DESPUÉS
+// de que una migración deja `legacyRefreshPending=true` durable + en memoria, para
+// cerrar la carrera runner-preventivo/dispatcher. Inyección (no import) para NO
+// crear ciclo useSyncStore↔connectivity. Runtime-safe si aún no hay waker (no-op).
+let _legacyRefreshWaker: (() => void) | null = null;
+function notifyRefreshPendingReady(): void {
+  try {
+    _legacyRefreshWaker?.();
+  } catch {
+    // el wake nunca debe romper la migración
+  }
+}
+
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -123,6 +151,12 @@ interface SyncState {
   pendingCount: number;
   errorCount: number;
   deadCount: number;
+
+  // Migración legacy refill/unload: cuántas solicitudes antiguas se descartaron
+  // (para el aviso NO bloqueante) y si hay que forzar un refresh autoritativo de
+  // inventario al reconectar (el delta local revertido lo confirma el servidor).
+  legacyMigrationNoticeCount: number;
+  legacyRefreshPending: boolean;
 
   // V2: cycle metrics (for observability)
   lastCycleMetrics: CycleMetrics | null;
@@ -152,6 +186,22 @@ interface SyncState {
   // error item; fires processQueue when its backoff elapses).
   scheduleWake: () => void;
   clearWakeTimer: () => void;
+
+  // Migración/guard de eventos legacy refill/unload. Async: la reparación
+  // pendiente se persiste durablemente ANTES de retirar cola o tocar stock.
+  migrateLegacyRefillUnload: () => Promise<{ migrated: number; reverted: number; ok: boolean }>;
+  discardLegacyRefillUnload: (
+    id: string,
+  ) => Promise<{ status: 'completed' | 'deferred' | 'not_legacy' }>;
+  // P2: connectivity inyecta aquí el disparador del refresh autoritativo (runner
+  // singleton). Toda migración que deje pending durable lo invoca al terminar.
+  setLegacyRefreshWaker: (waker: (() => void) | null) => void;
+  clearLegacyMigrationNotice: () => void;
+  // Refresh autoritativo: `has` LEE (no consume); `markCompleted` limpia SOLO
+  // tras un refresh exitoso, de forma DURABLE (persiste false y espera confirmación
+  // antes de tocar memoria; rechaza si la limpieza durable falla → retry seguro).
+  hasLegacyRefreshPending: () => boolean;
+  markLegacyRefreshCompleted: () => Promise<void>;
 
   // V2: helpers for diagnostics
   getQueueSummary: () => QueueSummary;
@@ -206,6 +256,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   pendingCount: 0,
   errorCount: 0,
   deadCount: 0,
+  legacyMigrationNoticeCount: 0,
+  legacyRefreshPending: false,
   lastCycleMetrics: null,
 
   // ═══ Enqueue ═══
@@ -414,6 +466,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // otro modo esperarían a un enqueue o a un flanco de reconexión.
       get().scheduleWake();
     }
+    // Rehidrata la bandera DURABLE de refresh autoritativo pendiente: si una
+    // migración previa retiró eventos legacy pero la app cerró (o el refresh
+    // falló) antes de recargar inventario, el pending sobrevive y se reintenta
+    // en la próxima reconexión/foreground.
+    const refreshPending = await storeLoad<boolean>(STORAGE_KEYS.LEGACY_REFRESH_PENDING);
+    if (refreshPending === true) {
+      set({ legacyRefreshPending: true });
+    }
   },
 
   // ═══ V2: Priority-based Sync Processor ═══
@@ -449,6 +509,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     let processed = 0;
     let succeeded = 0;
     let failed = 0;
+    // P1 (Codex): un ítem legacy DIFERIDO por fallo de persistencia final NO debe
+    // disparar drain_now (redrenaje agresivo si el storage sigue fallando). Se
+    // rastrea aquí y se usa en la decisión post-ciclo para forzar backoff.
+    let hadDeferredStorageFailure = false;
+    const tally = (o: ProcessItemOutcome): void => {
+      processed++;
+      if (o === 'handled') succeeded++;
+      else if (o === 'deferred') hadDeferredStorageFailure = true;
+      else failed++; // 'failed' | 'dependency_wait'
+    };
 
     logInfo('sync', 'cycle_start', { candidates: candidates.length });
 
@@ -467,11 +537,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
       const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
-
+        tally(await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,
         // we don't stop the whole cycle — other independent items can proceed.
       }
@@ -480,10 +546,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
         .slice(0, MAX_ITEMS_PER_CYCLE - processed);
       for (const item of orderedP2) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
+        tally(await processOneItem(item, get, set));
       }
 
       // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
@@ -502,10 +565,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
       // Other P3 (client_event etc): serial
       for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
-        const result = await processOneItem(item, get, set);
-        processed++;
-        if (result) succeeded++;
-        else failed++;
+        tally(await processOneItem(item, get, set));
       }
 
       // ── End of cycle ──
@@ -573,8 +633,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // caso; aquí además limpiamos cualquier wake timer pendiente. La cola
       // queda a la espera de un evento EXTERNO: foreground, reconexión, enqueue
       // nuevo o reintento manual — con el error ya logueado para diagnóstico.
+      // P1 (Codex, ronda final): si hubo un legacy DIFERIDO por fallo de
+      // persistencia final, NUNCA drain_now — usar backoff. Sin esto, el legacy
+      // seguía en cola y (si quedaba elegible) re-disparaba drain_now → storage
+      // falla → drain_now, en bucle. El ítem diferido queda en 'error'+backoff
+      // (fuera de la elegibilidad inmediata), y scheduleWake lo reintenta al vencer.
       const action = decidePostCycleActionAfterCycle({
         hadUnhandledCycleError,
+        hadDeferredStorageFailure,
         queue: get().queue,
         now: Date.now(),
         maxRetries: MAX_RETRIES,
@@ -586,6 +652,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       } else if (action === 'drain_now') {
         setTimeout(() => { void get().processQueue(); }, 0);
       } else {
+        if (hadDeferredStorageFailure) {
+          logWarn('sync', 'post_cycle_backoff_after_deferred_storage', { next: 'schedule_wake' });
+        }
         get().scheduleWake();
       }
     }
@@ -620,6 +689,49 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
   },
 
+  // ═══ Migración/guard de eventos legacy refill/unload ═══
+
+  // Migra TODA la cola: revierte el stock local de los eventos legacy de
+  // recarga/devolución y los retira. Idempotente y seguro ante cierre a mitad:
+  //   Fase 1 — MARCA el consumo (`_localStockRolledBack`/`_legacyStockRestored`)
+  //            y persiste ANTES de tocar stock, para que una reejecución tras un
+  //            cierre a mitad NUNCA vuelva a revertir (a lo sumo pierde una
+  //            reversión, que el refresh autoritativo corrige).
+  //   Fase 2 — aplica la reversión al stock local.
+  //   Fase 3 — retira los legacy de la cola, arma el aviso y el refresh pendiente.
+  migrateLegacyRefillUnload: async () => {
+    const { legacy } = partitionLegacyRefillUnload(get().queue);
+    if (legacy.length === 0) return { migrated: 0, reverted: 0, ok: true };
+    return durableMigrateLegacy(get, set, legacy);
+  },
+
+  // Descarta UN ítem legacy (guard del dispatcher). MISMA operación durable que
+  // la migración (un solo helper). status='deferred' si la persistencia crítica
+  // falló → el guard NO lo marca procesado y lo difiere con backoff.
+  discardLegacyRefillUnload: async (id) => {
+    const item = get().queue.find((i) => i.id === id);
+    if (!item || !isLegacyRefillUnloadItem(item)) return { status: 'not_legacy' };
+    const res = await durableMigrateLegacy(get, set, [item]);
+    return { status: res.status };
+  },
+
+  setLegacyRefreshWaker: (waker) => {
+    _legacyRefreshWaker = waker;
+  },
+
+  clearLegacyMigrationNotice: () => set({ legacyMigrationNoticeCount: 0 }),
+
+  // LEE (no consume) si hay refresh autoritativo pendiente.
+  hasLegacyRefreshPending: () => get().legacyRefreshPending,
+
+  // Limpieza DURABLE verificable: persiste false y ESPERA confirmación; solo
+  // entonces toca memoria. Si la limpieza durable falla, PROPAGA (memoria sigue
+  // pending=true) → el runner devuelve completion_persist_failed y reintenta.
+  markLegacyRefreshCompleted: async () => {
+    await storeSaveStrict(STORAGE_KEYS.LEGACY_REFRESH_PENDING, false);
+    set({ legacyRefreshPending: false });
+  },
+
   // ═══ Diagnostics helpers ═══
 
   getQueueSummary: (): QueueSummary => {
@@ -650,16 +762,152 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 }));
 
+// ═══ Migración DURABLE compartida (rehidratado + guard del dispatcher) ═══
+//
+// Orden seguro (ver runDurableLegacyMigration): pending durable → marcar+persistir
+// → revertir stock → retirar+persistir. Captura las reversiones ANTES de marcar
+// consumido para que sean idempotentes. Un único helper para no duplicar lógica.
+async function durableMigrateLegacy(
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+  events: SyncQueueItem[],
+): Promise<{ migrated: number; reverted: number; ok: boolean; status: 'completed' | 'deferred' }> {
+  const ids = new Set(events.map((e) => e.id));
+  const reversalEntries: Array<{ product_id: number; qty: number }> = [];
+  const consumedFlagById = new Map<string, '_localStockRolledBack' | '_legacyStockRestored' | null>();
+  for (const ev of events) {
+    const plan = planLegacyReversal(ev);
+    consumedFlagById.set(ev.id, plan ? consumedFlagForSource(plan.source) : null);
+    if (plan) for (const r of plan.reversal) reversalEntries.push(r);
+  }
+
+  const result = await runDurableLegacyMigration({
+    // 1. pending durable ANTES de tocar cola/stock.
+    persistPendingTrue: async () => {
+      await storeSaveStrict(STORAGE_KEYS.LEGACY_REFRESH_PENDING, true);
+      set({ legacyRefreshPending: true });
+    },
+    // 2. marcar consumido + persistir la cola (memoria solo tras persistir).
+    markConsumedAndPersist: async () => {
+      const marked = get().queue.map((i) => {
+        const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
+        return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
+      });
+      await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(marked));
+      set({ queue: marked, ...computeCounts(marked) });
+    },
+    // 3. reversión local (idempotente: flags de consumo ya durables).
+    applyReversal: () => {
+      const updateLocalStock = useProductStore.getState().updateLocalStock;
+      for (const r of reversalEntries) updateLocalStock(r.product_id, r.qty);
+    },
+    // 4. retirar de la cola + persistir + aviso (memoria solo tras persistir).
+    removeAndPersist: async () => {
+      const kept = get().queue.filter((i) => !ids.has(i.id));
+      await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(kept));
+      set({
+        queue: kept,
+        ...computeCounts(kept),
+        legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + events.length,
+      });
+    },
+    onPhaseError: (phase, error) =>
+      logWarn('sync', 'legacy_migration_phase_failed', {
+        phase,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+  });
+
+  const ok = result.ok;
+  // Handler ÚNICO del resultado (P2): difiere TODO el lote con backoff si quedó
+  // deferred (también en rehydrate, no solo en el dispatcher) y despierta el runner
+  // tras dejar pending durable. Sin duplicar la lógica de defer/wake.
+  const status = handleDurableMigrationResult(result, {
+    defer: () => deferLegacyEvents(get, set, [...ids]),
+    notifyRefreshPending: notifyRefreshPendingReady,
+  });
+  logWarn('sync', 'legacy_refill_unload_migrated', {
+    migrated: ok ? events.length : 0,
+    reverted: ok ? reversalEntries.length : 0,
+    phase: result.phase,
+    ok,
+    status,
+  });
+  return {
+    migrated: ok ? events.length : 0,
+    reverted: ok ? reversalEntries.length : 0,
+    ok,
+    status,
+  };
+}
+
+// Difiere un LOTE de ítems legacy con backoff SIN mandarlos a dead: status='error',
+// retries=0 (nunca alcanza MAX_RETRIES), next_retry_at futuro (fuera de la
+// elegibilidad inmediata → no drain_now). El reintento re-ejecuta la operación
+// durable; el stock NO se re-revierte (flag de consumo ya durable). Único punto de
+// defer, compartido por rehydrate y dispatcher (vía durableMigrateLegacy).
+function deferLegacyEvents(
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+  ids: string[],
+): void {
+  if (ids.length === 0) return;
+  const idSet = new Set(ids);
+  const retryAt = Date.now() + LEGACY_DEFER_BACKOFF_MS;
+  const newQueue = get().queue.map((i) =>
+    idSet.has(i.id)
+      ? {
+          ...i,
+          status: 'error' as SyncItemStatus,
+          error_message: 'legacy migration deferred (storage)',
+          retries: 0, // NO acumula → nunca dead; el guard intercepta antes de enviar
+          next_retry_at: retryAt,
+        }
+      : i,
+  );
+  set({ queue: newQueue, ...computeCounts(newQueue) });
+  schedulePersist();
+  // Arma el despertador de backoff AHORA: en rehydrate el defer ocurre fuera de un
+  // ciclo de processQueue (no hay decisión post-ciclo que lo agende), así que sin
+  // esto el reintento esperaría a un evento externo. Idempotente en el dispatcher.
+  get().scheduleWake();
+}
+
 // ═══ Individual item processor ═══
+
+// Resultado explícito del procesador de un ítem (P1 Codex):
+//  - 'handled'         → completado (o descartado con reparación durable); cuenta éxito.
+//  - 'failed'          → error real (markError/markDead); cuenta fallo.
+//  - 'deferred'        → legacy cuya persistencia final falló: sigue en cola con
+//                        backoff, NO manejado, NO enviado, NO re-revertido, y NO
+//                        debe disparar drain_now.
+//  - 'dependency_wait' → esperando una dependencia; no es fallo real.
+type ProcessItemOutcome = 'handled' | 'failed' | 'deferred' | 'dependency_wait';
 
 async function processOneItem(
   item: SyncQueueItem,
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
-): Promise<boolean> {
+): Promise<ProcessItemOutcome> {
+  // Guard temporal (compat una versión): un evento legacy de recarga/devolución
+  // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra con la
+  // MISMA operación durable que el rehidratado.
+  if (isLegacyRefillUnloadItem(item)) {
+    // discardLegacyRefillUnload → durableMigrateLegacy YA difiere con backoff y
+    // despierta el runner (handler único). Aquí solo mapeamos el status al
+    // resultado del ciclo: 'deferred' evita el drain_now agresivo.
+    const res = await get().discardLegacyRefillUnload(item.id);
+    if (res.status === 'deferred') {
+      logWarn('sync', 'legacy_dispatch_guard_deferred', { id: item.id, type: item.type });
+      return 'deferred';
+    }
+    logWarn('sync', 'legacy_dispatch_guard', { id: item.id, type: item.type, status: res.status });
+    return 'handled'; // completed o not_legacy: nada más que hacer
+  }
+
   if (!areSyncDependenciesSatisfied(item, get().queue)) {
     logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
-    return false;
+    return 'dependency_wait';
   }
 
   // Mark as syncing
@@ -682,7 +930,7 @@ async function processOneItem(
       }
     }
 
-    return true;
+    return 'handled';
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
@@ -702,7 +950,7 @@ async function processOneItem(
       get().markError(item.id, msg);
     }
 
-    return false;
+    return 'failed';
   }
 }
 
@@ -934,24 +1182,15 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }, meta);
       break;
 
+    // NOTA: los antiguos case 'refill'/'unload' (que posteaban a los modelos van
+    // de recarga/descarga vía /api/create_update) se ELIMINARON. El flujo se
+    // retiró: la recarga la crea Almacén y el vendedor la acepta; la devolución
+    // (vendible + merma) se captura en el Corte. Cualquier evento legacy que quede
+    // en cola lo intercepta el guard de processOneItem (isLegacyRefillUnloadItem) y
+    // se migra (revierte stock + descarta); nunca llega a este dispatcher.
+
     // V2 types — basic dispatchers. Payloads follow the same
     // postRpc pattern. Backend contracts TBD per endpoint.
-    case 'refill':
-      await postRpc('/api/create_update', {
-        model: 'van.refill.request',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
-    case 'unload':
-      await postRpc('/api/create_update', {
-        model: 'van.unload',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
     case 'collection':
       await postRpc('/api/create_update', {
         model: 'account.payment',
@@ -990,7 +1229,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
   }
 }
 
-// ═══ Rollback V2 — sale_order + unload + refill ═══
+// ═══ Rollback V2 — genérico por `_localStockDelta` (+ sale_order) ═══
 
 /** Marca el ítem como ya-revertido en la cola, para evitar doble rollback. */
 function markLocalStockRolledBack(id: string): void {
@@ -1005,10 +1244,9 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
   const updateLocalStock = useProductStore.getState().updateLocalStock;
 
   // PR-3a: rollback GENÉRICO por `_localStockDelta`, independiente del `type`.
-  // Cubre unload (encolado como 'prospection', que antes caía en `default` y NO
-  // revertía → stock fantasma). Idempotente: computeLocalStockReversal devuelve
-  // [] si ya se revirtió (`_localStockRolledBack`), y aquí marcamos el flag tras
-  // revertir. Si hay delta, esta ruta es autoritativa (no cae al switch por-type).
+  // Idempotente: computeLocalStockReversal devuelve [] si ya se revirtió
+  // (`_localStockRolledBack`), y aquí marcamos el flag tras revertir. Si hay
+  // delta, esta ruta es autoritativa (no cae al switch por-type).
   const reversal = computeLocalStockReversal(item.payload);
   if (reversal.length > 0) {
     reversal.forEach((r) => updateLocalStock(r.product_id, r.qty));
@@ -1020,8 +1258,9 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
     });
     return;
   }
-  // Sin delta (o ya revertido): mantener el rollback legacy por-type para ítems
-  // que aún no llevan `_localStockDelta` (p.ej. rehidratados de versiones previas).
+  // Sin delta (o ya revertido): rollback por-type para ítems que aún no llevan
+  // `_localStockDelta`. Los antiguos case 'unload'/'refill' se ELIMINARON (el
+  // flujo se retiró; los eventos legacy los intercepta el guard antes de morir).
   switch (item.type) {
     case 'sale_order': {
       // Pedido offline pendiente (política S1): NO se descuenta stock local al
@@ -1034,36 +1273,6 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
         id: item.id,
         lines: Array.isArray(item.payload.lines) ? item.payload.lines.length : 0,
       });
-      break;
-    }
-
-    case 'unload': {
-      // V2: Unload deducts stock locally. On failure, restore it.
-      const unloadLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
-      if (unloadLines && unloadLines.length > 0) {
-        unloadLines.forEach((line) => {
-          updateLocalStock(line.product_id, line.qty); // positive = restore
-        });
-        logError('sync', 'rollback_unload', {
-          id: item.id,
-          lines_restored: unloadLines.length,
-        });
-      }
-      break;
-    }
-
-    case 'refill': {
-      // V2: Refill ADDS stock locally. On failure, REMOVE it.
-      const refillLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
-      if (refillLines && refillLines.length > 0) {
-        refillLines.forEach((line) => {
-          updateLocalStock(line.product_id, -line.qty); // negative = remove added stock
-        });
-        logError('sync', 'rollback_refill', {
-          id: item.id,
-          lines_reversed: refillLines.length,
-        });
-      }
       break;
     }
 

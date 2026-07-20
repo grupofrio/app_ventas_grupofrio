@@ -23,8 +23,6 @@ export type SyncItemType =
   | 'gift'
   // V2 additions:
   | 'collection'
-  | 'refill'
-  | 'unload'
   | 'transfer'
   | 'customer_create'
   | 'customer_update';
@@ -53,8 +51,6 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   no_sale: 1,
   payment: 1,
   collection: 1,
-  refill: 1,
-  unload: 1,
   transfer: 1,
   customer_create: 1,
   customer_update: 1,

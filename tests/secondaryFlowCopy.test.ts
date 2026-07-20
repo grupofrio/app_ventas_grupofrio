@@ -5,21 +5,12 @@
 import assert from 'node:assert/strict';
 
 interface Mod {
-  refillSavedMessage: () => { title: string; body: string };
   consignmentOfflineBlockMessage: () => { title: string; body: string };
   presaleOfflineBlockMessage: () => { title: string; body: string };
   insufficientStockActionHint: () => string;
-  isRefillSyncItem: (item: { type?: string; payload?: any }) => boolean;
-  syncItemLabel: (item: { type?: string; payload?: any }, fallback: string) => string;
 }
 
 function run(m: Mod) {
-  // Refill: encola → "guardada", NO "registrada/confirmada/enviada".
-  const refill = m.refillSavedMessage();
-  assert.match(refill.title, /guardad/i);
-  assert.match(refill.body, /sincroniz/i);
-  assert.doesNotMatch(`${refill.title} ${refill.body}`, /registrad|confirmad/i);
-
   // Consignación: bloqueo con razón (trazabilidad de inventario).
   const consign = m.consignmentOfflineBlockMessage();
   assert.match(consign.title, /sin conexión/i);
@@ -36,16 +27,6 @@ function run(m: Mod) {
   const hint = m.insufficientStockActionHint();
   assert.match(hint, /NO se ha confirmado/i);
   assert.match(hint, /ajusta|elimina/i);
-
-  // Etiqueta de Sync: refill (prospection con van.refill.request) → "Solicitud de carga".
-  assert.equal(m.isRefillSyncItem({ type: 'prospection', payload: { model: 'van.refill.request' } }), true);
-  assert.equal(m.isRefillSyncItem({ type: 'prospection', payload: { type: 'refill' } }), true);
-  // Otros prospection (nuevo cliente / descarga) NO se confunden con refill.
-  assert.equal(m.isRefillSyncItem({ type: 'prospection', payload: { model: 'crm.lead' } }), false);
-  assert.equal(m.isRefillSyncItem({ type: 'no_sale', payload: {} }), false);
-  assert.equal(m.syncItemLabel({ type: 'prospection', payload: { model: 'van.refill.request' } }, 'Operacion'), 'Solicitud de carga');
-  assert.equal(m.syncItemLabel({ type: 'prospection', payload: { model: 'crm.lead' } }, 'Operacion'), 'Operacion');
-  assert.equal(m.syncItemLabel({ type: 'checkin', payload: {} }, 'Check-in'), 'Check-in');
 
   console.log('secondary flow copy tests: ok');
 }

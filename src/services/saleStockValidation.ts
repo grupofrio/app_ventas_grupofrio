@@ -3,7 +3,7 @@
  *
  * The cart caps quantities against the stock captured WHEN the line was added
  * (SaleLineItem.stock). That value goes stale if the catalog refreshes (another
- * sale synced, refill, etc.). Before confirming a sale we re-check each line
+ * sale synced, catalog reload, etc.). Before confirming a sale we re-check each line
  * against the CURRENT qty_display from the product store, and reject quantities
  * that are <= 0, NaN, or exceed fresh availability.
  *

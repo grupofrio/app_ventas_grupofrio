@@ -20,10 +20,17 @@
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { AppState, AppStateStatus } from 'react-native';
 import { useSyncStore } from '../stores/useSyncStore';
-import { shouldWakeOnNetTransition, NetSnapshot } from './syncWakeup';
+import { useProductStore } from '../stores/useProductStore';
+import { useAuthStore } from '../stores/useAuthStore';
+import { shouldWakeOnNetTransition, shouldWakeOnWarehouseTransition, NetSnapshot } from './syncWakeup';
+import { createLegacyRefreshRunner } from './legacyRefreshRunner';
+import { logWarn } from '../utils/logger';
 
 let netUnsubscribe: (() => void) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
+/** Suscripción al store de auth: dispara el refresh cuando aparece/cambia el
+ * warehouse tras el arranque (P2). Única; se limpia en stopConnectivityMonitor. */
+let authUnsubscribe: (() => void) | null = null;
 
 /** Última lectura tri-estado de NetInfo, para decidir el flanco de despertar. */
 let prevNet: NetSnapshot = { isConnected: null, isInternetReachable: null };
@@ -39,11 +46,58 @@ function isOnlineFromState(state: NetInfoState | NetSnapshot): boolean {
   return !!(state.isConnected && state.isInternetReachable !== false);
 }
 
+/**
+ * Runner del refresh autoritativo de inventario pendiente tras migrar eventos
+ * legacy refill/unload. Contrato: la bandera DURABLE `legacyRefreshPending` solo
+ * se limpia (`markLegacyRefreshCompleted`) tras una carga AUTORITATIVA
+ * (`loadProductsAuthoritative`: fuente scoped, warehouse correcto, no
+ * global_legacy) Y su limpieza durable confirmada. El guard in-flight (dentro del
+ * runner) evita dos refresh simultáneos si red/foreground/warehouse caen juntos.
+ * SINGLETON: NetInfo, foreground, rehydrate y auth comparten este mismo runner.
+ */
+const legacyRefreshRunner = createLegacyRefreshRunner({
+  hasPending: () => useSyncStore.getState().hasLegacyRefreshPending(),
+  isOnline: () => useSyncStore.getState().isOnline,
+  getWarehouseId: () => useAuthStore.getState().warehouseId,
+  // P1-2: resultado AUTORITATIVO explícito (fuente scoped, warehouse correcto).
+  loadAuthoritative: (warehouseId: number) =>
+    useProductStore.getState().loadProductsAuthoritative(warehouseId),
+  // Limpieza durable verificable (async): rechaza si no se pudo persistir el false.
+  markCompleted: () => useSyncStore.getState().markLegacyRefreshCompleted(),
+  onError: (error) =>
+    logWarn('inventory', 'legacy_authoritative_refresh_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  onNonAuthoritative: (result) =>
+    logWarn('inventory', 'legacy_refresh_non_authoritative', {
+      reason: result.ok ? undefined : result.reason,
+      source: result.source,
+    }),
+});
+
+/**
+ * Dispara UN intento de refresh autoritativo pendiente. El runner protege por
+ * pending / online / warehouse / in-flight, así que es seguro llamarlo en
+ * cualquier punto de despertar (reconexión, foreground, fin de bootstrap).
+ * Fire-and-forget: nunca bloquea processQueue ni lanza.
+ */
+export function requestLegacyAuthoritativeRefresh(): void {
+  void legacyRefreshRunner.run();
+}
+
+// P2 (Codex): registrar el disparador en el store por INYECCIÓN (no import
+// inverso → sin ciclo useSyncStore↔connectivity). Toda migración que deje
+// `legacyRefreshPending=true` durable invoca este waker al terminar, cerrando la
+// carrera "runner-preventivo ve pending=false → dispatcher fija pending=true".
+// Se hace al cargar el módulo (connectivity se importa temprano vía rehydrate).
+useSyncStore.getState().setLegacyRefreshWaker(requestLegacyAuthoritativeRefresh);
+
 /** Dispara el drenaje de la cola sin duplicar ciclos (guard isSyncing). */
 function wakeQueue(): void {
   const store = useSyncStore.getState();
   store.processQueue();
   store.scheduleWake();
+  requestLegacyAuthoritativeRefresh();
 }
 
 export function startConnectivityMonitor(): void {
@@ -84,6 +138,21 @@ export function startConnectivityMonitor(): void {
     });
   }
 
+  // P2: suscripción REAL al store de auth. Cuando warehouseId pasa de
+  // null/0 a un valor válido (o cambia de almacén) DESPUÉS del arranque —el caso
+  // en que rehydrate encontró pending pero aún no había warehouse— disparamos el
+  // MISMO runner singleton (no polling, no hook React, no runner nuevo). Solo si
+  // hay pending; el runner revalida que la carga corresponda al warehouse.
+  if (!authUnsubscribe) {
+    authUnsubscribe = useAuthStore.subscribe((state, prev) => {
+      const hasPending = useSyncStore.getState().hasLegacyRefreshPending();
+      if (shouldWakeOnWarehouseTransition(prev.warehouseId, state.warehouseId, hasPending)) {
+        if (__DEV__) console.log('[connectivity] warehouse available — legacy refresh');
+        requestLegacyAuthoritativeRefresh();
+      }
+    });
+  }
+
   if (__DEV__) console.log('[connectivity] Monitor started');
 }
 
@@ -95,6 +164,10 @@ export function stopConnectivityMonitor(): void {
   if (appStateSubscription) {
     appStateSubscription.remove();
     appStateSubscription = null;
+  }
+  if (authUnsubscribe) {
+    authUnsubscribe();
+    authUnsubscribe = null;
   }
   // Limpia el timer de backoff para no dejar despertadores huérfanos tras teardown.
   useSyncStore.getState().clearWakeTimer();

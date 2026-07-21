@@ -118,6 +118,40 @@ function testEnqueueKeepsDependsOnOnlyOptionsExact(module: VisitPhotosModule) {
   assert.deepEqual(options, [{ dependsOn: ['sale-op-legacy'] }]);
 }
 
+function testEnqueueIsolatesPhotoOptionsFromMutatingConsumers(module: VisitPhotosModule) {
+  const dependsOn = ['sale-op-1'];
+  const observed: SyncEnqueueOptions[] = [];
+
+  module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://photo-1.jpg', 'file://photo-2.jpg'],
+    dependsOn,
+    holdProcessing: true,
+    enqueue: (_type, _payload, opts) => {
+      assert.ok(opts);
+      observed.push({
+        ...opts,
+        ...(opts.dependsOn ? { dependsOn: [...opts.dependsOn] } : {}),
+      });
+      opts.dependsOn?.push('consumer-mutation');
+      opts.holdProcessing = false;
+      return `photo-${observed.length}`;
+    },
+  });
+
+  assert.deepEqual(observed, [
+    {
+      dependsOn: ['sale-op-1'],
+      holdProcessing: true,
+    },
+    {
+      dependsOn: ['sale-op-1'],
+      holdProcessing: true,
+    },
+  ]);
+  assert.deepEqual(dependsOn, ['sale-op-1']);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -129,6 +163,7 @@ async function main() {
   testEnqueueCreatesOneUploadPerPhoto(module);
   testEnqueueAllowsSaleEvidenceImageType(module);
   testEnqueueKeepsDependsOnOnlyOptionsExact(module);
+  testEnqueueIsolatesPhotoOptionsFromMutatingConsumers(module);
   console.log('visit photos tests: ok');
 }
 

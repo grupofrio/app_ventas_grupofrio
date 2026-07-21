@@ -25,15 +25,15 @@ export function enqueueVisitPhotos({
   holdProcessing?: boolean;
   imageType?: string;
 }): string[] {
-  const opts: SyncEnqueueOptions | undefined = dependsOn?.length || holdProcessing
-    ? {
-        ...(dependsOn?.length ? { dependsOn } : {}),
-        ...(holdProcessing ? { holdProcessing } : {}),
-      }
-    : undefined;
+  return photoUris.map((localUri) => {
+    const opts: SyncEnqueueOptions | undefined = dependsOn?.length || holdProcessing
+      ? {
+          ...(dependsOn?.length ? { dependsOn: [...dependsOn] } : {}),
+          ...(holdProcessing ? { holdProcessing } : {}),
+        }
+      : undefined;
 
-  return photoUris.map((localUri) =>
-    enqueue(
+    return enqueue(
       'photo',
       {
         stop_id: stopId,
@@ -41,6 +41,6 @@ export function enqueueVisitPhotos({
         image_type: imageType,
       },
       opts,
-    )
-  );
+    );
+  });
 }

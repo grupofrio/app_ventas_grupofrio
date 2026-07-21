@@ -16,6 +16,11 @@ export interface PersistAmbiguousSaleInput {
   photoUris: string[];
   enqueue: Enqueue;
   persistQueue: () => Promise<void>;
+  /**
+   * Expected to be non-throwing. If cleanup fails after another failure, the
+   * helper rejects with an AggregateError whose cause is the primary failure;
+   * after a successful persist, its cleanup error is propagated directly.
+   */
   releaseProcessingHolds: (ids: string[]) => void;
 }
 
@@ -35,6 +40,7 @@ export async function persistAmbiguousSaleRecovery({
   persistQueue,
   releaseProcessingHolds,
 }: PersistAmbiguousSaleInput): Promise<PersistAmbiguousSaleResult> {
+  const normalizedOperationId = operationId.trim();
   const heldIds: string[] = [];
   const trackedEnqueue: Enqueue = (type, enqueuedPayload, opts) => {
     const id = enqueue(type, enqueuedPayload, opts);
@@ -52,12 +58,12 @@ export async function persistAmbiguousSaleRecovery({
         _clientTotal: total,
       },
       {
-        operationId,
+        operationId: normalizedOperationId,
         holdProcessing: true,
       },
     );
 
-    if (saleId !== operationId) {
+    if (saleId !== normalizedOperationId) {
       throw new Error('La cola no conservó el identificador de la venta.');
     }
 
@@ -65,15 +71,23 @@ export async function persistAmbiguousSaleRecovery({
       stopId,
       photoUris,
       enqueue: trackedEnqueue,
-      dependsOn: [operationId],
+      dependsOn: [normalizedOperationId],
       holdProcessing: true,
       imageType: 'sale',
     });
 
     await persistQueue();
-    result = { saleId, photoIds };
+    result = { saleId: normalizedOperationId, photoIds };
   } catch (error) {
-    releaseProcessingHolds(heldIds);
+    try {
+      releaseProcessingHolds(heldIds);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'No se pudieron liberar las retenciones después de otro error.',
+        { cause: error },
+      );
+    }
     throw error;
   }
 

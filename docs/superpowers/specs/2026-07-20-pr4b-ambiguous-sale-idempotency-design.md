@@ -95,6 +95,7 @@ Cuando exista una respuesta HTTP:
 - `responseReceived` será `true`;
 - `httpStatus` contendrá el estado real;
 - si `unwrapRestResult` produce un error funcional, sus campos `code` y `data` se copiarán al error final;
+- si el sobre válido contiene `ok: false` pero no trae código, se asignará `code: "api_rejection"` para identificar estructuralmente el rechazo;
 - el mensaje seguirá siendo el mismo que se muestra hoy y el marcado interno de logging existente se preservará.
 
 Cuando falle el transporte antes de obtener una respuesta:
@@ -136,6 +137,8 @@ La precedencia será deliberadamente conservadora:
 
 La regla de HTTP 5xx tiene precedencia incluso si el cuerpo contiene un mensaje funcional, porque un intermediario o un fallo tardío no garantiza que toda la transacción haya sido revertida.
 
+Un rechazo funcional 2xx sin código propio será reconocible por `code: "api_rejection"`, asignado en el límite HTTP. El clasificador no dependerá de buscar frases en el mensaje para distinguirlo de un error desconocido.
+
 El clasificador no decidirá textos, navegación, reintentos ni mutará stores. La pantalla será responsable únicamente de orquestar la decisión.
 
 ### Identificador explícito e idempotente en la cola
@@ -146,6 +149,7 @@ El clasificador no decidirá textos, navegación, reintentos ni mutará stores. 
 enqueue(type, payload, {
   dependsOn?: string[];
   operationId?: string;
+  deferProcessing?: boolean;
 }): string
 ```
 
@@ -156,8 +160,28 @@ Las reglas serán:
 3. Si no existe el ID, se crea el ítem con `item.id === operationId` y `payload._operationId === operationId`.
 4. Si ya existe un ítem del mismo tipo con ese ID, se devuelve el ID existente sin insertar, reemplazar payload ni duplicar la operación. El primer registro es autoritativo.
 5. Si el ID ya pertenece a otro tipo de operación, se lanza una colisión explícita y no se sobrescribe el ítem.
+6. `deferProcessing: true` evita únicamente el auto-disparo del procesador para esa inserción. El llamador será responsable de iniciarlo después de completar la persistencia durable.
+
+Para un ítem del mismo ID y tipo ya existente, el estado se resolverá así:
+
+- `pending`, `syncing` o `error`: se conserva el ítem y su política normal de procesamiento/backoff;
+- `dead`: se rearma el mismo ítem a `pending`, limpiando error, reintentos y `next_retry_at`, pero sin sustituir su payload;
+- `done`: se conserva como `done` y no se reenvía, porque la operación ya tiene éxito conocido.
 
 La prioridad, dependencias, telemetría, conteos y auto-procesamiento existentes seguirán funcionando. No se cambia la forma persistida de `SyncQueueItem`.
+
+### Persistencia serializada y barrera antes del envío
+
+Todas las escrituras de la cola —inmediatas, agendadas, producidas por metadata o solicitadas explícitamente— pasarán por un único coordinador serial. Cada solicitud:
+
+1. espera a que termine la escritura anterior;
+2. lee el estado más reciente de la cola cuando le corresponde ejecutarse, no cuando se solicitó;
+3. escribe ese snapshot completo;
+4. devuelve una promesa que resuelve solo después de que su snapshot quedó guardado.
+
+Con esto, una escritura parcial iniciada por el primer `enqueue` nunca puede terminar después de una escritura más nueva y sobrescribir el lote completo. `persistQueue()` representará una barrera: al resolver, no quedará ninguna escritura anterior capaz de degradar el estado durable que acaba de guardar.
+
+Durante la recuperación ambigua, tanto la venta como sus fotos se encolarán con `deferProcessing: true`. `enqueueVisitPhotos` ampliará sus opciones para propagar esta bandera a cada foto. Después de insertar todo el lote en memoria, la pantalla esperará `persistQueue()` y solo entonces invocará `processQueue()` sin bloquear la interfaz. El comportamiento predeterminado de los demás `enqueue` seguirá persistiendo y auto-procesando como hoy.
 
 ### Flujo online exitoso
 
@@ -165,9 +189,11 @@ El camino feliz permanece igual:
 
 1. `lockSaleConfirm()` genera o reutiliza el ID de la confirmación.
 2. La pantalla envía la venta directamente con `_operationId`.
-3. `createSale` valida la respuesta de éxito.
-4. Se encolan las fotos con el comportamiento online actual, se guarda el ticket y se continúa al checkout o a la ruta.
-5. No se crea un `sale_order` pendiente.
+3. Un `try/catch` limitado exclusivamente a `createSale` valida o clasifica el resultado remoto.
+4. Después de una respuesta válida, se cierra definitivamente la fase de envío de la venta.
+5. En una fase posterior separada se encolan las fotos con el comportamiento online actual, se guarda el ticket y se continúa al checkout o a la ruta.
+6. Un error de fotos, ticket o navegación nunca vuelve a entrar al clasificador, nunca ejecuta `unlockSaleConfirm()` y nunca encola un segundo `sale_order`; se registra y se comunica como un problema posterior a una venta ya confirmada.
+7. No se crea un `sale_order` pendiente.
 
 ### Rechazo definitivo
 
@@ -183,13 +209,14 @@ Si el clasificador devuelve `definitive_rejection`:
 
 Si el clasificador devuelve `ambiguous_result`, la pantalla no llamará a `unlockSaleConfirm`. Ejecutará en este orden:
 
-1. Encolar `sale_order` con el payload original, la metadata visible de cliente/total y `{ operationId }`.
-2. Encolar las fotos con `dependsOn: [operationId]`.
+1. Encolar `sale_order` con el payload original, la metadata visible de cliente/total y `{ operationId, deferProcessing: true }`.
+2. Encolar las fotos con `dependsOn: [operationId]` y `deferProcessing: true`.
 3. Ejecutar y esperar `persistQueue()` después de que el lote completo esté en memoria.
-4. Guardar `saleOperationId: operationId` para que checkout, ruta y sincronización sigan la operación correcta.
-5. Guardar el snapshot del ticket con el mismo ID.
-6. Mantener `saleConfirmed: true`, impidiendo que el carrito genere otra confirmación.
-7. Mostrar el estado pendiente y continuar por la misma decisión checkout/ruta del camino offline.
+4. Iniciar `processQueue()` solo después de que la persistencia durable haya terminado.
+5. Guardar `saleOperationId: operationId` para que checkout, ruta y sincronización sigan la operación correcta.
+6. Guardar el snapshot del ticket con el mismo ID.
+7. Mantener `saleConfirmed: true`, impidiendo que el carrito genere otra confirmación.
+8. Mostrar el estado pendiente y continuar por la misma decisión checkout/ruta del camino offline.
 
 El mensaje será:
 
@@ -214,6 +241,8 @@ La recuperación solo se comunicará como pendiente después de que `persistQueu
 - no se mostrará “Pedido guardado”;
 - se advertirá que no se cierre la aplicación mientras continúa la verificación.
 
+El procesador no se iniciará desde este flujo si la barrera de persistencia falla. Las inserciones siguen en memoria y una transición posterior de conectividad, una sincronización manual u otro despertar normal de la cola podrá volver a intentarlas, siempre con el mismo ID.
+
 Esta política prioriza evitar una duplicación sobre permitir una nueva edición. Un flujo manual de recuperación de almacenamiento queda fuera de PR-4b.
 
 ### Fotos, ticket y estado visible
@@ -223,6 +252,16 @@ Las fotos son operaciones dependientes y nunca deben usar una llave nueva como p
 El ticket local también usará ese ID, de modo que una respuesta idempotente posterior se relacione con el mismo comprobante. Un fallo posterior al persistir la venta —por ejemplo al guardar el ticket— no deberá desbloquear la venta ni retirar el ítem durable; la cola ya es la fuente de recuperación.
 
 Los estados existentes de sincronización (`pending`, `syncing`, `error`, `dead`) y sus acciones de reintento seguirán siendo la interfaz para observar y recuperar el pedido.
+
+### Límites de las fases de error
+
+La clasificación aplica exclusivamente a la promesa de `createSale`. Los pasos se separarán en tres bloques con responsabilidades distintas:
+
+1. **Preparación local:** tarifa y payload. Sus errores conservan el manejo previo y pueden liberar el bloqueo porque no se envió la venta.
+2. **Envío de venta:** solo la excepción de `createSale` entra al clasificador definitivo/ambiguo.
+3. **Post-confirmación o recuperación local:** fotos, ticket, persistencia y navegación tienen manejo propio. Nunca se reclasifican como un fallo remoto de venta.
+
+Una vez que `createSale` devuelve un resultado válido, la venta se considera confirmada aunque falle un efecto local posterior. Si la respuesta fue ambigua y la venta ya quedó durable, un fallo posterior tampoco retira el ítem ni desbloquea la operación.
 
 ### Observabilidad
 
@@ -235,12 +274,15 @@ La implementación seguirá TDD e incluirá:
 1. **Clasificador puro:** matriz de timeout, red, aborto, `responseReceived: false`, 5xx, 4xx, `invalid_response`, `insufficient_stock`, `session_expired`, rechazo funcional 2xx y error desconocido. También verificará la precedencia de 5xx sobre códigos funcionales.
 2. **Metadatos HTTP:** pruebas de que `postRest` conserva `httpStatus`, `responseReceived`, `code` y `data` para respuestas, y marca correctamente fallos de transporte. Los mensajes y el marcado de logging existente deben permanecer compatibles.
 3. **Contrato de creación:** éxito normal, éxito idempotente con `duplicate: true`, `order_id` inválido, `operation_id` ausente o distinto, objeto truthy no reconocido y respuesta cruda/no JSON.
-4. **Cola con ID explícito:** inserción con el mismo ID en item/payload, llamadas normales que aún generan UUID, reencolado idempotente del mismo tipo, primera escritura autoritativa, valor vacío y colisión con otro tipo.
-5. **Dependencias:** las fotos de una recuperación dependen exactamente del ID original de la venta.
-6. **Cableado de pantalla:** resultado definitivo libera el bloqueo; resultado ambiguo no lo libera, encola con `{ operationId }`, espera `persistQueue()` antes del aviso, guarda el ticket con el mismo ID y aplica la navegación de pedido pendiente.
-7. **Fallo de persistencia:** no muestra éxito, no avanza y conserva la operación bloqueada.
-8. **Regresión:** flujo online exitoso, flujo offline existente, stock insuficiente, sincronización y tickets.
-9. **Verificación completa:** `npm test` y `npm run typecheck`.
+4. **Cola con ID explícito:** inserción con el mismo ID en item/payload, llamadas normales que aún generan UUID, reencolado idempotente del mismo tipo, primera escritura autoritativa, valor vacío, colisión con otro tipo y comportamiento definido para `pending`, `syncing`, `error`, `dead` y `done`.
+5. **Persistencia serializada:** dos o más escrituras solapadas no permiten que un snapshot antiguo sobrescriba uno nuevo; la promesa de barrera solo resuelve cuando el snapshot más reciente solicitado quedó durable.
+6. **Procesamiento diferido:** la venta y las fotos no se despachan antes de que resuelva la barrera; después se dispara una sola ejecución normal del procesador.
+7. **Dependencias:** las fotos de una recuperación dependen exactamente del ID original de la venta.
+8. **Cableado de pantalla:** resultado definitivo libera el bloqueo; resultado ambiguo no lo libera, encola con `{ operationId, deferProcessing: true }`, espera `persistQueue()` antes del procesador y del aviso, guarda el ticket con el mismo ID y aplica la navegación de pedido pendiente.
+9. **Límites de fase:** un error de `createSale` sí se clasifica; errores posteriores de fotos, ticket o navegación no desbloquean ni reencolan la venta confirmada.
+10. **Fallo de persistencia:** no muestra éxito, no avanza, no inicia el procesador desde la recuperación y conserva la operación bloqueada.
+11. **Regresión:** flujo online exitoso, flujo offline existente, stock insuficiente, sincronización y tickets.
+12. **Verificación completa:** `npm test` y `npm run typecheck`.
 
 La validación manual crítica simulará este orden:
 
@@ -259,9 +301,12 @@ También se probará un timeout anterior a la creación para verificar que el mi
 - Un timeout, error de red, aborto, HTTP 5xx, respuesta inválida o error desconocido nunca genera una nueva llave de operación.
 - El `sale_order` recuperado usa el mismo valor en `item.id`, `payload._operationId`, `saleOperationId`, dependencias de fotos y ticket.
 - No se informa que el pedido quedó pendiente hasta completar la persistencia durable.
+- Ningún reintento recuperado se envía antes de que venta y fotos hayan cruzado la barrera de persistencia.
+- Una escritura antigua de la cola nunca puede sobrescribir un snapshot durable más reciente.
 - Un fallo de persistencia no desbloquea la venta ni permite confirmar otra operación.
 - Reencolar el mismo ID y tipo no duplica ni reemplaza el ítem existente.
 - Una colisión de ID entre tipos falla de forma explícita.
 - Una respuesta de creación solo es éxito cuando cumple el contrato confirmado; `duplicate: true` se acepta como éxito idempotente.
+- Solo los errores de `createSale` se clasifican; fallos posteriores no recrean ni desbloquean la venta.
 - El camino online exitoso y el camino offline normal mantienen su comportamiento actual.
 - La suite completa y el typecheck pasan.

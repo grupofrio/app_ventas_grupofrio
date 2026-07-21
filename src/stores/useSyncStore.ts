@@ -22,6 +22,7 @@
 import { create } from 'zustand';
 import {
   SyncQueueItem,
+  SyncEnqueueOptions,
   SyncItemType,
   SyncItemStatus,
   SyncPriority,
@@ -70,6 +71,8 @@ import {
   handleDurableMigrationResult,
 } from '../services/legacyRefillUnloadMigration';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
+import { applySyncEnqueue } from '../services/syncEnqueue';
+import { createSyncProcessingHolds } from '../services/syncProcessingHolds';
 
 // ═══ Constants ═══
 
@@ -111,6 +114,8 @@ function schedulePersist(): void {
 // un flanco de reconexión. El timer NO es un segundo procesador: solo invoca el
 // processQueue existente, que se auto-protege con el guard isSyncing.
 let _wakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+const processingHolds = createSyncProcessingHolds();
 
 // P2 (Codex): "waker" INYECTADO del refresh autoritativo. connectivity registra
 // aquí `requestLegacyAuthoritativeRefresh` (runner singleton). Se invoca DESPUÉS
@@ -165,8 +170,9 @@ interface SyncState {
   enqueue: (
     type: SyncItemType,
     payload: Record<string, unknown>,
-    opts?: { dependsOn?: string[] },
+    opts?: SyncEnqueueOptions,
   ) => string;
+  releaseProcessingHolds: (ids: string[]) => void;
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
   markDead: (id: string, message: string, retries?: number) => void;
@@ -263,28 +269,24 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ Enqueue ═══
 
   enqueue: (type, payload, opts) => {
-    const id = uuid();
-    const priority = SYNC_PRIORITY_MAP[type] ?? 3;
-
-    const item: SyncQueueItem = {
-      id,
+    const generatedId = uuid();
+    const createdAt = Date.now();
+    const originalQueue = get().queue;
+    let result = applySyncEnqueue({
+      queue: originalQueue,
       type,
-      payload: { ...payload, _operationId: id },
-      status: 'pending',
-      created_at: Date.now(),
-      retries: 0,
-      error_message: null,
-      priority,
-      next_retry_at: null,
-      dependsOn: opts?.dependsOn && opts.dependsOn.length > 0 ? [...opts.dependsOn] : undefined,
-    };
+      payload,
+      options: opts,
+      generatedId,
+      createdAt,
+    });
 
-    // GPS cap eviction (only for GPS type)
-    let baseQueue = get().queue;
-    if (type === 'gps') {
+    // Idempotency is resolved first: GPS-cap eviction is only valid for a real
+    // insertion, never for reuse/rearm/collision of an explicit operation id.
+    if (result.action === 'inserted' && type === 'gps') {
       try {
         const victimId = pickGpsOverflowVictim(
-          baseQueue.map((i) => ({
+          originalQueue.map((i) => ({
             id: i.id,
             type: i.type,
             status: i.status,
@@ -292,39 +294,58 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           })),
         );
         if (victimId) {
-          baseQueue = baseQueue.filter((i) => i.id !== victimId);
+          const baseQueue = originalQueue.filter((i) => i.id !== victimId);
           logInfo('gps', 'cap_eviction', { victimId });
+          result = applySyncEnqueue({
+            queue: baseQueue,
+            type,
+            payload,
+            options: opts,
+            generatedId,
+            createdAt,
+          });
         }
       } catch {
-        // keep baseQueue unchanged
+        // Keep the original insertion result unchanged.
       }
     }
 
-    const newQueue = [...baseQueue, item];
-    set({ queue: newQueue, ...computeCounts(newQueue) });
+    if (opts?.holdProcessing) {
+      processingHolds.hold([result.id]);
+    }
 
-    // Persist immediately (fire-and-forget)
-    get().persistQueue();
+    if (result.action !== 'reused') {
+      set({ queue: result.queue, ...computeCounts(result.queue) });
 
-    logInfo('sync', 'enqueue', { id, type, priority });
+      // Persist every queue mutation immediately (fire-and-forget).
+      get().persistQueue();
+      const priority = SYNC_PRIORITY_MAP[type] ?? 3;
+      logInfo('sync', 'enqueue', { id: result.id, type, priority, action: result.action });
+    }
 
-    // BLD-008: client event metadata (async, never blocks enqueue)
-    makeClientEventMeta(id)
-      .then((meta) => {
-        const updated = get().queue.map((i) => (i.id === id ? { ...i, meta } : i));
-        set({ queue: updated });
-        get().persistQueue();
-      })
-      .catch(() => {});
+    if (result.action === 'inserted') {
+      // BLD-008: client event metadata (async, never blocks enqueue)
+      makeClientEventMeta(result.id)
+        .then((meta) => {
+          const updated = get().queue.map((i) => (i.id === result.id ? { ...i, meta } : i));
+          set({ queue: updated });
+          get().persistQueue();
+        })
+        .catch(() => {});
+    }
 
     // Auto-trigger queue processing when online (fire-and-forget).
     // Without this, enqueued items only process on connectivity change
     // or manual sync — causing sales/no-sales/checkouts to never reach Odoo.
-    if (get().isOnline && !get().isSyncing) {
+    if (!opts?.holdProcessing && get().isOnline && !get().isSyncing) {
       setTimeout(() => get().processQueue(), 100);
     }
 
-    return id;
+    return result.id;
+  },
+
+  releaseProcessingHolds: (ids) => {
+    processingHolds.release(ids);
   },
 
   // ═══ Status transitions ═══
@@ -496,7 +517,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return false;
     };
 
-    const candidates = queue.filter(isReady);
+    const candidates = processingHolds.withoutHeld(queue).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -641,7 +662,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const action = decidePostCycleActionAfterCycle({
         hadUnhandledCycleError,
         hadDeferredStorageFailure,
-        queue: get().queue,
+        queue: processingHolds.withoutHeld(get().queue),
         now: Date.now(),
         maxRetries: MAX_RETRIES,
         depsSatisfied: areSyncDependenciesSatisfied,
@@ -672,7 +693,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const { queue, isOnline } = get();
     // Offline: no tiene sentido agendar; el flanco de reconexión re-arma.
     if (!isOnline) return;
-    const delay = nextWakeDelayMs(queue, { maxRetries: MAX_RETRIES, now: Date.now() });
+    const delay = nextWakeDelayMs(processingHolds.withoutHeld(queue), {
+      maxRetries: MAX_RETRIES,
+      now: Date.now(),
+    });
     if (delay == null) return;
     _wakeTimer = setTimeout(() => {
       _wakeTimer = null;
@@ -889,6 +913,11 @@ async function processOneItem(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): Promise<ProcessItemOutcome> {
+  if (processingHolds.isHeld(item.id)) {
+    logInfo('sync', 'processing_hold_wait', { id: item.id, type: item.type });
+    return 'dependency_wait';
+  }
+
   // Guard temporal (compat una versión): un evento legacy de recarga/devolución
   // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra con la
   // MISMA operación durable que el rehidratado.
@@ -969,27 +998,30 @@ async function processGpsBatch(
   const chunks = chunkArray(items, GPS_BATCH_SIZE);
 
   for (const chunk of chunks) {
+    const dispatchChunk = processingHolds.withoutHeld(chunk);
+    if (dispatchChunk.length === 0) continue;
+
     // Mark all as syncing
-    const ids = new Set(chunk.map((i) => i.id));
+    const ids = new Set(dispatchChunk.map((i) => i.id));
     const updatedQueue = get().queue.map((i) =>
       ids.has(i.id) ? { ...i, status: 'syncing' as SyncItemStatus } : i
     );
     set({ queue: updatedQueue });
 
     try {
-      await tryGpsBatchCreate(chunk);
-      for (const item of chunk) {
+      await tryGpsBatchCreate(dispatchChunk);
+      for (const item of dispatchChunk) {
         get().markDone(item.id);
         succeeded++;
       }
-      processed += chunk.length;
+      processed += dispatchChunk.length;
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : 'GPS sync error';
-      for (const item of chunk) {
+      for (const item of dispatchChunk) {
         handleGpsItemError(item, errMsg, get, set);
         failed++;
       }
-      processed += chunk.length;
+      processed += dispatchChunk.length;
     }
   }
 

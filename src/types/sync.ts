@@ -87,3 +87,9 @@ export interface SyncQueueItem {
   // item is processed. Missing / empty array = legacy FIFO behaviour.
   dependsOn?: string[];
 }
+
+export interface SyncEnqueueOptions {
+  dependsOn?: string[];
+  operationId?: string;
+  holdProcessing?: boolean;
+}

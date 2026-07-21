@@ -28,8 +28,9 @@ import {
   SyncPriority,
   SYNC_PRIORITY_MAP,
 } from '../types/sync';
-import { storeSave, storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
+import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
+import { createSerializedTaskRunner } from '../services/serializedTaskRunner';
 import { postRest, postRpc } from '../services/api';
 import {
   readPhotoAsBase64,
@@ -101,6 +102,25 @@ const LEGACY_DEFER_BACKOFF_MS = 8000;
 // banderas de estado, que son recuperables por idempotencia al rehidratar.
 const PERSIST_DEBOUNCE_MS = 800;
 
+const runSerializedQueuePersist = createSerializedTaskRunner();
+
+function persistCurrentQueue(): Promise<void> {
+  return runSerializedQueuePersist(async () => {
+    const { queue } = useSyncStore.getState();
+    const toPersist = selectPersistableQueue(queue);
+    await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, toPersist);
+  });
+}
+
+function persistQueueInBackground(source: string): void {
+  void useSyncStore.getState().persistQueue().catch((error: unknown) => {
+    logError('sync', 'sync_queue_persist_failed', {
+      source,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 /** Agenda una persistencia (trailing): la primera mutación de la ráfaga fija
  * un write dentro de PERSIST_DEBOUNCE_MS; las siguientes se coalescen. */
@@ -108,7 +128,7 @@ function schedulePersist(): void {
   if (_persistTimer) return;
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
-    void useSyncStore.getState().persistQueue();
+    persistQueueInBackground('scheduled_writer');
   }, PERSIST_DEBOUNCE_MS);
 }
 
@@ -323,7 +343,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: result.queue, ...computeCounts(result.queue) });
 
       // Persist every queue mutation immediately (fire-and-forget).
-      get().persistQueue();
+      persistQueueInBackground('enqueue');
       const priority = SYNC_PRIORITY_MAP[type] ?? 3;
       logInfo('sync', 'enqueue', { id: result.id, type, priority, action: result.action });
     }
@@ -334,7 +354,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         .then((meta) => {
           const updated = get().queue.map((i) => (i.id === result.id ? { ...i, meta } : i));
           set({ queue: updated });
-          get().persistQueue();
+          persistQueueInBackground('metadata_completion');
         })
         .catch(() => {});
     }
@@ -458,17 +478,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   // ═══ Persistence ═══
 
-  persistQueue: async () => {
+  persistQueue: () => {
     // Un write inmediato cancela cualquier persistencia agendada (sería
     // redundante: ya escribimos el estado actual completo).
     if (_persistTimer) {
       clearTimeout(_persistTimer);
       _persistTimer = null;
     }
-    const { queue } = get();
-    // Only persist non-done items to avoid unbounded growth
-    const toPersist = selectPersistableQueue(queue);
-    await storeSave(STORAGE_KEYS.SYNC_QUEUE, toPersist);
+    return persistCurrentQueue();
   },
 
   rehydrateQueue: async () => {
@@ -638,7 +655,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     } finally {
       // Garantías pase lo que pase: liberar el mutex isSyncing y persistir la cola.
       set({ isSyncing: false });
-      get().persistQueue();
+      persistQueueInBackground('process_finally');
 
       // P2 (Codex): decidir el siguiente paso con la MISMA lógica de dependencias
       // que processQueue. Si quedó trabajo elegible con deps satisfechas — p.ej.
@@ -814,12 +831,18 @@ async function durableMigrateLegacy(
     },
     // 2. marcar consumido + persistir la cola (memoria solo tras persistir).
     markConsumedAndPersist: async () => {
-      const marked = get().queue.map((i) => {
-        const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
-        return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
+      return runSerializedQueuePersist(async () => {
+        const marked = get().queue.map((i) => {
+          const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
+          return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
+        });
+        await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(marked));
+        const currentMarked = get().queue.map((i) => {
+          const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
+          return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
+        });
+        set({ queue: currentMarked, ...computeCounts(currentMarked) });
       });
-      await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(marked));
-      set({ queue: marked, ...computeCounts(marked) });
     },
     // 3. reversión local (idempotente: flags de consumo ya durables).
     applyReversal: () => {
@@ -828,12 +851,15 @@ async function durableMigrateLegacy(
     },
     // 4. retirar de la cola + persistir + aviso (memoria solo tras persistir).
     removeAndPersist: async () => {
-      const kept = get().queue.filter((i) => !ids.has(i.id));
-      await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(kept));
-      set({
-        queue: kept,
-        ...computeCounts(kept),
-        legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + events.length,
+      return runSerializedQueuePersist(async () => {
+        const kept = get().queue.filter((i) => !ids.has(i.id));
+        await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(kept));
+        const currentKept = get().queue.filter((i) => !ids.has(i.id));
+        set({
+          queue: currentKept,
+          ...computeCounts(currentKept),
+          legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + events.length,
+        });
       });
     },
     onPhaseError: (phase, error) =>
@@ -1292,7 +1318,7 @@ function markLocalStockRolledBack(id: string): void {
     i.id === id ? { ...i, payload: { ...i.payload, _localStockRolledBack: true } } : i,
   );
   useSyncStore.setState({ queue });
-  void useSyncStore.getState().persistQueue();
+  persistQueueInBackground('rollback_marker');
 }
 
 function rollbackFailedOperation(item: SyncQueueItem): void {

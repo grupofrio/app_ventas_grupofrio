@@ -181,6 +181,8 @@ Todas las escrituras de la cola —inmediatas, agendadas, producidas por metadat
 
 Con esto, una escritura parcial iniciada por el primer `enqueue` nunca puede terminar después de una escritura más nueva y sobrescribir el lote completo. `persistQueue()` representará una barrera: al resolver, no quedará ninguna escritura anterior capaz de degradar el estado durable que acaba de guardar.
 
+Los llamadores fire-and-forget del coordinador consumirán y registrarán sus rechazos para evitar promesas no manejadas. La llamada explícita usada como barrera no ocultará el error: conservará el rechazo para que la pantalla aplique la política de fallo de persistencia.
+
 Durante la recuperación ambigua, tanto la venta como sus fotos se encolarán con `deferProcessing: true`. `enqueueVisitPhotos` ampliará sus opciones para propagar esta bandera a cada foto. Después de insertar todo el lote en memoria, la pantalla esperará `persistQueue()` y solo entonces invocará `processQueue()` sin bloquear la interfaz. El comportamiento predeterminado de los demás `enqueue` seguirá persistiendo y auto-procesando como hoy.
 
 ### Flujo online exitoso

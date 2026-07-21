@@ -621,6 +621,7 @@ Create `tests/syncProcessingHoldWiring.test.mjs` and assert that `useSyncStore.t
 - exposes `releaseProcessingHolds(ids)` without calling `processQueue` itself;
 - filters held IDs from `processQueue` candidates;
 - passes a held-filtered queue to `decidePostCycleActionAfterCycle`;
+- filters held IDs before `scheduleWake` calls `nextWakeDelayMs`, preventing a held overdue error from creating a timer loop;
 - does not rely only on suppressing enqueue's `setTimeout`.
 
 - [ ] **Step 9: Run the wiring test and verify RED**
@@ -643,7 +644,8 @@ In the store:
 6. Suppress enqueue's auto-trigger when `holdProcessing` is true.
 7. In `processQueue`, filter held IDs before `isReady` candidates.
 8. In `finally`, pass `holds.withoutHeld(get().queue)` to `decidePostCycleActionAfterCycle`.
-9. `releaseProcessingHolds` only removes IDs; it never triggers sync.
+9. In `scheduleWake`, pass an unheld queue to `nextWakeDelayMs` so held errors cannot arm repeated timers.
+10. `releaseProcessingHolds` only removes IDs; it never triggers sync.
 
 - [ ] **Step 11: Run queue, hold, dependency, and wakeup tests**
 
@@ -717,7 +719,7 @@ In `useSyncStore.ts`:
 1. Stop using swallowing `storeSave` for `SYNC_QUEUE`; keep `storeSaveStrict`.
 2. Create one module-level serialized runner.
 3. Implement `persistCurrentQueue()` as a serialized task that reads `useSyncStore.getState().queue` when its turn begins, applies `selectPersistableQueue`, then awaits `storeSaveStrict`.
-4. Make the public `persistQueue` return `persistCurrentQueue()` so explicit callers observe rejection.
+4. Make the public `persistQueue` cancel the pending debounce timer exactly as today, then return `persistCurrentQueue()` so explicit callers observe rejection.
 5. Add `persistQueueInBackground(source)` which calls the same function, catches, and logs `sync_queue_persist_failed` without producing an unhandled rejection.
 6. Replace the fire-and-forget calls from the scheduled writer, enqueue, metadata completion, process `finally`, and rollback marker with `persistQueueInBackground`.
 7. Route both direct `SYNC_QUEUE` writes in `durableMigrateLegacy` through the same serialized runner. Compute their queue transform inside the serialized task and, after a successful write, apply the equivalent transform to the then-current in-memory queue so concurrent new items are preserved.

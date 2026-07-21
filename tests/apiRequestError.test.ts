@@ -71,3 +71,68 @@ test('makeApiTransportError marks failures before a response and preserves timeo
   assert.equal(Object.hasOwn(error, 'httpStatus'), false);
   assert.strictEqual(error, cause);
 });
+
+test('makeApiTransportError removes a stale HTTP status from reused Errors', async () => {
+  const { makeApiTransportError } = await loadApiRequestError();
+  const cause = Object.assign(new Error('Tiempo de espera agotado'), {
+    code: 'timeout',
+    httpStatus: 504,
+  });
+
+  const error = makeApiTransportError(cause);
+
+  assert.equal(error.responseReceived, false);
+  assert.equal(error.code, 'timeout');
+  assert.equal(error.httpStatus, undefined);
+  assert.equal(Object.hasOwn(error, 'httpStatus'), false);
+  assert.strictEqual(error, cause);
+});
+
+test('makeApiTransportError uses message and metadata from object causes', async () => {
+  const { makeApiTransportError } = await loadApiRequestError();
+  const cause = {
+    message: 'La conexión se cerró',
+    code: 'connection_lost',
+    data: { retryable: true },
+  };
+
+  const error = makeApiTransportError(cause);
+
+  assert.equal(error.message, 'La conexión se cerró');
+  assert.equal(error.code, 'connection_lost');
+  assert.deepEqual(error.data, { retryable: true });
+  assert.equal(error.responseReceived, false);
+});
+
+test('makeApiTransportError safely handles objects without string conversion', async () => {
+  const { makeApiTransportError } = await loadApiRequestError();
+  const cause = Object.create(null) as Record<string, unknown>;
+
+  const error = makeApiTransportError(cause);
+
+  assert.equal(error.message, 'Error de solicitud');
+  assert.equal(error.responseReceived, false);
+});
+
+test('makeApiTransportError safely handles hostile string conversion', async () => {
+  const { makeApiTransportError } = await loadApiRequestError();
+  const cause = {
+    toString(): string {
+      throw new Error('hostile conversion');
+    },
+  };
+
+  const error = makeApiTransportError(cause);
+
+  assert.equal(error.message, 'Error de solicitud');
+  assert.equal(error.responseReceived, false);
+});
+
+test('makeApiTransportError preserves safe Symbol descriptions', async () => {
+  const { makeApiTransportError } = await loadApiRequestError();
+
+  const error = makeApiTransportError(Symbol('request failure'));
+
+  assert.equal(error.message, 'Symbol(request failure)');
+  assert.equal(error.responseReceived, false);
+});

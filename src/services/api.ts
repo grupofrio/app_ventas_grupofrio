@@ -228,12 +228,15 @@ export async function postRest<T = any>(
     requestBody: data,
   }));
 
+  let responseStatus: number | undefined;
+
   try {
     const response = await fetchWithTimeout(absoluteUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
     }, options.timeoutMs);
+    responseStatus = response.status;
 
     const text = await response.text();
     const parsed = safeParseJson(text);
@@ -278,7 +281,9 @@ export async function postRest<T = any>(
     if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
       throw error;
     }
-    const requestError = makeApiTransportError(error);
+    const requestError = responseStatus === undefined
+      ? makeApiTransportError(error)
+      : makeApiResponseError(error, 'Error de solicitud', responseStatus);
     logError('api', 'http_error', buildHttpTraceData({
       phase: 'error',
       channel: 'rest',

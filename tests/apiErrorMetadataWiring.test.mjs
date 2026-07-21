@@ -35,9 +35,19 @@ test('postRest preserves structured response and transport error metadata', () =
     'response failures must keep backend metadata and HTTP status',
   );
   assert.match(
+    postRestBlock,
+    /let responseStatus:\s*number \| undefined;/,
+    'postRest must track when fetch has produced a response',
+  );
+  assert.match(
+    postRestBlock,
+    /const response = await fetchWithTimeout\([\s\S]*?responseStatus = response\.status;/,
+    'postRest must capture response status before reading or parsing the response body',
+  );
+  assert.match(
     outerCatch,
-    /makeApiTransportError\(error\)/,
-    'failures before a response must be marked as transport failures',
+    /responseStatus === undefined\s*\? makeApiTransportError\(error\)\s*:\s*makeApiResponseError\(error, 'Error de solicitud', responseStatus\)/,
+    'the outer catch must distinguish pre-response transport failures from post-response failures',
   );
 });
 
@@ -62,5 +72,29 @@ test('getRest retains its legacy message-only error handling', () => {
     getRestBlock,
     /makeApiResponseError|makeApiTransportError|resultError/,
     'structured request metadata is intentionally limited to postRest writes',
+  );
+});
+
+test('postRpc retains its legacy message-only error handling', () => {
+  const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8').replace(/\r\n/g, '\n');
+  const postRpcBlock = api.match(
+    /export async function postRpc[\s\S]*?(?=\n\/\*\*\n \* POST to the legacy \/jsonrpc endpoint)/,
+  )?.[0] ?? '';
+
+  assert.notEqual(postRpcBlock, '', 'postRpc block must be isolated for policy-scope assertions');
+  assert.match(
+    postRpcBlock,
+    /throw makeLoggedHttpError\(errMsg\);/,
+    'postRpc response failures must keep existing logged HTTP error handling',
+  );
+  assert.match(
+    postRpcBlock,
+    /catch \(error\) \{[\s\S]*?throw error;/,
+    'postRpc transport failures must continue to rethrow the original error',
+  );
+  assert.doesNotMatch(
+    postRpcBlock,
+    /makeApiResponseError|makeApiTransportError|responseStatus|resultError/,
+    'structured REST request metadata must not broaden to RPC calls',
   );
 });

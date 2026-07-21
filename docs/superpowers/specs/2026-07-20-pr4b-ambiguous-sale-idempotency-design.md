@@ -43,14 +43,15 @@ El endpoint `/gf/logistics/api/employee/sales/create` devuelve el sobre estánda
 }
 ```
 
-`unwrapRestResult` entrega a `createSale` el contenido de `data`. El resultado solo se aceptará como confirmación válida si:
+Odoo puede envolver esa estructura en el `result` exterior de JSON-RPC. `unwrapRestResult` elimina únicamente ese sobre exterior y entrega a `createSale` la estructura `{ ok, message, data }`. El resultado solo se aceptará como confirmación válida si:
 
 1. es un objeto;
-2. `success === true`;
-3. `order_id` es un identificador positivo válido;
-4. `operation_id` es una cadena no vacía y coincide con la operación enviada.
+2. `ok === true`;
+3. `data` es un objeto y `data.success === true`;
+4. `data.order_id` es un identificador positivo válido;
+5. `data.operation_id` es una cadena no vacía y coincide con la operación enviada.
 
-`duplicate: true` también es éxito: indica que Odoo encontró la venta creada por un intento anterior. Una respuesta 2xx que no satisfaga el contrato se convertirá en un error con `code: "invalid_response"`; no se interpretará como venta confirmada por ser simplemente un valor truthy.
+`data.duplicate: true` también es éxito: indica que Odoo encontró la venta creada por un intento anterior. Una respuesta 2xx que no satisfaga el contrato se convertirá en un error con `code: "invalid_response"`; no se interpretará como venta confirmada por ser simplemente un valor truthy.
 
 ## Alcance aprobado
 
@@ -110,7 +111,7 @@ Los campos son opcionales y aditivos para no romper consumidores que solo inspec
 
 `src/services/gfLogistics.ts` dejará de considerar exitosa cualquier respuesta truthy de `createSale`. Un validador pequeño y puro verificará el contrato confirmado y devolverá el resultado tipado.
 
-Una respuesta incompleta, HTML transformado en `{ raw: ... }`, JSON con forma inesperada, `success !== true`, un `order_id` inválido o un `operation_id` distinto se marcará como `invalid_response`, `responseReceived: true`. Este error pertenece al resultado ambiguo porque la aplicación recibió bytes, pero no una confirmación confiable de la operación esperada.
+Una respuesta incompleta, HTML transformado en `{ raw: ... }`, JSON con forma inesperada, `ok !== true`, `data.success !== true`, un `data.order_id` inválido o un `data.operation_id` distinto se marcará como `invalid_response`, `responseReceived: true`. Este error pertenece al resultado ambiguo porque la aplicación recibió bytes, pero no una confirmación confiable de la operación esperada.
 
 ### Clasificador puro del intento de venta
 
@@ -275,7 +276,7 @@ La implementación seguirá TDD e incluirá:
 
 1. **Clasificador puro:** matriz de timeout, red, aborto, `responseReceived: false`, 5xx, 4xx, `invalid_response`, `insufficient_stock`, `session_expired`, rechazo funcional 2xx y error desconocido. También verificará la precedencia de 5xx sobre códigos funcionales.
 2. **Metadatos HTTP:** pruebas de que `postRest` conserva `httpStatus`, `responseReceived`, `code` y `data` para respuestas, y marca correctamente fallos de transporte. Los mensajes y el marcado de logging existente deben permanecer compatibles.
-3. **Contrato de creación:** éxito normal, éxito idempotente con `duplicate: true`, `order_id` inválido, `operation_id` ausente o distinto, objeto truthy no reconocido y respuesta cruda/no JSON.
+3. **Contrato de creación:** éxito normal con `{ ok: true, data: ... }`, éxito idempotente con `data.duplicate: true`, `data.order_id` inválido, `data.operation_id` ausente o distinto, objeto truthy no reconocido y respuesta cruda/no JSON.
 4. **Cola con ID explícito:** inserción con el mismo ID en item/payload, llamadas normales que aún generan UUID, reencolado idempotente del mismo tipo, primera escritura autoritativa, valor vacío, colisión con otro tipo y comportamiento definido para `pending`, `syncing`, `error`, `dead` y `done`.
 5. **Persistencia serializada:** dos o más escrituras solapadas no permiten que un snapshot antiguo sobrescriba uno nuevo; la promesa de barrera solo resuelve cuando el snapshot más reciente solicitado quedó durable.
 6. **Procesamiento diferido:** la venta y las fotos no se despachan antes de que resuelva la barrera; después se dispara una sola ejecución normal del procesador.

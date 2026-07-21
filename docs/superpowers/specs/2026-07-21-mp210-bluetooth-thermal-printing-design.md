@@ -170,7 +170,10 @@ type NativePrintResult = {
 
 getBondedDevices(): Promise<BondedBluetoothDevice[]>;
 printTicket(address: string, document: ThermalTicketDocument): Promise<NativePrintResult>;
-printDiagnostic(address: string): Promise<NativePrintResult>;
+printDiagnostic(
+  address: string,
+  branding: ThermalTicketDocument['branding'],
+): Promise<NativePrintResult>;
 ```
 
 Las operaciones de conexión, rasterización y escritura se ejecutarán fuera del hilo principal. La creación de recursos Android que exijan el hilo principal se coordinará explícitamente. El módulo mantendrá un mutex de proceso para rechazar una segunda impresión con código `busy` mientras exista otra activa.
@@ -313,7 +316,7 @@ La impresión nunca cambia el estado de la venta, su sincronización ni el snaps
 
 ## Diagnóstico y calibración
 
-La selección de impresora ofrecerá “Imprimir diagnóstico”. Se recomendará al configurar o cambiar equipo, pero el vendedor no tendrá que repetirlo antes de cada ticket. La impresión satisfactoria del diagnóstico en la MP210 de prueba sí es condición obligatoria de liberación de la función. El patrón incluirá:
+La selección de impresora ofrecerá “Imprimir diagnóstico”. TypeScript pasará al método nativo el mismo objeto `branding` usado por el PDF y por los tickets; el diagnóstico no tendrá una copia propia del logo, razón social o RFC. Se recomendará al configurar o cambiar equipo, pero el vendedor no tendrá que repetirlo antes de cada ticket. La impresión satisfactoria del diagnóstico en la MP210 de prueba sí es condición obligatoria de liberación de la función. El patrón incluirá:
 
 - líneas verticales en x=0 y x=383;
 - una regla horizontal o patrón alternado;
@@ -338,6 +341,7 @@ Si cualquiera falla, la función no se marcará lista: se capturará el resultad
 ### TypeScript
 
 - transformación estable de `SaleTicketSnapshot` a `ThermalTicketDocument`;
+- branding compartido también por el diagnóstico;
 - contado, crédito y transferencia;
 - vendedor faltante;
 - fecha inválida;
@@ -380,6 +384,7 @@ Si cualquiera falla, la función no se marcará lista: se capturará el resultad
 - impresora apagada, Bluetooth apagado y dispositivo desvinculado;
 - conexión agotada y corte durante la escritura;
 - compilación de desarrollo y release con el módulo incluido.
+- evaluación automatizada del manifiesto Android generado después de Prebuild, incluyendo atributos `maxSdkVersion`, ausencia de `BLUETOOTH_SCAN` y ausencia de duplicados.
 
 ### Aceptación física en MP210
 
@@ -390,6 +395,7 @@ Si cualquiera falla, la función no se marcará lista: se capturará el resultad
 - ticket de contado con varias líneas;
 - ticket de crédito con pagaré;
 - diagnóstico y ticket largo con más de 64 KB de payload raster;
+- el ticket largo será un fixture con forma real de venta, distinto del diagnóstico, y su tamaño mayor a 65,536 bytes quedará probado automáticamente antes de imprimirlo;
 - producto y cliente con nombres largos;
 - total e importes sin recorte;
 - avance suficiente para corte manual;

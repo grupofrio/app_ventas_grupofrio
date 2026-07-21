@@ -157,6 +157,7 @@ function SaleScreenInner() {
   const getStockIssues = useVisitStore((s) => s.getStockIssues);
   const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
   const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
+  const persistSaleConfirmationLock = useVisitStore((s) => s.persistSaleConfirmationLock);
   const saleReadyToContinue = useVisitStore((s) => s.saleReadyToContinue);
   const saleRecoveryPersistenceFailed = useVisitStore((s) => s.saleRecoveryPersistenceFailed);
   const markSaleReadyToContinue = useVisitStore((s) => s.markSaleReadyToContinue);
@@ -389,6 +390,28 @@ function SaleScreenInner() {
       company_id: companyId,
       effective_company_id: effectiveCompanyId,
     });
+
+    try {
+      const lockPersisted = await persistSaleConfirmationLock(operationId);
+      if (!lockPersisted) {
+        throw new Error('The sale confirmation lock no longer matches the active visit');
+      }
+    } catch (lockPersistError) {
+      setSaleRecoveryPersistenceFailed(true);
+      setSaleSubmitting(false);
+      logError('sync', 'sale_confirmation_lock_persist_failed', {
+        operation_id: operationId,
+        message: safeUnknownErrorMessage(
+          lockPersistError,
+          'Error desconocido al guardar el identificador de la venta.',
+        ),
+      });
+      Alert.alert(
+        'Pedido no enviado',
+        'No se envió el pedido porque no pudimos guardar de forma segura su identificador. No cierres la aplicación; mantén esta pantalla abierta.',
+      );
+      return;
+    }
 
     // Pedido offline pendiente (S1): sin señal, NO bloqueamos — encolamos el
     // pedido como `sale_order` (+ foto) para enviarlo a Odoo al reconectar. NO

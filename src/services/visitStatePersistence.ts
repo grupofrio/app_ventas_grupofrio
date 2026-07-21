@@ -25,6 +25,7 @@ interface VisitStatePersistenceOptions<
 
 export interface VisitStatePersistenceCoordinator {
   persistCurrent: () => Promise<void>;
+  persistSaleConfirmationLock: (operationId: string) => Promise<boolean>;
   markSaleReadyToContinue: (
     operationId: string,
     options?: { clearOperationId?: boolean },
@@ -46,6 +47,30 @@ export function createVisitStatePersistenceCoordinator<
           return;
         }
         await options.save(snapshot);
+      });
+    },
+
+    persistSaleConfirmationLock(operationId: string): Promise<boolean> {
+      return runSerialized(async () => {
+        const current = options.read();
+        if (
+          !current.saleConfirmed
+          || current.saleOperationId !== operationId
+          || current.saleReadyToContinue
+        ) {
+          return false;
+        }
+
+        const snapshot = options.selectSnapshot(current);
+        if (snapshot === null) {
+          throw new Error('Confirmed sale does not have an active visit snapshot');
+        }
+        await options.save(snapshot);
+
+        const latest = options.read();
+        return latest.saleConfirmed
+          && latest.saleOperationId === operationId
+          && !latest.saleReadyToContinue;
       });
     },
 
@@ -72,9 +97,10 @@ export function createVisitStatePersistenceCoordinator<
         await options.save(snapshot);
 
         const latest = options.read();
-        if (latest.saleConfirmed && latest.saleOperationId === operationId) {
-          options.publishSaleRecovery(patch);
+        if (!latest.saleConfirmed || latest.saleOperationId !== operationId) {
+          return false;
         }
+        options.publishSaleRecovery(patch);
         return true;
       });
     },

@@ -96,10 +96,41 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
 function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
   assert.deepEqual(module.restoreSaleRecoveryState({
     saleConfirmed: true,
+    saleOperationId: null,
+  }), {
+    saleConfirmed: true,
+    saleOperationId: null,
+    saleReadyToContinue: true,
+    saleRecoveryPersistenceFailed: false,
+  });
+
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: true,
+    saleOperationId: null,
+    saleReadyToContinue: false,
+  }), {
+    saleConfirmed: true,
+    saleOperationId: null,
+    saleReadyToContinue: false,
+    saleRecoveryPersistenceFailed: false,
+  });
+
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: true,
     saleOperationId: 'sale-op-old',
   }), {
     saleConfirmed: true,
     saleOperationId: 'sale-op-old',
+    saleReadyToContinue: false,
+    saleRecoveryPersistenceFailed: false,
+  });
+
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: false,
+    saleOperationId: null,
+  }), {
+    saleConfirmed: false,
+    saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
   });

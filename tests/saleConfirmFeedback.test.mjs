@@ -127,6 +127,11 @@ function main() {
   );
   assert.match(
     visitStore,
+    /persistSaleConfirmationLock:\s*\(operationId:\s*string\)\s*=>\s*Promise<boolean>/,
+    'el store expone la barrera strict previa a side effects',
+  );
+  assert.match(
+    visitStore,
     /setSaleRecoveryPersistenceFailed:\s*\(value\)\s*=>\s*\{[\s\S]*?set\(\{\s*saleRecoveryPersistenceFailed:\s*value\s*\}\);[\s\S]*?persistVisitStateInBackground/,
     'la accion del flag debe actualizar y persistir el snapshot',
   );
@@ -161,6 +166,11 @@ function main() {
     visitStore,
     /markSaleReadyToContinue:\s*\(operationId, options\)\s*=>[\s\S]*?visitStatePersistence\.markSaleReadyToContinue\(operationId, options\)/,
     'la acción crítica consume el mismo runner sin reentrada',
+  );
+  assert.match(
+    visitStore,
+    /persistSaleConfirmationLock:\s*\(operationId\)\s*=>[\s\S]*?visitStatePersistence\.persistSaleConfirmationLock\(operationId\)/,
+    'la barrera del lock consume el mismo runner serializado',
   );
 
   console.log('sale confirm feedback tests: ok');

@@ -106,6 +106,55 @@ assert.doesNotMatch(
   'el try de createSale debe terminar antes de fotos y ticket online',
 );
 
+const lockBarrierPhase = tryCatchContaining(
+  sale,
+  'await persistSaleConfirmationLock(',
+);
+const offlineSaleIndex = sale.indexOf('if (!isOnline) {');
+const payloadIndex = sale.indexOf('const payload = {');
+assert(payloadIndex >= 0 && payloadIndex < lockBarrierPhase.tryStart);
+assert(
+  lockBarrierPhase.catchEnd < offlineSaleIndex,
+  'la barrera durable termina antes de cualquier enqueue offline',
+);
+assert(
+  lockBarrierPhase.catchEnd < createPhase.tryStart,
+  'la barrera durable termina antes del createSale online',
+);
+assert.match(
+  lockBarrierPhase.tryBody,
+  /await persistSaleConfirmationLock\(operationId\)/,
+);
+assert.match(lockBarrierPhase.tryBody, /if \(!lockPersisted\)/);
+const lockFailedFlagIndex = lockBarrierPhase.catchBody.indexOf(
+  'setSaleRecoveryPersistenceFailed(true)',
+);
+const lockFailedSubmittingIndex = lockBarrierPhase.catchBody.indexOf(
+  'setSaleSubmitting(false)',
+);
+assert(
+  lockFailedFlagIndex >= 0 && lockFailedFlagIndex < lockFailedSubmittingIndex,
+  'el fallo de barrera bloquea recuperación antes de terminar submitting',
+);
+assert.match(
+  lockBarrierPhase.catchBody,
+  /logError\(\s*['"]sync['"],\s*['"]sale_confirmation_lock_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+);
+assert.match(
+  lockBarrierPhase.catchBody,
+  /safeUnknownErrorMessage\(\s*lockPersistError,/,
+);
+assert.match(
+  lockBarrierPhase.catchBody,
+  /Alert\.alert\(\s*['"]Pedido no enviado['"],[\s\S]*?No se envió el pedido[\s\S]*?No cierres la aplicación/,
+);
+assert.doesNotMatch(
+  lockBarrierPhase.catchBody,
+  /\benqueue\s*\(|createSale|classifySaleSubmissionError|unlockSaleConfirm|saleConfirmationSingleFlight\.release|router\.|setAfterSaleAction|updateStopState|saveSaleTicketSnapshot/,
+  'fallar la barrera no causa side effects de venta, unlock ni navegación',
+);
+assert.match(lockBarrierPhase.catchBody, /return;/);
+
 assert.match(
   sale,
   /import\s*\{[\s\S]*?classifySaleSubmissionError[\s\S]*?readSaleSubmissionErrorMetadata[\s\S]*?\}\s*from\s*['"]\.\.\/\.\.\/src\/services\/saleSubmissionOutcome['"]/,
@@ -151,6 +200,11 @@ assert.match(
   sale,
   /import\s*\{[^}]*\blogError\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/src\/utils\/logger['"]/,
   'la pantalla debe importar logError',
+);
+assert.match(
+  sale,
+  /const persistSaleConfirmationLock\s*=\s*useVisitStore\(\(s\)\s*=>\s*s\.persistSaleConfirmationLock\)/,
+  'la pantalla selecciona la barrera durable del lock',
 );
 
 assert.match(createPhase.catchBody, /classifySaleSubmissionError\(error\)/);

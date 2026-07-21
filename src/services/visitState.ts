@@ -36,6 +36,15 @@ export interface PersistedSaleRecoveryState {
   saleRecoveryPersistenceFailed?: boolean;
 }
 
+export function restoreSaleReadyToContinue(
+  snapshot: PersistedSaleRecoveryState,
+): boolean {
+  if (snapshot.saleReadyToContinue !== undefined) {
+    return snapshot.saleReadyToContinue;
+  }
+  return snapshot.saleConfirmed === true && snapshot.saleOperationId === null;
+}
+
 export function restoreSaleRecoveryState(
   snapshot: PersistedSaleRecoveryState,
 ): Pick<
@@ -45,7 +54,7 @@ export function restoreSaleRecoveryState(
   return {
     saleConfirmed: snapshot.saleConfirmed ?? false,
     saleOperationId: snapshot.saleOperationId ?? null,
-    saleReadyToContinue: snapshot.saleReadyToContinue ?? false,
+    saleReadyToContinue: restoreSaleReadyToContinue(snapshot),
     saleRecoveryPersistenceFailed: snapshot.saleRecoveryPersistenceFailed ?? false,
   };
 }

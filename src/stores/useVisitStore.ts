@@ -116,6 +116,7 @@ interface VisitState {
   lockSaleConfirm: () => string; // Returns operationId
   unlockSaleConfirm: () => void;
   setSaleRecoveryPersistenceFailed: (value: boolean) => void;
+  persistSaleConfirmationLock: (operationId: string) => Promise<boolean>;
   markSaleReadyToContinue: (
     operationId: string,
     options?: { clearOperationId?: boolean },
@@ -317,6 +318,9 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     set({ saleRecoveryPersistenceFailed: value });
     persistVisitStateInBackground('set_sale_recovery_persistence_failed');
   },
+
+  persistSaleConfirmationLock: (operationId) =>
+    visitStatePersistence.persistSaleConfirmationLock(operationId),
 
   markSaleReadyToContinue: (operationId, options) =>
     visitStatePersistence.markSaleReadyToContinue(operationId, options),

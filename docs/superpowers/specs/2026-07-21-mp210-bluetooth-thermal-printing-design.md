@@ -40,7 +40,7 @@ La aplicación ya conserva cada venta en un `SaleTicketSnapshot`, muestra una vi
 - `src/services/saleTicketPdf.ts` genera y comparte el PDF;
 - `app/print/[orderId].tsx` carga el snapshot y ofrece “Abrir PDF”.
 
-No existe todavía un módulo nativo de impresora ni permisos Bluetooth en Android. La aplicación usa Expo SDK 52 con un proyecto Android nativo versionado, `compileSdkVersion` 35, `targetSdkVersion` 34 y `minSdkVersion` 24.
+No existe todavía un módulo nativo de impresora ni permisos Bluetooth en Android. La aplicación usa Expo SDK 52 y genera sus proyectos nativos mediante Expo Prebuild; `/android` y `/ios` están ignorados por Git y no son fuentes versionadas. La configuración vigente declara `compileSdkVersion` 35, `targetSdkVersion` 34 y `minSdkVersion` 24.
 
 El PDF seguirá siendo una salida independiente y una alternativa operativa. La impresión Bluetooth no intentará enviar el PDF a la impresora.
 
@@ -153,7 +153,7 @@ La dirección Bluetooth no es una credencial y puede guardarse en AsyncStorage. 
 
 ### Módulo Android
 
-Se implementará un módulo Expo local escrito en Kotlin, incluido en la compilación nativa. Su contrato lógico será:
+Se implementará un módulo Expo local rastreado en `modules/thermal-printer`, escrito en Kotlin y descubierto automáticamente desde el directorio local de módulos durante Prebuild/EAS Build. No se editará `/android` como fuente de verdad. Su contrato lógico será:
 
 ```ts
 type BondedBluetoothDevice = {
@@ -191,7 +191,7 @@ El manifiesto declarará:
 
 `BLUETOOTH_CONNECT` se solicitará en tiempo de ejecución cuando corresponda. Esta versión no declarará `BLUETOOTH_SCAN`, porque no descubre dispositivos cercanos; solo consulta equipos ya vinculados y se conecta al elegido.
 
-Los permisos se declararán tanto en la configuración Expo que sobrevive a `prebuild` como en el manifiesto nativo versionado, y una prueba de configuración exigirá que ambos permanezcan alineados.
+Los permisos se declararán en el `AndroidManifest.xml` versionado del módulo local y, cuando haga falta preservar atributos como `maxSdkVersion`, en su config plugin. `app.json` registrará el plugin. Una prueba ejecutará la evaluación de configuración/prebuild y verificará el manifiesto generado; no se versionará ni editará manualmente ese resultado.
 
 Denegar el permiso no afectará la venta ni el PDF. La aplicación explicará cómo habilitarlo y permitirá volver a solicitarlo cuando Android lo admita. Si Android marca “no volver a preguntar”, la interfaz ofrecerá abrir los Ajustes de la aplicación en vez de repetir una solicitud que ya no puede mostrarse.
 
@@ -399,7 +399,7 @@ La función se considerará terminada solo después de una impresión real satis
 
 ## Entrega y compatibilidad
 
-El módulo nativo requiere una nueva compilación Android; no puede entregarse únicamente por actualización JavaScript y no funcionará dentro de Expo Go. La interfaz detectará la ausencia del módulo y mantendrá disponible el PDF sin provocar un cierre.
+El módulo nativo requiere ejecutar Prebuild y producir una nueva compilación Android; no puede entregarse únicamente por actualización JavaScript y no funcionará dentro de Expo Go. La interfaz detectará la ausencia del módulo y mantendrá disponible el PDF sin provocar un cierre.
 
 Se conservarán las pruebas y el flujo de PDF actuales. El cambio Bluetooth será aditivo y no alterará la creación, persistencia o sincronización de ventas.
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { SyncEnqueueOptions } from '../src/types/sync';
 
 interface VisitPhotosModule {
   appendVisitPhotoUri: (current: string[], uri: string) => string[];
@@ -8,9 +9,10 @@ interface VisitPhotosModule {
     enqueue: (
       type: 'photo',
       payload: Record<string, unknown>,
-      opts?: { dependsOn?: string[] },
+      opts?: SyncEnqueueOptions,
     ) => string;
     dependsOn?: string[];
+    holdProcessing?: boolean;
     imageType?: string;
   }) => string[];
 }
@@ -32,7 +34,7 @@ function testEnqueueCreatesOneUploadPerPhoto(module: VisitPhotosModule) {
   const calls: Array<{
     type: 'photo';
     payload: Record<string, unknown>;
-    opts?: { dependsOn?: string[] };
+    opts?: SyncEnqueueOptions;
   }> = [];
 
   const ids = module.enqueueVisitPhotos({
@@ -40,32 +42,32 @@ function testEnqueueCreatesOneUploadPerPhoto(module: VisitPhotosModule) {
     photoUris: [
       'file://photo-1.jpg',
       'file://photo-2.jpg',
-      'file://photo-3.jpg',
-      'file://photo-4.jpg',
     ],
-    dependsOn: ['sale-1'],
+    dependsOn: ['sale-op-1'],
+    holdProcessing: true,
     enqueue: (type, payload, opts) => {
       calls.push({ type, payload, opts });
       return `photo-${calls.length}`;
     },
   });
 
-  assert.deepEqual(ids, ['photo-1', 'photo-2', 'photo-3', 'photo-4']);
-  assert.equal(calls.length, 4);
+  assert.deepEqual(ids, ['photo-1', 'photo-2']);
+  assert.equal(calls.length, 2);
   assert.deepEqual(
     calls.map((call) => call.payload.localUri),
     [
       'file://photo-1.jpg',
       'file://photo-2.jpg',
-      'file://photo-3.jpg',
-      'file://photo-4.jpg',
     ],
   );
   for (const call of calls) {
     assert.equal(call.type, 'photo');
     assert.equal(call.payload.stop_id, 44);
     assert.equal(call.payload.image_type, 'visit');
-    assert.deepEqual(call.opts, { dependsOn: ['sale-1'] });
+    assert.deepEqual(call.opts, {
+      dependsOn: ['sale-op-1'],
+      holdProcessing: true,
+    });
     assert.equal(
       Object.prototype.hasOwnProperty.call(call.payload, 'image_base64'),
       false,
@@ -78,7 +80,7 @@ function testEnqueueAllowsSaleEvidenceImageType(module: VisitPhotosModule) {
   const calls: Array<{
     type: 'photo';
     payload: Record<string, unknown>;
-    opts?: { dependsOn?: string[] };
+    opts?: SyncEnqueueOptions;
   }> = [];
 
   const ids = module.enqueueVisitPhotos({
@@ -97,6 +99,23 @@ function testEnqueueAllowsSaleEvidenceImageType(module: VisitPhotosModule) {
     'file://sale-photo-1.jpg',
     'file://sale-photo-2.jpg',
   ]);
+  assert.deepEqual(calls.map((call) => call.opts), [undefined, undefined]);
+}
+
+function testEnqueueKeepsDependsOnOnlyOptionsExact(module: VisitPhotosModule) {
+  const options: Array<SyncEnqueueOptions | undefined> = [];
+
+  module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://legacy-photo.jpg'],
+    dependsOn: ['sale-op-legacy'],
+    enqueue: (_type, _payload, opts) => {
+      options.push(opts);
+      return 'legacy-photo-1';
+    },
+  });
+
+  assert.deepEqual(options, [{ dependsOn: ['sale-op-legacy'] }]);
 }
 
 async function main() {
@@ -109,6 +128,7 @@ async function main() {
   testAppendKeepsEveryCapturedPhoto(module);
   testEnqueueCreatesOneUploadPerPhoto(module);
   testEnqueueAllowsSaleEvidenceImageType(module);
+  testEnqueueKeepsDependsOnOnlyOptionsExact(module);
   console.log('visit photos tests: ok');
 }
 

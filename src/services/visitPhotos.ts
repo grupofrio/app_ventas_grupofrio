@@ -1,9 +1,9 @@
-import type { SyncItemType } from '../types/sync';
+import type { SyncEnqueueOptions, SyncItemType } from '../types/sync';
 
 type EnqueuePhoto = (
   type: Extract<SyncItemType, 'photo'>,
   payload: Record<string, unknown>,
-  opts?: { dependsOn?: string[] },
+  opts?: SyncEnqueueOptions,
 ) => string;
 
 export function appendVisitPhotoUri(current: string[], uri: string): string[] {
@@ -15,14 +15,23 @@ export function enqueueVisitPhotos({
   photoUris,
   enqueue,
   dependsOn,
+  holdProcessing,
   imageType = 'visit',
 }: {
   stopId: number;
   photoUris: string[];
   enqueue: EnqueuePhoto;
   dependsOn?: string[];
+  holdProcessing?: boolean;
   imageType?: string;
 }): string[] {
+  const opts: SyncEnqueueOptions | undefined = dependsOn?.length || holdProcessing
+    ? {
+        ...(dependsOn?.length ? { dependsOn } : {}),
+        ...(holdProcessing ? { holdProcessing } : {}),
+      }
+    : undefined;
+
   return photoUris.map((localUri) =>
     enqueue(
       'photo',
@@ -31,7 +40,7 @@ export function enqueueVisitPhotos({
         localUri,
         image_type: imageType,
       },
-      dependsOn && dependsOn.length > 0 ? { dependsOn } : undefined,
+      opts,
     )
   );
 }

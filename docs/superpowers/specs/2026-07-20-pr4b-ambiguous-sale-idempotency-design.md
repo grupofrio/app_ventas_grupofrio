@@ -233,6 +233,8 @@ La cola podrá procesar inmediatamente porque el dispositivo sigue marcado onlin
 - si Odoo no la creó, el siguiente intento la creará;
 - en ambos casos solo existirá una venta para el `operation_id`.
 
+Al procesar un ítem `sale_order`, la cola reutilizará el mismo clasificador estructurado para decidir si el error admite backoff/reintento. Así, `invalid_response`, transporte, 5xx y errores desconocidos ambiguos agotarán la política normal de reintentos, mientras un rechazo definitivo pasará a `dead` como ocurre hoy con errores no reintentables. Los demás tipos de ítem conservarán su predicado actual basado en mensajes; PR-4b no amplía su política.
+
 ### Fallo de persistencia local
 
 La recuperación solo se comunicará como pendiente después de que `persistQueue()` resuelva. Si falla el almacenamiento durable:
@@ -283,9 +285,10 @@ La implementación seguirá TDD e incluirá:
 7. **Dependencias:** las fotos de una recuperación dependen exactamente del ID original de la venta.
 8. **Cableado de pantalla:** resultado definitivo libera el bloqueo; resultado ambiguo no lo libera, encola con `{ operationId, deferProcessing: true }`, espera `persistQueue()` antes del procesador y del aviso, guarda el ticket con el mismo ID y aplica la navegación de pedido pendiente.
 9. **Límites de fase:** un error de `createSale` sí se clasifica; errores posteriores de fotos, ticket o navegación no desbloquean ni reencolan la venta confirmada.
-10. **Fallo de persistencia:** no muestra éxito, no avanza, no inicia el procesador desde la recuperación y conserva la operación bloqueada.
-11. **Regresión:** flujo online exitoso, flujo offline existente, stock insuficiente, sincronización y tickets.
-12. **Verificación completa:** `npm test` y `npm run typecheck`.
+10. **Reintentos de cola:** `sale_order` usa la clasificación estructurada, reintenta resultados ambiguos —incluido `invalid_response` y desconocido— y no reintenta rechazos definitivos; otros tipos mantienen la decisión existente.
+11. **Fallo de persistencia:** no muestra éxito, no avanza, no inicia el procesador desde la recuperación y conserva la operación bloqueada.
+12. **Regresión:** flujo online exitoso, flujo offline existente, stock insuficiente, sincronización y tickets.
+13. **Verificación completa:** `npm test` y `npm run typecheck`.
 
 La validación manual crítica simulará este orden:
 
@@ -309,7 +312,8 @@ También se probará un timeout anterior a la creación para verificar que el mi
 - Un fallo de persistencia no desbloquea la venta ni permite confirmar otra operación.
 - Reencolar el mismo ID y tipo no duplica ni reemplaza el ítem existente.
 - Una colisión de ID entre tipos falla de forma explícita.
-- Una respuesta de creación solo es éxito cuando cumple el contrato confirmado; `duplicate: true` se acepta como éxito idempotente.
+- Una respuesta de creación solo es éxito cuando cumple el contrato confirmado; `data.duplicate: true` se acepta como éxito idempotente.
+- La cola reintenta los resultados ambiguos de `sale_order` con la misma llave y no cambia la política de otros tipos.
 - Solo los errores de `createSale` se clasifican; fallos posteriores no recrean ni desbloquean la venta.
 - El camino online exitoso y el camino offline normal mantienen su comportamiento actual.
 - La suite completa y el typecheck pasan.

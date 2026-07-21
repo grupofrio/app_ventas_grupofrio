@@ -26,6 +26,15 @@ export function createSerializedPersistenceCoordinator<State, Persisted>(
       });
     },
 
+    /**
+     * Persists a transformed snapshot, then reapplies the same transformation
+     * to the current state before publishing it. On a successful write,
+     * `transform` is therefore invoked twice: once before the write to build the
+     * durable snapshot, and once after the write against the then-current state.
+     *
+     * @param transform A pure, deterministic, idempotent transformation with no
+     * side effects. It must be safe to invoke twice for one successful operation.
+     */
     transformAndPersist(transform: (state: State) => State): Promise<void> {
       return runSerialized(async () => {
         const durableSnapshot = transform(options.read());

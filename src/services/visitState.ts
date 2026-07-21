@@ -25,21 +25,27 @@ export interface VisitDataState {
   noSalePhotoUris: string[];
   saleConfirmed: boolean;
   saleOperationId: string | null;
+  saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
 }
 
 export interface PersistedSaleRecoveryState {
   saleConfirmed?: boolean;
   saleOperationId?: string | null;
+  saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
 }
 
 export function restoreSaleRecoveryState(
   snapshot: PersistedSaleRecoveryState,
-): Pick<VisitDataState, 'saleConfirmed' | 'saleOperationId' | 'saleRecoveryPersistenceFailed'> {
+): Pick<
+  VisitDataState,
+  'saleConfirmed' | 'saleOperationId' | 'saleReadyToContinue' | 'saleRecoveryPersistenceFailed'
+> {
   return {
     saleConfirmed: snapshot.saleConfirmed ?? false,
     saleOperationId: snapshot.saleOperationId ?? null,
+    saleReadyToContinue: snapshot.saleReadyToContinue ?? false,
     saleRecoveryPersistenceFailed: snapshot.saleRecoveryPersistenceFailed ?? false,
   };
 }
@@ -70,6 +76,7 @@ export function createInitialVisitState(): VisitDataState {
     noSalePhotoUris: [],
     saleConfirmed: false,
     saleOperationId: null,
+    saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
   };
 }

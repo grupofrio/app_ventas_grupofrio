@@ -14,7 +14,7 @@ const resumableSale = {
   stopExists: true,
   saleSubmitting: false,
   saleRecoveryPersistenceFailed: false,
-  saleOperationId: null,
+  saleReadyToContinue: true,
   hasQueuedSaleOrderEvidence: false,
 };
 
@@ -41,14 +41,12 @@ test('a durable recovery persistence failure stays blocked after submission ends
     ...resumableSale,
     saleSubmitting: true,
     saleRecoveryPersistenceFailed: true,
-    saleOperationId: 'sale-op-blocked',
     hasQueuedSaleOrderEvidence: true,
   });
   const afterSubmitting = shouldResumeAfterSale({
     ...resumableSale,
     saleSubmitting: false,
     saleRecoveryPersistenceFailed: true,
-    saleOperationId: 'sale-op-blocked',
     hasQueuedSaleOrderEvidence: true,
   });
 
@@ -56,7 +54,7 @@ test('a durable recovery persistence failure stays blocked after submission ends
   assert.equal(afterSubmitting, false);
 });
 
-test('restored confirmations require matching queued sale evidence', () => {
+test('resumes from either matching queued evidence or a durable terminal marker', () => {
   const matchingSale = [
     { id: 'sale-op-restored', type: 'sale_order' },
   ];
@@ -70,7 +68,7 @@ test('restored confirmations require matching queued sale evidence', () => {
   assert.equal(
     shouldResumeAfterSale({
       ...resumableSale,
-      saleOperationId: 'sale-op-restored',
+      saleReadyToContinue: false,
       hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(
         'sale-op-restored',
         [],
@@ -81,7 +79,7 @@ test('restored confirmations require matching queued sale evidence', () => {
   assert.equal(
     shouldResumeAfterSale({
       ...resumableSale,
-      saleOperationId: 'sale-op-restored',
+      saleReadyToContinue: false,
       hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(
         'sale-op-restored',
         matchingSale,
@@ -92,11 +90,41 @@ test('restored confirmations require matching queued sale evidence', () => {
   assert.equal(
     shouldResumeAfterSale({
       ...resumableSale,
-      saleOperationId: null,
+      saleReadyToContinue: true,
       hasQueuedSaleOrderEvidence: false,
     }),
     true,
-    'direct online success resumes without a queue item',
+    'a completed queue item may be filtered once the terminal marker is durable',
+  );
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleReadyToContinue: true,
+      hasQueuedSaleOrderEvidence: false,
+    }),
+    true,
+    'direct online success resumes from its durable marker',
+  );
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleReadyToContinue: false,
+      hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(null, []),
+    }),
+    false,
+    'a null operation id is not evidence by itself',
+  );
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleReadyToContinue: false,
+      hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(
+        'sale-op-restored',
+        [],
+      ),
+    }),
+    false,
+    'an operation id without queue evidence is not terminal',
   );
   assert.equal(
     hasQueuedSaleOrderRecoveryEvidence('sale-op-restored', differentSale),
@@ -106,6 +134,15 @@ test('restored confirmations require matching queued sale evidence', () => {
     hasQueuedSaleOrderRecoveryEvidence('sale-op-restored', matchingPhotoOnly),
     false,
   );
+});
+
+test('a current-session persistence failure wins over every recovery signal', () => {
+  assert.equal(shouldResumeAfterSale({
+    ...resumableSale,
+    saleRecoveryPersistenceFailed: true,
+    saleReadyToContinue: true,
+    hasQueuedSaleOrderEvidence: true,
+  }), false);
 });
 
 test('single-flight admits one immediate confirmation and can be released', () => {

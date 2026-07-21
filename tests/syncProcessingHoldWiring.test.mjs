@@ -141,7 +141,7 @@ assertOrdered(oneItemBlock, [
   /if \(isLegacyRefillUnloadItem\(item\)\)/,
   /if \(!areSyncDependenciesSatisfied\(/,
   /status: ['"]syncing['"] as SyncItemStatus/,
-  /await processSyncItem\(item\);/,
+  /await processSyncItemToCompletion\(\{/,
 ], 'per-item race guard runs before dependencies, syncing, and dispatch');
 
 const gpsBlock = block(
@@ -197,7 +197,7 @@ assertOrdered(enqueueBlock, [
   /processingHolds\.hold\(\[result\.id\]\);/,
   /if \(result\.action !== ['"]reused['"]\)/,
 ], 'reused pending sale race');
-assert(oneItemBlock.indexOf('runUnlessProcessingHeld({') < oneItemBlock.indexOf('processSyncItem(item)'),
+assert(oneItemBlock.indexOf('runUnlessProcessingHeld({') < oneItemBlock.indexOf('processSyncItemToCompletion({'),
   'a snapshotted reused sale is stopped before dispatch');
 
 // Concrete race (b): GPS bypasses processOneItem, so a GPS held after the cycle

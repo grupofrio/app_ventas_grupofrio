@@ -8,7 +8,7 @@
 
 import { create } from 'zustand';
 import { GFStop } from '../types/plan';
-import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { storeRemoveStrict, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { PersistedVisitSnapshot, buildVisitSnapshot, shouldPersistVisitTick } from '../services/visitPersistence';
 import {
   buildStartedVisitState,
@@ -16,6 +16,11 @@ import {
   restoreSaleRecoveryState,
 } from '../services/visitState';
 import { appendVisitPhotoUri } from '../services/visitPhotos';
+import {
+  createVisitStatePersistenceCoordinator,
+  VisitStatePersistenceCoordinator,
+} from '../services/visitStatePersistence';
+import { logError } from '../utils/logger';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -94,6 +99,7 @@ interface VisitState {
   // V1.2: Anti-duplicate
   saleConfirmed: boolean;        // Prevents double-tap
   saleOperationId: string | null; // Idempotency key for this sale
+  saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
 
   // Computed
@@ -110,29 +116,30 @@ interface VisitState {
   lockSaleConfirm: () => string; // Returns operationId
   unlockSaleConfirm: () => void;
   setSaleRecoveryPersistenceFailed: (value: boolean) => void;
+  markSaleReadyToContinue: (
+    operationId: string,
+    options?: { clearOperationId?: boolean },
+  ) => Promise<boolean>;
 }
 
 const initialState = createInitialVisitState();
 
-function persistVisitState(state: {
-  phase: VisitPhase;
-  currentStopId: number | null;
-  currentStop: GFStop | null;
-  offrouteVisitId: number | null;
-  checkInTime: number | null;
-  checkInLat: number | null;
-  checkInLon: number | null;
-  elapsedSeconds: number;
-  saleConfirmed?: boolean;
-  saleOperationId?: string | null;
-  saleRecoveryPersistenceFailed?: boolean;
-}) {
-  const snapshot = buildVisitSnapshot(state);
-  if (snapshot) {
-    void storeSave(STORAGE_KEYS.VISIT_STATE, snapshot);
-    return;
-  }
-  void storeRemove(STORAGE_KEYS.VISIT_STATE);
+const visitStatePersistence: VisitStatePersistenceCoordinator =
+  createVisitStatePersistenceCoordinator<VisitState, PersistedVisitSnapshot>({
+    read: () => useVisitStore.getState(),
+    selectSnapshot: buildVisitSnapshot,
+    save: (snapshot) => storeSaveStrict(STORAGE_KEYS.VISIT_STATE, snapshot),
+    remove: () => storeRemoveStrict(STORAGE_KEYS.VISIT_STATE),
+    publishSaleRecovery: (patch) => useVisitStore.setState(patch),
+  });
+
+function persistVisitStateInBackground(source: string): void {
+  void visitStatePersistence.persistCurrent().catch((error: unknown) => {
+    logError('visit', 'visit_state_persist_failed', {
+      source,
+      message: error instanceof Error ? error.message : 'Unknown visit persistence error',
+    });
+  });
 }
 
 export const useVisitStore = create<VisitState>((set, get) => ({
@@ -141,17 +148,17 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   startVisit: (stop, lat, lon) => {
     const nextState = buildStartedVisitState(stop, lat, lon);
     set(nextState);
-    persistVisitState(nextState);
+    persistVisitStateInBackground('start_visit');
   },
 
   endVisit: (_lat, _lon) => {
     set({ phase: 'checked_out' });
-    persistVisitState({ ...get(), phase: 'checked_out' });
+    persistVisitStateInBackground('end_visit');
   },
 
   setPhase: (phase) => {
     set({ phase });
-    persistVisitState({ ...get(), phase });
+    persistVisitStateInBackground('set_phase');
   },
 
   setOffrouteVisitId: (offrouteVisitId) => {
@@ -165,7 +172,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       ? { ...stop, _offrouteVisitId: offrouteVisitId }
       : null;
     set({ offrouteVisitId, currentStop });
-    persistVisitState({ ...get(), offrouteVisitId, currentStop });
+    persistVisitStateInBackground('set_offroute_visit');
   },
 
   // Sale
@@ -224,7 +231,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       // elapsed se recomputa de checkInTime, así que no se pierde duración.
       set({ elapsedSeconds });
       if (shouldPersistVisitTick(elapsedSeconds, VISIT_TICK_PERSIST_INTERVAL_S)) {
-        persistVisitState({ ...get(), elapsedSeconds });
+        persistVisitStateInBackground('visit_timer');
       }
     }
   },
@@ -232,7 +239,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   // Reset
   resetVisit: () => {
     set({ ...initialState });
-    persistVisitState({ ...initialState });
+    persistVisitStateInBackground('reset_visit');
   },
 
   restoreVisit: (snapshot) => {
@@ -250,7 +257,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       // snapshots without these fields default to not-confirmed).
       ...saleRecoveryState,
     });
-    persistVisitState(snapshot);
+    persistVisitStateInBackground('restore_visit');
   },
 
   // Computed
@@ -288,10 +295,11 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     set({
       saleConfirmed: true,
       saleOperationId: opId,
+      saleReadyToContinue: false,
       saleRecoveryPersistenceFailed: false,
     });
     // Persist immediately so a crash right after locking still blocks re-confirm.
-    persistVisitState({ ...get() });
+    persistVisitStateInBackground('lock_sale_confirm');
     return opId;
   },
 
@@ -299,13 +307,17 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     set({
       saleConfirmed: false,
       saleOperationId: null,
+      saleReadyToContinue: false,
       saleRecoveryPersistenceFailed: false,
     });
-    persistVisitState({ ...get() });
+    persistVisitStateInBackground('unlock_sale_confirm');
   },
 
   setSaleRecoveryPersistenceFailed: (value) => {
     set({ saleRecoveryPersistenceFailed: value });
-    persistVisitState({ ...get() });
+    persistVisitStateInBackground('set_sale_recovery_persistence_failed');
   },
+
+  markSaleReadyToContinue: (operationId, options) =>
+    visitStatePersistence.markSaleReadyToContinue(operationId, options),
 }));

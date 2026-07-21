@@ -18,6 +18,7 @@ interface VisitPersistenceModule {
     elapsedSeconds: number;
     saleConfirmed?: boolean;
     saleOperationId?: string | null;
+    saleReadyToContinue?: boolean;
     saleRecoveryPersistenceFailed?: boolean;
   }) => null | {
     phase: string;
@@ -30,6 +31,7 @@ interface VisitPersistenceModule {
     elapsedSeconds: number;
     saleConfirmed: boolean;
     saleOperationId: string | null;
+    saleReadyToContinue: boolean;
     saleRecoveryPersistenceFailed: boolean;
   };
   shouldRehydrateVisit: (
@@ -78,6 +80,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     // P0-2: defaults when not provided.
     saleConfirmed: false,
     saleOperationId: null,
+    saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
   });
 }
@@ -101,11 +104,13 @@ function testSnapshotCarriesSaleConfirmation(module: VisitPersistenceModule) {
     elapsedSeconds: 5,
     saleConfirmed: true,
     saleOperationId: 'sale_123_abc',
+    saleReadyToContinue: true,
     saleRecoveryPersistenceFailed: true,
   });
   assert.ok(snapshot);
   assert.equal(snapshot!.saleConfirmed, true);
   assert.equal(snapshot!.saleOperationId, 'sale_123_abc');
+  assert.equal(snapshot!.saleReadyToContinue, true);
   assert.equal(snapshot!.saleRecoveryPersistenceFailed, true);
 }
 

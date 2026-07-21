@@ -1,162 +1,96 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 
 const sale = readFileSync(
   resolve(process.cwd(), 'app/sale/[stopId].tsx'),
   'utf8',
 );
+const saleSourceFile = ts.createSourceFile(
+  'sale.tsx',
+  sale,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+const syntaxNodes = [];
+function collectSyntaxNodes(node) {
+  syntaxNodes.push(node);
+  ts.forEachChild(node, collectSyntaxNodes);
+}
+collectSyntaxNodes(saleSourceFile);
 
-function matchingBrace(source, openBraceIndex) {
-  assert.equal(source[openBraceIndex], '{', 'el extractor debe iniciar en una llave');
-
-  let depth = 0;
-  let state = 'code';
-  const templateExpressionReturnDepths = [];
-
-  for (let index = openBraceIndex; index < source.length; index += 1) {
-    const character = source[index];
-    const nextCharacter = source[index + 1];
-
-    if (state === 'single_quote' || state === 'double_quote') {
-      if (character === '\\') {
-        index += 1;
-      } else if (
-        (state === 'single_quote' && character === "'")
-        || (state === 'double_quote' && character === '"')
-      ) {
-        state = 'code';
-      }
-      continue;
-    }
-
-    if (state === 'line_comment') {
-      if (character === '\n' || character === '\r') state = 'code';
-      continue;
-    }
-
-    if (state === 'block_comment') {
-      if (character === '*' && nextCharacter === '/') {
-        state = 'code';
-        index += 1;
-      }
-      continue;
-    }
-
-    if (state === 'template') {
-      if (character === '\\') {
-        index += 1;
-      } else if (character === '`') {
-        state = 'code';
-      } else if (character === '$' && nextCharacter === '{') {
-        templateExpressionReturnDepths.push(depth);
-        depth += 1;
-        state = 'code';
-        index += 1;
-      }
-      continue;
-    }
-
-    if (character === "'") {
-      state = 'single_quote';
-      continue;
-    }
-    if (character === '"') {
-      state = 'double_quote';
-      continue;
-    }
-    if (character === '`') {
-      state = 'template';
-      continue;
-    }
-    if (character === '/' && nextCharacter === '/') {
-      state = 'line_comment';
-      index += 1;
-      continue;
-    }
-    if (character === '/' && nextCharacter === '*') {
-      state = 'block_comment';
-      index += 1;
-      continue;
-    }
-    if (character === '{') {
-      depth += 1;
-      continue;
-    }
-    if (character === '}') {
-      depth -= 1;
-      if (templateExpressionReturnDepths.at(-1) === depth) {
-        templateExpressionReturnDepths.pop();
-        state = 'template';
-        continue;
-      }
-      if (depth === 0) return index;
-    }
-  }
-
-  throw new Error(`bloque sin cierre desde ${openBraceIndex}`);
+function blockDetails(source, block) {
+  const openBraceIndex = block.getStart(saleSourceFile);
+  const closeBraceIndex = block.end - 1;
+  assert.equal(sale[openBraceIndex], '{', 'el AST debe localizar la llave inicial');
+  assert.equal(sale[closeBraceIndex], '}', 'el AST debe localizar la llave final');
+  return {
+    openBraceIndex,
+    closeBraceIndex,
+    body: sale.slice(openBraceIndex + 1, closeBraceIndex),
+  };
 }
 
-const lexicalBraceFixture = [
-  '{',
-  '  const stringValue = "}";',
-  '  // } must not close the block',
-  '  /* } must not close the block either */',
-  '  const templateValue = `template } ${(() => ({ nested: true }))()} tail`;',
-  '}',
-].join('\n');
-assert.equal(
-  matchingBrace(lexicalBraceFixture, 0),
-  lexicalBraceFixture.length - 1,
-  'el scanner ignora llaves en strings, comentarios y texto template, pero cuenta expresiones template',
-);
+function sourceOffset(source) {
+  if (source === sale) return 0;
+  const offset = sale.indexOf(source);
+  assert.notEqual(offset, -1, 'el fragmento analizado debe pertenecer al TSX');
+  return offset;
+}
 
 function blockAfter(source, marker, fromIndex = 0) {
   const markerIndex = source.indexOf(marker, fromIndex);
   assert.notEqual(markerIndex, -1, `no se encontro el marcador: ${marker}`);
-  const openBraceIndex = source.indexOf('{', markerIndex + marker.length);
-  assert.notEqual(openBraceIndex, -1, `no se encontro el bloque de: ${marker}`);
-  const closeBraceIndex = matchingBrace(source, openBraceIndex);
+  const offset = sourceOffset(source);
+  const globalMarkerIndex = offset + markerIndex;
+  const block = syntaxNodes
+    .filter(ts.isBlock)
+    .filter((candidate) => (
+      candidate.getStart(saleSourceFile) >= globalMarkerIndex + marker.length
+    ))
+    .sort((left, right) => left.getStart(saleSourceFile) - right.getStart(saleSourceFile))[0];
+  assert(block, `no se encontro el bloque AST de: ${marker}`);
+  const details = blockDetails(source, block);
   return {
     markerIndex,
-    openBraceIndex,
-    closeBraceIndex,
-    body: source.slice(openBraceIndex + 1, closeBraceIndex),
+    openBraceIndex: details.openBraceIndex - offset,
+    closeBraceIndex: details.closeBraceIndex - offset,
+    body: details.body,
   };
 }
 
 function tryCatchContaining(source, needle, fromIndex = 0) {
   const needleIndex = source.indexOf(needle, fromIndex);
   assert.notEqual(needleIndex, -1, `no se encontro la operacion: ${needle}`);
+  const offset = sourceOffset(source);
+  const globalNeedleIndex = offset + needleIndex;
 
-  const candidates = [];
-  const tryPattern = /\btry\s*\{/g;
-  let match;
-  while ((match = tryPattern.exec(source)) !== null) {
-    const openBraceIndex = source.indexOf('{', match.index);
-    const closeBraceIndex = matchingBrace(source, openBraceIndex);
-    if (openBraceIndex < needleIndex && needleIndex < closeBraceIndex) {
-      candidates.push({ markerIndex: match.index, openBraceIndex, closeBraceIndex });
-    }
-  }
+  const candidates = syntaxNodes
+    .filter(ts.isTryStatement)
+    .filter((candidate) => (
+      candidate.tryBlock.getStart(saleSourceFile) < globalNeedleIndex
+      && globalNeedleIndex < candidate.tryBlock.end
+    ))
+    .sort((left, right) => (
+      right.tryBlock.getStart(saleSourceFile) - left.tryBlock.getStart(saleSourceFile)
+    ));
 
   assert(candidates.length > 0, `${needle} debe estar dentro de un try`);
-  const tryBlock = candidates.at(-1);
-  const afterTry = source.slice(tryBlock.closeBraceIndex + 1);
-  const catchMatch = afterTry.match(/^\s*catch\s*\([^)]*\)\s*\{/);
-  assert(catchMatch, `el try de ${needle} debe tener catch inmediato`);
-  const catchOpenBraceIndex = tryBlock.closeBraceIndex + 1 + catchMatch.index
-    + catchMatch[0].lastIndexOf('{');
-  const catchCloseBraceIndex = matchingBrace(source, catchOpenBraceIndex);
+  const statement = candidates[0];
+  assert(statement.catchClause, `el try de ${needle} debe tener catch`);
+  const tryBlock = blockDetails(source, statement.tryBlock);
+  const catchBlock = blockDetails(source, statement.catchClause.block);
 
   return {
     needleIndex,
-    tryStart: tryBlock.markerIndex,
-    tryEnd: tryBlock.closeBraceIndex,
-    tryBody: source.slice(tryBlock.openBraceIndex + 1, tryBlock.closeBraceIndex),
-    catchStart: catchOpenBraceIndex,
-    catchEnd: catchCloseBraceIndex,
-    catchBody: source.slice(catchOpenBraceIndex + 1, catchCloseBraceIndex),
+    tryStart: statement.getStart(saleSourceFile) - offset,
+    tryEnd: tryBlock.closeBraceIndex - offset,
+    tryBody: tryBlock.body,
+    catchStart: catchBlock.openBraceIndex - offset,
+    catchEnd: catchBlock.closeBraceIndex - offset,
+    catchBody: catchBlock.body,
   };
 }
 
@@ -194,14 +128,15 @@ assert.match(
 );
 assert.match(
   sale,
-  /shouldResumeAfterSale\(\{[\s\S]*?saleOperationId,[\s\S]*?hasQueuedSaleOrderEvidence:/,
-  'la decision de reanudacion recibe el operationId y la evidencia de cola',
+  /shouldResumeAfterSale\(\{[\s\S]*?saleReadyToContinue,[\s\S]*?hasQueuedSaleOrderEvidence:/,
+  'la decision de reanudacion recibe el marker durable y la evidencia de cola',
 );
 const resumeEffect = blockAfter(sale, 'React.useEffect(() =>');
 const resumeEffectEnd = sale.indexOf(']);', resumeEffect.closeBraceIndex);
 assert.notEqual(resumeEffectEnd, -1, 'el efecto de reanudacion debe cerrar sus dependencias');
 const resumeEffectDependencies = sale.slice(resumeEffect.closeBraceIndex + 1, resumeEffectEnd);
 assert.match(resumeEffectDependencies, /saleOperationId,/);
+assert.match(resumeEffectDependencies, /saleReadyToContinue,/);
 assert.match(
   resumeEffectDependencies,
   /hasSaleOrderRecoveryEvidence,/,
@@ -235,6 +170,44 @@ assert.match(
   /logInfo\(\s*['"]general['"],\s*['"]sale_submission_outcome['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?outcome:\s*outcome\.kind[\s\S]*?http_status:\s*metadata\.httpStatus[\s\S]*?code:\s*metadata\.code/,
   'el resultado remoto debe quedar registrado con metadata segura',
 );
+
+const terminalMarkerPhase = tryCatchContaining(
+  sale,
+  'await markSaleReadyToContinue(',
+  createPhase.catchEnd + 1,
+);
+assert(
+  terminalMarkerPhase.tryStart > createPhase.catchEnd,
+  'el marker terminal directo tiene un límite de error posterior al createSale',
+);
+assert.match(
+  terminalMarkerPhase.tryBody,
+  /await markSaleReadyToContinue\(\s*operationId,\s*\{\s*clearOperationId:\s*true\s*\},?\s*\)/,
+  'el éxito directo limpia el operation id dentro del snapshot terminal',
+);
+assert.match(terminalMarkerPhase.tryBody, /if \(!markedReadyToContinue\)/);
+assert.match(terminalMarkerPhase.catchBody, /setSaleRecoveryPersistenceFailed\(true\)/);
+assert.match(terminalMarkerPhase.catchBody, /setSaleSubmitting\(false\)/);
+assert.match(
+  terminalMarkerPhase.catchBody,
+  /logError\(\s*['"]sync['"],\s*['"]sale_remote_confirmation_state_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+);
+assert.match(
+  terminalMarkerPhase.catchBody,
+  /safeUnknownErrorMessage\(\s*persistError,/,
+  'el fallo crítico se registra sin asumir un Error nativo',
+);
+assert.match(
+  terminalMarkerPhase.catchBody,
+  /Alert\.alert\(\s*['"]La venta se confirmó['"],[\s\S]*?No cierres la aplicación/,
+  'el vendedor recibe una advertencia inequívoca de venta remota confirmada',
+);
+assert.doesNotMatch(
+  terminalMarkerPhase.catchBody,
+  /classifySaleSubmissionError|unlockSaleConfirm|router\.|setAfterSaleAction|updateStopState|enqueueVisitPhotos|saveSaleTicketSnapshot/,
+  'el fallo del marker no se reclasifica, desbloquea ni navega',
+);
+assert.match(terminalMarkerPhase.catchBody, /return;/);
 
 const definitive = blockAfter(
   createPhase.catchBody,
@@ -363,6 +336,7 @@ const postConfirmation = tryCatchContaining(
   createPhase.catchEnd + 1,
 );
 assert(postConfirmation.tryStart > createPhase.catchEnd);
+assert(postConfirmation.tryStart > terminalMarkerPhase.catchEnd);
 assert.match(postConfirmation.tryBody, /saveSaleTicketSnapshot/);
 assert.match(
   postConfirmation.catchBody,
@@ -379,6 +353,11 @@ assert.match(
   sale.slice(postConfirmation.catchEnd + 1),
   /shouldSkipStopCheckout\(stop\.id\)[\s\S]*?setAfterSaleAction/,
   'un fallo post-confirmacion no debe impedir continuar a checkout/ruta',
+);
+assert.doesNotMatch(
+  sale,
+  /useVisitStore\.setState\(\{\s*saleOperationId:\s*null\s*\}\)/,
+  'el operation id directo sólo se limpia dentro de la transición durable',
 );
 
 const pricelistPhase = tryCatchContaining(

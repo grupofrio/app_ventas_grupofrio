@@ -31,7 +31,7 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /shouldResumeAfterSale\(\{[\s\S]*?saleConfirmed,[\s\S]*?hasAfterSaleAction:\s*afterSaleAction !== null,[\s\S]*?stopExists:\s*stop !== undefined,[\s\S]*?saleSubmitting,[\s\S]*?saleRecoveryPersistenceFailed,[\s\S]*?\}\)/,
+    /shouldResumeAfterSale\(\{[\s\S]*?saleConfirmed,[\s\S]*?hasAfterSaleAction:\s*afterSaleAction !== null,[\s\S]*?stopExists:\s*stop !== undefined,[\s\S]*?saleSubmitting,[\s\S]*?saleRecoveryPersistenceFailed,[\s\S]*?saleReadyToContinue,[\s\S]*?hasQueuedSaleOrderEvidence:[\s\S]*?\}\)/,
     'La reanudacion debe usar la decision pura que tambien considera el bloqueo persistido',
   );
   assert.match(
@@ -118,21 +118,49 @@ function main() {
   );
 
   assert.match(visitStore, /saleRecoveryPersistenceFailed:\s*boolean/);
+  assert.match(visitStore, /saleReadyToContinue:\s*boolean/);
   assert.match(visitStore, /setSaleRecoveryPersistenceFailed:\s*\(value:\s*boolean\)\s*=>\s*void/);
   assert.match(
     visitStore,
-    /setSaleRecoveryPersistenceFailed:\s*\(value\)\s*=>\s*\{[\s\S]*?set\(\{\s*saleRecoveryPersistenceFailed:\s*value\s*\}\);[\s\S]*?persistVisitState/,
+    /markSaleReadyToContinue:\s*\([\s\S]*?operationId:\s*string[\s\S]*?clearOperationId\?:\s*boolean[\s\S]*?Promise<boolean>/,
+    'el store expone la transición terminal async',
+  );
+  assert.match(
+    visitStore,
+    /setSaleRecoveryPersistenceFailed:\s*\(value\)\s*=>\s*\{[\s\S]*?set\(\{\s*saleRecoveryPersistenceFailed:\s*value\s*\}\);[\s\S]*?persistVisitStateInBackground/,
     'la accion del flag debe actualizar y persistir el snapshot',
   );
   assert.match(
     visitStore,
-    /if \(get\(\)\.saleConfirmed && existing\)\s*\{\s*return existing;\s*\}[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
-    'un lock nuevo limpia el flag, pero reutilizar un lock confirmado no toca el bloqueo existente',
+    /if \(get\(\)\.saleConfirmed && existing\)\s*\{\s*return existing;\s*\}[\s\S]*?saleReadyToContinue:\s*false,[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
+    'un lock nuevo limpia marker y flag, pero reutilizar un lock confirmado conserva la recuperación',
   );
   assert.match(
     visitStore,
-    /unlockSaleConfirm:[\s\S]*?saleConfirmed:\s*false,[\s\S]*?saleOperationId:\s*null,[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
-    'unlock limpia tambien el bloqueo de recuperacion',
+    /unlockSaleConfirm:[\s\S]*?saleConfirmed:\s*false,[\s\S]*?saleOperationId:\s*null,[\s\S]*?saleReadyToContinue:\s*false,[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
+    'unlock limpia tambien marker y bloqueo de recuperacion',
+  );
+  assert.match(
+    visitStore,
+    /createVisitStatePersistenceCoordinator<VisitState,\s*PersistedVisitSnapshot>/,
+    'todos los writes de visita comparten un coordinador serializado',
+  );
+  assert.match(visitStore, /storeSaveStrict\(STORAGE_KEYS\.VISIT_STATE, snapshot\)/);
+  assert.match(visitStore, /storeRemoveStrict\(STORAGE_KEYS\.VISIT_STATE\)/);
+  assert.doesNotMatch(
+    visitStore,
+    /\bstoreSave\(|\bstoreRemove\(/,
+    'VISIT_STATE no usa wrappers tolerantes que oculten fallos o compitan',
+  );
+  assert.match(
+    visitStore,
+    /persistVisitStateInBackground[\s\S]*?\.persistCurrent\(\)\.catch\(/,
+    'los writes normales capturan y registran rechazos sin unhandled rejection',
+  );
+  assert.match(
+    visitStore,
+    /markSaleReadyToContinue:\s*\(operationId, options\)\s*=>[\s\S]*?visitStatePersistence\.markSaleReadyToContinue\(operationId, options\)/,
+    'la acción crítica consume el mismo runner sin reentrada',
   );
 
   console.log('sale confirm feedback tests: ok');

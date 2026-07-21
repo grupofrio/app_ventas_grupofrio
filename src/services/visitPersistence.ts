@@ -15,10 +15,11 @@ export interface PersistedVisitSnapshot {
   // duplicate sale with a new operation_id on restart.
   saleConfirmed: boolean;
   saleOperationId: string | null;
+  saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
 }
 
-interface BuildVisitSnapshotInput {
+export interface BuildVisitSnapshotInput {
   phase: VisitPhase;
   currentStopId: number | null;
   currentStop: GFStop | null;
@@ -29,6 +30,7 @@ interface BuildVisitSnapshotInput {
   elapsedSeconds: number;
   saleConfirmed?: boolean;
   saleOperationId?: string | null;
+  saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
 }
 
@@ -44,6 +46,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     elapsedSeconds,
     saleConfirmed = false,
     saleOperationId = null,
+    saleReadyToContinue = false,
     saleRecoveryPersistenceFailed = false,
   } = input;
 
@@ -61,6 +64,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     elapsedSeconds,
     saleConfirmed,
     saleOperationId,
+    saleReadyToContinue,
     saleRecoveryPersistenceFailed,
   };
 }

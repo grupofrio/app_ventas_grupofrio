@@ -79,6 +79,8 @@ import {
   runUnlessProcessingHeld,
   runUnheldProcessingChunk,
 } from '../services/syncProcessingHolds';
+import { processSyncItemToCompletion } from '../services/syncItemCompletion';
+import { useVisitStore } from './useVisitStore';
 
 // ═══ Constants ═══
 
@@ -973,8 +975,13 @@ async function processOneItemUnheld(
   set({ queue: updatedQueue });
 
   try {
-    await processSyncItem(item);
-    get().markDone(item.id);
+    await processSyncItemToCompletion({
+      item,
+      process: processSyncItem,
+      markSaleReadyToContinue: (operationId) =>
+        useVisitStore.getState().markSaleReadyToContinue(operationId),
+      markDone: (id) => get().markDone(id),
+    });
 
     // Photo cleanup post-sync
     if (item.type === 'photo' && PHOTO_DELETE_ON_SYNC_ENABLED) {

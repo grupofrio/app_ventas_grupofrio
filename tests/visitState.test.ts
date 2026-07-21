@@ -40,15 +40,18 @@ interface VisitStateModule {
     noSalePhotoUris: [];
     saleConfirmed: false;
     saleOperationId: null;
+    saleReadyToContinue: false;
     saleRecoveryPersistenceFailed: false;
   };
   restoreSaleRecoveryState: (snapshot: {
     saleConfirmed?: boolean;
     saleOperationId?: string | null;
+    saleReadyToContinue?: boolean;
     saleRecoveryPersistenceFailed?: boolean;
   }) => {
     saleConfirmed: boolean;
     saleOperationId: string | null;
+    saleReadyToContinue: boolean;
     saleRecoveryPersistenceFailed: boolean;
   };
 }
@@ -86,6 +89,7 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.deepEqual(started.noSalePhotoUris, []);
   assert.equal(started.saleConfirmed, false);
   assert.equal(started.saleOperationId, null);
+  assert.equal(started.saleReadyToContinue, false);
   assert.equal(started.saleRecoveryPersistenceFailed, false);
 }
 
@@ -96,16 +100,19 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
   }), {
     saleConfirmed: true,
     saleOperationId: 'sale-op-old',
+    saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
   });
 
   assert.deepEqual(module.restoreSaleRecoveryState({
     saleConfirmed: true,
     saleOperationId: 'sale-op-blocked',
+    saleReadyToContinue: true,
     saleRecoveryPersistenceFailed: true,
   }), {
     saleConfirmed: true,
     saleOperationId: 'sale-op-blocked',
+    saleReadyToContinue: true,
     saleRecoveryPersistenceFailed: true,
   });
 }

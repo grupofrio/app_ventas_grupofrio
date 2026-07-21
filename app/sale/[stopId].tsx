@@ -157,7 +157,9 @@ function SaleScreenInner() {
   const getStockIssues = useVisitStore((s) => s.getStockIssues);
   const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
   const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
+  const saleReadyToContinue = useVisitStore((s) => s.saleReadyToContinue);
   const saleRecoveryPersistenceFailed = useVisitStore((s) => s.saleRecoveryPersistenceFailed);
+  const markSaleReadyToContinue = useVisitStore((s) => s.markSaleReadyToContinue);
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
@@ -195,7 +197,7 @@ function SaleScreenInner() {
       stopExists: stop !== undefined,
       saleSubmitting,
       saleRecoveryPersistenceFailed,
-      saleOperationId,
+      saleReadyToContinue,
       hasQueuedSaleOrderEvidence: hasSaleOrderRecoveryEvidence,
     })) {
       setAfterSaleAction(shouldSkipStopCheckout(stop.id) ? 'route' : 'checkout');
@@ -206,6 +208,7 @@ function SaleScreenInner() {
     stop?.id,
     saleSubmitting,
     saleRecoveryPersistenceFailed,
+    saleReadyToContinue,
     saleOperationId,
     hasSaleOrderRecoveryEvidence,
   ]);
@@ -401,7 +404,7 @@ function SaleScreenInner() {
         ...payload,
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
-      });
+      }, { operationId });
       enqueueVisitPhotos({
         stopId: stop.id,
         photoUris: salePhotoUris,
@@ -409,8 +412,7 @@ function SaleScreenInner() {
         dependsOn: [enqId],
         imageType: 'sale',
       });
-      // checkout/ruta rastrean el pedido por este id (getSaleSyncState).
-      useVisitStore.setState({ saleOperationId: enqId });
+      // checkout/ruta rastrean el pedido por el mismo id durable del lock.
       await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
         saleId: enqId,
         customerName: stop.customer_name,
@@ -550,6 +552,31 @@ function SaleScreenInner() {
     }
 
     try {
+      const markedReadyToContinue = await markSaleReadyToContinue(
+        operationId,
+        { clearOperationId: true },
+      );
+      if (!markedReadyToContinue) {
+        throw new Error('The confirmed sale no longer matches the active visit');
+      }
+    } catch (persistError) {
+      setSaleRecoveryPersistenceFailed(true);
+      setSaleSubmitting(false);
+      logError('sync', 'sale_remote_confirmation_state_persist_failed', {
+        operation_id: operationId,
+        message: safeUnknownErrorMessage(
+          persistError,
+          'Error desconocido al guardar el estado confirmado.',
+        ),
+      });
+      Alert.alert(
+        'La venta se confirmó',
+        'La venta se confirmó en Odoo, pero no pudimos guardar de forma segura el estado para continuar. No cierres la aplicación; mantén esta pantalla abierta.',
+      );
+      return;
+    }
+
+    try {
       enqueueVisitPhotos({
         stopId: stop.id,
         photoUris: salePhotoUris,
@@ -580,7 +607,6 @@ function SaleScreenInner() {
       );
     }
 
-    useVisitStore.setState({ saleOperationId: null });
     setSaleSubmitting(false);
     if (warehouseId) {
       void loadProducts(warehouseId);

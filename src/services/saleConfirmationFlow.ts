@@ -6,7 +6,7 @@ export interface ResumeAfterSaleInput {
   stopExists: boolean;
   saleSubmitting: boolean;
   saleRecoveryPersistenceFailed: boolean;
-  saleOperationId: string | null;
+  saleReadyToContinue: boolean;
   hasQueuedSaleOrderEvidence: boolean;
 }
 
@@ -31,7 +31,7 @@ export function shouldResumeAfterSale({
   stopExists,
   saleSubmitting,
   saleRecoveryPersistenceFailed,
-  saleOperationId,
+  saleReadyToContinue,
   hasQueuedSaleOrderEvidence,
 }: ResumeAfterSaleInput): boolean {
   return saleConfirmed
@@ -39,7 +39,7 @@ export function shouldResumeAfterSale({
     && stopExists
     && !saleSubmitting
     && !saleRecoveryPersistenceFailed
-    && (saleOperationId === null || hasQueuedSaleOrderEvidence);
+    && (saleReadyToContinue || hasQueuedSaleOrderEvidence);
 }
 
 export interface SaleConfirmationSingleFlight {

@@ -71,6 +71,16 @@ assert(sale.includes('await createSale('), 'venta online usa createSale directo'
 // #3 OFFLINE (S1): el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
 assert(/enqueue\(\s*['"]sale_order['"]/.test(sale), 'offline debe encolar el pedido como sale_order');
+assert.match(
+  sale,
+  /const enqId = enqueue\(\s*['"]sale_order['"],[\s\S]*?\},\s*\{\s*operationId\s*\}\s*\);/,
+  'offline debe reutilizar el operationId durable del lock como id de cola',
+);
+assert.doesNotMatch(
+  sale,
+  /useVisitStore\.setState\(\{\s*saleOperationId:\s*enqId\s*\}\)/,
+  'offline no corrige el operationId sólo en memoria después de encolar',
+);
 assert(sale.includes('enqueueVisitPhotos'), 'venta debe usar el helper compartido para encolar evidencia');
 assert(/imageType:\s*['"]sale['"]/.test(sale), 'venta debe marcar la evidencia como imagen de venta');
 assert(!sale.includes('salePhotoUris[0]'), 'venta debe encolar todas las fotos capturadas, no solo la primera');

@@ -24,7 +24,7 @@ export interface PersistAmbiguousSaleResult {
   photoIds: string[];
 }
 
-export async function persistAmbiguousSale({
+export async function persistAmbiguousSaleRecovery({
   operationId,
   payload,
   customerName,

@@ -7,7 +7,7 @@ import type {
 import type { SyncEnqueueOptions, SyncItemType } from '../src/types/sync';
 
 interface SaleAmbiguousRecoveryModule {
-  persistAmbiguousSale: (
+  persistAmbiguousSaleRecovery: (
     input: PersistAmbiguousSaleInput,
   ) => Promise<PersistAmbiguousSaleResult>;
 }
@@ -60,7 +60,7 @@ async function testPersistsCompleteHeldBatchBeforeReleasing(
     lines: [{ product_id: 7, qty: 2 }],
   };
 
-  const pending = module.persistAmbiguousSale(baseInput({
+  const pending = module.persistAmbiguousSaleRecovery(baseInput({
     payload,
     enqueue: (type, enqueuedPayload, opts) => {
       calls.push({ type, payload: enqueuedPayload, opts });
@@ -141,7 +141,7 @@ async function testPersistFailureReleasesKnownBatchAndRethrows(
   let resolved = false;
   let photoCount = 0;
 
-  const pending = module.persistAmbiguousSale(baseInput({
+  const pending = module.persistAmbiguousSaleRecovery(baseInput({
     enqueue: (type) => {
       if (type === 'sale_order') return 'sale-op-1';
       photoCount++;
@@ -170,7 +170,7 @@ async function testMismatchedSaleIdReleasesReturnedHoldWithoutPersisting(
   let persistCalls = 0;
 
   await assert.rejects(
-    module.persistAmbiguousSale(baseInput({
+    module.persistAmbiguousSaleRecovery(baseInput({
       enqueue: () => 'unexpected-sale-id',
       persistQueue: async () => {
         persistCalls++;
@@ -196,7 +196,7 @@ async function testSynchronousPhotoFailureReleasesOnlyReturnedIds(
   let persistCalls = 0;
 
   await assert.rejects(
-    module.persistAmbiguousSale(baseInput({
+    module.persistAmbiguousSaleRecovery(baseInput({
       enqueue: (type) => {
         if (type === 'sale_order') return 'sale-op-1';
         photoCalls++;

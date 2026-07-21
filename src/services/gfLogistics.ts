@@ -32,6 +32,7 @@ import { isAlreadyConfirmedResponse } from './idempotentResponse';
 import { normalizePlanStopPayload, extractPlanStopsArray } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
+import { validateSaleCreateResult } from './saleCreateResult';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -562,11 +563,13 @@ export async function createSale(
   meta?: ClientEventMeta | null,
 ): Promise<boolean> {
   const body = attachClientMetaToRestPayload(payload, meta ?? null);
-  const result = await postRest<{ success?: boolean }>(
+  const result = await postRest<unknown>(
     `${GF_BASE}/sales/create`,
     body,
   );
-  return !!result;
+  const expectedOperationId = typeof body.operation_id === 'string' ? body.operation_id : '';
+  validateSaleCreateResult(result, expectedOperationId);
+  return true;
 }
 
 export async function acceptRouteLoad(routePlanId: number, pickingId: number): Promise<boolean> {

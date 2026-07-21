@@ -26,25 +26,29 @@ export function validateSaleCreateResult(
   result: unknown,
   expectedOperationId: string,
 ): SaleCreateResultData {
-  if (!isRecord(result) || result.ok !== true || !isRecord(result.data)) {
+  try {
+    if (!isRecord(result) || result.ok !== true || !isRecord(result.data)) {
+      throw invalidSaleCreateResponse();
+    }
+
+    const data = result.data;
+    if (
+      data.success !== true
+      || typeof data.order_id !== 'number'
+      || !Number.isInteger(data.order_id)
+      || data.order_id <= 0
+      || typeof expectedOperationId !== 'string'
+      || expectedOperationId.trim().length === 0
+      || typeof data.operation_id !== 'string'
+      || data.operation_id.trim().length === 0
+      || data.operation_id !== expectedOperationId
+      || (data.duplicate !== undefined && typeof data.duplicate !== 'boolean')
+    ) {
+      throw invalidSaleCreateResponse();
+    }
+
+    return data as SaleCreateResultData;
+  } catch {
     throw invalidSaleCreateResponse();
   }
-
-  const data = result.data;
-  if (
-    data.success !== true
-    || typeof data.order_id !== 'number'
-    || !Number.isInteger(data.order_id)
-    || data.order_id <= 0
-    || typeof expectedOperationId !== 'string'
-    || expectedOperationId.trim().length === 0
-    || typeof data.operation_id !== 'string'
-    || data.operation_id.trim().length === 0
-    || data.operation_id !== expectedOperationId
-    || (data.duplicate !== undefined && typeof data.duplicate !== 'boolean')
-  ) {
-    throw invalidSaleCreateResponse();
-  }
-
-  return data as SaleCreateResultData;
 }

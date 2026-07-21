@@ -33,6 +33,48 @@ test('accepts duplicate responses as idempotent success', () => {
   );
 });
 
+test('sanitizes exceptions thrown while inspecting the response envelope', () => {
+  const result = new Proxy({}, {
+    get(_target, property) {
+      throw new Error(`raw-envelope-secret:${String(property)}`);
+    },
+  });
+
+  assert.throws(
+    () => validateSaleCreateResult(result, 'sale-op-1'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      const metadata = error as Error & { code?: unknown; responseReceived?: unknown };
+      assert.equal(metadata.message, 'Respuesta inválida al confirmar la venta.');
+      assert.equal(metadata.code, 'invalid_response');
+      assert.equal(metadata.responseReceived, true);
+      assert.doesNotMatch(metadata.message, /raw-envelope-secret/i);
+      return true;
+    },
+  );
+});
+
+test('sanitizes exceptions thrown while inspecting response data', () => {
+  const data = new Proxy({}, {
+    get(_target, property) {
+      throw new Error(`raw-customer-secret:${String(property)}`);
+    },
+  });
+
+  assert.throws(
+    () => validateSaleCreateResult({ ok: true, data }, 'sale-op-1'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      const metadata = error as Error & { code?: unknown; responseReceived?: unknown };
+      assert.equal(metadata.message, 'Respuesta inválida al confirmar la venta.');
+      assert.equal(metadata.code, 'invalid_response');
+      assert.equal(metadata.responseReceived, true);
+      assert.doesNotMatch(metadata.message, /raw-customer-secret/i);
+      return true;
+    },
+  );
+});
+
 const invalidCases: Array<{
   name: string;
   result: unknown;

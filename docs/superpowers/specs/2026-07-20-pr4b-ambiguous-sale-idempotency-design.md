@@ -150,7 +150,7 @@ El clasificador no decidirá textos, navegación, reintentos ni mutará stores. 
 enqueue(type, payload, {
   dependsOn?: string[];
   operationId?: string;
-  deferProcessing?: boolean;
+  holdProcessing?: boolean;
 }): string
 ```
 
@@ -161,7 +161,8 @@ Las reglas serán:
 3. Si no existe el ID, se crea el ítem con `item.id === operationId` y `payload._operationId === operationId`.
 4. Si ya existe un ítem del mismo tipo con ese ID, se devuelve el ID existente sin insertar, reemplazar payload ni duplicar la operación. El primer registro es autoritativo.
 5. Si el ID ya pertenece a otro tipo de operación, se lanza una colisión explícita y no se sobrescribe el ítem.
-6. `deferProcessing: true` evita únicamente el auto-disparo del procesador para esa inserción. El llamador será responsable de iniciarlo después de completar la persistencia durable.
+6. `holdProcessing: true` registra el ID en un conjunto transitorio de bloqueos antes de exponerlo como candidato. No solo evita el auto-disparo de ese `enqueue`: impide que cualquier ciclo concurrente, reconexión, sincronización manual o redrenaje post-ciclo despache el ítem mientras siga retenido.
+7. El store expondrá `releaseProcessingHolds(ids)` para liberar una venta y sus fotos como grupo. La liberación no dispara procesamiento por sí sola; el llamador decide si inicia el ciclo.
 
 Para un ítem del mismo ID y tipo ya existente, el estado se resolverá así:
 
@@ -170,6 +171,8 @@ Para un ítem del mismo ID y tipo ya existente, el estado se resolverá así:
 - `done`: se conserva como `done` y no se reenvía, porque la operación ya tiene éxito conocido.
 
 La prioridad, dependencias, telemetría, conteos y auto-procesamiento existentes seguirán funcionando. No se cambia la forma persistida de `SyncQueueItem`.
+
+El conjunto de bloqueos será solo de memoria y no formará parte de `SyncQueueItem`. Si la aplicación se cierra después de que un ítem quedó durable, la rehidratación comienza sin bloqueos y la cola puede procesarlo normalmente. La opción también se aplica cuando el ID explícito ya existía: un ítem reutilizado o rearmado queda retenido frente a futuros ciclos hasta que el lote se libere; un envío que ya estaba efectivamente `syncing` no puede cancelarse, pero en ese caso la operación ya provenía de la cola durable.
 
 ### Persistencia serializada y barrera antes del envío
 
@@ -184,7 +187,7 @@ Con esto, una escritura parcial iniciada por el primer `enqueue` nunca puede ter
 
 Los llamadores fire-and-forget del coordinador consumirán y registrarán sus rechazos para evitar promesas no manejadas. La llamada explícita usada como barrera no ocultará el error: conservará el rechazo para que la pantalla aplique la política de fallo de persistencia.
 
-Durante la recuperación ambigua, tanto la venta como sus fotos se encolarán con `deferProcessing: true`. `enqueueVisitPhotos` ampliará sus opciones para propagar esta bandera a cada foto. Después de insertar todo el lote en memoria, la pantalla esperará `persistQueue()` y solo entonces invocará `processQueue()` sin bloquear la interfaz. El comportamiento predeterminado de los demás `enqueue` seguirá persistiendo y auto-procesando como hoy.
+Durante la recuperación ambigua, tanto la venta como sus fotos se encolarán con `holdProcessing: true`. `enqueueVisitPhotos` ampliará sus opciones para propagar esta bandera a cada foto y devolverá sus IDs como hoy. `processQueue` excluirá los IDs retenidos al seleccionar candidatos, y la decisión de redrenaje post-ciclo evaluará la cola filtrada por la misma regla. Después de insertar todo el lote en memoria, la pantalla esperará `persistQueue()`, liberará juntos el ID de venta y los IDs de fotos y solo entonces invocará `processQueue()` sin bloquear la interfaz. El comportamiento predeterminado de los demás `enqueue` seguirá persistiendo y auto-procesando como hoy.
 
 ### Flujo online exitoso
 
@@ -212,14 +215,15 @@ Si el clasificador devuelve `definitive_rejection`:
 
 Si el clasificador devuelve `ambiguous_result`, la pantalla no llamará a `unlockSaleConfirm`. Ejecutará en este orden:
 
-1. Encolar `sale_order` con el payload original, la metadata visible de cliente/total y `{ operationId, deferProcessing: true }`.
-2. Encolar las fotos con `dependsOn: [operationId]` y `deferProcessing: true`.
+1. Encolar `sale_order` con el payload original, la metadata visible de cliente/total y `{ operationId, holdProcessing: true }`.
+2. Encolar las fotos con `dependsOn: [operationId]` y `holdProcessing: true`, conservando sus IDs devueltos.
 3. Ejecutar y esperar `persistQueue()` después de que el lote completo esté en memoria.
-4. Iniciar `processQueue()` solo después de que la persistencia durable haya terminado.
-5. Guardar `saleOperationId: operationId` para que checkout, ruta y sincronización sigan la operación correcta.
-6. Guardar el snapshot del ticket con el mismo ID.
-7. Mantener `saleConfirmed: true`, impidiendo que el carrito genere otra confirmación.
-8. Mostrar el estado pendiente y continuar por la misma decisión checkout/ruta del camino offline.
+4. Liberar como grupo los bloqueos de la venta y las fotos.
+5. Iniciar `processQueue()` solo después de que la persistencia durable haya terminado y los bloqueos hayan sido liberados.
+6. Guardar `saleOperationId: operationId` para que checkout, ruta y sincronización sigan la operación correcta.
+7. Guardar el snapshot del ticket con el mismo ID.
+8. Mantener `saleConfirmed: true`, impidiendo que el carrito genere otra confirmación.
+9. Mostrar el estado pendiente y continuar por la misma decisión checkout/ruta del camino offline.
 
 El mensaje será:
 
@@ -246,7 +250,7 @@ La recuperación solo se comunicará como pendiente después de que `persistQueu
 - no se mostrará “Pedido guardado”;
 - se advertirá que no se cierre la aplicación mientras continúa la verificación.
 
-El procesador no se iniciará desde este flujo si la barrera de persistencia falla. Las inserciones siguen en memoria y una transición posterior de conectividad, una sincronización manual u otro despertar normal de la cola podrá volver a intentarlas, siempre con el mismo ID.
+Si la barrera falla, la pantalla liberará los bloqueos sin invocar `processQueue()`. Las inserciones siguen en memoria y una transición posterior de conectividad, una sincronización manual u otro despertar normal de la cola podrá volver a intentarlas, siempre con el mismo ID. Esta liberación evita dejar ítems inaccesibles durante toda la sesión, pero no convierte el fallo en éxito ni provoca un envío inmediato desde el flujo de recuperación.
 
 Esta política prioriza evitar una duplicación sobre permitir una nueva edición. Un flujo manual de recuperación de almacenamiento queda fuera de PR-4b.
 
@@ -281,12 +285,12 @@ La implementación seguirá TDD e incluirá:
 3. **Contrato de creación:** éxito normal con `{ ok: true, data: ... }`, éxito idempotente con `data.duplicate: true`, `data.order_id` inválido, `data.operation_id` ausente o distinto, objeto truthy no reconocido y respuesta cruda/no JSON.
 4. **Cola con ID explícito:** inserción con el mismo ID en item/payload, llamadas normales que aún generan UUID, reencolado idempotente del mismo tipo, primera escritura autoritativa, valor vacío, colisión con otro tipo y comportamiento definido para `pending`, `syncing`, `error`, `dead` y `done`.
 5. **Persistencia serializada:** dos o más escrituras solapadas no permiten que un snapshot antiguo sobrescriba uno nuevo; la promesa de barrera solo resuelve cuando el snapshot más reciente solicitado quedó durable.
-6. **Procesamiento diferido:** la venta y las fotos no se despachan antes de que resuelva la barrera; después se dispara una sola ejecución normal del procesador.
+6. **Bloqueo transitorio de procesamiento:** la venta y las fotos quedan fuera de candidatos y del redrenaje durante la barrera, incluso ante ciclos concurrentes, reconexión o sincronización manual; al éxito se liberan juntas y después se dispara una sola ejecución normal.
 7. **Dependencias:** las fotos de una recuperación dependen exactamente del ID original de la venta.
-8. **Cableado de pantalla:** resultado definitivo libera el bloqueo; resultado ambiguo no lo libera, encola con `{ operationId, deferProcessing: true }`, espera `persistQueue()` antes del procesador y del aviso, guarda el ticket con el mismo ID y aplica la navegación de pedido pendiente.
+8. **Cableado de pantalla:** resultado definitivo libera el bloqueo de confirmación; resultado ambiguo conserva ese bloqueo, encola con `{ operationId, holdProcessing: true }`, espera `persistQueue()`, libera los bloqueos transitorios antes del procesador y del aviso, guarda el ticket con el mismo ID y aplica la navegación de pedido pendiente.
 9. **Límites de fase:** un error de `createSale` sí se clasifica; errores posteriores de fotos, ticket o navegación no desbloquean ni reencolan la venta confirmada.
 10. **Reintentos de cola:** `sale_order` usa la clasificación estructurada, reintenta resultados ambiguos —incluido `invalid_response` y desconocido— y no reintenta rechazos definitivos; otros tipos mantienen la decisión existente.
-11. **Fallo de persistencia:** no muestra éxito, no avanza, no inicia el procesador desde la recuperación y conserva la operación bloqueada.
+11. **Fallo de persistencia:** libera los bloqueos transitorios sin disparar procesamiento, no muestra éxito, no avanza y conserva bloqueada la confirmación de la operación.
 12. **Regresión:** flujo online exitoso, flujo offline existente, stock insuficiente, sincronización y tickets.
 13. **Verificación completa:** `npm test` y `npm run typecheck`.
 
@@ -307,7 +311,7 @@ También se probará un timeout anterior a la creación para verificar que el mi
 - Un timeout, error de red, aborto, HTTP 5xx, respuesta inválida o error desconocido nunca genera una nueva llave de operación.
 - El `sale_order` recuperado usa el mismo valor en `item.id`, `payload._operationId`, `saleOperationId`, dependencias de fotos y ticket.
 - No se informa que el pedido quedó pendiente hasta completar la persistencia durable.
-- Ningún reintento recuperado se envía antes de que venta y fotos hayan cruzado la barrera de persistencia.
+- Mientras la barrera de persistencia está pendiente, ningún punto de entrada del procesador puede enviar la venta ni sus fotos.
 - Una escritura antigua de la cola nunca puede sobrescribir un snapshot durable más reciente.
 - Un fallo de persistencia no desbloquea la venta ni permite confirmar otra operación.
 - Reencolar el mismo ID y tipo no duplica ni reemplaza el ítem existente.

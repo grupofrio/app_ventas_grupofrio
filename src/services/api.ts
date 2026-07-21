@@ -10,6 +10,7 @@ import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
 import { detectFunctionalErrorMessage } from '../utils/rpcEnvelope';
+import { makeApiResponseError, makeApiTransportError } from './apiRequestError';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
@@ -239,10 +240,12 @@ export async function postRest<T = any>(
     let resultPayload: T | undefined;
     const durationMs = Date.now() - startedAt;
     let errorMessage: string | undefined;
+    let resultError: unknown;
 
     try {
       resultPayload = unwrapRestResult(parsed, response.status) as T;
     } catch (error) {
+      resultError = error;
       errorMessage = error instanceof Error ? error.message : String(error);
     }
 
@@ -267,7 +270,7 @@ export async function postRest<T = any>(
     } else {
       logError('api', 'http_error', trace);
       const msg = errorMessage || parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
-      throw makeLoggedHttpError(msg);
+      throw makeApiResponseError(resultError, msg, response.status);
     }
 
     return resultPayload as T;
@@ -275,7 +278,7 @@ export async function postRest<T = any>(
     if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
       throw error;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const requestError = makeApiTransportError(error);
     logError('api', 'http_error', buildHttpTraceData({
       phase: 'error',
       channel: 'rest',
@@ -283,9 +286,9 @@ export async function postRest<T = any>(
       url: absoluteUrl,
       requestId,
       durationMs: Date.now() - startedAt,
-      errorMessage: message,
+      errorMessage: requestError.message,
     }));
-    throw error;
+    throw requestError;
   }
 }
 

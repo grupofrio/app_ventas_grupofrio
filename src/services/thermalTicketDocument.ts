@@ -2,9 +2,10 @@ import type { SaleTicketSnapshot } from './saleTicket.ts';
 import { SALE_TICKET_CREDIT_NOTE } from './saleTicket.ts';
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
 import {
-  formatQuantity,
+  formatQuantityAndUnitPrice,
   formatTicketCurrency,
   formatTicketDate,
+  formatTotalKg,
   normalizeSellerName,
 } from './saleTicketFormatting.ts';
 import type { ThermalTicketDocument } from './thermalPrinterTypes.ts';
@@ -32,11 +33,11 @@ export function buildThermalTicketDocument(
     lines: snapshot.lines.map((line) => ({
       productId: line.productId,
       productName: line.productName,
-      quantityAndUnitPrice: `${formatQuantity(line.qty)} x ${formatTicketCurrency(line.unitPrice)}`,
+      quantityAndUnitPrice: formatQuantityAndUnitPrice(line.qty, line.unitPrice),
       lineTotal: formatTicketCurrency(line.lineTotal),
     })),
     subtotal: formatTicketCurrency(snapshot.subtotal),
-    totalKg: `${snapshot.totalKg.toFixed(1)} kg`,
+    totalKg: formatTotalKg(snapshot.totalKg),
     total: formatTicketCurrency(snapshot.total),
     ...(snapshot.paymentMethod === 'credit'
       ? { creditNote: SALE_TICKET_CREDIT_NOTE }

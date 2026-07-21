@@ -5,8 +5,13 @@ import { SALE_TICKET_BRANDING } from '../src/services/saleTicketBranding.ts';
 import {
   SALE_TICKET_CREDIT_NOTE,
   SALE_TICKET_DEFAULT_SELLER,
+  buildSaleTicketHtml,
   buildSaleTicketSnapshot,
 } from '../src/services/saleTicket.ts';
+import {
+  formatQuantityAndUnitPrice,
+  formatTotalKg,
+} from '../src/services/saleTicketFormatting.ts';
 import { buildThermalTicketDocument } from '../src/services/thermalTicketDocument.ts';
 
 function buildSnapshot(
@@ -83,6 +88,27 @@ test('buildThermalTicketDocument formats integer and decimal quantities for draw
   assert.equal(document.lines[0].lineTotal, '$20.00');
   assert.equal(document.lines[1].quantityAndUnitPrice, '1.25 x $12.50');
   assert.equal(document.lines[1].lineTotal, '$15.63');
+});
+
+test('shared compound formatting keeps thermal and PDF quantity and kg text equivalent', () => {
+  const snapshot = buildSnapshot('cash', {
+    lines: [
+      { productId: 1, productName: 'Entero', qty: 2, price: 10, weight: 1 },
+      { productId: 2, productName: 'Decimal', qty: 1.25, price: 12.5, weight: 0.5 },
+    ],
+  });
+  const document = buildThermalTicketDocument(snapshot);
+  const html = buildSaleTicketHtml(snapshot);
+
+  assert.equal(formatQuantityAndUnitPrice(2, 10), '2 x $10.00');
+  assert.equal(formatQuantityAndUnitPrice(1.25, 12.5), '1.25 x $12.50');
+  assert.equal(formatTotalKg(snapshot.totalKg), '2.6 kg');
+  assert.equal(document.lines[0].quantityAndUnitPrice, formatQuantityAndUnitPrice(2, 10));
+  assert.equal(document.lines[1].quantityAndUnitPrice, formatQuantityAndUnitPrice(1.25, 12.5));
+  assert.equal(document.totalKg, formatTotalKg(snapshot.totalKg));
+  assert.ok(html.includes(document.lines[0].quantityAndUnitPrice));
+  assert.ok(html.includes(document.lines[1].quantityAndUnitPrice));
+  assert.ok(html.includes(document.totalKg));
 });
 
 test('buildThermalTicketDocument preserves Spanish characters and long names', () => {

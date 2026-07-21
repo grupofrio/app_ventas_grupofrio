@@ -17,6 +17,14 @@ export function formatTicketCurrency(amount: number): string {
   })}`;
 }
 
+export function formatQuantityAndUnitPrice(quantity: number, unitPrice: number): string {
+  return `${formatQuantity(quantity)} x ${formatTicketCurrency(unitPrice)}`;
+}
+
+export function formatTotalKg(totalKg: number): string {
+  return `${totalKg.toFixed(1)} kg`;
+}
+
 export function formatTicketDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;

@@ -30,19 +30,32 @@ const SAVED_SELECTION_KEYS = new Set(['version', 'name', 'address']);
 export function parseSavedThermalPrinter(value: unknown): SavedThermalPrinterV1 | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
 
-  const keys = Object.keys(value);
-  if (keys.length !== SAVED_SELECTION_KEYS.size) return null;
-  if (keys.some((key) => !SAVED_SELECTION_KEYS.has(key))) return null;
-  if (!('version' in value) || value.version !== 1) return null;
-  if (!('name' in value) || (value.name !== null && typeof value.name !== 'string')) return null;
-  if (!('address' in value) || typeof value.address !== 'string') return null;
-  if (!BLUETOOTH_MAC_ADDRESS.test(value.address)) return null;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
 
-  return {
-    version: 1,
-    name: value.name,
-    address: value.address,
-  };
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== SAVED_SELECTION_KEYS.size) return null;
+    if (keys.some((key) => typeof key !== 'string' || !SAVED_SELECTION_KEYS.has(key))) return null;
+
+    const versionDescriptor = Object.getOwnPropertyDescriptor(value, 'version');
+    const nameDescriptor = Object.getOwnPropertyDescriptor(value, 'name');
+    const addressDescriptor = Object.getOwnPropertyDescriptor(value, 'address');
+    if (!versionDescriptor || !('value' in versionDescriptor)) return null;
+    if (!nameDescriptor || !('value' in nameDescriptor)) return null;
+    if (!addressDescriptor || !('value' in addressDescriptor)) return null;
+
+    const version: unknown = versionDescriptor.value;
+    const name: unknown = nameDescriptor.value;
+    const address: unknown = addressDescriptor.value;
+    if (version !== 1) return null;
+    if (name !== null && typeof name !== 'string') return null;
+    if (typeof address !== 'string' || !BLUETOOTH_MAC_ADDRESS.test(address)) return null;
+
+    return { version: 1, name, address };
+  } catch {
+    return null;
+  }
 }
 
 const defaultStorage: ThermalPrinterSelectionStorage = {
@@ -61,14 +74,18 @@ export function createThermalPrinterSelectionStore(
     },
 
     async save(selection) {
-      if (!BLUETOOTH_MAC_ADDRESS.test(selection.address)) {
-        throw new Error('Invalid Bluetooth address');
-      }
-      await storage.save(STORAGE_KEYS.THERMAL_PRINTER, {
+      const candidate: unknown = {
         version: 1,
         name: selection.name,
         address: selection.address,
-      });
+      };
+      const savedSelection = parseSavedThermalPrinter(candidate);
+      if (savedSelection === null) {
+        throw new Error(
+          'Invalid thermal printer selection: expected a string or null name and a valid Bluetooth address',
+        );
+      }
+      await storage.save(STORAGE_KEYS.THERMAL_PRINTER, savedSelection);
     },
 
     async remove() {

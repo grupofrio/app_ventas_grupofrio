@@ -9,9 +9,63 @@ import {
 test('parseSavedThermalPrinter accepts a valid versioned selection and nullable name', () => {
   const named = { version: 1, name: 'MP210', address: 'AA:bb:09:10:EF:f0' };
   const unnamed = { version: 1, name: null, address: '00:11:22:33:44:55' };
+  const nullPrototype = Object.assign(Object.create(null), named);
 
   assert.deepEqual(parseSavedThermalPrinter(named), named);
   assert.deepEqual(parseSavedThermalPrinter(unnamed), unnamed);
+  assert.deepEqual(parseSavedThermalPrinter(nullPrototype), named);
+});
+
+test('parseSavedThermalPrinter rejects class instances and custom prototypes', () => {
+  class PersistedSelection {
+    version = 1;
+    name = 'MP210';
+    address = '00:11:22:33:44:55';
+  }
+  const customPrototype = Object.assign(Object.create({ inherited: true }), {
+    version: 1,
+    name: 'MP210',
+    address: '00:11:22:33:44:55',
+  });
+
+  assert.equal(parseSavedThermalPrinter(new PersistedSelection()), null);
+  assert.equal(parseSavedThermalPrinter(customPrototype), null);
+});
+
+test('parseSavedThermalPrinter returns null for hostile introspection and property access', () => {
+  const valid = { version: 1, name: 'MP210', address: '00:11:22:33:44:55' };
+  let getterReads = 0;
+  const throwingGetter = Object.defineProperties(Object.create(null), {
+    version: { enumerable: true, value: 1 },
+    name: {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        throw new Error('hostile name getter');
+      },
+    },
+    address: { enumerable: true, value: '00:11:22:33:44:55' },
+  });
+  const hostileValues: unknown[] = [
+    new Proxy(valid, {
+      getPrototypeOf() {
+        throw new Error('hostile prototype trap');
+      },
+    }),
+    new Proxy(valid, {
+      ownKeys() {
+        throw new Error('hostile keys trap');
+      },
+    }),
+    throwingGetter,
+  ];
+
+  for (const value of hostileValues) {
+    assert.doesNotThrow(() => {
+      assert.equal(parseSavedThermalPrinter(value), null);
+    });
+  }
+  assert.equal(getterReads, 0, 'validation must inspect descriptors without invoking getters');
 });
 
 test('parseSavedThermalPrinter rejects malformed persisted selections', () => {
@@ -90,6 +144,27 @@ test('selection store rejects an invalid address instead of persisting it', asyn
   await assert.rejects(
     store.save({ name: 'MP210', address: '10-20-30-40-50-60' }),
     /Bluetooth address/i,
+  );
+  assert.equal(saveCalled, false);
+});
+
+test('selection store rejects an invalid runtime name before persisting it', async () => {
+  let saveCalled = false;
+  const store = createThermalPrinterSelectionStore({
+    load: async () => null,
+    save: async () => {
+      saveCalled = true;
+    },
+    remove: async () => {},
+  });
+  const invalidSelection = {
+    name: 210,
+    address: '00:11:22:33:44:55',
+  } as unknown as Parameters<typeof store.save>[0];
+
+  await assert.rejects(
+    store.save(invalidSelection),
+    /thermal printer selection/i,
   );
   assert.equal(saveCalled, false);
 });

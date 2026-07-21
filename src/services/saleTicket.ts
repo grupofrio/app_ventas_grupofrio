@@ -1,8 +1,9 @@
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
 import {
-  formatQuantity,
+  formatQuantityAndUnitPrice,
   formatTicketCurrency,
   formatTicketDate,
+  formatTotalKg,
   normalizeSellerName,
 } from './saleTicketFormatting.ts';
 
@@ -179,7 +180,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     <tr>
       <td class="item">
         <div class="name">${escapeHtml(line.productName)}</div>
-        <div class="meta">${formatQuantity(line.qty)} x ${formatTicketCurrency(line.unitPrice)}</div>
+        <div class="meta">${formatQuantityAndUnitPrice(line.qty, line.unitPrice)}</div>
       </td>
       <td class="amount">${formatTicketCurrency(line.lineTotal)}</td>
     </tr>
@@ -295,7 +296,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
   <table>${rows}</table>
   <div class="divider"></div>
   <div class="row"><span>Subtotal</span><span>${formatTicketCurrency(snapshot.subtotal)}</span></div>
-  <div class="row"><span>Kg</span><span>${snapshot.totalKg.toFixed(1)} kg</span></div>
+  <div class="row"><span>Kg</span><span>${formatTotalKg(snapshot.totalKg)}</span></div>
   <div class="row total"><span>Total</span><span>${formatTicketCurrency(snapshot.total)}</span></div>
   ${snapshot.paymentMethod === 'credit' ? `
   <div class="divider"></div>

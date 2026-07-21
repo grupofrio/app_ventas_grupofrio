@@ -9,6 +9,10 @@ function main() {
     resolve(REPO_ROOT, 'app/sale/[stopId].tsx'),
     'utf8',
   );
+  const visitStore = readFileSync(
+    resolve(REPO_ROOT, 'src/stores/useVisitStore.ts'),
+    'utf8',
+  );
 
   assert.doesNotMatch(
     saleScreen,
@@ -27,13 +31,35 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /saleConfirmed && !afterSaleAction && stop && !saleSubmitting/,
-    'La reanudacion post-venta no debe mostrar Continuar a checkout mientras createSale sigue pendiente',
+    /shouldResumeAfterSale\(\{[\s\S]*?saleConfirmed,[\s\S]*?hasAfterSaleAction:\s*afterSaleAction !== null,[\s\S]*?stopExists:\s*stop !== undefined,[\s\S]*?saleSubmitting,[\s\S]*?saleRecoveryPersistenceFailed,[\s\S]*?\}\)/,
+    'La reanudacion debe usar la decision pura que tambien considera el bloqueo persistido',
   );
   assert.match(
     saleScreen,
-    /setSaleSubmitting\(true\)[\s\S]*?lockSaleConfirm\(\)/,
-    'El lock de venta debe ocurrir dentro de un estado de envio activo',
+    /React\.useRef[^\n]*SaleConfirmationSingleFlight|React\.useRef<[^>]*SaleConfirmationSingleFlight/,
+    'La pantalla debe conservar una sola instancia single-flight por montaje',
+  );
+  const validationIndex = saleScreen.indexOf('if (!confirmedPaymentMethod) return;');
+  const freshConfirmedIndex = saleScreen.indexOf('useVisitStore.getState().saleConfirmed', validationIndex);
+  const acquireIndex = saleScreen.indexOf('saleConfirmationSingleFlight.tryAcquire()', validationIndex);
+  const submittingIndex = saleScreen.indexOf('setSaleSubmitting(true)', validationIndex);
+  const lockIndex = saleScreen.indexOf('lockSaleConfirm()', validationIndex);
+  assert(
+    validationIndex >= 0
+      && freshConfirmedIndex > validationIndex
+      && acquireIndex > freshConfirmedIndex
+      && submittingIndex > acquireIndex
+      && lockIndex > submittingIndex,
+    'El guard atomico usa estado fresco despues de validar y antes de submitting/lock',
+  );
+  const unlockCount = (saleScreen.match(/\bunlockSaleConfirm\(\)/g) ?? []).length;
+  const releaseCount = (saleScreen.match(/\bsaleConfirmationSingleFlight\.release\(\)/g) ?? []).length;
+  assert.equal(unlockCount, 2, 'solo preparacion y rechazo definitivo desbloquean la venta');
+  assert.equal(releaseCount, unlockCount, 'cada unlock debe liberar tambien el single-flight');
+  assert.match(
+    saleScreen,
+    /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);|unlockSaleConfirm\(\);\s*saleConfirmationSingleFlight\.release\(\);/,
+    'release y unlock deben permanecer juntos',
   );
   assert.match(
     saleScreen,
@@ -89,6 +115,24 @@ function main() {
     saleScreen,
     /salePaymentMethod === 'cash'[\s\S]*?enqueue\('payment'/,
     'El efectivo no debe depender de un segundo item de sync; el backend crea el pago con la venta',
+  );
+
+  assert.match(visitStore, /saleRecoveryPersistenceFailed:\s*boolean/);
+  assert.match(visitStore, /setSaleRecoveryPersistenceFailed:\s*\(value:\s*boolean\)\s*=>\s*void/);
+  assert.match(
+    visitStore,
+    /setSaleRecoveryPersistenceFailed:\s*\(value\)\s*=>\s*\{[\s\S]*?set\(\{\s*saleRecoveryPersistenceFailed:\s*value\s*\}\);[\s\S]*?persistVisitState/,
+    'la accion del flag debe actualizar y persistir el snapshot',
+  );
+  assert.match(
+    visitStore,
+    /if \(get\(\)\.saleConfirmed && existing\)\s*\{\s*return existing;\s*\}[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
+    'un lock nuevo limpia el flag, pero reutilizar un lock confirmado no toca el bloqueo existente',
+  );
+  assert.match(
+    visitStore,
+    /unlockSaleConfirm:[\s\S]*?saleConfirmed:\s*false,[\s\S]*?saleOperationId:\s*null,[\s\S]*?saleRecoveryPersistenceFailed:\s*false/,
+    'unlock limpia tambien el bloqueo de recuperacion',
   );
 
   console.log('sale confirm feedback tests: ok');

@@ -54,6 +54,11 @@ import {
   readSaleSubmissionErrorMetadata,
 } from '../../src/services/saleSubmissionOutcome';
 import { persistAmbiguousSaleRecovery } from '../../src/services/saleAmbiguousRecovery';
+import {
+  createSaleConfirmationSingleFlight,
+  safeUnknownErrorMessage,
+  shouldResumeAfterSale,
+} from '../../src/services/saleConfirmationFlow';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -107,6 +112,13 @@ function SaleScreenInner() {
   const [lastSaleTicketId, setLastSaleTicketId] = React.useState<string | null>(null);
   const [afterSaleAction, setAfterSaleAction] = React.useState<'checkout' | 'route' | null>(null);
   const [saleSubmitting, setSaleSubmitting] = React.useState(false);
+  const saleConfirmationSingleFlightRef = React.useRef<
+    ReturnType<typeof createSaleConfirmationSingleFlight> | null
+  >(null);
+  if (!saleConfirmationSingleFlightRef.current) {
+    saleConfirmationSingleFlightRef.current = createSaleConfirmationSingleFlight();
+  }
+  const saleConfirmationSingleFlight = saleConfirmationSingleFlightRef.current;
 
   useFocusEffect(
     useCallback(() => {
@@ -144,6 +156,10 @@ function SaleScreenInner() {
   const getStockIssues = useVisitStore((s) => s.getStockIssues);
   const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
   const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
+  const saleRecoveryPersistenceFailed = useVisitStore((s) => s.saleRecoveryPersistenceFailed);
+  const setSaleRecoveryPersistenceFailed = useVisitStore(
+    (s) => s.setSaleRecoveryPersistenceFailed,
+  );
   const stockIssues = getStockIssues();
   const hasStock = !hasStockIssues();
   const implicitAnalytics = resolveImplicitSaleAnalytics({
@@ -168,10 +184,22 @@ function SaleScreenInner() {
   // el vendedor continúe al cobro/checkout en vez de re-confirmar (evita venta
   // duplicada). No crea nada: solo reabre la guía "Continuar a checkout".
   React.useEffect(() => {
-    if (saleConfirmed && !afterSaleAction && stop && !saleSubmitting) {
+    if (shouldResumeAfterSale({
+      saleConfirmed,
+      hasAfterSaleAction: afterSaleAction !== null,
+      stopExists: stop !== undefined,
+      saleSubmitting,
+      saleRecoveryPersistenceFailed,
+    })) {
       setAfterSaleAction(shouldSkipStopCheckout(stop.id) ? 'route' : 'checkout');
     }
-  }, [saleConfirmed, afterSaleAction, stop?.id, saleSubmitting]);
+  }, [
+    saleConfirmed,
+    afterSaleAction,
+    stop?.id,
+    saleSubmitting,
+    saleRecoveryPersistenceFailed,
+  ]);
 
   function setSaleQtyFromText(productId: number, qtyText: string) {
     const digits = qtyText.replace(/\D/g, '');
@@ -263,6 +291,8 @@ function SaleScreenInner() {
     const confirmedPaymentMethod = salePaymentMethod;
     if (!confirmedPaymentMethod) return;
 
+    if (useVisitStore.getState().saleConfirmed) return;
+    if (!saleConfirmationSingleFlight.tryAcquire()) return;
     setSaleSubmitting(true);
 
     // V1.2: Lock to prevent duplicate
@@ -303,8 +333,12 @@ function SaleScreenInner() {
       }
     } catch (error) {
       setSaleSubmitting(false);
+      saleConfirmationSingleFlight.release();
       unlockSaleConfirm();
-      const message = error instanceof Error ? error.message : 'No se pudo resolver la lista de precios.';
+      const message = safeUnknownErrorMessage(
+        error,
+        'No se pudo resolver la lista de precios.',
+      );
       Alert.alert('Venta rechazada', message);
       return;
     }
@@ -405,6 +439,7 @@ function SaleScreenInner() {
 
       if (outcome.kind === 'definitive_rejection') {
         setSaleSubmitting(false);
+        saleConfirmationSingleFlight.release();
         unlockSaleConfirm();
         // insufficient_stock: el backend rechazó por stock. Refrescamos el
         // inventario para mostrar el available_qty REAL y dejamos el carrito
@@ -437,15 +472,16 @@ function SaleScreenInner() {
           persistQueue,
           releaseProcessingHolds,
         });
+        setSaleRecoveryPersistenceFailed(false);
       } catch (persistError) {
+        setSaleRecoveryPersistenceFailed(true);
         setSaleSubmitting(false);
         logError('sync', 'ambiguous_sale_persist_failed', {
           operation_id: operationId,
-          message: persistError instanceof Error
-            ? persistError.message
-            : typeof persistError === 'string'
-              ? persistError
-              : 'Error desconocido al guardar la recuperación.',
+          message: safeUnknownErrorMessage(
+            persistError,
+            'Error desconocido al guardar la recuperación.',
+          ),
         });
         Alert.alert(
           'No cierres la aplicación',
@@ -459,11 +495,10 @@ function SaleScreenInner() {
         'ambiguous_sale_process_start_failed',
         {
           operation_id: operationId,
-          message: processError instanceof Error
-            ? processError.message
-            : typeof processError === 'string'
-              ? processError
-              : 'Error desconocido al iniciar la sincronización.',
+          message: safeUnknownErrorMessage(
+            processError,
+            'Error desconocido al iniciar la sincronización.',
+          ),
         },
       ));
 
@@ -481,11 +516,10 @@ function SaleScreenInner() {
       } catch (ticketError) {
         logError('sync', 'ambiguous_sale_ticket_failed', {
           operation_id: operationId,
-          message: ticketError instanceof Error
-            ? ticketError.message
-            : typeof ticketError === 'string'
-              ? ticketError
-              : 'Error desconocido al guardar el comprobante.',
+          message: safeUnknownErrorMessage(
+            ticketError,
+            'Error desconocido al guardar el comprobante.',
+          ),
         });
         Alert.alert(
           'Comprobante no disponible',
@@ -523,11 +557,10 @@ function SaleScreenInner() {
       }));
       setLastSaleTicketId(operationId);
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : typeof error === 'string'
-          ? error
-          : 'Error desconocido al completar los datos locales.';
+      const message = safeUnknownErrorMessage(
+        error,
+        'Error desconocido al completar los datos locales.',
+      );
       logError('sync', 'sale_post_confirmation_failed', {
         operation_id: operationId,
         message,
@@ -554,7 +587,10 @@ function SaleScreenInner() {
             longitude: longitude || 0,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'La venta se confirmó, pero no se pudo cerrar la visita especial.';
+          const message = safeUnknownErrorMessage(
+            error,
+            'La venta se confirmó, pero no se pudo cerrar la visita especial.',
+          );
           Alert.alert('Cierre pendiente en Odoo', message);
         }
       }

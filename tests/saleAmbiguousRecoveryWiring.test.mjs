@@ -95,6 +95,11 @@ assert.match(
 );
 assert.match(
   sale,
+  /import\s*\{[^}]*\bsafeUnknownErrorMessage\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/src\/services\/saleConfirmationFlow['"]/,
+  'la pantalla debe usar el lector RN-free para errores unknown',
+);
+assert.match(
+  sale,
   /import\s*\{[^}]*\blogInfo\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/src\/utils\/logger['"]/,
   'la pantalla debe preservar logInfo',
 );
@@ -106,6 +111,11 @@ assert.match(
 
 assert.match(createPhase.catchBody, /classifySaleSubmissionError\(error\)/);
 assert.match(createPhase.catchBody, /readSaleSubmissionErrorMetadata\(error\)/);
+assert.doesNotMatch(
+  sale,
+  /instanceof\s+Error/,
+  'ningun catch de la pantalla debe depender del prototipo de un error unknown',
+);
 assert.equal(
   (sale.match(/classifySaleSubmissionError\(/g) ?? []).length,
   1,
@@ -147,6 +157,13 @@ assert.match(
   /logError\(\s*['"]sync['"],\s*['"]ambiguous_sale_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
 );
 assert.match(recoveryPhase.catchBody, /setSaleSubmitting\(false\)/);
+assert.match(recoveryPhase.catchBody, /safeUnknownErrorMessage\(\s*persistError,/);
+const failedFlagIndex = recoveryPhase.catchBody.indexOf('setSaleRecoveryPersistenceFailed(true)');
+const failedSubmittingIndex = recoveryPhase.catchBody.indexOf('setSaleSubmitting(false)');
+assert(
+  failedFlagIndex >= 0 && failedFlagIndex < failedSubmittingIndex,
+  'el bloqueo durable se marca antes de terminar el estado submitting',
+);
 assert.match(
   recoveryPhase.catchBody,
   /Alert\.alert\(\s*['"]No cierres la aplicación['"],\s*['"]No pudimos guardar de forma segura el pedido\. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente\.['"],?\s*\)/,
@@ -158,6 +175,16 @@ assert.doesNotMatch(
   'un fallo de persistencia debe retornar antes de cualquier navegacion',
 );
 assert.match(recoveryPhase.catchBody, /return;/);
+assert.match(
+  recoveryPhase.tryBody,
+  /await persistAmbiguousSaleRecovery\(\{[\s\S]*?setSaleRecoveryPersistenceFailed\(false\)/,
+  'la recuperacion durable conserva el flag desbloqueado',
+);
+assert.doesNotMatch(
+  recoveryPhase.catchBody,
+  /instanceof\s+Error|\bString\s*\(/,
+  'el error de persistencia unknown no debe inspeccionarse de forma insegura',
+);
 
 const recoveryCallIndex = createPhase.catchBody.indexOf('await persistAmbiguousSaleRecovery({');
 const processQueueIndex = createPhase.catchBody.indexOf('void processQueue().catch', recoveryCallIndex);
@@ -174,6 +201,10 @@ assert.doesNotMatch(
 assert.match(
   createPhase.catchBody.slice(processQueueIndex),
   /ambiguous_sale_process_start_failed[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+);
+assert.match(
+  createPhase.catchBody.slice(processQueueIndex),
+  /safeUnknownErrorMessage\(\s*processError,/,
 );
 
 const ambiguousSuccess = createPhase.catchBody.slice(recoveryPhase.catchEnd + 1);
@@ -201,9 +232,10 @@ assert.match(
   /logError\(\s*['"]sync['"],\s*['"]ambiguous_sale_ticket_failed['"],[\s\S]*?operation_id:\s*operationId/,
 );
 assert.match(ambiguousTicket.catchBody, /Alert\.alert\(/);
+assert.match(ambiguousTicket.catchBody, /safeUnknownErrorMessage\(\s*ticketError,/);
 assert.doesNotMatch(
   ambiguousTicket.catchBody,
-  /unlockSaleConfirm|enqueue\(\s*['"]sale_order['"]|return;/,
+  /unlockSaleConfirm|enqueue\(\s*['"]sale_order['"]|return;|instanceof\s+Error|\bString\s*\(/,
   'fallar el ticket ambiguo no desbloquea, reencola ni evita la ruta pendiente',
 );
 
@@ -232,6 +264,7 @@ assert.match(
   /Alert\.alert\([\s\S]*?['"`]La venta se confirmó/,
   'la advertencia post-confirmacion debe dejar claro que la venta ya existe',
 );
+assert.match(postConfirmation.catchBody, /safeUnknownErrorMessage\(\s*error,/);
 assert.doesNotMatch(postConfirmation.catchBody, /unlockSaleConfirm|enqueue\(\s*['"]sale_order['"]/);
 assert.match(
   sale.slice(postConfirmation.catchEnd + 1),
@@ -239,9 +272,30 @@ assert.match(
   'un fallo post-confirmacion no debe impedir continuar a checkout/ruta',
 );
 
+const pricelistPhase = tryCatchContaining(
+  sale,
+  'await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });',
+);
+assert.match(pricelistPhase.catchBody, /safeUnknownErrorMessage\(\s*error,/);
+assert.match(
+  pricelistPhase.catchBody,
+  /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);/,
+);
+
+const offrouteClosePhase = tryCatchContaining(
+  sale,
+  'await closeOffrouteVisit({',
+);
+assert.match(offrouteClosePhase.catchBody, /safeUnknownErrorMessage\(\s*error,/);
+
 // Selectores necesarios para persistir el lote retenido y luego iniciar sync.
 assert.match(sale, /const persistQueue\s*=\s*useSyncStore\(\(s\)\s*=>\s*s\.persistQueue\)/);
 assert.match(sale, /const processQueue\s*=\s*useSyncStore\(\(s\)\s*=>\s*s\.processQueue\)/);
 assert.match(sale, /const releaseProcessingHolds\s*=\s*useSyncStore\(\(s\)\s*=>\s*s\.releaseProcessingHolds\)/);
+assert.match(sale, /const saleRecoveryPersistenceFailed\s*=\s*useVisitStore\(\(s\)\s*=>\s*s\.saleRecoveryPersistenceFailed\)/);
+assert.match(
+  sale,
+  /const setSaleRecoveryPersistenceFailed\s*=\s*useVisitStore\(\s*\(s\)\s*=>\s*s\.setSaleRecoveryPersistenceFailed,?\s*\)/,
+);
 
 console.log('sale ambiguous recovery wiring tests: ok');

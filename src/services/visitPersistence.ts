@@ -15,6 +15,7 @@ export interface PersistedVisitSnapshot {
   // duplicate sale with a new operation_id on restart.
   saleConfirmed: boolean;
   saleOperationId: string | null;
+  saleRecoveryPersistenceFailed: boolean;
 }
 
 interface BuildVisitSnapshotInput {
@@ -28,6 +29,7 @@ interface BuildVisitSnapshotInput {
   elapsedSeconds: number;
   saleConfirmed?: boolean;
   saleOperationId?: string | null;
+  saleRecoveryPersistenceFailed?: boolean;
 }
 
 export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVisitSnapshot | null {
@@ -42,6 +44,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     elapsedSeconds,
     saleConfirmed = false,
     saleOperationId = null,
+    saleRecoveryPersistenceFailed = false,
   } = input;
 
   if (!['checked_in', 'selling', 'no_selling'].includes(phase)) return null;
@@ -58,6 +61,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     elapsedSeconds,
     saleConfirmed,
     saleOperationId,
+    saleRecoveryPersistenceFailed,
   };
 }
 

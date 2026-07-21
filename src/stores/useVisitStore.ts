@@ -10,7 +10,11 @@ import { create } from 'zustand';
 import { GFStop } from '../types/plan';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { PersistedVisitSnapshot, buildVisitSnapshot, shouldPersistVisitTick } from '../services/visitPersistence';
-import { buildStartedVisitState, createInitialVisitState } from '../services/visitState';
+import {
+  buildStartedVisitState,
+  createInitialVisitState,
+  restoreSaleRecoveryState,
+} from '../services/visitState';
 import { appendVisitPhotoUri } from '../services/visitPhotos';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
@@ -90,6 +94,7 @@ interface VisitState {
   // V1.2: Anti-duplicate
   saleConfirmed: boolean;        // Prevents double-tap
   saleOperationId: string | null; // Idempotency key for this sale
+  saleRecoveryPersistenceFailed: boolean;
 
   // Computed
   saleSubtotal: () => number;
@@ -104,6 +109,7 @@ interface VisitState {
   // V1.2: Confirm lock
   lockSaleConfirm: () => string; // Returns operationId
   unlockSaleConfirm: () => void;
+  setSaleRecoveryPersistenceFailed: (value: boolean) => void;
 }
 
 const initialState = createInitialVisitState();
@@ -119,6 +125,7 @@ function persistVisitState(state: {
   elapsedSeconds: number;
   saleConfirmed?: boolean;
   saleOperationId?: string | null;
+  saleRecoveryPersistenceFailed?: boolean;
 }) {
   const snapshot = buildVisitSnapshot(state);
   if (snapshot) {
@@ -229,6 +236,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   },
 
   restoreVisit: (snapshot) => {
+    const saleRecoveryState = restoreSaleRecoveryState(snapshot);
     set({
       phase: snapshot.phase,
       currentStopId: snapshot.currentStopId,
@@ -240,8 +248,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       elapsedSeconds: snapshot.elapsedSeconds,
       // P0-2: restore sale confirmation + idempotency key (back-compat: old
       // snapshots without these fields default to not-confirmed).
-      saleConfirmed: snapshot.saleConfirmed ?? false,
-      saleOperationId: snapshot.saleOperationId ?? null,
+      ...saleRecoveryState,
     });
     persistVisitState(snapshot);
   },
@@ -278,14 +285,27 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       return existing;
     }
     const opId = `sale_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    set({ saleConfirmed: true, saleOperationId: opId });
+    set({
+      saleConfirmed: true,
+      saleOperationId: opId,
+      saleRecoveryPersistenceFailed: false,
+    });
     // Persist immediately so a crash right after locking still blocks re-confirm.
     persistVisitState({ ...get() });
     return opId;
   },
 
   unlockSaleConfirm: () => {
-    set({ saleConfirmed: false, saleOperationId: null });
+    set({
+      saleConfirmed: false,
+      saleOperationId: null,
+      saleRecoveryPersistenceFailed: false,
+    });
+    persistVisitState({ ...get() });
+  },
+
+  setSaleRecoveryPersistenceFailed: (value) => {
+    set({ saleRecoveryPersistenceFailed: value });
     persistVisitState({ ...get() });
   },
 }));

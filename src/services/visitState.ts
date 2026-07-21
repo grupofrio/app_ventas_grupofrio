@@ -25,6 +25,23 @@ export interface VisitDataState {
   noSalePhotoUris: string[];
   saleConfirmed: boolean;
   saleOperationId: string | null;
+  saleRecoveryPersistenceFailed: boolean;
+}
+
+export interface PersistedSaleRecoveryState {
+  saleConfirmed?: boolean;
+  saleOperationId?: string | null;
+  saleRecoveryPersistenceFailed?: boolean;
+}
+
+export function restoreSaleRecoveryState(
+  snapshot: PersistedSaleRecoveryState,
+): Pick<VisitDataState, 'saleConfirmed' | 'saleOperationId' | 'saleRecoveryPersistenceFailed'> {
+  return {
+    saleConfirmed: snapshot.saleConfirmed ?? false,
+    saleOperationId: snapshot.saleOperationId ?? null,
+    saleRecoveryPersistenceFailed: snapshot.saleRecoveryPersistenceFailed ?? false,
+  };
 }
 
 export function createInitialVisitState(): VisitDataState {
@@ -53,6 +70,7 @@ export function createInitialVisitState(): VisitDataState {
     noSalePhotoUris: [],
     saleConfirmed: false,
     saleOperationId: null,
+    saleRecoveryPersistenceFailed: false,
   };
 }
 

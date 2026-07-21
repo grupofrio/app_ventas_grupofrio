@@ -40,6 +40,16 @@ interface VisitStateModule {
     noSalePhotoUris: [];
     saleConfirmed: false;
     saleOperationId: null;
+    saleRecoveryPersistenceFailed: false;
+  };
+  restoreSaleRecoveryState: (snapshot: {
+    saleConfirmed?: boolean;
+    saleOperationId?: string | null;
+    saleRecoveryPersistenceFailed?: boolean;
+  }) => {
+    saleConfirmed: boolean;
+    saleOperationId: string | null;
+    saleRecoveryPersistenceFailed: boolean;
   };
 }
 
@@ -76,6 +86,28 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.deepEqual(started.noSalePhotoUris, []);
   assert.equal(started.saleConfirmed, false);
   assert.equal(started.saleOperationId, null);
+  assert.equal(started.saleRecoveryPersistenceFailed, false);
+}
+
+function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-old',
+  }), {
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-old',
+    saleRecoveryPersistenceFailed: false,
+  });
+
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-blocked',
+    saleRecoveryPersistenceFailed: true,
+  }), {
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-blocked',
+    saleRecoveryPersistenceFailed: true,
+  });
 }
 
 async function main() {
@@ -86,6 +118,7 @@ async function main() {
   ) as VisitStateModule;
 
   testStartedVisitBeginsFromCleanTransactionalState(module);
+  testRestoresSaleRecoveryStateWithBackcompat(module);
   console.log('visit state tests: ok');
 }
 

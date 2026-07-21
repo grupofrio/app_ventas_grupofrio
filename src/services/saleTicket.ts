@@ -1,4 +1,12 @@
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
+import {
+  formatQuantity,
+  formatTicketCurrency,
+  formatTicketDate,
+  normalizeSellerName,
+} from './saleTicketFormatting.ts';
+
+export { SALE_TICKET_DEFAULT_SELLER } from './saleTicketFormatting.ts';
 
 export type SaleTicketPaymentMethod = 'cash' | 'credit' | 'transfer' | 'unknown';
 
@@ -70,7 +78,6 @@ export interface SaleTicketSnapshot {
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
 export const SALE_TICKET_LEGAL_NAME = SALE_TICKET_BRANDING.legalName;
 export const SALE_TICKET_RFC = SALE_TICKET_BRANDING.rfcLabel.replace(/^RFC:\s*/, '');
-export const SALE_TICKET_DEFAULT_SELLER = 'Vendedor no especificado';
 export const SALE_TICKET_CREDIT_NOTE =
   `Pagare: me obligo a cubrir a favor de Grupo Frio / ${SALE_TICKET_LEGAL_NAME}, RFC ${SALE_TICKET_RFC}, la cantidad total indicada en este ticket. Si no se cubre puntualmente, pagare intereses moratorios conforme a la politica vigente.`;
 
@@ -309,15 +316,6 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function formatQuantity(qty: number): string {
-  return Number.isInteger(qty) ? String(qty) : qty.toFixed(2);
-}
-
-function normalizeSellerName(value: string | undefined): string {
-  const normalized = (value ?? '').trim();
-  return normalized || SALE_TICKET_DEFAULT_SELLER;
-}
-
 function getPaymentLabel(paymentMethod: SaleTicketPaymentMethod): string {
   if (paymentMethod === 'cash') return 'Efectivo';
   if (paymentMethod === 'credit') return 'Credito';
@@ -331,24 +329,4 @@ function normalizePaymentMethod(value: string | undefined): SaleTicketPaymentMet
   if (['credit', 'credito', 'crédito'].includes(normalized)) return 'credit';
   if (['transfer', 'transferencia', 'bank_transfer'].includes(normalized)) return 'transfer';
   return 'unknown';
-}
-
-function formatTicketCurrency(amount: number): string {
-  const safe = typeof amount === 'number' && !Number.isNaN(amount) ? amount : 0;
-  return `$${safe.toLocaleString('es-MX', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatTicketDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('es-MX', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }

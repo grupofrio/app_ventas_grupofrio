@@ -124,6 +124,9 @@ export const STORAGE_KEYS = {
   // red hasta lograr un loadProducts exitoso (entonces se limpia).
   LEGACY_REFRESH_PENDING: 'sync:legacyRefreshPending',
 
+  // Preferences
+  THERMAL_PRINTER: 'preferences:thermalPrinter',
+
   // Timestamps
   LAST_FULL_SYNC: 'meta:lastFullSync',
 } as const;

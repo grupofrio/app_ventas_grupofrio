@@ -72,7 +72,12 @@ import {
 } from '../services/legacyRefillUnloadMigration';
 import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
 import { applySyncEnqueue } from '../services/syncEnqueue';
-import { createSyncProcessingHolds } from '../services/syncProcessingHolds';
+import {
+  createSyncCycleMetrics,
+  createSyncProcessingHolds,
+  runUnlessProcessingHeld,
+  runUnheldProcessingChunk,
+} from '../services/syncProcessingHolds';
 
 // ═══ Constants ═══
 
@@ -527,18 +532,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     set({ isSyncing: true });
     const cycleStart = Date.now();
-    let processed = 0;
-    let succeeded = 0;
-    let failed = 0;
+    const cycleTally = createSyncCycleMetrics();
+    let gpsDispatched = 0;
     // P1 (Codex): un ítem legacy DIFERIDO por fallo de persistencia final NO debe
     // disparar drain_now (redrenaje agresivo si el storage sigue fallando). Se
     // rastrea aquí y se usa en la decisión post-ciclo para forzar backoff.
     let hadDeferredStorageFailure = false;
-    const tally = (o: ProcessItemOutcome): void => {
-      processed++;
-      if (o === 'handled') succeeded++;
-      else if (o === 'deferred') hadDeferredStorageFailure = true;
-      else failed++; // 'failed' | 'dependency_wait'
+    const tally = (item: SyncQueueItem, outcome: ProcessItemOutcome): void => {
+      if (outcome === 'deferred') hadDeferredStorageFailure = true;
+      cycleTally.recordOutcome(item.priority, outcome);
     };
 
     logInfo('sync', 'cycle_start', { candidates: candidates.length });
@@ -558,16 +560,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
       const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
-        tally(await processOneItem(item, get, set));
+        tally(item, await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,
         // we don't stop the whole cycle — other independent items can proceed.
       }
 
       // ── STEP 3: Process P2 (media) — serial, FIFO ──
       const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
-        .slice(0, MAX_ITEMS_PER_CYCLE - processed);
+        .slice(0, MAX_ITEMS_PER_CYCLE - cycleTally.snapshot().processed);
       for (const item of orderedP2) {
-        tally(await processOneItem(item, get, set));
+        tally(item, await processOneItem(item, get, set));
       }
 
       // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
@@ -579,42 +581,41 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // GPS: batch processing
       if (gpsItems.length > 0) {
         const gpsResult = await processGpsBatch(gpsItems, get, set);
-        processed += gpsResult.processed;
-        succeeded += gpsResult.succeeded;
-        failed += gpsResult.failed;
+        cycleTally.recordBatch(3, gpsResult);
+        gpsDispatched += gpsResult.processed;
       }
 
       // Other P3 (client_event etc): serial
-      for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
-        tally(await processOneItem(item, get, set));
+      for (const item of otherP3.slice(
+        0,
+        MAX_ITEMS_PER_CYCLE - cycleTally.snapshot().processed,
+      )) {
+        tally(item, await processOneItem(item, get, set));
       }
 
       // ── End of cycle ──
       const cycleEnd = Date.now();
+      const cycleCounts = cycleTally.snapshot();
       const metrics: CycleMetrics = {
         cycle_start: cycleStart,
         cycle_end: cycleEnd,
         cycle_duration_ms: cycleEnd - cycleStart,
-        items_processed: processed,
-        items_succeeded: succeeded,
-        items_failed: failed,
-        items_by_priority: {
-          1: orderedP1.length,
-          2: orderedP2.length,
-          3: gpsItems.length + otherP3.length,
-        },
+        items_processed: cycleCounts.processed,
+        items_succeeded: cycleCounts.succeeded,
+        items_failed: cycleCounts.failed,
+        items_by_priority: cycleCounts.itemsByPriority,
       };
       set({ lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
 
       logInfo('sync', 'cycle_complete', {
         duration_ms: metrics.cycle_duration_ms,
-        processed,
-        succeeded,
-        failed,
-        p1: orderedP1.length,
-        p2: orderedP2.length,
-        p3_gps: gpsItems.length,
-        p3_other: otherP3.length,
+        processed: cycleCounts.processed,
+        succeeded: cycleCounts.succeeded,
+        failed: cycleCounts.failed,
+        p1: cycleCounts.itemsByPriority[1],
+        p2: cycleCounts.itemsByPriority[2],
+        p3_gps: gpsDispatched,
+        p3_other: cycleCounts.itemsByPriority[3] - gpsDispatched,
       });
 
       // Photo janitor (fire-and-forget, unchanged from V1)
@@ -913,11 +914,20 @@ async function processOneItem(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): Promise<ProcessItemOutcome> {
-  if (processingHolds.isHeld(item.id)) {
-    logInfo('sync', 'processing_hold_wait', { id: item.id, type: item.type });
-    return 'dependency_wait';
-  }
+  return runUnlessProcessingHeld({
+    registry: processingHolds,
+    id: item.id,
+    heldResult: 'dependency_wait' as ProcessItemOutcome,
+    onHeld: () => logInfo('sync', 'processing_hold_wait', { id: item.id, type: item.type }),
+    run: () => processOneItemUnheld(item, get, set),
+  });
+}
 
+async function processOneItemUnheld(
+  item: SyncQueueItem,
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+): Promise<ProcessItemOutcome> {
   // Guard temporal (compat una versión): un evento legacy de recarga/devolución
   // que haya quedado en la cola NUNCA se envía a ningún endpoint. Se migra con la
   // MISMA operación durable que el rehidratado.
@@ -998,30 +1008,43 @@ async function processGpsBatch(
   const chunks = chunkArray(items, GPS_BATCH_SIZE);
 
   for (const chunk of chunks) {
-    const dispatchChunk = processingHolds.withoutHeld(chunk);
-    if (dispatchChunk.length === 0) continue;
+    const chunkResult = await runUnheldProcessingChunk({
+      registry: processingHolds,
+      items: chunk,
+      run: async (dispatchChunk) => {
+        // Mark only the freshly re-filtered subchunk as syncing.
+        const ids = new Set(dispatchChunk.map((i) => i.id));
+        const updatedQueue = get().queue.map((i) =>
+          ids.has(i.id) ? { ...i, status: 'syncing' as SyncItemStatus } : i
+        );
+        set({ queue: updatedQueue });
 
-    // Mark all as syncing
-    const ids = new Set(dispatchChunk.map((i) => i.id));
-    const updatedQueue = get().queue.map((i) =>
-      ids.has(i.id) ? { ...i, status: 'syncing' as SyncItemStatus } : i
-    );
-    set({ queue: updatedQueue });
-
-    try {
-      await tryGpsBatchCreate(dispatchChunk);
-      for (const item of dispatchChunk) {
-        get().markDone(item.id);
-        succeeded++;
-      }
-      processed += dispatchChunk.length;
-    } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : 'GPS sync error';
-      for (const item of dispatchChunk) {
-        handleGpsItemError(item, errMsg, get, set);
-        failed++;
-      }
-      processed += dispatchChunk.length;
+        let chunkSucceeded = 0;
+        let chunkFailed = 0;
+        try {
+          await tryGpsBatchCreate(dispatchChunk);
+          for (const item of dispatchChunk) {
+            get().markDone(item.id);
+            chunkSucceeded++;
+          }
+        } catch (e: unknown) {
+          const errMsg = e instanceof Error ? e.message : 'GPS sync error';
+          for (const item of dispatchChunk) {
+            handleGpsItemError(item, errMsg, get, set);
+            chunkFailed++;
+          }
+        }
+        return {
+          processed: dispatchChunk.length,
+          succeeded: chunkSucceeded,
+          failed: chunkFailed,
+        };
+      },
+    });
+    if (chunkResult.dispatched) {
+      processed += chunkResult.result.processed;
+      succeeded += chunkResult.result.succeeded;
+      failed += chunkResult.result.failed;
     }
   }
 

@@ -926,9 +926,10 @@ function deferLegacyEvents(
 // Resultado explícito del procesador de un ítem (P1 Codex):
 //  - 'handled'         → completado (o descartado con reparación durable); cuenta éxito.
 //  - 'failed'          → error real (markError/markDead); cuenta fallo.
-//  - 'deferred'        → legacy cuya persistencia final falló: sigue en cola con
-//                        backoff, NO manejado, NO enviado, NO re-revertido, y NO
-//                        debe disparar drain_now.
+//  - 'deferred'        → persistencia local pendiente: migración legacy aún no
+//                        completada, o venta ya procesada remotamente cuyo terminal
+//                        marker local sigue pendiente. No cuenta como handled/failed
+//                        ni debe disparar drain_now; permanece en cola con backoff.
 //  - 'dependency_wait' → esperando una dependencia; no es fallo real.
 type ProcessItemOutcome = 'handled' | 'failed' | 'deferred' | 'dependency_wait';
 

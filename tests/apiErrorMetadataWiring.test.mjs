@@ -16,7 +16,7 @@ test('postRest preserves structured response and transport error metadata', () =
   assert.notEqual(outerCatch, '', 'postRest outer transport catch must be isolated');
   assert.match(
     api,
-    /import\s*{\s*makeApiResponseError,\s*makeApiTransportError\s*}\s*from\s*['"]\.\/apiRequestError['"];?/,
+    /import\s*{[^}]*makeApiResponseError,[^}]*makeApiTransportError,[^}]*}\s*from\s*['"]\.\/apiRequestError['"];?/,
     'api.ts must import the structured request-error factories',
   );
   assert.match(
@@ -46,9 +46,10 @@ test('postRest preserves structured response and transport error metadata', () =
   );
   assert.match(
     outerCatch,
-    /responseStatus === undefined\s*\? makeApiTransportError\(error\)\s*:\s*makeApiResponseError\(error, 'Error de solicitud', responseStatus\)/,
-    'the outer catch must distinguish pre-response transport failures from post-response failures',
+    /getApiErrorCode\(error\) === 'invalid_response'[\s\S]*?makeApiTransportError\(error\)[\s\S]*?makeApiResponseError\(error, 'Error de solicitud', responseStatus\)/,
+    'the outer catch must preserve invalid responses and distinguish transport from parsed response failures',
   );
+  assert.match(postRestBlock, /readPostRestResponseText\(response\)/);
 });
 
 test('getRest retains its legacy message-only error handling', () => {

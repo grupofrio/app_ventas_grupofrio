@@ -123,7 +123,7 @@ assert(
 );
 assert.match(
   lockBarrierPhase.tryBody,
-  /await persistSaleConfirmationLock\(operationId\)/,
+  /await persistSaleConfirmationLock\(operationId, recoveryIntent\)/,
 );
 assert.match(lockBarrierPhase.tryBody, /if \(!lockPersisted\)/);
 const lockFailedFlagIndex = lockBarrierPhase.catchBody.indexOf(
@@ -268,7 +268,9 @@ const definitive = blockAfter(
   "if (outcome.kind === 'definitive_rejection')",
 );
 assert.match(definitive.body, /setSaleSubmitting\(false\)/);
-assert.match(definitive.body, /unlockSaleConfirm\(\)/);
+assert.match(definitive.body, /await clearSaleConfirmationLock\(operationId\)/);
+assert.doesNotMatch(definitive.body, /unlockSaleConfirm\(\)/);
+assert.match(definitive.body, /sale_definitive_clear_persist_failed/);
 assert.match(definitive.body, /getInsufficientStockDetail\(error\)/);
 assert.match(definitive.body, /describeInsufficientStock\(insufficient\)/);
 assert.match(definitive.body, /void loadProducts\(warehouseId\)/);
@@ -279,12 +281,12 @@ const recoveryPhase = tryCatchContaining(
   createPhase.catchBody,
   'await persistAmbiguousSaleRecovery({',
 );
-assert.match(recoveryPhase.tryBody, /operationId,/);
-assert.match(recoveryPhase.tryBody, /payload,/);
-assert.match(recoveryPhase.tryBody, /customerName:\s*stop\.customer_name/);
-assert.match(recoveryPhase.tryBody, /total,/);
-assert.match(recoveryPhase.tryBody, /stopId:\s*stop\.id/);
-assert.match(recoveryPhase.tryBody, /photoUris:\s*salePhotoUris/);
+assert.match(recoveryPhase.tryBody, /operationId:\s*recoveryIntent\.operationId/);
+assert.match(recoveryPhase.tryBody, /payload:\s*recoveryIntent\.queuePayload/);
+assert.match(recoveryPhase.tryBody, /customerName:\s*recoveryIntent\.ticketSnapshot\.customerName/);
+assert.match(recoveryPhase.tryBody, /total:\s*recoveryIntent\.ticketSnapshot\.total/);
+assert.match(recoveryPhase.tryBody, /stopId:\s*recoveryIntent\.stopId/);
+assert.match(recoveryPhase.tryBody, /photoUris:\s*recoveryIntent\.photoUris/);
 assert.match(recoveryPhase.tryBody, /enqueue,/);
 assert.match(recoveryPhase.tryBody, /persistQueue,/);
 assert.match(recoveryPhase.tryBody, /releaseProcessingHolds,/);
@@ -347,7 +349,7 @@ const ambiguousSuccess = createPhase.catchBody.slice(recoveryPhase.catchEnd + 1)
 assert.match(ambiguousSuccess, /saleOperationId:\s*operationId/);
 assert.match(
   ambiguousSuccess,
-  /buildSaleTicketSnapshot\(\{[\s\S]*?saleId:\s*operationId/,
+  /saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/,
   'ticket ambiguo usa el identificador original',
 );
 assert.match(
@@ -361,7 +363,7 @@ assert.match(ambiguousSuccess, /return;/);
 
 const ambiguousTicket = tryCatchContaining(
   createPhase.catchBody,
-  'await saveSaleTicketSnapshot(buildSaleTicketSnapshot({',
+  'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
 );
 assert.match(
   ambiguousTicket.catchBody,

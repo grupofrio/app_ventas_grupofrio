@@ -20,6 +20,7 @@ interface VisitPersistenceModule {
     saleOperationId?: string | null;
     saleReadyToContinue?: boolean;
     saleRecoveryPersistenceFailed?: boolean;
+    saleRecoveryIntent?: unknown;
   }) => null | {
     phase: string;
     currentStopId: number;
@@ -33,6 +34,7 @@ interface VisitPersistenceModule {
     saleOperationId: string | null;
     saleReadyToContinue: boolean;
     saleRecoveryPersistenceFailed: boolean;
+    saleRecoveryIntent: unknown;
   };
   shouldRehydrateVisit: (
     snapshot: { currentStopId: number } | null,
@@ -82,7 +84,55 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   });
+}
+
+function testPendingConfirmationNeverPersistsWithoutMatchingIntent(module: VisitPersistenceModule) {
+  const base = {
+    phase: 'selling' as const,
+    currentStopId: 15,
+    currentStop: {
+      id: 15,
+      customer_id: 200,
+      customer_name: 'Abarrotes Centro',
+      state: 'in_progress',
+      source_model: 'gf.route.stop' as const,
+    },
+    offrouteVisitId: null,
+    checkInTime: 123456,
+    checkInLat: null,
+    checkInLon: null,
+    elapsedSeconds: 5,
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-1',
+    saleReadyToContinue: false,
+  };
+
+  const lockOnly = module.buildVisitSnapshot(base);
+  assert.ok(lockOnly);
+  assert.equal(lockOnly.saleConfirmed, false);
+  assert.equal(lockOnly.saleOperationId, null);
+  assert.equal(lockOnly.saleRecoveryIntent, null);
+
+  const ticketSnapshot = {
+    saleId: 'sale-op-1', customerName: 'Cliente', sellerName: 'Vendedor',
+    paymentMethod: 'cash', paymentLabel: 'Efectivo', createdAt: '2026-07-21T10:00:00.000Z',
+    lines: [], subtotal: 100, total: 100, totalKg: 10,
+  };
+  const saleRecoveryIntent = {
+    version: 1,
+    operationId: 'sale-op-1',
+    queuePayload: { _operationId: 'sale-op-1', _clientCustomerName: 'Cliente', _clientTotal: 100 },
+    stopId: 15,
+    photoUris: ['file://sale.jpg'],
+    ticketSnapshot,
+  };
+  const recoverable = module.buildVisitSnapshot({ ...base, saleRecoveryIntent });
+  assert.ok(recoverable);
+  assert.equal(recoverable.saleConfirmed, true);
+  assert.equal(recoverable.saleOperationId, 'sale-op-1');
+  assert.deepEqual(recoverable.saleRecoveryIntent, saleRecoveryIntent);
 }
 
 // P0-2: snapshot must carry sale confirmation + idempotency key.
@@ -191,6 +241,7 @@ async function main() {
   ) as VisitPersistenceModule;
 
   testBuildActiveVisitSnapshot(module);
+  testPendingConfirmationNeverPersistsWithoutMatchingIntent(module);
   testSnapshotCarriesSaleConfirmation(module);
   testIdleVisitDoesNotPersist(module);
   testRehydrateRequiresInProgressStop(module);

@@ -85,6 +85,10 @@ import {
   processSyncItemToCompletion,
 } from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
+import {
+  applySaleDefinitiveClearDeferral,
+  gateSaleDefinitiveFailure,
+} from '../services/saleDefinitiveFailure';
 
 // ═══ Constants ═══
 
@@ -514,9 +518,6 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         total: restored.length,
         syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
       });
-      // Arma el despertador de backoff para ítems en error rehidratados, que de
-      // otro modo esperarían a un enqueue o a un flanco de reconexión.
-      get().scheduleWake();
     }
     // Rehidrata la bandera DURABLE de refresh autoritativo pendiente: si una
     // migración previa retiró eventos legacy pero la app cerró (o el refresh
@@ -1020,6 +1021,30 @@ async function processOneItemUnheld(
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
     const shouldRetry = shouldRetrySyncItemError(item.type, error);
+
+    if (!shouldRetry) {
+      const definitiveGate = await gateSaleDefinitiveFailure({
+        item,
+        clearMatchingVisit: (operationId) =>
+          useVisitStore.getState().clearSaleConfirmationLock(operationId),
+      });
+      if (definitiveGate === 'deferred') {
+        const backoffMs = calculateBackoff(0);
+        const retryAt = Date.now() + backoffMs;
+        const deferredQueue = applySaleDefinitiveClearDeferral(
+          get().queue,
+          item.id,
+          retryAt,
+        );
+        set({ queue: deferredQueue, ...computeCounts(deferredQueue) });
+        schedulePersist();
+        logWarn('sync', 'sale_definitive_clear_deferred', {
+          id: item.id,
+          delay_ms: backoffMs,
+        });
+        return 'deferred';
+      }
+    }
 
     if (!shouldRetry || newRetries >= MAX_RETRIES) {
       get().markDead(item.id, msg, newRetries);

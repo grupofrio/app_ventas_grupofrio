@@ -70,19 +70,17 @@ assert(sale.includes('await createSale('), 'venta online usa createSale directo'
 
 // #3 OFFLINE (S1): el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
-assert(/enqueue\(\s*['"]sale_order['"]/.test(sale), 'offline debe encolar el pedido como sale_order');
 assert.match(
   sale,
-  /const enqId = enqueue\(\s*['"]sale_order['"],[\s\S]*?\},\s*\{\s*operationId\s*\}\s*\);/,
-  'offline debe reutilizar el operationId durable del lock como id de cola',
+  /if \(!isOnline\) \{[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?operationId:\s*recoveryIntent\.operationId/,
+  'offline debe materializar durablemente el intent con el mismo operationId',
 );
 assert.doesNotMatch(
   sale,
   /useVisitStore\.setState\(\{\s*saleOperationId:\s*enqId\s*\}\)/,
   'offline no corrige el operationId sólo en memoria después de encolar',
 );
-assert(sale.includes('enqueueVisitPhotos'), 'venta debe usar el helper compartido para encolar evidencia');
-assert(/imageType:\s*['"]sale['"]/.test(sale), 'venta debe marcar la evidencia como imagen de venta');
+assert(sale.includes('persistAmbiguousSaleRecovery'), 'venta debe usar el lote durable compartido para pedido y evidencia');
 assert(!sale.includes('salePhotoUris[0]'), 'venta debe encolar todas las fotos capturadas, no solo la primera');
 const offlineIdx = sale.indexOf('if (!isOnline) {');
 const createIdx = sale.indexOf('await createSale(');
@@ -105,7 +103,7 @@ assert(!/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
 assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?saveSaleTicketSnapshot/.test(sale),
   'online: snapshot del ticket después de createSale');
-assert(/sellerName:\s*employeeName/.test(sale), 'el ticket guarda el vendedor (employeeName)');
+assert(/sellerName:\s*employeeName/.test(sale), 'el intent del ticket guarda el vendedor (employeeName)');
 
 // #5 insufficient_stock: el catch usa el detalle y refresca inventario real.
 assert(sale.includes('getInsufficientStockDetail'), 'el catch debe parsear insufficient_stock');

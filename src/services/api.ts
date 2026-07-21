@@ -10,7 +10,14 @@ import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
 import { detectFunctionalErrorMessage } from '../utils/rpcEnvelope';
-import { makeApiResponseError, makeApiTransportError } from './apiRequestError';
+import {
+  getApiErrorMessage,
+  getApiErrorCode,
+  hasApiErrorFlag,
+  makeApiResponseError,
+  makeApiTransportError,
+} from './apiRequestError';
+import { readPostRestResponseText } from './postRestResponse';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
@@ -238,7 +245,7 @@ export async function postRest<T = any>(
     }, options.timeoutMs);
     responseStatus = response.status;
 
-    const text = await response.text();
+    const text = await readPostRestResponseText(response);
     const parsed = safeParseJson(text);
     let resultPayload: T | undefined;
     const durationMs = Date.now() - startedAt;
@@ -249,7 +256,7 @@ export async function postRest<T = any>(
       resultPayload = unwrapRestResult(parsed, response.status) as T;
     } catch (error) {
       resultError = error;
-      errorMessage = error instanceof Error ? error.message : String(error);
+      errorMessage = getApiErrorMessage(error, 'Error de solicitud');
     }
 
     const trace = buildHttpTraceData({
@@ -278,12 +285,14 @@ export async function postRest<T = any>(
 
     return resultPayload as T;
   } catch (error) {
-    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
+    if (hasApiErrorFlag(error, '__alreadyLogged')) {
       throw error;
     }
-    const requestError = responseStatus === undefined
-      ? makeApiTransportError(error)
-      : makeApiResponseError(error, 'Error de solicitud', responseStatus);
+    const requestError = responseStatus !== undefined && getApiErrorCode(error) === 'invalid_response'
+      ? error as ReturnType<typeof makeApiResponseError>
+      : responseStatus === undefined
+        ? makeApiTransportError(error)
+        : makeApiResponseError(error, 'Error de solicitud', responseStatus);
     logError('api', 'http_error', buildHttpTraceData({
       phase: 'error',
       channel: 'rest',
@@ -291,7 +300,7 @@ export async function postRest<T = any>(
       url: absoluteUrl,
       requestId,
       durationMs: Date.now() - startedAt,
-      errorMessage: requestError.message,
+      errorMessage: getApiErrorMessage(requestError, 'Error de solicitud'),
     }));
     throw requestError;
   }

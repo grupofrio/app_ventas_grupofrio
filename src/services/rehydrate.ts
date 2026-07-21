@@ -30,6 +30,8 @@ import {
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 import { todayLocalISO } from '../utils/localDate';
 import { requestLegacyAuthoritativeRefresh } from './connectivity';
+import { recoverPersistedSaleIntent } from './saleRehydrateRecovery';
+import { saveSaleTicketSnapshot } from './saleTicketStorage';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -98,6 +100,24 @@ export async function rehydrateAppState(): Promise<{
         const visitSnapshot = await storeLoad<PersistedVisitSnapshot>(STORAGE_KEYS.VISIT_STATE);
         if (shouldRehydrateVisit(visitSnapshot, stops)) {
           useVisitStore.getState().restoreVisit(visitSnapshot!);
+          const visit = useVisitStore.getState();
+          try {
+            await recoverPersistedSaleIntent({
+              saleConfirmed: visit.saleConfirmed,
+              saleReadyToContinue: visit.saleReadyToContinue,
+              intent: visit.saleRecoveryIntent,
+              queue: useSyncStore.getState().queue,
+              enqueue: useSyncStore.getState().enqueue,
+              persistQueue: useSyncStore.getState().persistQueue,
+              releaseProcessingHolds: useSyncStore.getState().releaseProcessingHolds,
+              saveTicket: saveSaleTicketSnapshot,
+            });
+          } catch (error) {
+            // Current-process fail-closed flag only. The durable intent remains
+            // unchanged, so the next app start retries materialization.
+            useVisitStore.setState({ saleRecoveryPersistenceFailed: true });
+            console.error('[rehydrate] Sale recovery failed:', error);
+          }
         } else {
           await storeRemove(STORAGE_KEYS.VISIT_STATE);
         }
@@ -143,6 +163,12 @@ export async function rehydrateAppState(): Promise<{
     // futura de NetInfo. El runner protege por pending/online/warehouse/in-flight,
     // así que también intenta en arranque-online; reconexión/foreground reintentan.
     requestLegacyAuthoritativeRefresh();
+
+    // This is the only startup wake. It runs after the visit snapshot and any
+    // missing sale recovery batch are restored, so a queued sale cannot finish
+    // against the store's initial (irrelevant) visit state.
+    useSyncStore.getState().scheduleWake();
+    queueSize = useSyncStore.getState().pendingCount;
 
     console.log(
       `[rehydrate] Done: queue=${queueSize}, plan=${hasPlan}, products=${productCount}, prices=${restoredPrices}`

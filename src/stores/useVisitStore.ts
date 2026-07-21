@@ -21,6 +21,10 @@ import {
   VisitStatePersistenceCoordinator,
 } from '../services/visitStatePersistence';
 import { logError } from '../utils/logger';
+import {
+  createSaleRecoveryIntent,
+  type SaleRecoveryIntentV1,
+} from '../services/saleRecoveryIntent';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -101,6 +105,7 @@ interface VisitState {
   saleOperationId: string | null; // Idempotency key for this sale
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
+  saleRecoveryIntent: SaleRecoveryIntentV1 | null;
 
   // Computed
   saleSubtotal: () => number;
@@ -116,11 +121,15 @@ interface VisitState {
   lockSaleConfirm: () => string; // Returns operationId
   unlockSaleConfirm: () => void;
   setSaleRecoveryPersistenceFailed: (value: boolean) => void;
-  persistSaleConfirmationLock: (operationId: string) => Promise<boolean>;
+  persistSaleConfirmationLock: (
+    operationId: string,
+    intent: SaleRecoveryIntentV1,
+  ) => Promise<boolean>;
   markSaleReadyToContinue: (
     operationId: string,
     options?: { clearOperationId?: boolean },
   ) => Promise<boolean>;
+  clearSaleConfirmationLock: (operationId: string) => Promise<boolean>;
 }
 
 const initialState = createInitialVisitState();
@@ -298,9 +307,10 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       saleOperationId: opId,
       saleReadyToContinue: false,
       saleRecoveryPersistenceFailed: false,
+      saleRecoveryIntent: null,
     });
-    // Persist immediately so a crash right after locking still blocks re-confirm.
-    persistVisitStateInBackground('lock_sale_confirm');
+    // The complete lock + recovery intent is persisted by the strict barrier.
+    // A background write here could serialize a lock-only crash state.
     return opId;
   },
 
@@ -310,6 +320,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       saleOperationId: null,
       saleReadyToContinue: false,
       saleRecoveryPersistenceFailed: false,
+      saleRecoveryIntent: null,
     });
     persistVisitStateInBackground('unlock_sale_confirm');
   },
@@ -319,9 +330,15 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     persistVisitStateInBackground('set_sale_recovery_persistence_failed');
   },
 
-  persistSaleConfirmationLock: (operationId) =>
-    visitStatePersistence.persistSaleConfirmationLock(operationId),
+  persistSaleConfirmationLock: (operationId, intent) =>
+    visitStatePersistence.persistSaleConfirmationLock(
+      operationId,
+      createSaleRecoveryIntent(intent),
+    ),
 
   markSaleReadyToContinue: (operationId, options) =>
     visitStatePersistence.markSaleReadyToContinue(operationId, options),
+
+  clearSaleConfirmationLock: (operationId) =>
+    visitStatePersistence.clearSaleConfirmationLock(operationId),
 }));

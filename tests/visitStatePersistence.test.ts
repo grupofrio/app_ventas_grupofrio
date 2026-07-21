@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createVisitStatePersistenceCoordinator } from '../src/services/visitStatePersistence.ts';
+import type { SaleRecoveryIntentV1 } from '../src/services/saleRecoveryIntent.ts';
 
 interface TestVisitState {
   saleConfirmed: boolean;
   saleOperationId: string | null;
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
+  saleRecoveryIntent: SaleRecoveryIntentV1 | null;
 }
 
 interface Deferred<T> {
@@ -60,6 +62,18 @@ const activeSale: TestVisitState = {
   saleOperationId: 'sale-current',
   saleReadyToContinue: false,
   saleRecoveryPersistenceFailed: false,
+  saleRecoveryIntent: {
+    version: 1,
+    operationId: 'sale-current',
+    queuePayload: { _operationId: 'sale-current', _clientCustomerName: 'Cliente', _clientTotal: 100 },
+    stopId: 44,
+    photoUris: ['file://sale.jpg'],
+    ticketSnapshot: {
+      saleId: 'sale-current', customerName: 'Cliente', sellerName: 'Vendedor',
+      paymentMethod: 'cash', paymentLabel: 'Efectivo', createdAt: '2026-07-21T10:00:00.000Z',
+      lines: [], subtotal: 100, total: 100, totalKg: 10,
+    },
+  },
 };
 
 test('a queued background write cannot overwrite the terminal marker', async () => {
@@ -116,6 +130,7 @@ test('the terminal marker publishes only after a successful strict write', async
   assert.equal(harness.getState().saleReadyToContinue, true);
   assert.equal(harness.getState().saleOperationId, null);
   assert.equal(harness.getState().saleRecoveryPersistenceFailed, false);
+  assert.equal(harness.getState().saleRecoveryIntent, null);
 });
 
 test('the terminal marker returns false when the active visit changes during its write', async () => {
@@ -205,7 +220,10 @@ test('the durable lock barrier waits behind an older background write', async ()
 
   const backgroundWrite = harness.coordinator.persistCurrent();
   await firstWriteStarted.promise;
-  const lockBarrier = harness.coordinator.persistSaleConfirmationLock('sale-current');
+  const lockBarrier = harness.coordinator.persistSaleConfirmationLock(
+    'sale-current',
+    activeSale.saleRecoveryIntent!,
+  );
   assert.deepEqual(events, ['write-1-start']);
 
   releaseFirstWrite.resolve();
@@ -226,7 +244,7 @@ test('the durable lock barrier waits behind an older background write', async ()
 test('the durable lock barrier rejects stale or already-terminal sale state', async () => {
   const staleHarness = createHarness(activeSale);
   assert.equal(
-    await staleHarness.coordinator.persistSaleConfirmationLock('sale-old'),
+    await staleHarness.coordinator.persistSaleConfirmationLock('sale-old', activeSale.saleRecoveryIntent!),
     false,
   );
   assert.deepEqual(staleHarness.writes, []);
@@ -236,8 +254,57 @@ test('the durable lock barrier rejects stale or already-terminal sale state', as
     saleReadyToContinue: true,
   });
   assert.equal(
-    await terminalHarness.coordinator.persistSaleConfirmationLock('sale-current'),
+    await terminalHarness.coordinator.persistSaleConfirmationLock(
+      'sale-current',
+      activeSale.saleRecoveryIntent!,
+    ),
     false,
   );
   assert.deepEqual(terminalHarness.writes, []);
+});
+
+test('the durable lock barrier stages and saves the matching recovery intent atomically', async () => {
+  const initial = { ...activeSale, saleRecoveryIntent: null };
+  const harness = createHarness(initial);
+
+  assert.equal(await harness.coordinator.persistSaleConfirmationLock(
+    'sale-current',
+    activeSale.saleRecoveryIntent!,
+  ), true);
+
+  assert.equal(harness.writes.length, 1);
+  assert.deepEqual(harness.writes[0].saleRecoveryIntent, activeSale.saleRecoveryIntent);
+  assert.deepEqual(harness.getState().saleRecoveryIntent, activeSale.saleRecoveryIntent);
+});
+
+test('a failed lock-and-intent write never publishes a lock-only recovery state', async () => {
+  const initial = { ...activeSale, saleRecoveryIntent: null };
+  const harness = createHarness(initial);
+  harness.setWrite(async (snapshot) => {
+    harness.writes.push({ ...snapshot });
+    throw new Error('uncertain storage failure');
+  });
+
+  await assert.rejects(harness.coordinator.persistSaleConfirmationLock(
+    'sale-current',
+    activeSale.saleRecoveryIntent!,
+  ));
+
+  assert.equal(harness.writes[0].saleRecoveryIntent?.operationId, 'sale-current');
+  assert.equal(harness.getState().saleRecoveryIntent, null);
+});
+
+test('strict definitive clear removes the matching lock and intent only after save', async () => {
+  const harness = createHarness(activeSale);
+
+  assert.equal(await harness.coordinator.clearSaleConfirmationLock('sale-current'), true);
+  assert.equal(harness.writes[0].saleConfirmed, false);
+  assert.equal(harness.writes[0].saleOperationId, null);
+  assert.equal(harness.writes[0].saleRecoveryIntent, null);
+  assert.equal(harness.getState().saleConfirmed, false);
+  assert.equal(harness.getState().saleRecoveryIntent, null);
+
+  const other = createHarness(activeSale);
+  assert.equal(await other.coordinator.clearSaleConfirmationLock('sale-other'), false);
+  assert.deepEqual(other.writes, []);
 });

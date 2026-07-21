@@ -42,17 +42,20 @@ interface VisitStateModule {
     saleOperationId: null;
     saleReadyToContinue: false;
     saleRecoveryPersistenceFailed: false;
+    saleRecoveryIntent: null;
   };
   restoreSaleRecoveryState: (snapshot: {
     saleConfirmed?: boolean;
     saleOperationId?: string | null;
     saleReadyToContinue?: boolean;
     saleRecoveryPersistenceFailed?: boolean;
+    saleRecoveryIntent?: unknown;
   }) => {
     saleConfirmed: boolean;
     saleOperationId: string | null;
     saleReadyToContinue: boolean;
     saleRecoveryPersistenceFailed: boolean;
+    saleRecoveryIntent: unknown;
   };
 }
 
@@ -91,6 +94,7 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.equal(started.saleOperationId, null);
   assert.equal(started.saleReadyToContinue, false);
   assert.equal(started.saleRecoveryPersistenceFailed, false);
+  assert.equal(started.saleRecoveryIntent, null);
 }
 
 function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
@@ -102,6 +106,7 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     saleOperationId: null,
     saleReadyToContinue: true,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   });
 
   assert.deepEqual(module.restoreSaleRecoveryState({
@@ -109,20 +114,22 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     saleOperationId: null,
     saleReadyToContinue: false,
   }), {
-    saleConfirmed: true,
+    saleConfirmed: false,
     saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   });
 
   assert.deepEqual(module.restoreSaleRecoveryState({
     saleConfirmed: true,
     saleOperationId: 'sale-op-old',
   }), {
-    saleConfirmed: true,
-    saleOperationId: 'sale-op-old',
+    saleConfirmed: false,
+    saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   });
 
   assert.deepEqual(module.restoreSaleRecoveryState({
@@ -133,6 +140,7 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   });
 
   assert.deepEqual(module.restoreSaleRecoveryState({
@@ -144,7 +152,45 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     saleConfirmed: true,
     saleOperationId: 'sale-op-blocked',
     saleReadyToContinue: true,
+    saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
+  });
+
+  const saleRecoveryIntent = {
+    version: 1,
+    operationId: 'sale-op-recoverable',
+    queuePayload: {
+      _operationId: 'sale-op-recoverable',
+      _clientCustomerName: 'Cliente',
+      _clientTotal: 100,
+    },
+    stopId: 44,
+    photoUris: ['file://sale.jpg'],
+    ticketSnapshot: {
+      saleId: 'sale-op-recoverable',
+      customerName: 'Cliente',
+      sellerName: 'Vendedor',
+      paymentMethod: 'cash',
+      paymentLabel: 'Efectivo',
+      createdAt: '2026-07-21T10:00:00.000Z',
+      lines: [],
+      subtotal: 100,
+      total: 100,
+      totalKg: 10,
+    },
+  };
+  assert.deepEqual(module.restoreSaleRecoveryState({
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-recoverable',
+    saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: true,
+    saleRecoveryIntent,
+  }), {
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-recoverable',
+    saleReadyToContinue: false,
+    saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent,
   });
 }
 

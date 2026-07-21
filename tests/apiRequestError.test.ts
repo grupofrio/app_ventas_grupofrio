@@ -36,6 +36,21 @@ test('makeApiResponseError defaults missing backend codes to api_rejection', asy
   assert.equal(error.code, 'api_rejection');
 });
 
+test('makeApiResponseError can tag an unreadable response as invalid_response', async () => {
+  const { makeApiResponseError } = await loadApiRequestError();
+
+  const error = makeApiResponseError(
+    new Error('body stream failed'),
+    'Error de solicitud',
+    200,
+    'invalid_response',
+  );
+
+  assert.equal(error.httpStatus, 200);
+  assert.equal(error.responseReceived, true);
+  assert.equal(error.code, 'invalid_response');
+});
+
 test('makeApiResponseError safely copies a non-extensible cause', async () => {
   const { makeApiResponseError } = await loadApiRequestError();
   const cause = Object.freeze(Object.assign(new Error('Error congelado'), {
@@ -135,4 +150,64 @@ test('makeApiTransportError preserves safe Symbol descriptions', async () => {
 
   assert.equal(error.message, 'Symbol(request failure)');
   assert.equal(error.responseReceived, false);
+});
+
+test('request error factories are total for a Proxy with a hostile prototype trap', async () => {
+  const { makeApiResponseError, makeApiTransportError } = await loadApiRequestError();
+  const hostile = new Proxy({}, {
+    getPrototypeOf() {
+      throw new Error('prototype trap');
+    },
+  });
+
+  assert.doesNotThrow(() => makeApiTransportError(hostile));
+  assert.doesNotThrow(() => makeApiResponseError(hostile, 'fallback', 200, 'invalid_response'));
+});
+
+test('request error factories ignore hostile Error property getters', async () => {
+  const { makeApiResponseError } = await loadApiRequestError();
+  const hostile = new Proxy(new Error('hidden'), {
+    get(target, property, receiver) {
+      if (property === 'message' || property === 'name' || property === 'stack') {
+        throw new Error(`${String(property)} trap`);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  const error = makeApiResponseError(hostile, 'safe fallback', 200, 'invalid_response');
+
+  assert.equal(error.message, 'safe fallback');
+  assert.equal(error.code, 'invalid_response');
+});
+
+test('request error factories copy when extensibility inspection or mutation is hostile', async () => {
+  const { makeApiResponseError, makeApiTransportError } = await loadApiRequestError();
+  const extensibilityTrap = new Proxy(new Error('extensibility trap'), {
+    isExtensible() {
+      throw new Error('isExtensible trap');
+    },
+  });
+  const setTrap = new Proxy(new Error('set trap'), {
+    set() {
+      throw new Error('set trap');
+    },
+  });
+
+  assert.doesNotThrow(() => makeApiTransportError(extensibilityTrap));
+  const copied = makeApiResponseError(setTrap, 'fallback', 200, 'invalid_response');
+  assert.notStrictEqual(copied, setTrap);
+  assert.equal(copied.code, 'invalid_response');
+});
+
+test('safe request error property reads never invoke hostile logging guards', async () => {
+  const { hasApiErrorFlag } = await loadApiRequestError();
+  const hostile = new Proxy({}, {
+    get() {
+      throw new Error('get trap');
+    },
+  });
+
+  assert.doesNotThrow(() => hasApiErrorFlag(hostile, '__alreadyLogged'));
+  assert.equal(hasApiErrorFlag(hostile, '__alreadyLogged'), false);
 });

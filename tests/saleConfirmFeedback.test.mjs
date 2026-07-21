@@ -54,8 +54,8 @@ function main() {
   );
   const unlockCount = (saleScreen.match(/\bunlockSaleConfirm\(\)/g) ?? []).length;
   const releaseCount = (saleScreen.match(/\bsaleConfirmationSingleFlight\.release\(\)/g) ?? []).length;
-  assert.equal(unlockCount, 2, 'solo preparacion y rechazo definitivo desbloquean la venta');
-  assert.equal(releaseCount, unlockCount, 'cada unlock debe liberar tambien el single-flight');
+  assert.equal(unlockCount, 1, 'solo un fallo previo al envío usa el unlock tolerante');
+  assert.equal(releaseCount, 2, 'preparación y rechazo definitivo liberan el single-flight');
   assert.match(
     saleScreen,
     /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);|unlockSaleConfirm\(\);\s*saleConfirmationSingleFlight\.release\(\);/,
@@ -127,7 +127,7 @@ function main() {
   );
   assert.match(
     visitStore,
-    /persistSaleConfirmationLock:\s*\(operationId:\s*string\)\s*=>\s*Promise<boolean>/,
+    /persistSaleConfirmationLock:\s*\([\s\S]*?operationId:\s*string,[\s\S]*?intent:\s*SaleRecoveryIntentV1,[\s\S]*?\)\s*=>\s*Promise<boolean>/,
     'el store expone la barrera strict previa a side effects',
   );
   assert.match(
@@ -169,7 +169,7 @@ function main() {
   );
   assert.match(
     visitStore,
-    /persistSaleConfirmationLock:\s*\(operationId\)\s*=>[\s\S]*?visitStatePersistence\.persistSaleConfirmationLock\(operationId\)/,
+    /persistSaleConfirmationLock:\s*\(operationId, intent\)\s*=>[\s\S]*?visitStatePersistence\.persistSaleConfirmationLock\([\s\S]*?operationId,[\s\S]*?createSaleRecoveryIntent\(intent\)/,
     'la barrera del lock consume el mismo runner serializado',
   );
 

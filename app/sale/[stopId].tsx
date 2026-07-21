@@ -54,6 +54,7 @@ import {
   readSaleSubmissionErrorMetadata,
 } from '../../src/services/saleSubmissionOutcome';
 import { persistAmbiguousSaleRecovery } from '../../src/services/saleAmbiguousRecovery';
+import { createSaleRecoveryIntent } from '../../src/services/saleRecoveryIntent';
 import {
   createSaleConfirmationSingleFlight,
   hasQueuedSaleOrderRecoveryEvidence,
@@ -161,6 +162,7 @@ function SaleScreenInner() {
   const saleReadyToContinue = useVisitStore((s) => s.saleReadyToContinue);
   const saleRecoveryPersistenceFailed = useVisitStore((s) => s.saleRecoveryPersistenceFailed);
   const markSaleReadyToContinue = useVisitStore((s) => s.markSaleReadyToContinue);
+  const clearSaleConfirmationLock = useVisitStore((s) => s.clearSaleConfirmationLock);
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
@@ -375,6 +377,26 @@ function SaleScreenInner() {
         discount: 0,
       })),
     };
+    const ticketSnapshot = buildSaleTicketSnapshot({
+      saleId: operationId,
+      customerName: stop.customer_name,
+      sellerName: employeeName,
+      paymentMethod: confirmedPaymentMethod,
+      createdAt: new Date().toISOString(),
+      lines: saleLines,
+    });
+    const recoveryIntent = createSaleRecoveryIntent({
+      version: 1,
+      operationId,
+      queuePayload: {
+        ...payload,
+        _clientCustomerName: stop.customer_name,
+        _clientTotal: total,
+      },
+      stopId: stop.id,
+      ticketSnapshot,
+      photoUris: [...salePhotoUris],
+    });
 
     logInfo('general', 'sale_confirm_payload', {
       partner_id: salePartnerId,
@@ -392,7 +414,7 @@ function SaleScreenInner() {
     });
 
     try {
-      const lockPersisted = await persistSaleConfirmationLock(operationId);
+      const lockPersisted = await persistSaleConfirmationLock(operationId, recoveryIntent);
       if (!lockPersisted) {
         throw new Error('The sale confirmation lock no longer matches the active visit');
       }
@@ -420,31 +442,37 @@ function SaleScreenInner() {
     // cuando hay conexión. Idempotente por _operationId. cashclose/route-close
     // ya bloquean el cierre/liquidación mientras haya pendientes en la cola.
     if (!isOnline) {
-      // Metadata SOLO para visibilidad en Sync/ruta (cliente + total). NO se
-      // envía al backend: buildSalesCreatePayload arma el contrato con whitelist
-      // y descarta campos desconocidos.
-      const enqId = enqueue('sale_order', {
-        ...payload,
-        _clientCustomerName: stop.customer_name,
-        _clientTotal: total,
-      }, { operationId });
-      enqueueVisitPhotos({
-        stopId: stop.id,
-        photoUris: salePhotoUris,
-        enqueue,
-        dependsOn: [enqId],
-        imageType: 'sale',
-      });
+      try {
+        await persistAmbiguousSaleRecovery({
+          operationId: recoveryIntent.operationId,
+          payload: recoveryIntent.queuePayload,
+          customerName: recoveryIntent.ticketSnapshot.customerName,
+          total: recoveryIntent.ticketSnapshot.total,
+          stopId: recoveryIntent.stopId,
+          photoUris: recoveryIntent.photoUris,
+          enqueue,
+          persistQueue,
+          releaseProcessingHolds,
+        });
+      } catch (persistError) {
+        setSaleRecoveryPersistenceFailed(true);
+        setSaleSubmitting(false);
+        logError('sync', 'offline_sale_persist_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            persistError,
+            'Error desconocido al guardar el pedido sin conexión.',
+          ),
+        });
+        Alert.alert(
+          'No cierres la aplicación',
+          'No pudimos guardar la cola del pedido. La operación permanece bloqueada y se recuperará con el mismo identificador.',
+        );
+        return;
+      }
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
-      await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
-        saleId: enqId,
-        customerName: stop.customer_name,
-        sellerName: employeeName,
-        paymentMethod: confirmedPaymentMethod,
-        createdAt: new Date().toISOString(),
-        lines: saleLines,
-      }));
-      setLastSaleTicketId(enqId);
+      await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
+      setLastSaleTicketId(operationId);
       setSaleSubmitting(false);
       Alert.alert(
         'Pedido guardado',
@@ -472,9 +500,29 @@ function SaleScreenInner() {
       });
 
       if (outcome.kind === 'definitive_rejection') {
+        try {
+          const cleared = await clearSaleConfirmationLock(operationId);
+          if (!cleared) {
+            throw new Error('The rejected sale no longer matches the active visit');
+          }
+        } catch (clearError) {
+          setSaleRecoveryPersistenceFailed(true);
+          setSaleSubmitting(false);
+          logError('sync', 'sale_definitive_clear_persist_failed', {
+            operation_id: operationId,
+            message: safeUnknownErrorMessage(
+              clearError,
+              'Error desconocido al limpiar el bloqueo de la venta rechazada.',
+            ),
+          });
+          Alert.alert(
+            'Venta rechazada con bloqueo local',
+            'Odoo rechazó la venta, pero no pudimos guardar de forma segura el desbloqueo. La operación permanece bloqueada para evitar duplicados.',
+          );
+          return;
+        }
         setSaleSubmitting(false);
         saleConfirmationSingleFlight.release();
-        unlockSaleConfirm();
         // insufficient_stock: el backend rechazó por stock. Refrescamos el
         // inventario para mostrar el available_qty REAL y dejamos el carrito
         // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
@@ -496,12 +544,12 @@ function SaleScreenInner() {
 
       try {
         await persistAmbiguousSaleRecovery({
-          operationId,
-          payload,
-          customerName: stop.customer_name,
-          total,
-          stopId: stop.id,
-          photoUris: salePhotoUris,
+          operationId: recoveryIntent.operationId,
+          payload: recoveryIntent.queuePayload,
+          customerName: recoveryIntent.ticketSnapshot.customerName,
+          total: recoveryIntent.ticketSnapshot.total,
+          stopId: recoveryIntent.stopId,
+          photoUris: recoveryIntent.photoUris,
           enqueue,
           persistQueue,
           releaseProcessingHolds,
@@ -538,14 +586,7 @@ function SaleScreenInner() {
 
       useVisitStore.setState({ saleOperationId: operationId });
       try {
-        await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
-          saleId: operationId,
-          customerName: stop.customer_name,
-          sellerName: employeeName,
-          paymentMethod: confirmedPaymentMethod,
-          createdAt: new Date().toISOString(),
-          lines: saleLines,
-        }));
+        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
         setLastSaleTicketId(operationId);
       } catch (ticketError) {
         logError('sync', 'ambiguous_sale_ticket_failed', {
@@ -606,14 +647,7 @@ function SaleScreenInner() {
         enqueue,
         imageType: 'sale',
       });
-      await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
-        saleId: operationId,
-        customerName: stop.customer_name,
-        sellerName: employeeName,
-        paymentMethod: confirmedPaymentMethod,
-        createdAt: new Date().toISOString(),
-        lines: saleLines,
-      }));
+      await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
       setLastSaleTicketId(operationId);
     } catch (error) {
       const message = safeUnknownErrorMessage(

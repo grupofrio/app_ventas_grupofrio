@@ -1,5 +1,9 @@
 import type { GFStop } from '../types/plan';
 import type { VisitPhase } from '../stores/useVisitStore';
+import {
+  restoreSaleRecoveryIntent,
+  type SaleRecoveryIntentV1,
+} from './saleRecoveryIntent.ts';
 
 export interface PersistedVisitSnapshot {
   phase: VisitPhase;
@@ -17,6 +21,7 @@ export interface PersistedVisitSnapshot {
   saleOperationId: string | null;
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
+  saleRecoveryIntent: SaleRecoveryIntentV1 | null;
 }
 
 export interface BuildVisitSnapshotInput {
@@ -32,6 +37,7 @@ export interface BuildVisitSnapshotInput {
   saleOperationId?: string | null;
   saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
+  saleRecoveryIntent?: unknown;
 }
 
 export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVisitSnapshot | null {
@@ -48,10 +54,19 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     saleOperationId = null,
     saleReadyToContinue = false,
     saleRecoveryPersistenceFailed = false,
+    saleRecoveryIntent = null,
   } = input;
 
   if (!['checked_in', 'selling', 'no_selling'].includes(phase)) return null;
   if (currentStopId == null || !currentStop || checkInTime == null) return null;
+
+  const restoredIntent = restoreSaleRecoveryIntent(saleRecoveryIntent);
+  const hasRecoverablePendingSale = saleConfirmed
+    && !saleReadyToContinue
+    && saleOperationId !== null
+    && restoredIntent?.operationId === saleOperationId;
+  const hasTerminalSale = saleConfirmed && saleReadyToContinue;
+  const persistConfirmed = hasRecoverablePendingSale || hasTerminalSale;
 
   return {
     phase,
@@ -62,10 +77,11 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     checkInLat,
     checkInLon,
     elapsedSeconds,
-    saleConfirmed,
-    saleOperationId,
-    saleReadyToContinue,
-    saleRecoveryPersistenceFailed,
+    saleConfirmed: persistConfirmed,
+    saleOperationId: persistConfirmed ? saleOperationId : null,
+    saleReadyToContinue: hasTerminalSale,
+    saleRecoveryPersistenceFailed: persistConfirmed ? saleRecoveryPersistenceFailed : false,
+    saleRecoveryIntent: hasRecoverablePendingSale ? restoredIntent : null,
   };
 }
 

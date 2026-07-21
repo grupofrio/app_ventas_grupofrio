@@ -1,4 +1,8 @@
 import type { GFStop } from '../types/plan';
+import {
+  restoreSaleRecoveryIntent,
+  type SaleRecoveryIntentV1,
+} from './saleRecoveryIntent.ts';
 
 export interface VisitDataState {
   phase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
@@ -27,6 +31,7 @@ export interface VisitDataState {
   saleOperationId: string | null;
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
+  saleRecoveryIntent: SaleRecoveryIntentV1 | null;
 }
 
 export interface PersistedSaleRecoveryState {
@@ -34,6 +39,7 @@ export interface PersistedSaleRecoveryState {
   saleOperationId?: string | null;
   saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
+  saleRecoveryIntent?: unknown;
 }
 
 export function restoreSaleReadyToContinue(
@@ -49,13 +55,45 @@ export function restoreSaleRecoveryState(
   snapshot: PersistedSaleRecoveryState,
 ): Pick<
   VisitDataState,
-  'saleConfirmed' | 'saleOperationId' | 'saleReadyToContinue' | 'saleRecoveryPersistenceFailed'
+  | 'saleConfirmed'
+  | 'saleOperationId'
+  | 'saleReadyToContinue'
+  | 'saleRecoveryPersistenceFailed'
+  | 'saleRecoveryIntent'
 > {
+  const saleReadyToContinue = restoreSaleReadyToContinue(snapshot);
+  if (snapshot.saleConfirmed === true && saleReadyToContinue) {
+    return {
+      saleConfirmed: true,
+      saleOperationId: snapshot.saleOperationId ?? null,
+      saleReadyToContinue: true,
+      saleRecoveryPersistenceFailed: false,
+      saleRecoveryIntent: null,
+    };
+  }
+
+  const saleRecoveryIntent = restoreSaleRecoveryIntent(snapshot.saleRecoveryIntent);
+  if (
+    snapshot.saleConfirmed === true
+    && typeof snapshot.saleOperationId === 'string'
+    && saleRecoveryIntent?.operationId === snapshot.saleOperationId
+  ) {
+    return {
+      saleConfirmed: true,
+      saleOperationId: snapshot.saleOperationId,
+      saleReadyToContinue: false,
+      // A startup recovery failure is retryable on every new app process.
+      saleRecoveryPersistenceFailed: false,
+      saleRecoveryIntent,
+    };
+  }
+
   return {
-    saleConfirmed: snapshot.saleConfirmed ?? false,
-    saleOperationId: snapshot.saleOperationId ?? null,
-    saleReadyToContinue: restoreSaleReadyToContinue(snapshot),
-    saleRecoveryPersistenceFailed: snapshot.saleRecoveryPersistenceFailed ?? false,
+    saleConfirmed: false,
+    saleOperationId: null,
+    saleReadyToContinue: false,
+    saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   };
 }
 
@@ -87,6 +125,7 @@ export function createInitialVisitState(): VisitDataState {
     saleOperationId: null,
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
+    saleRecoveryIntent: null,
   };
 }
 

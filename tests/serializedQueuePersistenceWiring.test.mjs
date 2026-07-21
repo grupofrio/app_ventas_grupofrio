@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
@@ -13,68 +13,52 @@ function blockBetween(startMarker, endMarker) {
   return store.slice(start, end);
 }
 
-function serializedCallbackRanges() {
-  const marker = 'runSerializedQueuePersist(async () => {';
-  const ranges = [];
-  let from = 0;
-  while (true) {
-    const start = store.indexOf(marker, from);
-    if (start === -1) return ranges;
-    const openBrace = store.indexOf('{', start);
-    let depth = 0;
-    let end = openBrace;
-    for (; end < store.length; end += 1) {
-      if (store[end] === '{') depth += 1;
-      if (store[end] === '}') {
-        depth -= 1;
-        if (depth === 0) break;
-      }
-    }
-    assert.ok(end < store.length, 'serialized queue callback must have a closing brace');
-    ranges.push([start, end]);
-    from = end + 1;
-  }
+function sourceFiles(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return /\.[cm]?[jt]sx?$/.test(entry.name) ? [path] : [];
+  });
 }
 
-assert.doesNotMatch(
-  store,
-  /storeSave\(STORAGE_KEYS\.SYNC_QUEUE/,
-  'SYNC_QUEUE must never use the error-swallowing storeSave helper',
+const tolerantQueueWriters = sourceFiles(resolve(REPO_ROOT, 'src')).filter((path) =>
+  /storeSave\(STORAGE_KEYS\.SYNC_QUEUE/.test(readFileSync(path, 'utf8')),
 );
+assert.deepEqual(tolerantQueueWriters, [], 'no source file may use tolerant storeSave for SYNC_QUEUE');
 
 assert.match(
   store,
-  /import \{ createSerializedTaskRunner \} from '\.\.\/services\/serializedTaskRunner';/,
-  'the sync store must import the shared serialized task runner',
+  /import \{ createSerializedPersistenceCoordinator \} from '\.\.\/services\/serializedTaskRunner';/,
+  'the sync store must import the tested persistence coordinator',
 );
 assert.equal(
-  (store.match(/createSerializedTaskRunner\(\)/g) || []).length,
+  (store.match(/createSerializedPersistenceCoordinator(?:<[^>]+>)?\(\{/g) || []).length,
   1,
-  'the module must create exactly one serialized queue runner',
+  'the store module must create exactly one queue persistence coordinator',
 );
 assert.match(
   store,
-  /const runSerializedQueuePersist = createSerializedTaskRunner\(\);/,
-  'the one runner must be module-level and shared by every SYNC_QUEUE write',
+  /const queuePersistence = createSerializedPersistenceCoordinator(?:<[^>]+>)?\(\{/,
+  'the queue persistence coordinator must be module-level',
 );
 
 const strictQueueWrites = [...store.matchAll(/storeSaveStrict\(STORAGE_KEYS\.SYNC_QUEUE/g)];
-assert.equal(strictQueueWrites.length, 3, 'current persistence plus both migration phases must write strictly');
-const runnerRanges = serializedCallbackRanges();
-for (const write of strictQueueWrites) {
-  assert.ok(
-    runnerRanges.some(([start, end]) => start < write.index && write.index < end),
-    `strict SYNC_QUEUE write at offset ${write.index} must be inside the one runner callback`,
-  );
-}
+assert.equal(strictQueueWrites.length, 1, 'the coordinator must own the only strict SYNC_QUEUE writer');
+
+const coordinatorSetup = blockBetween(
+  'const queuePersistence = createSerializedPersistenceCoordinator<SyncQueueItem[], SyncQueueItem[]>({',
+  'function persistCurrentQueue()',
+);
+assert.match(coordinatorSetup, /read: \(\) => useSyncStore\.getState\(\)\.queue/);
+assert.match(coordinatorSetup, /select: selectPersistableQueue/);
+assert.match(
+  coordinatorSetup,
+  /write: \(snapshot\) => storeSaveStrict\(STORAGE_KEYS\.SYNC_QUEUE, snapshot\)/,
+);
+assert.match(coordinatorSetup, /publish: \(queue\) =>[\s\S]*useSyncStore\.setState\(\{[\s\S]*queue/);
 
 const persistCurrent = blockBetween('function persistCurrentQueue()', 'function persistQueueInBackground');
-assert.match(persistCurrent, /return runSerializedQueuePersist\(async \(\) => \{/);
-assert.match(
-  persistCurrent,
-  /const \{ queue \} = useSyncStore\.getState\(\);[\s\S]*selectPersistableQueue\(queue\)[\s\S]*await storeSaveStrict\(STORAGE_KEYS\.SYNC_QUEUE/,
-  'persistCurrentQueue must read and select queue state only when its serialized callback runs',
-);
+assert.match(persistCurrent, /return queuePersistence\.persistCurrent\(\);/);
 
 const background = blockBetween('function persistQueueInBackground', '// PR-1');
 assert.match(
@@ -109,19 +93,17 @@ assert.doesNotMatch(
 );
 
 const markMigration = blockBetween('markConsumedAndPersist:', '// 3. reversión local');
-assert.match(markMigration, /return runSerializedQueuePersist\(async \(\) => \{/);
 assert.match(
   markMigration,
-  /const marked = get\(\)\.queue\.map[\s\S]*await storeSaveStrict\(STORAGE_KEYS\.SYNC_QUEUE[\s\S]*const currentMarked = get\(\)\.queue\.map[\s\S]*set\(\{ queue: currentMarked/,
-  'mark migration must transform turn-time state, then reapply the idempotent mark after await',
+  /return queuePersistence\.transformAndPersist\(\(queue\) =>[\s\S]*queue\.map/,
+  'mark migration must pass its real queue transform to the tested coordinator',
 );
 
 const removeMigration = blockBetween('removeAndPersist:', 'onPhaseError:');
-assert.match(removeMigration, /return runSerializedQueuePersist\(async \(\) => \{/);
 assert.match(
   removeMigration,
-  /const kept = get\(\)\.queue\.filter[\s\S]*await storeSaveStrict\(STORAGE_KEYS\.SYNC_QUEUE[\s\S]*const currentKept = get\(\)\.queue\.filter[\s\S]*queue: currentKept/,
-  'remove migration must transform turn-time state, then reapply removal after await without dropping new items',
+  /await queuePersistence\.transformAndPersist\(\(queue\) =>[\s\S]*queue\.filter/,
+  'remove migration must pass its real queue transform to the tested coordinator',
 );
 
 console.log('serialized queue persistence wiring tests: ok');

@@ -30,7 +30,7 @@ import {
 } from '../types/sync';
 import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
-import { createSerializedTaskRunner } from '../services/serializedTaskRunner';
+import { createSerializedPersistenceCoordinator } from '../services/serializedTaskRunner';
 import { postRest, postRpc } from '../services/api';
 import {
   readPhotoAsBase64,
@@ -102,14 +102,17 @@ const LEGACY_DEFER_BACKOFF_MS = 8000;
 // banderas de estado, que son recuperables por idempotencia al rehidratar.
 const PERSIST_DEBOUNCE_MS = 800;
 
-const runSerializedQueuePersist = createSerializedTaskRunner();
+const queuePersistence = createSerializedPersistenceCoordinator<SyncQueueItem[], SyncQueueItem[]>({
+  read: () => useSyncStore.getState().queue,
+  select: selectPersistableQueue,
+  write: (snapshot) => storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, snapshot),
+  publish: (queue) => {
+    useSyncStore.setState({ queue, ...computeCounts(queue) });
+  },
+});
 
 function persistCurrentQueue(): Promise<void> {
-  return runSerializedQueuePersist(async () => {
-    const { queue } = useSyncStore.getState();
-    const toPersist = selectPersistableQueue(queue);
-    await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, toPersist);
-  });
+  return queuePersistence.persistCurrent();
 }
 
 function persistQueueInBackground(source: string): void {
@@ -830,19 +833,13 @@ async function durableMigrateLegacy(
       set({ legacyRefreshPending: true });
     },
     // 2. marcar consumido + persistir la cola (memoria solo tras persistir).
-    markConsumedAndPersist: async () => {
-      return runSerializedQueuePersist(async () => {
-        const marked = get().queue.map((i) => {
+    markConsumedAndPersist: () => {
+      return queuePersistence.transformAndPersist((queue) =>
+        queue.map((i) => {
           const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
           return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
-        });
-        await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(marked));
-        const currentMarked = get().queue.map((i) => {
-          const flag = ids.has(i.id) ? consumedFlagById.get(i.id) : null;
-          return flag ? { ...i, payload: { ...i.payload, [flag]: true } } : i;
-        });
-        set({ queue: currentMarked, ...computeCounts(currentMarked) });
-      });
+        }),
+      );
     },
     // 3. reversión local (idempotente: flags de consumo ya durables).
     applyReversal: () => {
@@ -851,16 +848,10 @@ async function durableMigrateLegacy(
     },
     // 4. retirar de la cola + persistir + aviso (memoria solo tras persistir).
     removeAndPersist: async () => {
-      return runSerializedQueuePersist(async () => {
-        const kept = get().queue.filter((i) => !ids.has(i.id));
-        await storeSaveStrict(STORAGE_KEYS.SYNC_QUEUE, selectPersistableQueue(kept));
-        const currentKept = get().queue.filter((i) => !ids.has(i.id));
-        set({
-          queue: currentKept,
-          ...computeCounts(currentKept),
-          legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + events.length,
-        });
-      });
+      await queuePersistence.transformAndPersist((queue) =>
+        queue.filter((i) => !ids.has(i.id)),
+      );
+      set({ legacyMigrationNoticeCount: get().legacyMigrationNoticeCount + events.length });
     },
     onPhaseError: (phase, error) =>
       logWarn('sync', 'legacy_migration_phase_failed', {

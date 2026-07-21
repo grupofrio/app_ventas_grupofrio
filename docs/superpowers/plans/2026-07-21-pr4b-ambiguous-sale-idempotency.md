@@ -283,6 +283,8 @@ assert.equal(classify({ httpStatus: 422, responseReceived: true }), 'definitive_
 assert.equal(classify({ code: 'insufficient_stock', responseReceived: true }), 'definitive_rejection');
 assert.equal(classify({ code: 'session_expired', responseReceived: true }), 'definitive_rejection');
 assert.equal(classify({ code: 'api_rejection', responseReceived: true }), 'definitive_rejection');
+assert.equal(classify({ code: 'api_rejection', responseReceived: true, message: 'validation timeout must be positive' }), 'definitive_rejection');
+assert.equal(classify({ httpStatus: 422, responseReceived: true, message: 'connection value is invalid' }), 'definitive_rejection');
 assert.equal(classify(new Error('unknown')), 'ambiguous_result');
 ```
 
@@ -359,10 +361,10 @@ Apply this order:
 
 1. HTTP 500–599 → ambiguous.
 2. `responseReceived === false` → ambiguous.
-3. `timeout`, `invalid_response`, network/abort codes or names → ambiguous.
-4. Network/timeout/abort message patterns → ambiguous.
-5. HTTP 400–499 → definitive.
-6. `insufficient_stock`, `session_expired`, `api_rejection`, `access_denied`, `validation_error`, `forbidden`, `unauthorized` → definitive.
+3. HTTP 400–499 → definitive.
+4. `insufficient_stock`, `session_expired`, `api_rejection`, `access_denied`, `validation_error`, `forbidden`, `unauthorized` → definitive.
+5. `invalid_response`, timeout, network or abort codes/names → ambiguous.
+6. Network/timeout/abort message patterns → ambiguous only when `responseReceived !== true` and no HTTP status is present.
 7. Default → ambiguous.
 
 Do not use localized business-message matching to declare a rejection definitive.
@@ -530,6 +532,8 @@ In `tests/syncEnqueue.test.ts`, use a `makeItem` helper like `tests/saleRetry.te
 - empty/non-string explicit ID throws instead of falling back to a UUID;
 - dependencies are copied rather than aliased.
 
+Add a store-wiring/pure integration case for an explicit GPS ID that already exists: the action is `reused`, the queue and first payload remain unchanged, and GPS-cap eviction is not invoked.
+
 - [ ] **Step 2: Add failing tests for the hold registry**
 
 In `tests/syncProcessingHolds.test.ts` assert:
@@ -617,9 +621,11 @@ Run the command from Step 3.
 Create `tests/syncProcessingHoldWiring.test.mjs` and assert that `useSyncStore.ts`:
 
 - creates one module-level hold registry;
-- calls `hold([id])` before publishing a newly inserted/rearmed queue when `opts?.holdProcessing`;
+- calls `hold([id])` for every enqueue result action —including `reused`— when `opts?.holdProcessing`, and does so before publishing an inserted/rearmed queue;
 - exposes `releaseProcessingHolds(ids)` without calling `processQueue` itself;
 - filters held IDs from `processQueue` candidates;
+- re-checks `isHeld(item.id)` at the start of `processOneItem`, before dependency checks, `syncing`, or `processSyncItem`, covering candidates snapshotted before the hold;
+- re-filters every GPS chunk inside `processGpsBatch` immediately before marking/sending it, because GPS bypasses `processOneItem`;
 - passes a held-filtered queue to `decidePostCycleActionAfterCycle`;
 - filters held IDs before `scheduleWake` calls `nextWakeDelayMs`, preventing a held overdue error from creating a timer loop;
 - does not rely only on suppressing enqueue's `setTimeout`.
@@ -638,14 +644,18 @@ In the store:
 
 1. Change the `enqueue` signature to `opts?: SyncEnqueueOptions` and add `releaseProcessingHolds(ids: string[]): void`.
 2. Instantiate one registry outside Zustand state.
-3. Preserve GPS-cap eviction, then call `applySyncEnqueue` with `uuid()` and `Date.now()`.
-4. When `holdProcessing` is true, call `holds.hold([result.id])` before `set(...)` makes a new/rearmed queue visible.
+3. Call `applySyncEnqueue` first against the original queue with one captured `generatedId`/`createdAt`. Only when its action is `inserted` and `type === 'gps'`, calculate the GPS-cap victim from the original queue, remove that victim, and recompute `applySyncEnqueue` with the same ID/time. `reused`, `rearmed_dead`, and collisions must never run GPS eviction.
+4. When `holdProcessing` is true, call `holds.hold([result.id])` for `inserted`, `rearmed_dead`, and `reused`; for queue-changing actions this must happen before `set(...)` publishes the result.
 5. Generate client metadata only for `action === 'inserted'`.
 6. Suppress enqueue's auto-trigger when `holdProcessing` is true.
 7. In `processQueue`, filter held IDs before `isReady` candidates.
-8. In `finally`, pass `holds.withoutHeld(get().queue)` to `decidePostCycleActionAfterCycle`.
-9. In `scheduleWake`, pass an unheld queue to `nextWakeDelayMs` so held errors cannot arm repeated timers.
-10. `releaseProcessingHolds` only removes IDs; it never triggers sync.
+8. At the first executable line of `processOneItem`, re-check `holds.isHeld(item.id)`, log `processing_hold_wait`, and return the existing `'dependency_wait'` non-dispatch outcome before dependencies, `syncing`, or `processSyncItem`; this closes the already-snapshotted candidate race without adding a new state transition.
+9. Inside `processGpsBatch`, derive an unheld sub-chunk immediately before each chunk is marked `syncing`; skip an empty sub-chunk and use only the filtered items for IDs, payload, success/failure counts, and dispatch. This closes the already-snapshotted reused-GPS race.
+10. In `finally`, pass `holds.withoutHeld(get().queue)` to `decidePostCycleActionAfterCycle`.
+11. In `scheduleWake`, pass an unheld queue to `nextWakeDelayMs` so held errors cannot arm repeated timers.
+12. `releaseProcessingHolds` only removes IDs; it never triggers sync.
+
+Extend the wiring test with two concrete races: (a) an existing `pending` sale is returned as `reused`, receives a hold regardless of unchanged queue identity, and a cycle that snapshotted it hits the `processOneItem` guard; (b) an existing explicit GPS item is reused/held after snapshot and the per-chunk filter excludes it before batch dispatch.
 
 - [ ] **Step 11: Run queue, hold, dependency, and wakeup tests**
 
@@ -815,6 +825,8 @@ In `tests/saleAmbiguousRecovery.test.ts`, inject fake `enqueue`, `persistQueue`,
 - no hold is released while a deferred persistence promise is unresolved;
 - success releases `[operationId, ...photoIds]` together and returns those IDs;
 - persistence rejection releases the same IDs, rethrows, and never reports success;
+- a returned sale ID different from `operationId` releases every known hold, rejects, and never calls `persistQueue`;
+- a synchronous photo-enqueue failure releases the sale and every photo ID successfully returned before the throw;
 - the helper has no processor callback, so it cannot dispatch on failure.
 
 - [ ] **Step 6: Run the recovery test and verify RED**
@@ -827,36 +839,45 @@ Expected: FAIL because the module is missing.
 
 - [ ] **Step 7: Implement `persistAmbiguousSaleRecovery`**
 
-Create a typed, RN-free service whose core is:
+Create a typed, RN-free service whose core tracks every successful enqueue immediately:
 
 ```ts
-const saleId = enqueue('sale_order', {
-  ...payload,
-  _clientCustomerName: customerName,
-  _clientTotal: total,
-}, { operationId, holdProcessing: true });
+const heldIds: string[] = [];
+const trackedEnqueue: typeof enqueue = (type, itemPayload, options) => {
+  const id = enqueue(type, itemPayload, options);
+  heldIds.push(id);
+  return id;
+};
 
-const photoIds = enqueueVisitPhotos({
-  stopId,
-  photoUris,
-  enqueue,
-  dependsOn: [operationId],
-  imageType: 'sale',
-  holdProcessing: true,
-});
-
-const heldIds = [saleId, ...photoIds];
 try {
+  const saleId = trackedEnqueue('sale_order', {
+    ...payload,
+    _clientCustomerName: customerName,
+    _clientTotal: total,
+  }, { operationId, holdProcessing: true });
+  if (saleId !== operationId) {
+    throw new Error('La cola no conservó el identificador de la venta.');
+  }
+
+  const photoIds = enqueueVisitPhotos({
+    stopId,
+    photoUris,
+    enqueue: trackedEnqueue,
+    dependsOn: [operationId],
+    imageType: 'sale',
+    holdProcessing: true,
+  });
+
   await persistQueue();
+  releaseProcessingHolds(heldIds);
+  return { saleId, photoIds };
 } catch (error) {
   releaseProcessingHolds(heldIds);
   throw error;
 }
-releaseProcessingHolds(heldIds);
-return { saleId, photoIds };
 ```
 
-Before persisting, throw if `saleId !== operationId`; this protects the invariant even if a future enqueue implementation regresses.
+This protects the invariant even if a future enqueue implementation regresses and prevents a partially built batch from leaving orphaned holds.
 
 - [ ] **Step 8: Run helper, queue, and dependency tests**
 

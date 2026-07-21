@@ -140,6 +140,8 @@ La regla de HTTP 5xx tiene precedencia incluso si el cuerpo contiene un mensaje 
 
 Un rechazo funcional 2xx sin código propio será reconocible por `code: "api_rejection"`, asignado en el límite HTTP. El clasificador no dependerá de buscar frases en el mensaje para distinguirlo de un error desconocido.
 
+Las heurísticas de texto para timeout, red o aborto solo se usarán cuando falten metadatos estructurados de respuesta. Un HTTP 4xx o un `api_rejection` con `responseReceived: true` seguirá siendo definitivo aunque su mensaje funcional contenga palabras como “timeout” o “connection”.
+
 El clasificador no decidirá textos, navegación, reintentos ni mutará stores. La pantalla será responsable únicamente de orquestar la decisión.
 
 ### Identificador explícito e idempotente en la cola
@@ -161,7 +163,7 @@ Las reglas serán:
 3. Si no existe el ID, se crea el ítem con `item.id === operationId` y `payload._operationId === operationId`.
 4. Si ya existe un ítem del mismo tipo con ese ID, se devuelve el ID existente sin insertar, reemplazar payload ni duplicar la operación. El primer registro es autoritativo.
 5. Si el ID ya pertenece a otro tipo de operación, se lanza una colisión explícita y no se sobrescribe el ítem.
-6. `holdProcessing: true` registra el ID en un conjunto transitorio de bloqueos antes de exponerlo como candidato. No solo evita el auto-disparo de ese `enqueue`: impide que cualquier ciclo concurrente, reconexión, sincronización manual o redrenaje post-ciclo despache el ítem mientras siga retenido.
+6. `holdProcessing: true` registra el ID en un conjunto transitorio de bloqueos para cualquier resultado —insertado, rearmado o reutilizado— antes de continuar. En inserciones/rearmados ocurre antes de publicar la cola modificada. No solo evita el auto-disparo de ese `enqueue`: impide que cualquier ciclo concurrente, reconexión, sincronización manual o redrenaje post-ciclo despache el ítem mientras siga retenido.
 7. El store expondrá `releaseProcessingHolds(ids)` para liberar una venta y sus fotos como grupo. La liberación no dispara procesamiento por sí sola; el llamador decide si inicia el ciclo.
 
 Para un ítem del mismo ID y tipo ya existente, el estado se resolverá así:
@@ -172,7 +174,9 @@ Para un ítem del mismo ID y tipo ya existente, el estado se resolverá así:
 
 La prioridad, dependencias, telemetría, conteos y auto-procesamiento existentes seguirán funcionando. No se cambia la forma persistida de `SyncQueueItem`.
 
-El conjunto de bloqueos será solo de memoria y no formará parte de `SyncQueueItem`. Si la aplicación se cierra después de que un ítem quedó durable, la rehidratación comienza sin bloqueos y la cola puede procesarlo normalmente. La opción también se aplica cuando el ID explícito ya existía: un ítem reutilizado o rearmado queda retenido frente a futuros ciclos hasta que el lote se libere; un envío que ya estaba efectivamente `syncing` no puede cancelarse, pero en ese caso la operación ya provenía de la cola durable.
+La política existente de límite/expulsión para GPS solo se evaluará después de que la decisión confirme una inserción nueva. Una reutilización o colisión por ID explícito no podrá expulsar ni modificar otro ítem como efecto lateral.
+
+El conjunto de bloqueos será solo de memoria y no formará parte de `SyncQueueItem`. Si la aplicación se cierra después de que un ítem quedó durable, la rehidratación comienza sin bloqueos y la cola puede procesarlo normalmente. La opción también se aplica cuando el ID explícito ya existía: un ítem reutilizado o rearmado queda retenido frente a futuros ciclos hasta que el lote se libere. Además del filtro inicial, `processOneItem` volverá a consultar el bloqueo inmediatamente antes de marcar/enviar cada candidato; `processGpsBatch`, que evita ese helper, volverá a filtrar cada chunk justo antes de marcarlo y enviarlo. Esto cubre un ciclo que tomó su snapshot antes del reencolado para cualquier tipo. Un envío que ya estaba efectivamente `syncing` no puede cancelarse, pero en ese caso la operación ya provenía de la cola durable.
 
 ### Persistencia serializada y barrera antes del envío
 
@@ -224,6 +228,8 @@ Si el clasificador devuelve `ambiguous_result`, la pantalla no llamará a `unloc
 7. Guardar el snapshot del ticket con el mismo ID.
 8. Mantener `saleConfirmed: true`, impidiendo que el carrito genere otra confirmación.
 9. Mostrar el estado pendiente y continuar por la misma decisión checkout/ruta del camino offline.
+
+El helper de recuperación rastreará cada ID retenido inmediatamente después de cada `enqueue`. Cualquier excepción local previa a la barrera —incluida una violación de `saleId === operationId` o una foto parcialmente encolada— liberará todos los IDs conocidos antes de propagarse, evitando bloqueos transitorios huérfanos.
 
 El mensaje será:
 

@@ -56,6 +56,7 @@ import {
 import { persistAmbiguousSaleRecovery } from '../../src/services/saleAmbiguousRecovery';
 import {
   createSaleConfirmationSingleFlight,
+  hasQueuedSaleOrderRecoveryEvidence,
   safeUnknownErrorMessage,
   shouldResumeAfterSale,
 } from '../../src/services/saleConfirmationFlow';
@@ -178,6 +179,10 @@ function SaleScreenInner() {
   const saleOffline = describeSaleOfflineUx(isOnline);
   const saleOperationId = useVisitStore((s) => s.saleOperationId);
   const saleSync = getSaleSyncState(saleOperationId, syncQueue);
+  const hasSaleOrderRecoveryEvidence = hasQueuedSaleOrderRecoveryEvidence(
+    saleOperationId,
+    syncQueue,
+  );
 
   // P0-2 (hardening): si la venta ya estaba confirmada (p.ej. restaurada tras
   // un crash entre confirmar y checkout), reanuda el estado post-venta para que
@@ -190,6 +195,8 @@ function SaleScreenInner() {
       stopExists: stop !== undefined,
       saleSubmitting,
       saleRecoveryPersistenceFailed,
+      saleOperationId,
+      hasQueuedSaleOrderEvidence: hasSaleOrderRecoveryEvidence,
     })) {
       setAfterSaleAction(shouldSkipStopCheckout(stop.id) ? 'route' : 'checkout');
     }
@@ -199,6 +206,8 @@ function SaleScreenInner() {
     stop?.id,
     saleSubmitting,
     saleRecoveryPersistenceFailed,
+    saleOperationId,
+    hasSaleOrderRecoveryEvidence,
   ]);
 
   function setSaleQtyFromText(productId: number, qtyText: string) {

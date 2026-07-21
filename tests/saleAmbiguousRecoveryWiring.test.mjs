@@ -11,16 +11,105 @@ function matchingBrace(source, openBraceIndex) {
   assert.equal(source[openBraceIndex], '{', 'el extractor debe iniciar en una llave');
 
   let depth = 0;
+  let state = 'code';
+  const templateExpressionReturnDepths = [];
+
   for (let index = openBraceIndex; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] === '}') {
+    const character = source[index];
+    const nextCharacter = source[index + 1];
+
+    if (state === 'single_quote' || state === 'double_quote') {
+      if (character === '\\') {
+        index += 1;
+      } else if (
+        (state === 'single_quote' && character === "'")
+        || (state === 'double_quote' && character === '"')
+      ) {
+        state = 'code';
+      }
+      continue;
+    }
+
+    if (state === 'line_comment') {
+      if (character === '\n' || character === '\r') state = 'code';
+      continue;
+    }
+
+    if (state === 'block_comment') {
+      if (character === '*' && nextCharacter === '/') {
+        state = 'code';
+        index += 1;
+      }
+      continue;
+    }
+
+    if (state === 'template') {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === '`') {
+        state = 'code';
+      } else if (character === '$' && nextCharacter === '{') {
+        templateExpressionReturnDepths.push(depth);
+        depth += 1;
+        state = 'code';
+        index += 1;
+      }
+      continue;
+    }
+
+    if (character === "'") {
+      state = 'single_quote';
+      continue;
+    }
+    if (character === '"') {
+      state = 'double_quote';
+      continue;
+    }
+    if (character === '`') {
+      state = 'template';
+      continue;
+    }
+    if (character === '/' && nextCharacter === '/') {
+      state = 'line_comment';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && nextCharacter === '*') {
+      state = 'block_comment';
+      index += 1;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}') {
       depth -= 1;
+      if (templateExpressionReturnDepths.at(-1) === depth) {
+        templateExpressionReturnDepths.pop();
+        state = 'template';
+        continue;
+      }
       if (depth === 0) return index;
     }
   }
 
   throw new Error(`bloque sin cierre desde ${openBraceIndex}`);
 }
+
+const lexicalBraceFixture = [
+  '{',
+  '  const stringValue = "}";',
+  '  // } must not close the block',
+  '  /* } must not close the block either */',
+  '  const templateValue = `template } ${(() => ({ nested: true }))()} tail`;',
+  '}',
+].join('\n');
+assert.equal(
+  matchingBrace(lexicalBraceFixture, 0),
+  lexicalBraceFixture.length - 1,
+  'el scanner ignora llaves en strings, comentarios y texto template, pero cuenta expresiones template',
+);
 
 function blockAfter(source, marker, fromIndex = 0) {
   const markerIndex = source.indexOf(marker, fromIndex);
@@ -97,6 +186,26 @@ assert.match(
   sale,
   /import\s*\{[^}]*\bsafeUnknownErrorMessage\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/src\/services\/saleConfirmationFlow['"]/,
   'la pantalla debe usar el lector RN-free para errores unknown',
+);
+assert.match(
+  sale,
+  /hasQueuedSaleOrderRecoveryEvidence\(\s*saleOperationId,\s*syncQueue,?\s*\)/,
+  'la pantalla debe derivar evidencia de la cola ya rehidratada',
+);
+assert.match(
+  sale,
+  /shouldResumeAfterSale\(\{[\s\S]*?saleOperationId,[\s\S]*?hasQueuedSaleOrderEvidence:/,
+  'la decision de reanudacion recibe el operationId y la evidencia de cola',
+);
+const resumeEffect = blockAfter(sale, 'React.useEffect(() =>');
+const resumeEffectEnd = sale.indexOf(']);', resumeEffect.closeBraceIndex);
+assert.notEqual(resumeEffectEnd, -1, 'el efecto de reanudacion debe cerrar sus dependencias');
+const resumeEffectDependencies = sale.slice(resumeEffect.closeBraceIndex + 1, resumeEffectEnd);
+assert.match(resumeEffectDependencies, /saleOperationId,/);
+assert.match(
+  resumeEffectDependencies,
+  /hasSaleOrderRecoveryEvidence,/,
+  'el efecto debe reevaluar cuando aparece evidencia rehidratada',
 );
 assert.match(
   sale,

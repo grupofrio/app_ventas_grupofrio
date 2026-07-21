@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   createSaleConfirmationSingleFlight,
+  hasQueuedSaleOrderRecoveryEvidence,
   safeUnknownErrorMessage,
   shouldResumeAfterSale,
 } from '../src/services/saleConfirmationFlow.ts';
@@ -13,6 +14,8 @@ const resumableSale = {
   stopExists: true,
   saleSubmitting: false,
   saleRecoveryPersistenceFailed: false,
+  saleOperationId: null,
+  hasQueuedSaleOrderEvidence: false,
 };
 
 test('resumes only a confirmed sale with a stop and no active or failed transition', () => {
@@ -38,15 +41,71 @@ test('a durable recovery persistence failure stays blocked after submission ends
     ...resumableSale,
     saleSubmitting: true,
     saleRecoveryPersistenceFailed: true,
+    saleOperationId: 'sale-op-blocked',
+    hasQueuedSaleOrderEvidence: true,
   });
   const afterSubmitting = shouldResumeAfterSale({
     ...resumableSale,
     saleSubmitting: false,
     saleRecoveryPersistenceFailed: true,
+    saleOperationId: 'sale-op-blocked',
+    hasQueuedSaleOrderEvidence: true,
   });
 
   assert.equal(whileSubmitting, false);
   assert.equal(afterSubmitting, false);
+});
+
+test('restored confirmations require matching queued sale evidence', () => {
+  const matchingSale = [
+    { id: 'sale-op-restored', type: 'sale_order' },
+  ];
+  const differentSale = [
+    { id: 'sale-op-other', type: 'sale_order' },
+  ];
+  const matchingPhotoOnly = [
+    { id: 'sale-op-restored', type: 'photo' },
+  ];
+
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleOperationId: 'sale-op-restored',
+      hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(
+        'sale-op-restored',
+        [],
+      ),
+    }),
+    false,
+  );
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleOperationId: 'sale-op-restored',
+      hasQueuedSaleOrderEvidence: hasQueuedSaleOrderRecoveryEvidence(
+        'sale-op-restored',
+        matchingSale,
+      ),
+    }),
+    true,
+  );
+  assert.equal(
+    shouldResumeAfterSale({
+      ...resumableSale,
+      saleOperationId: null,
+      hasQueuedSaleOrderEvidence: false,
+    }),
+    true,
+    'direct online success resumes without a queue item',
+  );
+  assert.equal(
+    hasQueuedSaleOrderRecoveryEvidence('sale-op-restored', differentSale),
+    false,
+  );
+  assert.equal(
+    hasQueuedSaleOrderRecoveryEvidence('sale-op-restored', matchingPhotoOnly),
+    false,
+  );
 });
 
 test('single-flight admits one immediate confirmation and can be released', () => {

@@ -6,6 +6,23 @@ export interface ResumeAfterSaleInput {
   stopExists: boolean;
   saleSubmitting: boolean;
   saleRecoveryPersistenceFailed: boolean;
+  saleOperationId: string | null;
+  hasQueuedSaleOrderEvidence: boolean;
+}
+
+export interface SaleRecoveryQueueEvidenceItem {
+  id: string;
+  type: string;
+}
+
+export function hasQueuedSaleOrderRecoveryEvidence(
+  saleOperationId: string | null,
+  queue: readonly SaleRecoveryQueueEvidenceItem[],
+): boolean {
+  if (saleOperationId === null) return false;
+  return queue.some((item) => (
+    item.type === 'sale_order' && item.id === saleOperationId
+  ));
 }
 
 export function shouldResumeAfterSale({
@@ -14,12 +31,15 @@ export function shouldResumeAfterSale({
   stopExists,
   saleSubmitting,
   saleRecoveryPersistenceFailed,
+  saleOperationId,
+  hasQueuedSaleOrderEvidence,
 }: ResumeAfterSaleInput): boolean {
   return saleConfirmed
     && !hasAfterSaleAction
     && stopExists
     && !saleSubmitting
-    && !saleRecoveryPersistenceFailed;
+    && !saleRecoveryPersistenceFailed
+    && (saleOperationId === null || hasQueuedSaleOrderEvidence);
 }
 
 export interface SaleConfirmationSingleFlight {

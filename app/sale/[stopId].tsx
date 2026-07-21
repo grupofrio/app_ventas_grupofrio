@@ -37,7 +37,7 @@ import {
 } from '../../src/services/pricelist';
 import { decideSalePricelist } from '../../src/services/salePricelistDecision';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
-import { logInfo } from '../../src/utils/logger';
+import { logError, logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 import {
@@ -49,6 +49,11 @@ import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts
 import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
+import {
+  classifySaleSubmissionError,
+  readSaleSubmissionErrorMetadata,
+} from '../../src/services/saleSubmissionOutcome';
+import { persistAmbiguousSaleRecovery } from '../../src/services/saleAmbiguousRecovery';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -91,6 +96,9 @@ function SaleScreenInner() {
 
   const isOnline = useSyncStore((s) => s.isOnline);
   const enqueue = useSyncStore((s) => s.enqueue);
+  const persistQueue = useSyncStore((s) => s.persistQueue);
+  const processQueue = useSyncStore((s) => s.processQueue);
+  const releaseProcessingHolds = useSyncStore((s) => s.releaseProcessingHolds);
   const syncQueue = useSyncStore((s) => s.queue);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
@@ -385,6 +393,120 @@ function SaleScreenInner() {
 
     try {
       await createSale(buildSalesCreatePayload(payload));
+    } catch (error) {
+      const outcome = classifySaleSubmissionError(error);
+      const metadata = readSaleSubmissionErrorMetadata(error);
+      logInfo('general', 'sale_submission_outcome', {
+        operation_id: operationId,
+        outcome: outcome.kind,
+        http_status: metadata.httpStatus,
+        code: metadata.code,
+      });
+
+      if (outcome.kind === 'definitive_rejection') {
+        setSaleSubmitting(false);
+        unlockSaleConfirm();
+        // insufficient_stock: el backend rechazó por stock. Refrescamos el
+        // inventario para mostrar el available_qty REAL y dejamos el carrito
+        // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
+        const insufficient = getInsufficientStockDetail(error);
+        if (insufficient) {
+          if (warehouseId) void loadProducts(warehouseId);
+          Alert.alert(
+            'Stock insuficiente (servidor)',
+            `${describeInsufficientStock(insufficient)}\n\n${insufficientStockActionHint()}`,
+          );
+          return;
+        }
+        Alert.alert(
+          'Venta rechazada',
+          metadata.message ?? 'No se pudo confirmar la venta en Odoo.',
+        );
+        return;
+      }
+
+      try {
+        await persistAmbiguousSaleRecovery({
+          operationId,
+          payload,
+          customerName: stop.customer_name,
+          total,
+          stopId: stop.id,
+          photoUris: salePhotoUris,
+          enqueue,
+          persistQueue,
+          releaseProcessingHolds,
+        });
+      } catch (persistError) {
+        setSaleSubmitting(false);
+        logError('sync', 'ambiguous_sale_persist_failed', {
+          operation_id: operationId,
+          message: persistError instanceof Error
+            ? persistError.message
+            : typeof persistError === 'string'
+              ? persistError
+              : 'Error desconocido al guardar la recuperación.',
+        });
+        Alert.alert(
+          'No cierres la aplicación',
+          'No pudimos guardar de forma segura el pedido. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente.',
+        );
+        return;
+      }
+
+      void processQueue().catch((processError) => logError(
+        'sync',
+        'ambiguous_sale_process_start_failed',
+        {
+          operation_id: operationId,
+          message: processError instanceof Error
+            ? processError.message
+            : typeof processError === 'string'
+              ? processError
+              : 'Error desconocido al iniciar la sincronización.',
+        },
+      ));
+
+      useVisitStore.setState({ saleOperationId: operationId });
+      try {
+        await saveSaleTicketSnapshot(buildSaleTicketSnapshot({
+          saleId: operationId,
+          customerName: stop.customer_name,
+          sellerName: employeeName,
+          paymentMethod: confirmedPaymentMethod,
+          createdAt: new Date().toISOString(),
+          lines: saleLines,
+        }));
+        setLastSaleTicketId(operationId);
+      } catch (ticketError) {
+        logError('sync', 'ambiguous_sale_ticket_failed', {
+          operation_id: operationId,
+          message: ticketError instanceof Error
+            ? ticketError.message
+            : typeof ticketError === 'string'
+              ? ticketError
+              : 'Error desconocido al guardar el comprobante.',
+        });
+        Alert.alert(
+          'Comprobante no disponible',
+          'El pedido quedó guardado para verificación, pero no pudimos guardar el comprobante local.',
+        );
+      }
+      setSaleSubmitting(false);
+      Alert.alert(
+        'Pedido pendiente de verificación',
+        'No pudimos confirmar la respuesta del servidor. El pedido quedó pendiente de verificación y se reintentará con el mismo identificador.',
+      );
+      if (shouldSkipStopCheckout(stop.id)) {
+        updateStopState(stop.id, 'done');
+        setAfterSaleAction('route');
+      } else {
+        setAfterSaleAction('checkout');
+      }
+      return;
+    }
+
+    try {
       enqueueVisitPhotos({
         stopId: stop.id,
         photoUris: salePhotoUris,
@@ -400,29 +522,26 @@ function SaleScreenInner() {
         lines: saleLines,
       }));
       setLastSaleTicketId(operationId);
-      useVisitStore.setState({ saleOperationId: null });
-      setSaleSubmitting(false);
-      if (warehouseId) {
-        void loadProducts(warehouseId);
-      }
     } catch (error) {
-      setSaleSubmitting(false);
-      unlockSaleConfirm();
-      // insufficient_stock: el backend rechazó por stock. Refrescamos el
-      // inventario para mostrar el available_qty REAL y dejamos el carrito
-      // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
-      const insufficient = getInsufficientStockDetail(error);
-      if (insufficient) {
-        if (warehouseId) void loadProducts(warehouseId);
-        Alert.alert(
-          'Stock insuficiente (servidor)',
-          `${describeInsufficientStock(insufficient)}\n\n${insufficientStockActionHint()}`,
-        );
-        return;
-      }
-      const message = error instanceof Error ? error.message : 'No se pudo confirmar la venta en Odoo.';
-      Alert.alert('Venta rechazada', message);
-      return;
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'Error desconocido al completar los datos locales.';
+      logError('sync', 'sale_post_confirmation_failed', {
+        operation_id: operationId,
+        message,
+      });
+      Alert.alert(
+        'Venta confirmada con aviso',
+        `La venta se confirmó, pero no pudimos completar las fotos o el comprobante local. ${message}`,
+      );
+    }
+
+    useVisitStore.setState({ saleOperationId: null });
+    setSaleSubmitting(false);
+    if (warehouseId) {
+      void loadProducts(warehouseId);
     }
 
     if (shouldSkipStopCheckout(stop.id)) {

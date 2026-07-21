@@ -46,7 +46,7 @@ test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
   const html = buildSaleTicketHtml(snapshot);
 
   assert.match(html, /<img class="brand-logo"/);
-  assert.match(html, /src="data:image\/svg\+xml/);
+  assert.match(html, /src="data:image\/png;base64,/);
   assert.match(html, /alt="Grupo Frio"/);
   assert.match(html, /SOLUCIONES EN PRODUCCION GLACIEM/);
   assert.match(html, /RFC:\s*SPG230420F52/);

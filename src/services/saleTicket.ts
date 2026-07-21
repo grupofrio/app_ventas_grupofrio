@@ -1,3 +1,5 @@
+import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
+
 export type SaleTicketPaymentMethod = 'cash' | 'credit' | 'transfer' | 'unknown';
 
 export interface SaleTicketSourceLine {
@@ -65,10 +67,9 @@ export interface SaleTicketSnapshot {
   totalKg: number;
 }
 
-const GRUPO_FRIO_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 274 194" role="img" aria-label="Grupo Frio"><rect width="274" height="194" fill="#fff"/><g transform="translate(39 56)"><path d="M45 0 0 26v52l45 26 45-26V26Z" fill="#d8dce1"/><path d="M45 0v33L17 49V17Z" fill="#cfd3d8"/><path d="M45 0 73 17v32L45 33Z" fill="#bfc4ca"/><path d="M17 49 45 33l28 16-28 17Z" fill="#edf0f2"/><path d="M0 78V26l17 10v52Z" fill="#eef1f4"/><path d="M90 26v52L73 88V36Z" fill="#aeb4bd"/><path d="M0 78 45 104V66L17 50 17 88Z" fill="#0b4aa0"/><path d="M90 78 45 104V66l28-16v38Z" fill="#003c8f"/><path d="M45 66 17 50l28-17 28 17Z" fill="#f7f9fa"/><path d="M45 0v33" fill="none" stroke="#fff" stroke-width="3"/><path d="M17 17v33l28 16v38" fill="none" stroke="#fff" stroke-width="3"/><path d="M73 17v33L45 66" fill="none" stroke="#fff" stroke-width="3"/></g><g fill="#003c8f" font-family="Arial, Helvetica, sans-serif"><text x="137" y="101" font-size="29" font-weight="300" letter-spacing="1.5">GRUPO</text><text x="137" y="136" font-size="34" font-weight="700" letter-spacing="3">FRIO</text></g></svg>`;
-const GRUPO_FRIO_LOGO_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(GRUPO_FRIO_LOGO_SVG)}`;
-export const SALE_TICKET_LEGAL_NAME = 'SOLUCIONES EN PRODUCCION GLACIEM';
-export const SALE_TICKET_RFC = 'SPG230420F52';
+const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
+export const SALE_TICKET_LEGAL_NAME = SALE_TICKET_BRANDING.legalName;
+export const SALE_TICKET_RFC = SALE_TICKET_BRANDING.rfcLabel.replace(/^RFC:\s*/, '');
 export const SALE_TICKET_DEFAULT_SELLER = 'Vendedor no especificado';
 export const SALE_TICKET_CREDIT_NOTE =
   `Pagare: me obligo a cubrir a favor de Grupo Frio / ${SALE_TICKET_LEGAL_NAME}, RFC ${SALE_TICKET_RFC}, la cantidad total indicada en este ticket. Si no se cubre puntualmente, pagare intereses moratorios conforme a la politica vigente.`;
@@ -271,10 +272,10 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
 </head>
 <body>
   <div class="center">
-    <img class="brand-logo" src="${escapeHtml(GRUPO_FRIO_LOGO_DATA_URI)}" alt="Grupo Frio" />
-    <div class="legal-name">${escapeHtml(SALE_TICKET_LEGAL_NAME)}</div>
-    <div class="tax-id">RFC: ${escapeHtml(SALE_TICKET_RFC)}</div>
-    <div class="muted">Ticket de venta</div>
+    <img class="brand-logo" src="${escapeHtml(SALE_TICKET_LOGO_DATA_URI)}" alt="Grupo Frio" />
+    <div class="legal-name">${escapeHtml(SALE_TICKET_BRANDING.legalName)}</div>
+    <div class="tax-id">${escapeHtml(SALE_TICKET_BRANDING.rfcLabel)}</div>
+    <div class="muted">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
   </div>
   <div class="divider"></div>
   <div class="row"><span>Folio</span><span>${escapeHtml(snapshot.saleId)}</span></div>
@@ -294,7 +295,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
   <div class="credit-note">${escapeHtml(SALE_TICKET_CREDIT_NOTE)}</div>
   ` : ''}
   <div class="divider"></div>
-  <div class="center muted">Gracias por su compra</div>
+  <div class="center muted">${escapeHtml(SALE_TICKET_BRANDING.footer)}</div>
 </body>
 </html>`;
 }

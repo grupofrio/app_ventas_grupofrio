@@ -57,7 +57,7 @@ import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
+import { shouldRetrySyncItemError } from '../services/syncRetryDecision';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
@@ -934,7 +934,7 @@ async function processOneItem(
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
-    const shouldRetry = isRetryableSyncErrorMessage(msg);
+    const shouldRetry = shouldRetrySyncItemError(item.type, error);
 
     if (!shouldRetry || newRetries >= MAX_RETRIES) {
       get().markDead(item.id, msg, newRetries);

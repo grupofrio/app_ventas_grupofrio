@@ -88,6 +88,24 @@ export function restoreSaleRecoveryState(
     };
   }
 
+  if (
+    snapshot.saleConfirmed === true
+    && !saleReadyToContinue
+    && typeof snapshot.saleOperationId === 'string'
+    && snapshot.saleOperationId.trim().length > 0
+  ) {
+    return {
+      saleConfirmed: true,
+      saleOperationId: snapshot.saleOperationId,
+      saleReadyToContinue: false,
+      // Snapshots from versions predating the durable recovery intent cannot
+      // be retried safely. Keep their original operation ID locked for manual
+      // review instead of reopening confirmation and risking a duplicate sale.
+      saleRecoveryPersistenceFailed: true,
+      saleRecoveryIntent: null,
+    };
+  }
+
   return {
     saleConfirmed: false,
     saleOperationId: null,

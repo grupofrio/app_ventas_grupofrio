@@ -65,8 +65,14 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     && !saleReadyToContinue
     && saleOperationId !== null
     && restoredIntent?.operationId === saleOperationId;
+  const hasManualReviewLock = saleConfirmed
+    && !saleReadyToContinue
+    && typeof saleOperationId === 'string'
+    && saleOperationId.trim().length > 0
+    && restoredIntent === null
+    && saleRecoveryPersistenceFailed;
   const hasTerminalSale = saleConfirmed && saleReadyToContinue;
-  const persistConfirmed = hasRecoverablePendingSale || hasTerminalSale;
+  const persistConfirmed = hasRecoverablePendingSale || hasManualReviewLock || hasTerminalSale;
 
   return {
     phase,
@@ -80,7 +86,8 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     saleConfirmed: persistConfirmed,
     saleOperationId: persistConfirmed ? saleOperationId : null,
     saleReadyToContinue: hasTerminalSale,
-    saleRecoveryPersistenceFailed: persistConfirmed ? saleRecoveryPersistenceFailed : false,
+    saleRecoveryPersistenceFailed:
+      hasManualReviewLock || (persistConfirmed && saleRecoveryPersistenceFailed),
     saleRecoveryIntent: hasRecoverablePendingSale ? restoredIntent : null,
   };
 }

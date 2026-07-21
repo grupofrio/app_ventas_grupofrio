@@ -28,16 +28,51 @@ export function describeSaleOfflineUx(isOnline: boolean): SaleOfflineUx {
 
 export type SaleSyncStatusLike = 'none' | 'pending' | 'done' | 'failed';
 
+export interface SaleRecoveryNotice {
+  show: boolean;
+  message: string;
+}
+
+export function describeSaleRecoveryNotice(input: {
+  saleConfirmed: boolean;
+  saleRecoveryPersistenceFailed: boolean;
+  hasRecoveryIntent: boolean;
+}): SaleRecoveryNotice {
+  if (!input.saleConfirmed || !input.saleRecoveryPersistenceFailed) {
+    return { show: false, message: '' };
+  }
+
+  if (input.hasRecoveryIntent) {
+    return {
+      show: true,
+      message: 'No pudimos completar la recuperación local. Reinicia la app y sincroniza; si continúa bloqueado, contacta a soporte.',
+    };
+  }
+
+  return {
+    show: true,
+    message: 'El resultado de este pedido no puede verificarse automáticamente. No intentes otra venta; solicita una revisión manual a soporte.',
+  };
+}
+
 /**
- * Etiqueta del botón de confirmación según el estado del pedido. Prioriza el
- * estado real de sincronización (pedido offline encolado) sobre el lock local,
- * para que el vendedor nunca vea "confirmado" un pedido que sigue pendiente.
+ * Etiqueta del botón de confirmación según el estado del pedido. Una falla de
+ * recuperación se muestra primero; en los demás casos, prioriza el estado real
+ * de sincronización para no rotular como confirmado un pedido aún pendiente.
  */
 export function saleConfirmButtonLabel(input: {
   saleSyncStatus: SaleSyncStatusLike;
   isOnline: boolean;
   saleConfirmed: boolean;
+  saleRecoveryPersistenceFailed?: boolean;
+  hasRecoveryIntent?: boolean;
 }): string {
+  if (input.saleConfirmed && input.saleRecoveryPersistenceFailed) {
+    return input.hasRecoveryIntent
+      ? '⚠️ Recuperación pendiente'
+      : '⚠️ Revisión requerida';
+  }
+
   switch (input.saleSyncStatus) {
     case 'pending':
       return '⏳ Pedido pendiente de envío';

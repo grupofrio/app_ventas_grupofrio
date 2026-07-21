@@ -10,7 +10,14 @@ interface Mod {
   saleConfirmButtonLabel: (input: {
     saleSyncStatus: 'none' | 'pending' | 'done' | 'failed';
     isOnline: boolean; saleConfirmed: boolean;
+    saleRecoveryPersistenceFailed?: boolean;
+    hasRecoveryIntent?: boolean;
   }) => string;
+  describeSaleRecoveryNotice: (input: {
+    saleConfirmed: boolean;
+    saleRecoveryPersistenceFailed: boolean;
+    hasRecoveryIntent: boolean;
+  }) => { show: boolean; message: string };
 }
 
 function run(m: Mod) {
@@ -41,6 +48,50 @@ function run(m: Mod) {
   assert.equal(m.saleConfirmButtonLabel({ saleSyncStatus: 'none', isOnline: true, saleConfirmed: false }), '✓ Confirmar Pedido');
   assert.match(m.saleConfirmButtonLabel({ saleSyncStatus: 'none', isOnline: false, saleConfirmed: false }), /guardar pedido pendiente/i);
   assert.match(m.saleConfirmButtonLabel({ saleSyncStatus: 'none', isOnline: true, saleConfirmed: true }), /confirmado/i);
+  assert.doesNotMatch(
+    m.saleConfirmButtonLabel({
+      saleSyncStatus: 'none',
+      isOnline: true,
+      saleConfirmed: true,
+      saleRecoveryPersistenceFailed: true,
+      hasRecoveryIntent: false,
+    }),
+    /pedido confirmado/i,
+  );
+  assert.match(
+    m.saleConfirmButtonLabel({
+      saleSyncStatus: 'none',
+      isOnline: true,
+      saleConfirmed: true,
+      saleRecoveryPersistenceFailed: true,
+      hasRecoveryIntent: false,
+    }),
+    /revisi[oó]n requerida/i,
+  );
+
+  const manual = m.describeSaleRecoveryNotice({
+    saleConfirmed: true,
+    saleRecoveryPersistenceFailed: true,
+    hasRecoveryIntent: false,
+  });
+  assert.equal(manual.show, true);
+  assert.match(manual.message, /no intentes otra venta/i);
+  assert.match(manual.message, /soporte|revisi[oó]n manual/i);
+
+  const retryable = m.describeSaleRecoveryNotice({
+    saleConfirmed: true,
+    saleRecoveryPersistenceFailed: true,
+    hasRecoveryIntent: true,
+  });
+  assert.equal(retryable.show, true);
+  assert.match(retryable.message, /reinicia/i);
+  assert.match(retryable.message, /sincroniza/i);
+
+  assert.equal(m.describeSaleRecoveryNotice({
+    saleConfirmed: true,
+    saleRecoveryPersistenceFailed: false,
+    hasRecoveryIntent: true,
+  }).show, false);
 
   console.log('sale offline UX tests: ok');
 }

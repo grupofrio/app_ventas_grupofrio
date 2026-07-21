@@ -125,10 +125,10 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     saleConfirmed: true,
     saleOperationId: 'sale-op-old',
   }), {
-    saleConfirmed: false,
-    saleOperationId: null,
+    saleConfirmed: true,
+    saleOperationId: 'sale-op-old',
     saleReadyToContinue: false,
-    saleRecoveryPersistenceFailed: false,
+    saleRecoveryPersistenceFailed: true,
     saleRecoveryIntent: null,
   });
 

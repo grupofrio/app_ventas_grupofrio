@@ -11,7 +11,11 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
-import { describeSaleOfflineUx, saleConfirmButtonLabel } from '../../src/services/saleOfflineUx';
+import {
+  describeSaleOfflineUx,
+  describeSaleRecoveryNotice,
+  saleConfirmButtonLabel,
+} from '../../src/services/saleOfflineUx';
 import { describeSaleConfirmBlock } from '../../src/services/trustSignals';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
@@ -161,6 +165,7 @@ function SaleScreenInner() {
   const persistSaleConfirmationLock = useVisitStore((s) => s.persistSaleConfirmationLock);
   const saleReadyToContinue = useVisitStore((s) => s.saleReadyToContinue);
   const saleRecoveryPersistenceFailed = useVisitStore((s) => s.saleRecoveryPersistenceFailed);
+  const saleRecoveryIntent = useVisitStore((s) => s.saleRecoveryIntent);
   const markSaleReadyToContinue = useVisitStore((s) => s.markSaleReadyToContinue);
   const clearSaleConfirmationLock = useVisitStore((s) => s.clearSaleConfirmationLock);
   const setSaleRecoveryPersistenceFailed = useVisitStore(
@@ -182,6 +187,11 @@ function SaleScreenInner() {
   // Aviso offline + estado del pedido. Con pedido offline pendiente (S1), el
   // pedido se encola como sale_order y su estado se rastrea por saleOperationId.
   const saleOffline = describeSaleOfflineUx(isOnline);
+  const recoveryNotice = describeSaleRecoveryNotice({
+    saleConfirmed,
+    saleRecoveryPersistenceFailed,
+    hasRecoveryIntent: saleRecoveryIntent !== null,
+  });
   const saleOperationId = useVisitStore((s) => s.saleOperationId);
   const saleSync = getSaleSyncState(saleOperationId, syncQueue);
   const hasSaleOrderRecoveryEvidence = hasQueuedSaleOrderRecoveryEvidence(
@@ -711,6 +721,9 @@ function SaleScreenInner() {
         {saleOffline.showBanner && (
           <AlertBanner variant="warning" icon="📶" message={saleOffline.bannerText} />
         )}
+        {recoveryNotice.show && (
+          <AlertBanner variant="warning" icon="⚠️" message={recoveryNotice.message} />
+        )}
 
         {/* Product lines */}
         {saleLines.length === 0 ? (
@@ -916,6 +929,8 @@ function SaleScreenInner() {
             saleSyncStatus: saleSync.status,
             isOnline,
             saleConfirmed,
+            saleRecoveryPersistenceFailed,
+            hasRecoveryIntent: saleRecoveryIntent !== null,
           })}
           onPress={handleConfirm}
           fullWidth

@@ -79,7 +79,11 @@ import {
   runUnlessProcessingHeld,
   runUnheldProcessingChunk,
 } from '../services/syncProcessingHolds';
-import { processSyncItemToCompletion } from '../services/syncItemCompletion';
+import {
+  applySaleTerminalMarkerDeferral,
+  isSaleTerminalMarkerPersistenceError,
+  processSyncItemToCompletion,
+} from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
 
 // ═══ Constants ═══
@@ -556,7 +560,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const cycleStart = Date.now();
     const cycleTally = createSyncCycleMetrics();
     let gpsDispatched = 0;
-    // P1 (Codex): un ítem legacy DIFERIDO por fallo de persistencia final NO debe
+    // P1 (Codex): un ítem DIFERIDO por fallo de persistencia local NO debe
     // disparar drain_now (redrenaje agresivo si el storage sigue fallando). Se
     // rastrea aquí y se usa en la decisión post-ciclo para forzar backoff.
     let hadDeferredStorageFailure = false;
@@ -677,8 +681,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       // caso; aquí además limpiamos cualquier wake timer pendiente. La cola
       // queda a la espera de un evento EXTERNO: foreground, reconexión, enqueue
       // nuevo o reintento manual — con el error ya logueado para diagnóstico.
-      // P1 (Codex, ronda final): si hubo un legacy DIFERIDO por fallo de
-      // persistencia final, NUNCA drain_now — usar backoff. Sin esto, el legacy
+      // P1 (Codex, ronda final): si hubo un ítem DIFERIDO por fallo de
+      // persistencia local, NUNCA drain_now — usar backoff. Sin esto, el ítem
       // seguía en cola y (si quedaba elegible) re-disparaba drain_now → storage
       // falla → drain_now, en bucle. El ítem diferido queda en 'error'+backoff
       // (fuera de la elegibilidad inmediata), y scheduleWake lo reintenta al vencer.
@@ -995,6 +999,23 @@ async function processOneItemUnheld(
 
     return 'handled';
   } catch (error: unknown) {
+    if (isSaleTerminalMarkerPersistenceError(error)) {
+      const backoffMs = calculateBackoff(0);
+      const retryAt = Date.now() + backoffMs;
+      const newQueue = applySaleTerminalMarkerDeferral(
+        get().queue,
+        error.operationId,
+        retryAt,
+      );
+      set({ queue: newQueue, ...computeCounts(newQueue) });
+      schedulePersist();
+      logWarn('sync', 'sale_terminal_marker_deferred', {
+        id: error.operationId,
+        delay_ms: backoffMs,
+      });
+      return 'deferred';
+    }
+
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
     const shouldRetry = shouldRetrySyncItemError(item.type, error);

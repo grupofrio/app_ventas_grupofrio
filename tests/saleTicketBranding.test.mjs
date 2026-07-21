@@ -35,7 +35,8 @@ test('sale ticket HTML consumes the canonical shared branding', async () => {
     lines: [],
   }));
 
-  assert.match(html, /src="data:image\/png;base64,/);
+  const expectedLogoSrc = `src="data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}"`;
+  assert.ok(html.includes(expectedLogoSrc), 'ticket HTML must embed the exact shared branding logo');
   assert.ok(html.includes(SALE_TICKET_BRANDING.legalName));
   assert.ok(html.includes(SALE_TICKET_BRANDING.rfcLabel));
   assert.ok(html.includes(SALE_TICKET_BRANDING.title));

@@ -8,6 +8,10 @@ function main() {
   const saleScreen = readFileSync(resolve(REPO_ROOT, 'app/sale/[stopId].tsx'), 'utf8');
   const printScreen = readFileSync(resolve(REPO_ROOT, 'app/print/[orderId].tsx'), 'utf8');
   const saleTicketService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicket.ts'), 'utf8');
+  const saleTicketBrandingService = readFileSync(
+    resolve(REPO_ROOT, 'src/services/saleTicketBranding.ts'),
+    'utf8',
+  );
   const saleTicketPdfService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicketPdf.ts'), 'utf8');
 
   assert.match(
@@ -41,14 +45,19 @@ function main() {
     'La vista previa del ticket debe mostrar la marca Grupo Frio',
   );
   assert.match(
-    saleTicketService,
+    saleTicketBrandingService,
     /SOLUCIONES EN PRODUCCION GLACIEM/,
-    'El ticket debe declarar la razon social',
+    'El branding compartido debe declarar la razon social',
+  );
+  assert.match(
+    saleTicketBrandingService,
+    /SPG230420F52/,
+    'El branding compartido debe declarar el RFC',
   );
   assert.match(
     saleTicketService,
-    /SPG230420F52/,
-    'El ticket debe declarar el RFC',
+    /import\s+\{\s*SALE_TICKET_BRANDING\s*\}\s+from\s+['"]\.\/saleTicketBranding(?:\.ts)?['"]/,
+    'El ticket debe consumir el branding compartido',
   );
   assert.match(
     printScreen,

@@ -134,9 +134,14 @@ function snapshotBondedDevices(value: unknown): readonly BondedBluetoothDeviceSn
   try {
     if (!Array.isArray(value)) return null;
     const devices: BondedBluetoothDeviceSnapshot[] = [];
+    const seenAddresses = new Set<string>();
     for (const candidate of value) {
       const device = snapshotBondedDevice(candidate);
-      if (device !== null) devices.push(device);
+      if (device !== null && !seenAddresses.has(device.address)) {
+        // Native order is authoritative: the first valid snapshot for a canonical MAC wins.
+        seenAddresses.add(device.address);
+        devices.push(device);
+      }
     }
     devices.sort(compareBondedDevices);
     return Object.freeze(devices);
@@ -157,6 +162,22 @@ function nativeErrorCode(error: unknown): string | null {
 
 function frozenResult<Result extends ThermalPrinterAccessResult>(result: Result): Result {
   return Object.freeze(result);
+}
+
+function nativeAccessFailure(
+  code: string | null,
+  savedPrinter: SavedThermalPrinterSnapshot | null,
+): ThermalPrinterAccessResult {
+  switch (code) {
+    case 'permission_denied':
+      return frozenResult({ status: 'permission_denied', savedPrinter });
+    case 'bluetooth_disabled':
+      return frozenResult({ status: 'bluetooth_off', savedPrinter });
+    case 'bluetooth_unsupported':
+      return frozenResult({ status: 'bluetooth_unsupported', savedPrinter });
+    default:
+      return frozenResult({ status: 'native_error', code, savedPrinter });
+  }
 }
 
 export function createThermalPrinterService(
@@ -190,7 +211,18 @@ export function createThermalPrinterService(
         return frozenResult({ status: 'native_unavailable', savedPrinter });
       }
 
-      if (androidApiLevel >= ANDROID_BLUETOOTH_CONNECT_API_LEVEL) {
+      let state: BluetoothState;
+      try {
+        state = await native.getBluetoothState();
+      } catch (error) {
+        const code = nativeErrorCode(error);
+        if (
+          code !== 'permission_denied' ||
+          androidApiLevel < ANDROID_BLUETOOTH_CONNECT_API_LEVEL
+        ) {
+          return nativeAccessFailure(code, savedPrinter);
+        }
+
         let permission: BluetoothConnectPermissionResult;
         try {
           permission = await requestPermissionOnce();
@@ -206,13 +238,12 @@ export function createThermalPrinterService(
         if (permission !== 'granted') {
           return frozenResult({ status: 'permission_request_failed', savedPrinter });
         }
-      }
 
-      let state: BluetoothState;
-      try {
-        state = await native.getBluetoothState();
-      } catch (error) {
-        return frozenResult({ status: 'native_error', code: nativeErrorCode(error), savedPrinter });
+        try {
+          state = await native.getBluetoothState();
+        } catch (retryError) {
+          return nativeAccessFailure(nativeErrorCode(retryError), savedPrinter);
+        }
       }
       if (state === 'unsupported') {
         return frozenResult({ status: 'bluetooth_unsupported', savedPrinter });
@@ -228,7 +259,7 @@ export function createThermalPrinterService(
       try {
         nativeDevices = await native.getBondedDevices();
       } catch (error) {
-        return frozenResult({ status: 'native_error', code: nativeErrorCode(error), savedPrinter });
+        return nativeAccessFailure(nativeErrorCode(error), savedPrinter);
       }
       const devices = snapshotBondedDevices(nativeDevices);
       if (devices === null) {

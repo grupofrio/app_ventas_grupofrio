@@ -1,9 +1,17 @@
 import type {
   BluetoothState,
   BondedBluetoothDevice,
+  NativePrintResult,
+  ThermalTicketBranding,
+  ThermalTicketDocument,
   ThermalPrinterNativeModule,
 } from '../../modules/thermal-printer/index.ts';
-import type { SavedThermalPrinterV1 } from './thermalPrinterSelection.ts';
+import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
+import { requiresManualReprintConfirmation } from './thermalPrinterTypes.ts';
+import type {
+  SavedThermalPrinterV1,
+  ThermalPrinterSelectionStore,
+} from './thermalPrinterSelection.ts';
 
 export type ThermalPrinterPlatform = 'android' | 'ios' | 'web';
 export type BluetoothConnectPermissionResult = 'granted' | 'denied' | 'never_ask_again';
@@ -15,8 +23,78 @@ export interface ThermalPrinterServiceDependencies {
   requestConnectPermission: () => Promise<BluetoothConnectPermissionResult>;
 }
 
+export interface ThermalPrinterJobDependencies {
+  selectionStore: ThermalPrinterSelectionStore;
+}
+
 export type BondedBluetoothDeviceSnapshot = Readonly<BondedBluetoothDevice>;
 export type SavedThermalPrinterSnapshot = Readonly<SavedThermalPrinterV1>;
+export type NativePrintProgressSnapshot = Readonly<NativePrintResult>;
+
+export type ThermalPrintJobKind = 'ticket' | 'diagnostic';
+
+export type ThermalPrintJobResult = Readonly<{
+  status: 'sent';
+  kind: ThermalPrintJobKind;
+  printer: SavedThermalPrinterSnapshot;
+  progress: NativePrintProgressSnapshot;
+}>;
+
+export const GENERIC_THERMAL_PRINTER_MESSAGE =
+  'No se pudo enviar el ticket a la impresora.';
+
+const THERMAL_PRINTER_MESSAGES = Object.freeze({
+  bluetooth_unsupported: 'Este dispositivo no admite Bluetooth.',
+  bluetooth_disabled: 'Enciende Bluetooth para continuar.',
+  permission_denied: 'Se necesita permiso para conectar con la impresora.',
+  printer_not_bonded:
+    'La impresora seleccionada ya no está vinculada. Vuelve a vincularla o elige otra.',
+  connect_timeout:
+    'La impresora tardó demasiado en responder. Verifica que esté encendida y cerca.',
+  connect_failed:
+    'No se pudo conectar con la impresora. Verifica que esté encendida y cerca.',
+  busy: 'Ya hay un ticket en proceso de envío.',
+  invalid_ticket: 'El ticket contiene datos que no se pueden imprimir.',
+  ticket_too_large: 'El ticket es demasiado largo para imprimirlo.',
+  write_timeout: 'La impresora dejó de responder durante el envío.',
+  write_failed: 'No se pudo completar el envío del ticket.',
+} as const);
+
+export type KnownThermalPrinterErrorCode = keyof typeof THERMAL_PRINTER_MESSAGES;
+
+export function toThermalPrinterMessage(code: string): string {
+  if (Object.prototype.hasOwnProperty.call(THERMAL_PRINTER_MESSAGES, code)) {
+    return THERMAL_PRINTER_MESSAGES[code as KnownThermalPrinterErrorCode];
+  }
+  return GENERIC_THERMAL_PRINTER_MESSAGE;
+}
+
+const ZERO_PRINT_PROGRESS: NativePrintProgressSnapshot = Object.freeze({
+  transportBytesWritten: 0,
+  rasterBytesWritten: 0,
+  bandsCompleted: 0,
+  rasterPayloadAttempted: false,
+});
+
+export class ThermalPrinterError extends Error {
+  readonly code: string;
+  readonly phase: string | null;
+  readonly progress: NativePrintProgressSnapshot;
+  readonly requiresManualReprint: boolean;
+
+  constructor(
+    code: string,
+    phase: string | null = null,
+    progress: NativePrintProgressSnapshot = ZERO_PRINT_PROGRESS,
+  ) {
+    super(toThermalPrinterMessage(code));
+    this.name = 'ThermalPrinterError';
+    this.code = code;
+    this.phase = phase;
+    this.progress = progress;
+    this.requiresManualReprint = requiresManualReprintConfirmation(progress);
+  }
+}
 
 type AccessResultBase = {
   savedPrinter: SavedThermalPrinterSnapshot | null;
@@ -51,11 +129,19 @@ export type ThermalPrinterAccessResult =
 
 export interface ThermalPrinterService {
   prepare(savedPrinter?: SavedThermalPrinterV1 | null): Promise<ThermalPrinterAccessResult>;
+  selectPrinter(device: BondedBluetoothDevice): Promise<SavedThermalPrinterSnapshot>;
+  changePrinter(device: BondedBluetoothDevice): Promise<SavedThermalPrinterSnapshot>;
+  printTicket(document: ThermalTicketDocument): Promise<ThermalPrintJobResult>;
+  printDiagnostic(): Promise<ThermalPrintJobResult>;
 }
 
 const ANDROID_BLUETOOTH_CONNECT_API_LEVEL = 31;
 const BLUETOOTH_MAC_ADDRESS = /^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 const STABLE_NATIVE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const STABLE_NATIVE_PHASE = /^[a-z][a-z0-9_-]{0,63}$/;
+const MAX_NATIVE_ERROR_ENVELOPE_LENGTH = 65_536;
+
+let thermalPrintJobInFlight = false;
 
 function dataProperty(object: object, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
@@ -82,6 +168,19 @@ function snapshotSavedPrinter(
       return null;
     }
     return Object.freeze({ version: 1, name, address });
+  } catch {
+    return null;
+  }
+}
+
+function snapshotSelectionDevice(value: unknown): SavedThermalPrinterSnapshot | null {
+  if (value === null || typeof value !== 'object') return null;
+  try {
+    return snapshotSavedPrinter({
+      version: 1,
+      name: dataProperty(value, 'name'),
+      address: dataProperty(value, 'address'),
+    } as SavedThermalPrinterV1);
   } catch {
     return null;
   }
@@ -160,6 +259,109 @@ function nativeErrorCode(error: unknown): string | null {
   }
 }
 
+function snapshotProgress(value: unknown): NativePrintProgressSnapshot | null {
+  if (value === null || typeof value !== 'object') return null;
+
+  try {
+    const transportBytesWritten = dataProperty(value, 'transportBytesWritten');
+    const rasterBytesWritten = dataProperty(value, 'rasterBytesWritten');
+    const bandsCompleted = dataProperty(value, 'bandsCompleted');
+    const rasterPayloadAttempted = dataProperty(value, 'rasterPayloadAttempted');
+    if (
+      typeof transportBytesWritten !== 'number' ||
+      !Number.isSafeInteger(transportBytesWritten) ||
+      transportBytesWritten < 0 ||
+      typeof rasterBytesWritten !== 'number' ||
+      !Number.isSafeInteger(rasterBytesWritten) ||
+      rasterBytesWritten < 0 ||
+      typeof bandsCompleted !== 'number' ||
+      !Number.isSafeInteger(bandsCompleted) ||
+      bandsCompleted < 0 ||
+      typeof rasterPayloadAttempted !== 'boolean'
+    ) {
+      return null;
+    }
+
+    return Object.freeze({
+      transportBytesWritten,
+      rasterBytesWritten,
+      bandsCompleted,
+      rasterPayloadAttempted,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function snapshotPhase(value: unknown): string | null {
+  return typeof value === 'string' && STABLE_NATIVE_PHASE.test(value) ? value : null;
+}
+
+function nativeErrorEnvelope(error: unknown): {
+  valid: boolean;
+  phase: string | null;
+  progress: NativePrintProgressSnapshot;
+} {
+  if (error === null || typeof error !== 'object') {
+    return { valid: false, phase: null, progress: ZERO_PRINT_PROGRESS };
+  }
+
+  try {
+    const message = dataProperty(error, 'message');
+    if (
+      typeof message !== 'string' ||
+      message.length === 0 ||
+      message.length > MAX_NATIVE_ERROR_ENVELOPE_LENGTH
+    ) {
+      return { valid: false, phase: null, progress: ZERO_PRINT_PROGRESS };
+    }
+    const parsed: unknown = JSON.parse(message);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { valid: false, phase: null, progress: ZERO_PRINT_PROGRESS };
+    }
+
+    const privateMessage = dataProperty(parsed, 'message');
+    const rawPhase = dataProperty(parsed, 'phase');
+    const phase = snapshotPhase(rawPhase);
+    const progress = snapshotProgress(dataProperty(parsed, 'progress'));
+    const validPhase = rawPhase === null || phase !== null;
+
+    return {
+      valid: typeof privateMessage === 'string' && validPhase && progress !== null,
+      phase,
+      progress: progress ?? ZERO_PRINT_PROGRESS,
+    };
+  } catch {
+    return { valid: false, phase: null, progress: ZERO_PRINT_PROGRESS };
+  }
+}
+
+function normalizeThermalPrinterError(error: unknown): ThermalPrinterError {
+  try {
+    if (error instanceof ThermalPrinterError) return error;
+  } catch {
+    return unexpectedThermalPrinterError();
+  }
+  const envelope = nativeErrorEnvelope(error);
+  const code = envelope.valid ? nativeErrorCode(error) ?? 'unexpected_error' : 'unexpected_error';
+  return new ThermalPrinterError(code, envelope.phase, envelope.progress);
+}
+
+function unexpectedThermalPrinterError(): ThermalPrinterError {
+  return new ThermalPrinterError('unexpected_error');
+}
+
+function thermalTicketBranding(): ThermalTicketBranding {
+  return Object.freeze({
+    logoPngBase64: SALE_TICKET_BRANDING.logoPngBase64,
+    logoVersion: SALE_TICKET_BRANDING.version,
+    legalName: SALE_TICKET_BRANDING.legalName,
+    rfcLabel: SALE_TICKET_BRANDING.rfcLabel,
+    title: SALE_TICKET_BRANDING.title,
+    footer: SALE_TICKET_BRANDING.footer,
+  });
+}
+
 function frozenResult<Result extends ThermalPrinterAccessResult>(result: Result): Result {
   return Object.freeze(result);
 }
@@ -182,6 +384,7 @@ function nativeAccessFailure(
 
 export function createThermalPrinterService(
   dependencies: ThermalPrinterServiceDependencies,
+  jobDependencies?: ThermalPrinterJobDependencies,
 ): ThermalPrinterService {
   const { platform, androidApiLevel, native, requestConnectPermission } = dependencies;
   let permissionRequestInFlight: Promise<BluetoothConnectPermissionResult> | null = null;
@@ -195,6 +398,83 @@ export function createThermalPrinterService(
     });
     permissionRequestInFlight = sharedRequest;
     return sharedRequest;
+  };
+
+  const persistPrinter = async (
+    device: BondedBluetoothDevice,
+  ): Promise<SavedThermalPrinterSnapshot> => {
+    const snapshot = snapshotSelectionDevice(device);
+    if (snapshot === null || jobDependencies === undefined) {
+      throw unexpectedThermalPrinterError();
+    }
+
+    try {
+      await jobDependencies.selectionStore.save({
+        name: snapshot.name,
+        address: snapshot.address,
+      });
+      return snapshot;
+    } catch (error) {
+      throw normalizeThermalPrinterError(error);
+    }
+  };
+
+  const selectedBondedPrinter = async (): Promise<SavedThermalPrinterSnapshot> => {
+    if (jobDependencies === undefined || native === null) {
+      throw unexpectedThermalPrinterError();
+    }
+
+    let loaded: SavedThermalPrinterV1 | null;
+    try {
+      loaded = await jobDependencies.selectionStore.load();
+    } catch (error) {
+      throw normalizeThermalPrinterError(error);
+    }
+    const selected = snapshotSavedPrinter(loaded);
+    if (selected === null) throw new ThermalPrinterError('printer_not_bonded');
+
+    let nativeDevices: unknown;
+    try {
+      nativeDevices = await native.getBondedDevices();
+    } catch (error) {
+      throw normalizeThermalPrinterError(error);
+    }
+    const devices = snapshotBondedDevices(nativeDevices);
+    if (
+      devices === null ||
+      !devices.some(
+        (device) => device.address.toLowerCase() === selected.address.toLowerCase(),
+      )
+    ) {
+      throw new ThermalPrinterError('printer_not_bonded');
+    }
+    return selected;
+  };
+
+  const runPrintJob = async (
+    kind: ThermalPrintJobKind,
+    print: (
+      availableNative: ThermalPrinterNativeModule,
+      printer: SavedThermalPrinterSnapshot,
+    ) => Promise<NativePrintResult>,
+  ): Promise<ThermalPrintJobResult> => {
+    if (thermalPrintJobInFlight) {
+      throw new ThermalPrinterError('busy', 'gate');
+    }
+    thermalPrintJobInFlight = true;
+
+    try {
+      const printer = await selectedBondedPrinter();
+      if (native === null) throw unexpectedThermalPrinterError();
+      const nativeResult = await print(native, printer);
+      const progress = snapshotProgress(nativeResult);
+      if (progress === null) throw unexpectedThermalPrinterError();
+      return Object.freeze({ status: 'sent', kind, printer, progress });
+    } catch (error) {
+      throw normalizeThermalPrinterError(error);
+    } finally {
+      thermalPrintJobInFlight = false;
+    }
   };
 
   return Object.freeze({
@@ -277,6 +557,24 @@ export function createThermalPrinterService(
         savedPrinter,
         savedPrinterBonded,
       });
+    },
+
+    selectPrinter(device: BondedBluetoothDevice) {
+      return persistPrinter(device);
+    },
+
+    changePrinter(device: BondedBluetoothDevice) {
+      return persistPrinter(device);
+    },
+
+    printTicket(document: ThermalTicketDocument) {
+      return runPrintJob('ticket', (availableNative, printer) =>
+        availableNative.printTicket(printer.address, document));
+    },
+
+    printDiagnostic() {
+      return runPrintJob('diagnostic', (availableNative, printer) =>
+        availableNative.printDiagnostic(printer.address, thermalTicketBranding()));
     },
   });
 }

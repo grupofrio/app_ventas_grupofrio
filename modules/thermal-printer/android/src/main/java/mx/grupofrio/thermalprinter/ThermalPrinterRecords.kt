@@ -129,6 +129,28 @@ private fun ThermalTicketBrandingRecord.toRawDomain(): TicketBranding = TicketBr
   footer = requiredRawText(footer, "branding.footer"),
 )
 
+internal fun ThermalTicketBrandingRecord.toDomain(): TicketBranding {
+  val budget = DisplayTextBudget()
+  preflightBranding(this, budget)
+  val raw = toRawDomain()
+  return raw.copy(
+    logoPngBase64 = requiredOpaqueText(
+      raw.logoPngBase64,
+      "branding.logoPngBase64",
+      MAX_LOGO_BASE64_CHARS,
+    ),
+    logoVersion = requiredIdentifier(
+      raw.logoVersion,
+      "branding.logoVersion",
+      MAX_SHORT_TEXT_CHARS,
+    ),
+    legalName = requiredDisplayText(raw.legalName, "branding.legalName", MAX_TEXT_CHARS),
+    rfcLabel = requiredDisplayText(raw.rfcLabel, "branding.rfcLabel", MAX_TEXT_CHARS),
+    title = requiredDisplayText(raw.title, "branding.title", MAX_TEXT_CHARS),
+    footer = requiredDisplayText(raw.footer, "branding.footer", MAX_LONG_TEXT_CHARS),
+  )
+}
+
 private fun preflightLine(record: ThermalTicketLineRecord, index: Int, budget: DisplayTextBudget) {
   record.validProductId(index)
   budget.required(record.productName, "lines[$index].productName", MAX_TEXT_CHARS)

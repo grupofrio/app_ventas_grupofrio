@@ -5,6 +5,9 @@ import type ThermalPrinterModule from '../modules/thermal-printer/index.ts';
 import type {
   BluetoothState,
   BondedBluetoothDevice,
+  NativePrintResult,
+  ThermalTicketBranding,
+  ThermalTicketDocument,
   ThermalPrinterNativeModule,
 } from '../modules/thermal-printer/index.ts';
 
@@ -28,7 +31,16 @@ type ExpectedBondedBluetoothDevice = {
 type ExpectedThermalPrinterNativeModule = {
   getBluetoothState(): Promise<ExpectedBluetoothState>;
   getBondedDevices(): Promise<ExpectedBondedBluetoothDevice[]>;
+  printTicket(address: string, document: ThermalTicketDocument): Promise<NativePrintResult>;
+  printDiagnostic(address: string, branding: ThermalTicketBranding): Promise<NativePrintResult>;
 };
+type ExpectedNativePrintResult = {
+  transportBytesWritten: number;
+  rasterBytesWritten: number;
+  bandsCompleted: number;
+  rasterPayloadAttempted: boolean;
+};
+type ExpectedThermalTicketBranding = ThermalTicketDocument['branding'];
 
 type _BluetoothStateIsExact = Assert<
   IsExact<BluetoothState, ExpectedBluetoothState>
@@ -38,6 +50,12 @@ type _BondedDeviceIsExact = Assert<
 >;
 type _NativeModuleIsExact = Assert<
   IsExact<ThermalPrinterNativeModule, ExpectedThermalPrinterNativeModule>
+>;
+type _NativePrintResultIsExact = Assert<
+  IsExact<NativePrintResult, ExpectedNativePrintResult>
+>;
+type _ThermalTicketBrandingIsExact = Assert<
+  IsExact<ThermalTicketBranding, ExpectedThermalTicketBranding>
 >;
 type _BoundaryIsNotAny = Assert<IsAny<BoundaryType> extends false ? true : false>;
 type _BoundaryIsExact = Assert<
@@ -53,6 +71,12 @@ function assertNullable(module: BoundaryType) {
 async function assertExactMethods(module: NonNullable<BoundaryType>) {
   const state: BluetoothState = await module.getBluetoothState();
   const devices: BondedBluetoothDevice[] = await module.getBondedDevices();
+  const document = {} as ThermalTicketDocument;
+  const result: NativePrintResult = await module.printTicket('AA:BB:CC:DD:EE:FF', document);
+  const diagnostic: NativePrintResult = await module.printDiagnostic(
+    'AA:BB:CC:DD:EE:FF',
+    document.branding,
+  );
   const nullableName: string | null = devices[0]!.name;
 
   if (devices[0]!.name !== null) {
@@ -60,7 +84,7 @@ async function assertExactMethods(module: NonNullable<BoundaryType>) {
     void narrowedName;
   }
 
-  // @ts-expect-error Printing is introduced by a later task.
+  // @ts-expect-error There is no generic print API.
   module.print();
   // @ts-expect-error Scanning is deliberately outside the bonded-device API.
   module.scanForDevices();
@@ -68,6 +92,8 @@ async function assertExactMethods(module: NonNullable<BoundaryType>) {
   module.bluetoothState();
 
   void state;
+  void result;
+  void diagnostic;
   void nullableName;
 }
 

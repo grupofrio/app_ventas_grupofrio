@@ -31,8 +31,12 @@ test('registers the local Android module and config plugin', () => {
   );
 });
 
-test('uses an optional TypeScript boundary and exposes the exact Bluetooth directory API', () => {
+test('uses an optional TypeScript boundary and exposes the exact native printer API', () => {
   const boundarySource = readModuleFile('src/ThermalPrinterModule.ts');
+  const sharedTypesSource = readFileSync(
+    resolve(repoRoot, 'src/services/thermalPrinterTypes.ts'),
+    'utf8',
+  );
   const indexSource = readModuleFile('index.ts');
   const kotlinSource = readModuleFile(
     'android/src/main/java/mx/grupofrio/thermalprinter/ThermalPrinterModule.kt',
@@ -44,10 +48,26 @@ test('uses an optional TypeScript boundary and exposes the exact Bluetooth direc
   assert.match(kotlinSource, /Name\(\s*"KoldThermalPrinter"\s*\)/);
   assert.deepEqual(
     Array.from(kotlinSource.matchAll(/AsyncFunction\(\s*["']([^"']+)["']\s*\)/g), (match) => match[1]),
-    ['getBluetoothState', 'getBondedDevices'],
+    ['getBluetoothState', 'getBondedDevices', 'printTicket', 'printDiagnostic'],
   );
-  assert.doesNotMatch(kotlinSource, /\bprint(?:Ticket|Diagnostic)?\b/);
+  assert.match(boundarySource, /printTicket\(\s*address:\s*string,\s*document:\s*ThermalTicketDocument/);
+  assert.match(boundarySource, /Promise<NativePrintResult>/);
+  for (const field of [
+    'transportBytesWritten',
+    'rasterBytesWritten',
+    'bandsCompleted',
+    'rasterPayloadAttempted',
+  ]) {
+    assert.match(boundarySource + sharedTypesSource, new RegExp(`\\b${field}\\b`));
+  }
+  assert.match(boundarySource, /printDiagnostic\(\s*address:\s*string,\s*branding:\s*ThermalTicketBranding/);
   assert.doesNotMatch(kotlinSource, /\b(?:Function|Events|Property)\s*\(/);
+
+  const diagnosticSource = readModuleFile(
+    'android/src/main/java/mx/grupofrio/thermalprinter/DiagnosticTicketFactory.kt',
+  );
+  assert.doesNotMatch(diagnosticSource, /SOLUCIONES EN PRODUCCION GLACIEM|SPG230420F52/);
+  assert.doesNotMatch(diagnosticSource, /iVBOR[A-Za-z0-9+/=]{16,}/);
 });
 
 test('declares only the exact Bluetooth permissions in the module manifest', () => {

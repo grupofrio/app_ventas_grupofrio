@@ -21,11 +21,12 @@ class ThermalPrinterExpoBoundaryTest {
   }
 
   @Test
-  fun `every Task 7 error rejects with stable safe metadata and zero progress`() {
+  fun `directory and bonding errors reject with stable safe metadata and zero progress`() {
     val cases = listOf(
       bluetoothUnsupported(),
       bluetoothDisabled(),
       permissionDenied(SecurityException("private Android permission detail")),
+      printerNotBonded(),
     )
 
     cases.forEach { domainError ->
@@ -57,6 +58,39 @@ class ThermalPrinterExpoBoundaryTest {
       assertFalse(rejection.message.orEmpty().contains("private"))
       assertFalse(rejection.message.orEmpty().contains("SecurityException"))
     }
+  }
+
+  @Test
+  fun `print error envelope preserves conservative progress without cause detail`() {
+    val promise = RecordingPromise()
+    val progress = NativePrintProgress(
+      transportBytesWritten = 2_050,
+      rasterBytesWritten = 0,
+      bandsCompleted = 0,
+      rasterPayloadAttempted = true,
+    )
+    val domainError = ThermalPrinterException(
+      code = WRITE_FAILED_CODE,
+      message = "Printer write failed",
+      phase = "write",
+      progress = progress,
+      cause = IllegalStateException("private socket detail"),
+    )
+
+    settleThermalPrinterCall(promise) { throw domainError }
+
+    val rejection = requireNotNull(promise.rejection)
+    assertEquals(WRITE_FAILED_CODE, rejection.code)
+    val envelope = JSONObject(requireNotNull(rejection.message))
+    assertEquals("Printer write failed", envelope.getString("message"))
+    assertEquals("write", envelope.getString("phase"))
+    val encodedProgress = envelope.getJSONObject("progress")
+    assertEquals(2_050L, encodedProgress.getLong("transportBytesWritten"))
+    assertEquals(0L, encodedProgress.getLong("rasterBytesWritten"))
+    assertEquals(0L, encodedProgress.getLong("bandsCompleted"))
+    assertEquals(true, encodedProgress.getBoolean("rasterPayloadAttempted"))
+    assertFalse(rejection.message.orEmpty().contains("private"))
+    assertFalse(rejection.message.orEmpty().contains("IllegalStateException"))
   }
 
   private class RecordingPromise : Promise {

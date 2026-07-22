@@ -65,6 +65,11 @@ internal fun permissionDenied(cause: SecurityException? = null) = ThermalPrinter
   cause = cause,
 )
 
+internal fun printerNotBonded() = ThermalPrinterException(
+  code = PRINTER_NOT_BONDED_CODE,
+  message = "Printer is not bonded",
+)
+
 private fun saturatingAdd(current: Long, increment: Long): Long {
   require(current >= 0) { "Progress cannot be negative" }
   require(increment >= 0) { "Progress increment cannot be negative" }
@@ -81,3 +86,4 @@ internal const val WRITE_FAILED_CODE = "write_failed"
 internal const val BLUETOOTH_UNSUPPORTED_CODE = "bluetooth_unsupported"
 internal const val BLUETOOTH_DISABLED_CODE = "bluetooth_disabled"
 internal const val PERMISSION_DENIED_CODE = "permission_denied"
+internal const val PRINTER_NOT_BONDED_CODE = "printer_not_bonded"

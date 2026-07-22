@@ -14,13 +14,19 @@ import type {
   BondedBluetoothDeviceSnapshot,
   SavedThermalPrinterSnapshot,
 } from '../../services/thermalPrinter.ts';
-import { buildLongSaleThermalTicketFixture } from '../../services/thermalTicketFixtures.ts';
 import type { ThermalTicketDocument } from '../../services/thermalPrinterTypes.ts';
 import { colors, radii, spacing } from '../../theme/tokens';
 import { fonts, typography } from '../../theme/typography';
 
 type PickerAction = 'select' | 'diagnostic' | 'long-ticket';
-type PickerActionCallback = () => void | Promise<void>;
+export type ThermalPrinterPickerActionCallback = () => void | Promise<void>;
+
+export interface ThermalPrinterPickerDebugControlsProps {
+  disabled: boolean;
+  loading: boolean;
+  onRun: (callback: ThermalPrinterPickerActionCallback) => void;
+  onPrintTicket: (document: ThermalTicketDocument) => void | Promise<void>;
+}
 
 export interface ThermalPrinterPickerProps {
   visible: boolean;
@@ -37,6 +43,16 @@ export interface ThermalPrinterPickerProps {
 }
 
 const isDevelopmentBuild = typeof __DEV__ !== 'undefined' && __DEV__;
+let ThermalPrinterPickerDebugControls:
+  React.ComponentType<ThermalPrinterPickerDebugControlsProps> | null = null;
+
+if (isDevelopmentBuild) {
+  const debugModule = require('./ThermalPrinterPickerDebugControls.tsx') as {
+    ThermalPrinterPickerDebugControls:
+      React.ComponentType<ThermalPrinterPickerDebugControlsProps>;
+  };
+  ThermalPrinterPickerDebugControls = debugModule.ThermalPrinterPickerDebugControls;
+}
 
 export function ThermalPrinterPicker({
   visible,
@@ -55,7 +71,7 @@ export function ThermalPrinterPicker({
 
   const runAction = useCallback(async (
     action: PickerAction,
-    callback: PickerActionCallback,
+    callback: ThermalPrinterPickerActionCallback,
   ) => {
     if (loading || actionInFlightRef.current) return;
 
@@ -82,13 +98,6 @@ export function ThermalPrinterPicker({
   const handleDiagnostic = useCallback(() => {
     void runAction('diagnostic', () => onPrintDiagnostic());
   }, [onPrintDiagnostic, runAction]);
-
-  const handleLongTicket = useCallback(() => {
-    void runAction(
-      'long-ticket',
-      () => onPrintTicket(buildLongSaleThermalTicketFixture()),
-    );
-  }, [onPrintTicket, runAction]);
 
   return (
     <Modal
@@ -183,24 +192,15 @@ export function ThermalPrinterPicker({
           </View>
         )}
 
-        {isDevelopmentBuild && selectedPrinter !== null && (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Imprimir ticket largo de prueba"
-            accessibilityState={{ disabled: isBusy }}
-            activeOpacity={0.8}
+        {ThermalPrinterPickerDebugControls !== null && selectedPrinter !== null && (
+          <ThermalPrinterPickerDebugControls
             disabled={isBusy}
-            onPress={handleLongTicket}
-            style={[styles.debugAction, isBusy && styles.disabled]}
-          >
-            {pendingAction === 'long-ticket' ? (
-              <ActivityIndicator size="small" color={colors.text} />
-            ) : (
-              <Text style={styles.debugActionText}>
-                Imprimir ticket largo de prueba
-              </Text>
-            )}
-          </TouchableOpacity>
+            loading={pendingAction === 'long-ticket'}
+            onRun={(callback) => {
+              void runAction('long-ticket', callback);
+            }}
+            onPrintTicket={onPrintTicket}
+          />
         )}
       </SafeAreaView>
     </Modal>
@@ -308,20 +308,6 @@ const styles = StyleSheet.create({
   },
   primaryActionText: {
     ...typography.button,
-  },
-  debugAction: {
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: spacing.screenPadding,
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.xl,
-    backgroundColor: colors.cardLighter,
-    borderRadius: radii.button,
-  },
-  debugActionText: {
-    ...typography.button,
-    color: colors.text,
   },
   disabled: {
     opacity: 0.5,

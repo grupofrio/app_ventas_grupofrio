@@ -68,6 +68,18 @@ test('parseSavedThermalPrinter returns null for hostile introspection and proper
   assert.equal(getterReads, 0, 'validation must inspect descriptors without invoking getters');
 });
 
+test('parseSavedThermalPrinter returns null for a revoked Proxy without throwing', () => {
+  const revocable = Proxy.revocable(
+    { version: 1, name: 'MP210', address: '00:11:22:33:44:55' },
+    {},
+  );
+  revocable.revoke();
+
+  assert.doesNotThrow(() => {
+    assert.equal(parseSavedThermalPrinter(revocable.proxy), null);
+  });
+});
+
 test('parseSavedThermalPrinter rejects malformed persisted selections', () => {
   const malformed: unknown[] = [
     null,

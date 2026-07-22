@@ -28,9 +28,11 @@ const BLUETOOTH_MAC_ADDRESS = /^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 const SAVED_SELECTION_KEYS = new Set(['version', 'name', 'address']);
 
 export function parseSavedThermalPrinter(value: unknown): SavedThermalPrinterV1 | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (value === null || typeof value !== 'object') return null;
 
   try {
+    if (Array.isArray(value)) return null;
+
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return null;
 

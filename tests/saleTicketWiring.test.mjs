@@ -41,6 +41,16 @@ function main() {
   );
   assert.match(
     printScreen,
+    /Imprimir en MP210/,
+    'La pantalla de impresion debe exponer el envio directo a la MP210',
+  );
+  assert.match(
+    printScreen,
+    /buildThermalTicketDocument/,
+    'La impresion termica debe construirse desde el mismo snapshot local del ticket',
+  );
+  assert.match(
+    printScreen,
     /GRUPO FRIO/,
     'La vista previa del ticket debe mostrar la marca Grupo Frio',
   );

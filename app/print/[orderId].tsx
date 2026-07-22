@@ -4,9 +4,21 @@
  */
 
 import React from 'react';
-import { View, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  Linking,
+  PermissionsAndroid,
+  Platform,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
+import ThermalPrinterModule from '../../modules/thermal-printer';
+import type { ThermalTicketDocument } from '../../modules/thermal-printer';
+import { ThermalPrinterPicker } from '../../src/components/domain/ThermalPrinterPicker';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
@@ -18,13 +30,88 @@ import {
   SaleTicketSnapshot,
 } from '../../src/services/saleTicket';
 import { openSaleTicketPdf } from '../../src/services/saleTicketPdf';
+import {
+  createThermalPrinterService,
+  ThermalPrinterError,
+} from '../../src/services/thermalPrinter';
+import type {
+  BondedBluetoothDeviceSnapshot,
+  SavedThermalPrinterSnapshot,
+  ThermalPrinterAccessResult,
+} from '../../src/services/thermalPrinter';
+import { createThermalPrinterSelectionStore } from '../../src/services/thermalPrinterSelection';
+import { buildThermalTicketDocument } from '../../src/services/thermalTicketDocument';
 import { formatCurrency } from '../../src/utils/time';
+
+type PrinterJobState = 'idle' | 'permission' | 'connecting' | 'sending';
+
+const selectionStore = createThermalPrinterSelectionStore();
+const androidApiLevel = typeof Platform.Version === 'number'
+  ? Platform.Version
+  : Number.parseInt(String(Platform.Version), 10) || 0;
+const printerPlatform = Platform.OS === 'android'
+  ? 'android'
+  : Platform.OS === 'ios'
+    ? 'ios'
+    : 'web';
+
+async function requestBluetoothConnectPermission() {
+  const result = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+  );
+  if (result === PermissionsAndroid.RESULTS.GRANTED) return 'granted' as const;
+  if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+    return 'never_ask_again' as const;
+  }
+  if (result === PermissionsAndroid.RESULTS.DENIED) return 'denied' as const;
+  return 'denied' as const;
+}
+
+const thermalPrinterService = createThermalPrinterService(
+  {
+    platform: printerPlatform,
+    androidApiLevel,
+    native: ThermalPrinterModule,
+    requestConnectPermission: requestBluetoothConnectPermission,
+  },
+  { selectionStore },
+);
+
+const PRINTER_JOB_COPY: Record<Exclude<PrinterJobState, 'idle'>, string> = {
+  permission: 'Revisando permiso de dispositivos cercanos...',
+  connecting: 'Preparando conexión con MP210...',
+  sending: 'Conectando y enviando a MP210...',
+};
+
+function waitForUiFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 export default function PrintTicketScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
   const [ticket, setTicket] = React.useState<SaleTicketSnapshot | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isOpening, setIsOpening] = React.useState(false);
+  const [isSelectionLoading, setIsSelectionLoading] = React.useState(true);
+  const [selectedPrinter, setSelectedPrinter] = React.useState<SavedThermalPrinterSnapshot | null>(null);
+  const [bondedDevices, setBondedDevices] = React.useState<readonly BondedBluetoothDeviceSnapshot[]>([]);
+  const [pickerVisible, setPickerVisible] = React.useState(false);
+  const [printerJobState, setPrinterJobState] = React.useState<PrinterJobState>('idle');
+  const mountedRef = React.useRef(false);
+  const operationIdRef = React.useRef(0);
+  const jobInFlightRef = React.useRef(false);
+  const pdfInFlightRef = React.useRef(false);
+  const isPrintJobActive = printerJobState !== 'idle';
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationIdRef.current += 1;
+    };
+  }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -43,17 +130,251 @@ export default function PrintTicketScreen() {
     };
   }, [orderId]);
 
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadPrinterSelection() {
+      try {
+        const saved = await selectionStore.load();
+        if (mounted) setSelectedPrinter(saved);
+      } catch {
+        if (mounted) setSelectedPrinter(null);
+      } finally {
+        if (mounted) setIsSelectionLoading(false);
+      }
+    }
+
+    void loadPrinterSelection();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   async function handleOpenPdf() {
-    if (!ticket) return;
+    if (
+      !ticket ||
+      isPrintJobActive ||
+      jobInFlightRef.current ||
+      pdfInFlightRef.current
+    ) return;
+    pdfInFlightRef.current = true;
     setIsOpening(true);
     try {
       await openSaleTicketPdf(ticket);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo abrir el PDF del ticket.';
-      Alert.alert('Ticket PDF', message);
+      if (mountedRef.current) Alert.alert('Ticket PDF', message);
     } finally {
-      setIsOpening(false);
+      pdfInFlightRef.current = false;
+      if (mountedRef.current) setIsOpening(false);
     }
+  }
+
+  function startPrinterOperation(state: Exclude<PrinterJobState, 'idle'>): number | null {
+    if (jobInFlightRef.current || pdfInFlightRef.current) return null;
+    jobInFlightRef.current = true;
+    operationIdRef.current += 1;
+    const operationId = operationIdRef.current;
+    if (mountedRef.current) setPrinterJobState(state);
+    return operationId;
+  }
+
+  function isCurrentOperation(operationId: number): boolean {
+    return mountedRef.current && operationIdRef.current === operationId;
+  }
+
+  function finishPrinterOperation(operationId: number) {
+    if (operationIdRef.current !== operationId) return;
+    jobInFlightRef.current = false;
+    if (mountedRef.current) setPrinterJobState('idle');
+  }
+
+  function showPrinterError(error: unknown, retry: () => Promise<void>) {
+    if (!mountedRef.current) return;
+    if (error instanceof ThermalPrinterError) {
+      if (error.progress.rasterPayloadAttempted) {
+        Alert.alert(
+          'El ticket pudo salir incompleto',
+          `${error.message} Revisa el papel antes de decidir si quieres enviarlo otra vez.`,
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            {
+              text: 'Reimprimir',
+              onPress: () => {
+                void retry();
+              },
+            },
+          ],
+        );
+        return;
+      }
+      Alert.alert('No se pudo enviar el ticket', error.message);
+      return;
+    }
+    Alert.alert('No se pudo enviar el ticket', 'Ocurrió un error inesperado. Intenta de nuevo.');
+  }
+
+  async function runNativePrinterJob(
+    operationId: number,
+    job: () => Promise<unknown>,
+    successMessage: string,
+    retry: () => Promise<void>,
+  ) {
+    if (!isCurrentOperation(operationId)) return;
+    setPrinterJobState('connecting');
+    try {
+      await waitForUiFrame();
+      if (!isCurrentOperation(operationId)) return;
+      setPrinterJobState('sending');
+      await job();
+      if (isCurrentOperation(operationId)) Alert.alert('MP210', successMessage);
+    } catch (error) {
+      if (isCurrentOperation(operationId)) showPrinterError(error, retry);
+    } finally {
+      finishPrinterOperation(operationId);
+    }
+  }
+
+  async function printTicketDocument(
+    document: ThermalTicketDocument,
+    successMessage = 'Ticket enviado a MP210',
+  ) {
+    const operationId = startPrinterOperation('connecting');
+    if (operationId === null) return;
+    const retry = () => printTicketDocument(document, successMessage);
+    await runNativePrinterJob(
+      operationId,
+      () => thermalPrinterService.printTicket(document),
+      successMessage,
+      retry,
+    );
+  }
+
+  async function printDiagnostic() {
+    const operationId = startPrinterOperation('connecting');
+    if (operationId === null) return;
+    const retry = () => printDiagnostic();
+    await runNativePrinterJob(
+      operationId,
+      () => thermalPrinterService.printDiagnostic(),
+      'Diagnóstico enviado a MP210',
+      retry,
+    );
+  }
+
+  function showAccessFailure(result: Exclude<ThermalPrinterAccessResult, { status: 'ready' }>) {
+    if (!mountedRef.current) return;
+    switch (result.status) {
+      case 'permission_denied':
+        Alert.alert(
+          'Permiso Bluetooth necesario',
+          'Permite conectar con dispositivos cercanos para usar la MP210. El PDF sigue disponible.',
+        );
+        break;
+      case 'permission_permanently_denied':
+        Alert.alert(
+          'Permiso Bluetooth bloqueado',
+          'Activa el permiso de dispositivos cercanos en los ajustes. El PDF sigue disponible.',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Abrir ajustes', onPress: () => { void Linking.openSettings(); } },
+          ],
+        );
+        break;
+      case 'permission_request_failed':
+        Alert.alert(
+          'No se pudo solicitar el permiso',
+          'Intenta de nuevo o usa el PDF, que sigue disponible.',
+        );
+        break;
+      case 'bluetooth_off':
+        Alert.alert('Bluetooth apagado', 'Enciende Bluetooth y vuelve a intentarlo. El PDF sigue disponible.');
+        break;
+      case 'bluetooth_unsupported':
+        Alert.alert('Bluetooth no disponible', 'Este dispositivo no admite esta conexión. El PDF sigue disponible.');
+        break;
+      case 'native_unavailable':
+        Alert.alert(
+          'MP210 no disponible en esta instalación',
+          'Necesitas instalar una nueva compilación de Android para imprimir por Bluetooth. El PDF sigue disponible.',
+        );
+        break;
+      case 'unsupported_platform':
+        Alert.alert(
+          'MP210 disponible solo en Android',
+          'La impresión Bluetooth directa no está disponible aquí. El PDF sigue disponible.',
+        );
+        break;
+      case 'native_error':
+        Alert.alert(
+          'No se pudo consultar Bluetooth',
+          'Verifica la conexión e intenta de nuevo. El PDF sigue disponible.',
+        );
+        break;
+    }
+  }
+
+  async function preparePrinterAccess(intent: 'print' | 'change') {
+    const operationId = startPrinterOperation('permission');
+    if (operationId === null) return;
+    try {
+      const result = await thermalPrinterService.prepare(selectedPrinter);
+      if (!isCurrentOperation(operationId)) return;
+
+      if (result.status !== 'ready') {
+        showAccessFailure(result);
+        return;
+      }
+
+      setBondedDevices(result.devices);
+      if (intent === 'change' || result.savedPrinter === null) {
+        setPickerVisible(true);
+        return;
+      }
+      if (!result.savedPrinterBonded) {
+        Alert.alert(
+          'Impresora no vinculada',
+          'La impresora seleccionada ya no está vinculada. Vincúlala en Android o elige otra.',
+        );
+        setPickerVisible(true);
+        return;
+      }
+      if (!ticket) return;
+
+      const document = buildThermalTicketDocument(ticket);
+      const retry = () => printTicketDocument(document);
+      await runNativePrinterJob(
+        operationId,
+        () => thermalPrinterService.printTicket(document),
+        'Ticket enviado a MP210',
+        retry,
+      );
+    } catch (error) {
+      if (isCurrentOperation(operationId)) {
+        Alert.alert(
+          'No se pudo preparar la MP210',
+          error instanceof Error ? error.message : 'Ocurrió un error inesperado.',
+        );
+      }
+    } finally {
+      finishPrinterOperation(operationId);
+    }
+  }
+
+  async function handleSelectPrinter(device: BondedBluetoothDeviceSnapshot) {
+    const saved = selectedPrinter === null
+      ? await thermalPrinterService.selectPrinter(device)
+      : await thermalPrinterService.changePrinter(device);
+    if (!mountedRef.current) return;
+    setSelectedPrinter(saved);
+    setPickerVisible(false);
+  }
+
+  function handlePickerActionError(error: unknown) {
+    if (!mountedRef.current) return;
+    const message = error instanceof Error
+      ? error.message
+      : 'No se pudo completar la acción con la MP210.';
+    Alert.alert('MP210', message);
   }
 
   return (
@@ -118,12 +439,56 @@ export default function PrintTicketScreen() {
             </View>
 
             <Button
+              label="Imprimir en MP210"
+              onPress={() => { void preparePrinterAccess('print'); }}
+              loading={isPrintJobActive}
+              disabled={isPrintJobActive || isOpening || isSelectionLoading}
+              fullWidth
+              style={{ marginBottom: spacing.md }}
+            />
+            <Button
               label="Abrir PDF"
               onPress={handleOpenPdf}
               loading={isOpening}
+              disabled={isPrintJobActive}
+              variant="secondary"
               fullWidth
               style={{ marginBottom: spacing.lg }}
             />
+
+            <View style={styles.printerStatus}>
+              <View style={styles.printerIdentity}>
+                <Text style={styles.printerLabel}>Impresora seleccionada</Text>
+                {isSelectionLoading ? (
+                  <Text style={styles.printerValue}>Cargando selección...</Text>
+                ) : selectedPrinter ? (
+                  <>
+                    <Text style={styles.printerValue}>
+                      {selectedPrinter.name ?? 'Dispositivo sin nombre'}
+                    </Text>
+                    <Text style={styles.printerAddress}>{selectedPrinter.address}</Text>
+                  </>
+                ) : (
+                  <Text style={styles.printerValue}>Sin impresora seleccionada</Text>
+                )}
+              </View>
+              <Button
+                label="Cambiar impresora"
+                onPress={() => { void preparePrinterAccess('change'); }}
+                disabled={isPrintJobActive || isSelectionLoading}
+                variant="secondary"
+                small
+              />
+            </View>
+
+            {isPrintJobActive ? (
+              <View style={styles.jobIndicator}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.jobIndicatorText}>
+                  {PRINTER_JOB_COPY[printerJobState as Exclude<PrinterJobState, 'idle'>]}
+                </Text>
+              </View>
+            ) : null}
           </>
         ) : (
           <View style={styles.notice}>
@@ -137,11 +502,23 @@ export default function PrintTicketScreen() {
         <View style={styles.notice}>
           <Text style={styles.noticeTitle}>Impresion Bluetooth</Text>
           <Text style={styles.noticeText}>
-            El PDF se abre con el visor del sistema. Desde ahi puedes elegir
-            imprimir con una impresora Bluetooth compatible con tu dispositivo.
+            En Android puedes enviar el ticket directamente a la MP210 vinculada.
+            El PDF permanece disponible como alternativa.
           </Text>
         </View>
       </View>
+
+      <ThermalPrinterPicker
+        visible={pickerVisible}
+        devices={bondedDevices}
+        selectedPrinter={selectedPrinter}
+        loading={isPrintJobActive}
+        onCancel={() => setPickerVisible(false)}
+        onSelectPrinter={handleSelectPrinter}
+        onPrintDiagnostic={printDiagnostic}
+        onPrintTicket={(document) => printTicketDocument(document, 'Ticket de prueba enviado a MP210')}
+        onActionError={handlePickerActionError}
+      />
     </SafeAreaView>
   );
 }
@@ -235,6 +612,43 @@ const styles = StyleSheet.create({
   productMeta: {
     fontSize: 11,
     color: '#666',
+  },
+  printerStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radii.button,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  printerIdentity: {
+    flex: 1,
+  },
+  printerLabel: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginBottom: 2,
+  },
+  printerValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  printerAddress: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginTop: 2,
+  },
+  jobIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  jobIndicatorText: {
+    fontSize: 13,
+    color: colors.textDim,
   },
   notice: {
     backgroundColor: 'rgba(37,99,235,0.08)',

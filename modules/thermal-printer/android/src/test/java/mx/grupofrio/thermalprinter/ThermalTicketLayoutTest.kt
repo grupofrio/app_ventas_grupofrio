@@ -209,82 +209,121 @@ class ThermalTicketLayoutTest {
 
   @Test
   fun `record conversion canonicalizes every display string but leaves base64 opaque`() {
+    val opaqueLogo = "iVBORw0KGgo=\u0000\r\n\u200B\u2028\u202E$LANGUAGE_TAG"
     val record = validRecord().apply {
       branding!!.apply {
-        logoPngBase64 = "iVBORw0KGgo=\r\n"
-        legalName = "  Razón\r\n  Social\t "
-        rfcLabel = " RFC:\tAAA010101AAA "
-        title = " NOTA\nDE\rVENTA "
-        footer = " Gracias\t por\n su compra "
+        logoPngBase64 = opaqueLogo
+        legalName = "  Razón\r\n\u200B Social\t "
+        rfcLabel = " RFC:\t\u202EAAA010101AAA "
+        title = " NOTA\n$LANGUAGE_TAG DE\rVENTA "
+        footer = " Gracias\t\u2028 por\u2029 su compra "
       }
       folio = " VENTA-\r\n42 "
       formattedDate = " 21/07/2026\t10:30 "
-      customerName = " Ana\n  María\u2003\tMuñoz "
-      sellerName = " José\rÁngel "
-      paymentLabel = " Crédito\t diferido "
+      customerName = " Ana\n\u200B María\u2003\tMuñoz $iceCube "
+      sellerName = " José\r\u202EÁngel "
+      paymentLabel = " Crédito\u0000\t diferido "
       lines!!.single().apply {
-        productName = " Hielo\r\n premium\tazul "
+        productName = " Hielo\r\n$LANGUAGE_TAG premium\tazul $iceCube "
         quantityAndUnitPrice = " 2\t x\n $50.00 "
         lineTotal = " $100.00\r\n MXN "
       }
       subtotal = " $100.00\t MXN "
       totalKg = " 2\n kg "
       total = " $100.00\r MXN "
-      creditNote = " Pagaré:\r\n pago\t incondicional "
+      creditNote = " Pagaré:\r\n\u202E pago$LANGUAGE_TAG incondicional "
     }
 
     val domain = record.toDomain()
 
-    assertEquals("iVBORw0KGgo=\r\n", domain.branding.logoPngBase64)
+    assertEquals(opaqueLogo, domain.branding.logoPngBase64)
     assertEquals("Razón Social", domain.branding.legalName)
     assertEquals("RFC: AAA010101AAA", domain.branding.rfcLabel)
     assertEquals("NOTA DE VENTA", domain.branding.title)
     assertEquals("Gracias por su compra", domain.branding.footer)
     assertEquals("VENTA- 42", domain.folio)
     assertEquals("21/07/2026 10:30", domain.formattedDate)
-    assertEquals("Ana María Muñoz", domain.customerName)
+    assertEquals("Ana María Muñoz $iceCube", domain.customerName)
     assertEquals("José Ángel", domain.sellerName)
     assertEquals("Crédito diferido", domain.paymentLabel)
-    assertEquals("Hielo premium azul", domain.lines.single().productName)
+    assertEquals("Hielo premium azul $iceCube", domain.lines.single().productName)
     assertEquals("2 x $50.00", domain.lines.single().quantityAndUnitPrice)
     assertEquals("$100.00 MXN", domain.lines.single().lineTotal)
     assertEquals("$100.00 MXN", domain.subtotal)
     assertEquals("2 kg", domain.totalKg)
     assertEquals("$100.00 MXN", domain.total)
     assertEquals("Pagaré: pago incondicional", domain.creditNote)
+    domain.displayValues().forEach(::assertCanonicalDisplayText)
   }
 
   @Test
   fun `required display text is validated after normalization and optional blanks disappear`() {
-    val requiredBlank = validRecord().apply { customerName = " \r\n\t " }
-    val optionalBlank = validRecord().apply { creditNote = " \r\n\t " }
-    val invalidIdentifier = validRecord().apply { branding!!.logoVersion = "version\t1" }
+    val isolatedSurrogate = validRecord().apply { customerName = "Ana\uD83EBeto" }
 
+    listOf(" \r\n\t ", " \u200B\u202E$LANGUAGE_TAG ").forEach { separatorsOnly ->
+      val requiredBlank = validRecord().apply { customerName = separatorsOnly }
+      val optionalBlank = validRecord().apply { creditNote = separatorsOnly }
+
+      assertEquals(
+        "invalid_ticket",
+        assertThrows(ThermalPrinterException::class.java) { requiredBlank.toDomain() }.code,
+      )
+      assertEquals(null, optionalBlank.toDomain().creditNote)
+    }
     assertEquals(
       "invalid_ticket",
-      assertThrows(ThermalPrinterException::class.java) { requiredBlank.toDomain() }.code,
+      assertThrows(ThermalPrinterException::class.java) { isolatedSurrogate.toDomain() }.code,
     )
-    assertEquals(null, optionalBlank.toDomain().creditNote)
-    assertEquals(
-      "invalid_ticket",
-      assertThrows(ThermalPrinterException::class.java) { invalidIdentifier.toDomain() }.code,
+  }
+
+  @Test
+  fun `logo version rejects unsafe whitespace controls and BMP or supplementary format code points`() {
+    val unsafeIdentifiers = listOf(
+      "\u0000",
+      "\t",
+      "\u200B",
+      "\u2028",
+      "\u2029",
+      "\u202E",
+      LANGUAGE_TAG,
     )
+
+    unsafeIdentifiers.forEach { unsafe ->
+      val record = validRecord().apply { branding!!.logoVersion = "version${unsafe}1" }
+      val directDomain = ticket().copy(
+        branding = branding().copy(logoVersion = "version${unsafe}1"),
+      )
+
+      assertEquals(
+        "invalid_ticket",
+        assertThrows(ThermalPrinterException::class.java) { record.toDomain() }.code,
+      )
+      assertEquals(
+        "invalid_ticket",
+        assertThrows(ThermalPrinterException::class.java) { subject.layout(directDomain) }.code,
+      )
+    }
   }
 
   @Test
   fun `layout defensively canonicalizes direct domain values before creating text commands`() {
     val directDomain = ticket(
-      customerName = " Ana\r\n María\t Muñoz ",
-      sellerName = " José\r Ángel ",
-      paymentLabel = " Crédito\n diferido ",
+      customerName = " Ana\r\n\u200B María\t Muñoz $iceCube ",
+      sellerName = " José\r\u202E Ángel ",
+      paymentLabel = " Crédito\u0000\n diferido ",
       total = " $100.00\t MXN ",
-      creditNote = " Pagaré:\r\n pago\t incondicional ",
+      creditNote = " Pagaré:\r\n pago$LANGUAGE_TAG incondicional ",
       branding = branding().copy(
-        legalName = " Soluciones\r\n Frías ",
-        footer = " Gracias\t por\n su compra ",
+        legalName = " Soluciones\r\n\u200B Frías ",
+        footer = " Gracias\t\u2028 por\u2029 su compra ",
       ),
       lines = listOf(
-        TicketLine(1, " Hielo\r\n premium\tazul ", " 2\t x\n $50.00 ", " $100.00\r MXN "),
+        TicketLine(
+          1,
+          " Hielo\r\n\u202E premium\tazul $iceCube ",
+          " 2\t x\n $50.00 ",
+          " $100.00\r MXN ",
+        ),
       ),
     ).copy(
       folio = " VENTA-\r\n42 ",
@@ -296,19 +335,15 @@ class ThermalTicketLayoutTest {
     val textCommands = subject.layout(directDomain).commands.filterIsInstance<DrawCommand.Text>()
     val renderedText = textCommands.joinToString(" ") { it.text }
 
-    assertTrue(textCommands.all { command ->
-      command.text.none { it == '\r' || it == '\n' || it == '\t' } &&
-        command.text == command.text.trim() &&
-        !command.text.contains(Regex("\\s{2,}"))
-    })
+    textCommands.map { it.text }.forEach(::assertCanonicalDisplayText)
     listOf(
       "Soluciones Frías",
       "VENTA- 42",
       "21/07/2026 10:30",
-      "Ana María Muñoz",
+      "Ana María Muñoz $iceCube",
       "José Ángel",
       "Crédito diferido",
-      "Hielo premium azul",
+      "Hielo premium azul $iceCube",
       "2 x $50.00",
       "$100.00 MXN",
       "2 kg",
@@ -321,6 +356,46 @@ class ThermalTicketLayoutTest {
 
   private fun TicketLayout.text(value: String): DrawCommand.Text =
     commands.filterIsInstance<DrawCommand.Text>().single { it.text == value }
+
+  private fun ThermalTicket.displayValues(): List<String> = listOf(
+    branding.legalName,
+    branding.rfcLabel,
+    branding.title,
+    branding.footer,
+    folio,
+    formattedDate,
+    customerName,
+    sellerName,
+    paymentLabel,
+    subtotal,
+    totalKg,
+    total,
+  ) + listOfNotNull(creditNote) + lines.flatMap { line ->
+    listOf(line.productName, line.quantityAndUnitPrice, line.lineTotal)
+  }
+
+  private fun assertCanonicalDisplayText(value: String) {
+    assertFalse("Display text must be trimmed: '$value'", value.startsWith(' ') || value.endsWith(' '))
+    var index = 0
+    var previousWasSpace = false
+    while (index < value.length) {
+      val codePoint = Character.codePointAt(value, index)
+      val type = Character.getType(codePoint)
+      val unsafe = codePoint != ASCII_SPACE && (
+        Character.isWhitespace(codePoint) ||
+          Character.isSpaceChar(codePoint) ||
+          type == Character.CONTROL.toInt() ||
+          type == Character.FORMAT.toInt() ||
+          type == Character.LINE_SEPARATOR.toInt() ||
+          type == Character.PARAGRAPH_SEPARATOR.toInt() ||
+          type == Character.SURROGATE.toInt()
+        )
+      assertFalse("Unsafe U+${codePoint.toString(16)} in '$value'", unsafe)
+      assertFalse("Repeated ASCII spaces in '$value'", codePoint == ASCII_SPACE && previousWasSpace)
+      previousWasSpace = codePoint == ASCII_SPACE
+      index += Character.charCount(codePoint)
+    }
+  }
 
   private fun validRecord(): ThermalTicketDocumentRecord = ThermalTicketDocumentRecord().apply {
     schemaVersion = 1
@@ -383,4 +458,10 @@ class ThermalTicketLayoutTest {
     title = "NOTA DE VENTA",
     footer = "Gracias por su compra",
   )
+
+  private companion object {
+    const val ASCII_SPACE = 0x20
+    val LANGUAGE_TAG: String = String(Character.toChars(0xE0001))
+    val iceCube: String = String(Character.toChars(0x1F9CA))
+  }
 }

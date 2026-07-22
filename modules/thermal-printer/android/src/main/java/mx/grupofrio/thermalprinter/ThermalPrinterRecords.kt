@@ -136,21 +136,25 @@ private fun ThermalTicketLineRecord.toDomain(index: Int): TicketLine {
 }
 
 /**
- * Printer display policy: CR/LF/TAB become spaces, every whitespace run collapses to one space,
- * and surrounding whitespace is removed. Required/optional validation happens after this step.
- * Opaque base64 and identifiers deliberately use separate validators below.
+ * Printer display policy: whitespace, Unicode separators, controls, and FORMAT code points become
+ * one ASCII-space separator; separator runs collapse and surrounding separators disappear.
+ * Required/optional validation happens afterward. Valid supplementary code points are preserved;
+ * an isolated UTF-16 surrogate is invalid instead of being silently rewritten. Opaque base64 and
+ * identifiers deliberately use separate validators below.
  */
-internal fun normalizeDisplayText(value: String): String = buildString(value.length) {
-  var spacePending = false
-  value.forEach { character ->
-    if (character.isWhitespace() || character == '\u00A0') {
-      spacePending = isNotEmpty()
+internal fun normalizeDisplayText(value: String): String {
+  val normalized = StringBuilder(value.length)
+  var separatorPending = false
+  value.forEachUnicodeCodePoint { codePoint ->
+    if (isDisplaySeparator(codePoint)) {
+      separatorPending = normalized.isNotEmpty()
     } else {
-      if (spacePending) append(' ')
-      append(character)
-      spacePending = false
+      if (separatorPending) normalized.append(' ')
+      normalized.appendCodePoint(codePoint)
+      separatorPending = false
     }
   }
+  return normalized.toString()
 }
 
 private fun requiredDisplayText(value: String?, field: String, maxChars: Int): String {
@@ -170,8 +174,10 @@ private fun optionalDisplayText(value: String?, field: String, maxChars: Int): S
 
 private fun validateDisplayText(value: String, field: String, maxChars: Int) {
   if (value.length > maxChars) invalidTicket("$field is too long")
-  if (value.any { Character.isISOControl(it.code) }) {
-    invalidTicket("$field contains unsupported control characters")
+  value.forEachUnicodeCodePoint { codePoint ->
+    if (codePoint != ASCII_SPACE && isDisplaySeparator(codePoint)) {
+      invalidTicket("$field contains non-canonical display separators")
+    }
   }
 }
 
@@ -188,10 +194,34 @@ private fun requiredIdentifier(value: String?, field: String, maxChars: Int): St
   val safeValue = value ?: invalidTicket("$field is required")
   if (safeValue.isBlank()) invalidTicket("$field must not be blank")
   if (safeValue.length > maxChars) invalidTicket("$field is too long")
-  if (safeValue.any { it.isWhitespace() || Character.isISOControl(it.code) }) {
-    invalidTicket("$field contains invalid identifier whitespace")
+  safeValue.forEachUnicodeCodePoint { codePoint ->
+    if (isDisplaySeparator(codePoint)) {
+      invalidTicket("$field contains unsafe identifier code points")
+    }
   }
   return safeValue
+}
+
+private inline fun String.forEachUnicodeCodePoint(action: (Int) -> Unit) {
+  var index = 0
+  while (index < length) {
+    val codePoint = Character.codePointAt(this, index)
+    if (Character.getType(codePoint) == Character.SURROGATE.toInt()) {
+      invalidTicket("Text contains an isolated UTF-16 surrogate")
+    }
+    action(codePoint)
+    index += Character.charCount(codePoint)
+  }
+}
+
+private fun isDisplaySeparator(codePoint: Int): Boolean {
+  val type = Character.getType(codePoint)
+  return Character.isWhitespace(codePoint) ||
+    Character.isSpaceChar(codePoint) ||
+    type == Character.CONTROL.toInt() ||
+    type == Character.FORMAT.toInt() ||
+    type == Character.LINE_SEPARATOR.toInt() ||
+    type == Character.PARAGRAPH_SEPARATOR.toInt()
 }
 
 /**
@@ -267,3 +297,4 @@ private const val MAX_TEXT_CHARS = 8_192
 private const val MAX_LONG_TEXT_CHARS = 16_384
 internal const val MAX_LOGO_BASE64_CHARS = 2_800_000
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991.0
+private const val ASCII_SPACE = 0x20

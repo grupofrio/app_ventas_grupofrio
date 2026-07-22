@@ -67,12 +67,6 @@ data class TicketLine(
   val lineTotal: String,
 )
 
-/** A stable code plus safe message that later module tasks can map to an Expo rejection. */
-class ThermalPrinterException(
-  val code: String,
-  message: String,
-) : IllegalArgumentException(message)
-
 fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   val safeSchemaVersion = schemaVersion ?: invalidTicket("schemaVersion is required")
   if (safeSchemaVersion != SUPPORTED_SCHEMA_VERSION) {
@@ -392,15 +386,6 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
 
 private fun <T> immutableList(values: List<T>): List<T> =
   Collections.unmodifiableList(ArrayList(values))
-
-internal fun invalidTicket(message: String): Nothing =
-  throw ThermalPrinterException(INVALID_TICKET_CODE, message)
-
-internal fun ticketTooLarge(message: String): Nothing =
-  throw ThermalPrinterException(TICKET_TOO_LARGE_CODE, message)
-
-internal const val INVALID_TICKET_CODE = "invalid_ticket"
-internal const val TICKET_TOO_LARGE_CODE = "ticket_too_large"
 
 private const val SUPPORTED_SCHEMA_VERSION = 1
 private const val MAX_TICKET_LINES = 500

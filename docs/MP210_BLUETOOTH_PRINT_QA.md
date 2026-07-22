@@ -4,8 +4,9 @@
 
 **Incompleta y bloqueada por el entorno de ejecución.** La configuración y las
 pruebas JavaScript descritas abajo sí tienen evidencia fresca. El Prebuild
-limpio, las tareas Gradle, los APK, la instrumentación conectada y la aceptación
-física siguen pendientes. Este documento no afirma una impresión física
+limpio, la prueba JVM del módulo, el build debug, la instrumentación conectada y
+la aceptación física siguen pendientes. El APK release sí cuenta con un build
+y una verificación frescos. Este documento no afirma una impresión física
 satisfactoria.
 
 ## Identificación de la implementación
@@ -105,7 +106,20 @@ No hay permisos Bluetooth duplicados.
 
 ## Gradle, pruebas JVM y builds
 
-El comando requerido no pudo iniciar Gradle dentro del sandbox:
+El build release se ejecutó con permisos aprobados fuera del sandbox, desde el
+directorio `android/` del worktree:
+
+```text
+$ ./gradlew assembleRelease
+BUILD SUCCESSFUL in 2m 15s
+1345 actionable tasks: 1331 executed, 14 up-to-date
+```
+
+El módulo `thermal-printer` fue configurado, compilado y ensamblado durante ese
+build, y `app:assembleRelease` terminó correctamente. Esta es evidencia fresca
+del release generado desde el SHA de implementación indicado arriba.
+
+La prueba JVM requerida no pudo iniciar Gradle dentro del sandbox:
 
 ```text
 $ ./android/gradlew -p android :thermal-printer:testDebugUnitTest
@@ -124,21 +138,23 @@ java.net.SocketException: Operation not permitted
 BUILD FAILED
 ```
 
-Esto impide producir evidencia fresca para las siguientes tareas; todas quedan
-pendientes, no fallidas por un defecto demostrado del código:
+Una solicitud posterior nueva para ejecutar exactamente
+`./gradlew :thermal-printer:testDebugUnitTest` con permisos ampliados fue
+rechazada únicamente por el límite de uso de Codex. No se volvió a intentar ni
+se buscó otro rodeo. Las siguientes tareas quedan pendientes, no fallidas por
+un defecto demostrado del código:
 
 - `:thermal-printer:testDebugUnitTest`;
-- `assembleDebug`;
-- `assembleRelease`.
+- `assembleDebug`.
 
-No se reutilizaron resultados o APK antiguos como si fueran evidencia fresca.
+No se reutilizaron resultados o APK antiguos como evidencia de esos pendientes.
 
 ### Artefactos esperados
 
 | Variante | Ruta esperada | Tamaño | SHA-256 | Estado |
 | --- | --- | --- | --- | --- |
 | Debug | `android/app/build/outputs/apk/debug/app-debug.apk` | no disponible | no disponible | Pendiente de build fresco |
-| Release | `android/app/build/outputs/apk/release/app-release.apk` | no disponible | no disponible | Pendiente de build fresco |
+| Release | `android/app/build/outputs/apk/release/app-release.apk` | 68,792,865 bytes | `3a975943a550dd6d3278632aac93c4cd23f2079e673c94dbe1c14ad3447c7115` | Aprobado; build fresco |
 
 ## Dispositivo e instrumentación
 
@@ -176,7 +192,8 @@ instrumentación conectada y una impresión real satisfactoria en la MP210.
 1. Repetir `npx expo prebuild --platform android --clean` con acceso a la
    plantilla SDK 52 y exigir un resultado exitoso.
 2. Repetir el verificador de autolinking y manifiesto sobre ese Android limpio.
-3. Ejecutar las pruebas Gradle y ambos builds en un entorno que permita los
-   locks y sockets locales de Gradle.
-4. Registrar tamaño y SHA-256 de cada APK fresco.
+3. Ejecutar la prueba JVM del módulo y el build debug en un entorno que permita
+   los locks y sockets locales de Gradle.
+4. Registrar tamaño y SHA-256 del APK debug fresco; el release ya quedó
+   registrado arriba.
 5. Ejecutar instrumentación conectada y la aceptación física de Task 14.

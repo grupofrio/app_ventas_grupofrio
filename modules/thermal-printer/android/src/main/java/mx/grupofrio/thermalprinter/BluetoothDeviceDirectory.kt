@@ -99,7 +99,7 @@ internal class BluetoothDeviceDirectory internal constructor(
 
   private companion object {
     val BONDED_DEVICE_COMPARATOR = compareBy<BondedBluetoothDevice>(
-      { device -> if (device.name?.trim()?.equals("MP210", ignoreCase = true) == true) 0 else 1 },
+      { device -> if (device.name?.trim()?.contains("MP210", ignoreCase = true) == true) 0 else 1 },
       { device -> device.name == null },
       { device -> device.name?.lowercase(Locale.ROOT) ?: "" },
       { device -> device.address },

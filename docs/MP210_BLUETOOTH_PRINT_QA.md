@@ -2,198 +2,104 @@
 
 ## Estado
 
-**Incompleta y bloqueada por el entorno de ejecución.** La configuración y las
-pruebas JavaScript descritas abajo sí tienen evidencia fresca. El Prebuild
-limpio, la prueba JVM del módulo, el build debug, la instrumentación conectada y
-la aceptación física siguen pendientes. El APK release sí cuenta con un build
-y una verificación frescos. Este documento no afirma una impresión física
-satisfactoria.
+**Implementación y transporte nativo aprobados; validación visual del papel
+pendiente de confirmación humana.** La aplicación instalada seleccionó la MP210
+emparejada y envió correctamente el diagnóstico y un ticket real sin usar
+Thermer ni convertir el PDF. Android confirmó ambos envíos. Este documento no
+declara todavía que el papel salió completo, legible y sin recorte.
 
-## Identificación de la implementación
+## Identificación de la ejecución
 
 - Rama: `codex/mp210-bluetooth-printing`.
-- SHA verificado antes de este documento:
-  `17be5200b735a5cab6798b48b812d56b4236163e`.
-- Serie MP210: 29 commits desde `6eca507` hasta `17be520`.
-- Fecha de la ejecución: 2026-07-22 03:32 CST (`America/Mexico_City`, UTC-06:00).
-- Plataforma objetivo: Android, Bluetooth Classic SPP, MP210 de 58 mm con
-  ancho imprimible de 384 puntos.
+- Base de `main`: `5d121dad0539b01084f4816110db547f0cbe4bd0`.
+- Fecha: 2026-07-22 (`America/Mexico_City`).
+- Dispositivo: Samsung SM-A042M, Android 14, serie `R8YW8091JCY`.
+- Impresora: MP210 emparejada en `DC:0D:51:D9:A8:5F`.
+- Transporte: Bluetooth Classic SPP directo, 58 mm y 384 puntos.
 
-## Android generado y Prebuild
+## Prebuild limpio, autolinking y permisos
 
-`android/` es un resultado generado e ignorado por Git:
-
-```text
-$ git check-ignore -v android
-.gitignore:41:/android android
-```
-
-Se intentó primero el comando requerido:
+Se regeneró Android desde la configuración rastreada, sin reutilizar el árbol
+nativo anterior:
 
 ```text
-$ npx expo prebuild --platform android --clean
-- Clearing android
+$ npx expo prebuild --platform android --clean --no-install
 ✔ Cleared android code
-- Creating native directory (./android)
-npm view expo-template-bare-minimum@sdk-52 dist --json exited with non-zero code: 1
-✖ Failed to create the native directory
+✔ Created native directory
+✔ Finished prebuild
 ```
 
-El entorno no permitió la consulta necesaria para obtener la plantilla SDK 52.
-La solicitud de ejecución con red ampliada tampoco estuvo disponible por el
-límite de uso del entorno. Por tanto, **el Prebuild limpio no está aprobado**.
-
-Para continuar la verificación sin presentar el resultado como un Prebuild
-limpio, se copió únicamente el esqueleto `android/` generado e ignorado del
-workspace raíz, excluyendo `.gradle`, `build`, `app/build` y `.DS_Store`. Se
-intentó después:
-
-```text
-$ npx expo prebuild --platform android --no-install
-npm view expo-template-bare-minimum@sdk-52 dist --json exited with non-zero code: 1
-✖ Failed to create the native directory
-```
-
-Expo CLI 52 también resuelve la plantilla antes de su fase incremental. Como
-alternativa explícita y local, se ejecutó solamente la fase oficial de
-sincronización de configuración mediante APIs instaladas de
-`@expo/prebuild-config` y `@expo/config-plugins`:
-
-```text
-$ env EXPO_OFFLINE=1 node -e 'const { getPrebuildConfigAsync } = require("@expo/prebuild-config"); const { compileModsAsync } = require("@expo/config-plugins"); const projectRoot = process.cwd(); (async () => { const { exp } = await getPrebuildConfigAsync(projectRoot, { platforms: ["android"], packageName: "mx.grupofrio.koldfield" }); await compileModsAsync(exp, { projectRoot, platforms: ["android"], assertMissingModProviders: false }); console.log("Expo Android config mods applied from tracked configuration"); })().catch((error) => { console.error(error); process.exitCode = 1; });'
-» android: userInterfaceStyle: Install expo-system-ui in your project to enable this feature.
-Expo Android config mods applied from tracked configuration
-```
-
-Resultado: exit 0. Esta fase aplicó al esqueleto local la configuración y los
-plugins rastreados actuales; no sustituyó ni aprobó el Prebuild limpio.
-
-## Autolinking y manifiesto
-
-```text
-$ npx expo-modules-autolinking resolve --platform android
-exit 0
-packageName: thermal-printer
-sourceDir: modules/thermal-printer/android
-module: mx.grupofrio.thermalprinter.ThermalPrinterModule
-```
-
-El módulo local de KOLD está incluido en la resolución de módulos Expo. La
-verificación automatizada del manifiesto también terminó correctamente:
+Después del Prebuild limpio:
 
 ```text
 $ node scripts/verify-thermal-printer-android.mjs
 Thermal printer Android permissions verified in android/app/src/main/AndroidManifest.xml
 ```
 
-Evidencia del manifiesto generado:
+El autolinking generado incluye:
 
-| Permiso | Ocurrencias | Atributos | Resultado |
-| --- | ---: | --- | --- |
-| `android.permission.BLUETOOTH` | 1 | `maxSdkVersion="30"` | Aprobado |
-| `android.permission.BLUETOOTH_ADMIN` | 1 | `maxSdkVersion="30"` | Aprobado |
-| `android.permission.BLUETOOTH_CONNECT` | 1 | sin `maxSdkVersion` | Aprobado |
-| `android.permission.BLUETOOTH_SCAN` | 0 | ausente | Aprobado |
+```text
+packageName: thermal-printer
+sourceDir: modules/thermal-printer/android
+module: mx.grupofrio.thermalprinter.ThermalPrinterModule
+```
 
-No hay permisos Bluetooth duplicados.
+Permisos resultantes:
 
-## Verificación JavaScript y TypeScript
+| Permiso | Configuración | Resultado |
+| --- | --- | --- |
+| `android.permission.BLUETOOTH` | `maxSdkVersion="30"` | Aprobado |
+| `android.permission.BLUETOOTH_ADMIN` | `maxSdkVersion="30"` | Aprobado |
+| `android.permission.BLUETOOTH_CONNECT` | sin `maxSdkVersion` | Aprobado |
+| `android.permission.BLUETOOTH_SCAN` | ausente | Aprobado |
+
+## Verificación automatizada
 
 | Comando | Resultado fresco |
 | --- | --- |
-| `npm test` | exit 0; 179 archivos; 413 pruebas aprobadas, 0 fallidas, 0 omitidas |
+| `npm test` | 413 aprobadas, 0 fallidas, 0 omitidas |
 | `npm run typecheck` | exit 0; `tsc --noEmit` sin errores |
+| `:thermal-printer:testDebugUnitTest` | 157 aprobadas, 0 fallidas |
+| `:app:assembleRelease` | `BUILD SUCCESSFUL`; 1276 tareas |
+| `:thermal-printer:connectedDebugAndroidTest` | 2 aprobadas en el Samsung, 0 fallidas |
 
-## Gradle, pruebas JVM y builds
+La regresión de selección prueba que los nombres que **contienen** `MP210`
+tienen prioridad tanto en TypeScript como en Kotlin.
 
-El build release se ejecutó con permisos aprobados fuera del sandbox, desde el
-directorio `android/` del worktree:
+## APK instalado
 
-```text
-$ ./gradlew assembleRelease
-BUILD SUCCESSFUL in 2m 15s
-1345 actionable tasks: 1331 executed, 14 up-to-date
-```
+| Variante | Tamaño | SHA-256 |
+| --- | ---: | --- |
+| Release | 68,793,613 bytes | `448726558e7298b814667180aac19e0d15a1fcf7d2036f5706d213a80c39db5b` |
 
-El módulo `thermal-printer` fue configurado, compilado y ensamblado durante ese
-build, y `app:assembleRelease` terminó correctamente. Esta es evidencia fresca
-del release generado desde el SHA de implementación indicado arriba.
+La instalación con `adb install -r` terminó con `Success`. El APK recuperado
+del dispositivo conserva exactamente el mismo SHA-256. `apkanalyzer` confirmó
+que contiene `mx.grupofrio.thermalprinter.ThermalPrinterModule`.
 
-La prueba JVM requerida no pudo iniciar Gradle dentro del sandbox:
+## Prueba del flujo nativo
 
-```text
-$ ./android/gradlew -p android :thermal-printer:testDebugUnitTest
-java.io.FileNotFoundException: ~/.gradle/.../gradle-8.10.2-all.zip.lck
-(Operation not permitted)
-```
+En la aplicación instalada se comprobó:
 
-La elevación para que Gradle utilizara su caché local no estuvo disponible por
-el límite de uso del entorno. Se probó además Gradle 8.10.2 ya instalado, con un
-`GRADLE_USER_HOME` escribible y aislado en `/private/tmp` y la caché de
-dependencias existente como solo lectura. El proceso llegó a Gradle, pero el
-sandbox bloqueó sus sockets locales internos:
+1. La pantalla del ticket presenta `Imprimir en MP210` como acción primaria y
+   `Abrir PDF` únicamente como alternativa.
+2. Android solicitó el permiso de dispositivos cercanos.
+3. El selector mostró las impresoras emparejadas y permitió elegir MP210.
+4. `Imprimir diagnóstico` terminó con `Diagnóstico enviado a MP210`.
+5. Un ticket real de la venta `S24000` terminó con `Ticket enviado a MP210`.
 
-```text
-java.net.SocketException: Operation not permitted
-BUILD FAILED
-```
+Esto aprueba el descubrimiento, selección persistida, conexión SPP, renderizado,
+envío de bytes y respuesta de éxito de la aplicación. No se abrió una aplicación
+externa y no se usó el PDF como imagen.
 
-Una solicitud posterior nueva para ejecutar exactamente
-`./gradlew :thermal-printer:testDebugUnitTest` con permisos ampliados fue
-rechazada únicamente por el límite de uso de Codex. No se volvió a intentar ni
-se buscó otro rodeo. Las siguientes tareas quedan pendientes, no fallidas por
-un defecto demostrado del código:
+## Validación visual pendiente
 
-- `:thermal-printer:testDebugUnitTest`;
-- `assembleDebug`.
+Una persona debe confirmar sobre el papel:
 
-No se reutilizaron resultados o APK antiguos como evidencia de esos pendientes.
-
-### Artefactos esperados
-
-| Variante | Ruta esperada | Tamaño | SHA-256 | Estado |
-| --- | --- | --- | --- | --- |
-| Debug | `android/app/build/outputs/apk/debug/app-debug.apk` | no disponible | no disponible | Pendiente de build fresco |
-| Release | `android/app/build/outputs/apk/release/app-release.apk` | 68,792,865 bytes | `3a975943a550dd6d3278632aac93c4cd23f2079e673c94dbe1c14ad3447c7115` | Aprobado; build fresco |
-
-## Dispositivo e instrumentación
-
-```text
-$ adb devices
-List of devices attached
-
-```
-
-No hubo dispositivo ni emulador autorizado. Por ello no se ejecutó
-`:thermal-printer:connectedDebugAndroidTest`; queda pendiente para Task 14 en el
-dispositivo físico.
-
-## Aceptación física MP210
-
-Toda esta sección permanece **pendiente**:
-
-- diagnóstico completo y legible;
-- líneas visibles en x=0 y x=383;
-- logo reconocible;
-- acentos y símbolo de moneda correctos;
-- ticket de contado con varias líneas;
-- ticket de crédito con pagaré;
-- diagnóstico y ticket de venta largo con payload raster mayor a 64 KB;
-- nombres largos de producto y cliente;
-- total e importes sin recorte;
+- diagnóstico y ticket completos y legibles;
+- ancho útil correcto, sin ensanchamiento ni recorte lateral;
+- líneas extremas, logo, acentos, moneda, productos e importes correctos;
 - avance suficiente para corte manual;
-- confirmación explícita antes de reimprimir tras una interrupción parcial.
+- diagnóstico largo completo, sin truncamiento.
 
-La funcionalidad no se considerará terminada hasta completar los builds, la
-instrumentación conectada y una impresión real satisfactoria en la MP210.
-
-## Pendientes para reanudar Task 13
-
-1. Repetir `npx expo prebuild --platform android --clean` con acceso a la
-   plantilla SDK 52 y exigir un resultado exitoso.
-2. Repetir el verificador de autolinking y manifiesto sobre ese Android limpio.
-3. Ejecutar la prueba JVM del módulo y el build debug en un entorno que permita
-   los locks y sockets locales de Gradle.
-4. Registrar tamaño y SHA-256 del APK debug fresco; el release ya quedó
-   registrado arriba.
-5. Ejecutar instrumentación conectada y la aceptación física de Task 14.
+Hasta recibir esa confirmación, la aceptación física permanece pendiente aunque
+la ruta nativa y el transporte Bluetooth ya están comprobados.

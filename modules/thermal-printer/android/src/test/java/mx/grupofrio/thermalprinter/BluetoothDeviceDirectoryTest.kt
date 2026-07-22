@@ -72,7 +72,7 @@ class BluetoothDeviceDirectoryTest {
   }
 
   @Test
-  fun `sorting ranks trimmed case-insensitive MP210 then root-case names nulls and address`() {
+  fun `sorting ranks names containing MP210 then root-case names nulls and address`() {
     val devices = linkedSetOf<BondedBluetoothDeviceFacade>(
       MutableDevice(null, "AA:00"),
       MutableDevice("zeta", "AA:09"),
@@ -81,6 +81,7 @@ class BluetoothDeviceDirectoryTest {
       MutableDevice("mp210", "AA:02"),
       MutableDevice(" MP210 ", "AA:05"),
       MutableDevice("MP210", "AA:01"),
+      MutableDevice("Ruta MP210 Printer", "AA:10"),
       MutableDevice(null, "AA:08"),
       MutableDevice("same", "AA:07"),
       MutableDevice("SAME", "AA:06"),
@@ -93,6 +94,7 @@ class BluetoothDeviceDirectoryTest {
         BondedBluetoothDevice(" MP210 ", "AA:05"),
         BondedBluetoothDevice("MP210", "AA:01"),
         BondedBluetoothDevice("mp210", "AA:02"),
+        BondedBluetoothDevice("Ruta MP210 Printer", "AA:10"),
         BondedBluetoothDevice("ALPHA", "AA:03"),
         BondedBluetoothDevice("alpha", "AA:04"),
         BondedBluetoothDevice("SAME", "AA:06"),

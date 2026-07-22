@@ -220,15 +220,15 @@ function compareStrings(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
-function isExactMp210(name: string | null): boolean {
-  return name?.trim().toLowerCase() === 'mp210';
+function isMp210Name(name: string | null): boolean {
+  return name?.trim().toLowerCase().includes('mp210') === true;
 }
 
 function compareBondedDevices(
   left: BondedBluetoothDeviceSnapshot,
   right: BondedBluetoothDeviceSnapshot,
 ): number {
-  const mp210Order = Number(!isExactMp210(left.name)) - Number(!isExactMp210(right.name));
+  const mp210Order = Number(!isMp210Name(left.name)) - Number(!isMp210Name(right.name));
   if (mp210Order !== 0) return mp210Order;
 
   const nullNameOrder = Number(left.name === null) - Number(right.name === null);

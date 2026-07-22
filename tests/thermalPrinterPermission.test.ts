@@ -263,7 +263,7 @@ test('Bluetooth unsupported and off are explicit and do not list devices', async
   }
 });
 
-test('paired devices are validated, copied, frozen, and sorted with exact MP210 names first', async () => {
+test('paired devices are validated, copied, frozen, and sorted with names containing MP210 first', async () => {
   const mutableName = { name: 'zeta', address: '00:00:00:00:00:09' };
   const mutableDevices: unknown[] = [
     { name: null, address: '00:00:00:00:00:08' },
@@ -273,6 +273,7 @@ test('paired devices are validated, copied, frozen, and sorted with exact MP210 
     { name: 'mp210', address: '00:00:00:00:00:02' },
     { name: ' MP210 ', address: '00:00:00:00:00:05' },
     { name: 'MP210', address: 'AA:00:00:00:00:01' },
+    { name: 'Ruta MP210 Printer', address: '00:00:00:00:00:07' },
     { name: 'Duplicate must lose', address: 'aa:00:00:00:00:01' },
     { name: null, address: '00:00:00:00:00:00' },
     { name: 210, address: '00:00:00:00:00:06' },
@@ -294,6 +295,7 @@ test('paired devices are validated, copied, frozen, and sorted with exact MP210 
     { name: ' MP210 ', address: '00:00:00:00:00:05' },
     { name: 'mp210', address: '00:00:00:00:00:02' },
     { name: 'MP210', address: 'AA:00:00:00:00:01' },
+    { name: 'Ruta MP210 Printer', address: '00:00:00:00:00:07' },
     { name: 'ALPHA', address: '00:00:00:00:00:03' },
     { name: 'alpha', address: '00:00:00:00:00:04' },
     { name: 'zeta', address: '00:00:00:00:00:09' },

@@ -31,7 +31,7 @@ test('registers the local Android module and config plugin', () => {
   );
 });
 
-test('uses an optional TypeScript boundary and exposes only the initial Expo module name', () => {
+test('uses an optional TypeScript boundary and exposes the exact Bluetooth directory API', () => {
   const boundarySource = readModuleFile('src/ThermalPrinterModule.ts');
   const indexSource = readModuleFile('index.ts');
   const kotlinSource = readModuleFile(
@@ -42,7 +42,12 @@ test('uses an optional TypeScript boundary and exposes only the initial Expo mod
   assert.doesNotMatch(boundarySource, /\brequireNativeModule\b/);
   assert.match(indexSource, /ThermalPrinterModule/);
   assert.match(kotlinSource, /Name\(\s*"KoldThermalPrinter"\s*\)/);
-  assert.doesNotMatch(kotlinSource, /(?:AsyncFunction|Function|Events|Property)\s*\(/);
+  assert.deepEqual(
+    Array.from(kotlinSource.matchAll(/AsyncFunction\(\s*["']([^"']+)["']\s*\)/g), (match) => match[1]),
+    ['getBluetoothState', 'getBondedDevices'],
+  );
+  assert.doesNotMatch(kotlinSource, /\bprint(?:Ticket|Diagnostic)?\b/);
+  assert.doesNotMatch(kotlinSource, /\b(?:Function|Events|Property)\s*\(/);
 });
 
 test('declares only the exact Bluetooth permissions in the module manifest', () => {
@@ -64,6 +69,16 @@ test('declares only the exact Bluetooth permissions in the module manifest', () 
   const pluginSource = readModuleFile('app.plugin.js');
   assert.equal(manifestSource.includes('BLUETOOTH_SCAN'), false);
   assert.equal(pluginSource.includes('BLUETOOTH_SCAN'), false);
+
+  for (const relativePath of [
+    'android/src/main/java/mx/grupofrio/thermalprinter/ThermalPrinterModule.kt',
+    'android/src/main/java/mx/grupofrio/thermalprinter/BluetoothDeviceDirectory.kt',
+    'android/src/main/java/mx/grupofrio/thermalprinter/BluetoothPrinterTransport.kt',
+  ]) {
+    const productionSource = readModuleFile(relativePath);
+    assert.equal(productionSource.includes('BLUETOOTH_SCAN'), false);
+    assert.equal(productionSource.includes('startDiscovery'), false);
+  }
 });
 
 test('configures the Expo Android module build and native test toolchain', () => {

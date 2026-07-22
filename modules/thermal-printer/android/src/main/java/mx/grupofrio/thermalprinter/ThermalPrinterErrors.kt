@@ -49,6 +49,22 @@ internal fun invalidTicket(message: String): Nothing =
 internal fun ticketTooLarge(message: String): Nothing =
   throw ThermalPrinterException(TICKET_TOO_LARGE_CODE, message)
 
+internal fun bluetoothUnsupported() = ThermalPrinterException(
+  code = BLUETOOTH_UNSUPPORTED_CODE,
+  message = "Bluetooth is unavailable",
+)
+
+internal fun bluetoothDisabled() = ThermalPrinterException(
+  code = BLUETOOTH_DISABLED_CODE,
+  message = "Bluetooth is turned off",
+)
+
+internal fun permissionDenied(cause: SecurityException? = null) = ThermalPrinterException(
+  code = PERMISSION_DENIED_CODE,
+  message = "Bluetooth permission denied",
+  cause = cause,
+)
+
 private fun saturatingAdd(current: Long, increment: Long): Long {
   require(current >= 0) { "Progress cannot be negative" }
   require(increment >= 0) { "Progress increment cannot be negative" }
@@ -62,3 +78,6 @@ internal const val CONNECT_FAILED_CODE = "connect_failed"
 internal const val BUSY_CODE = "busy"
 internal const val WRITE_TIMEOUT_CODE = "write_timeout"
 internal const val WRITE_FAILED_CODE = "write_failed"
+internal const val BLUETOOTH_UNSUPPORTED_CODE = "bluetooth_unsupported"
+internal const val BLUETOOTH_DISABLED_CODE = "bluetooth_disabled"
+internal const val PERMISSION_DENIED_CODE = "permission_denied"

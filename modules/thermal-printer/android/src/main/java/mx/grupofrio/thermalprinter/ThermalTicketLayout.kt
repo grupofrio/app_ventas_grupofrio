@@ -133,15 +133,18 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     val pieces = mutableListOf<String>()
     var start = 0
     while (start < word.length) {
-      var end = start + 1
+      var end = start
       var largestEnd = -1
-      while (end <= word.length) {
-        val candidate = word.substring(start, end)
+      while (end < word.length) {
+        val nextEnd = word.offsetByCodePoints(end, 1)
+        val candidate = word.substring(start, nextEnd)
         if (measuredWidth(candidate, style) > maxWidth) break
-        largestEnd = end
-        end += 1
+        largestEnd = nextEnd
+        end = nextEnd
       }
-      if (largestEnd <= start) invalidTicket("A character is wider than the available ticket width")
+      if (largestEnd <= start) {
+        invalidTicket("A code point is wider than the available ticket width")
+      }
       pieces += word.substring(start, largestEnd)
       start = largestEnd
     }

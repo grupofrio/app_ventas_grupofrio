@@ -53,9 +53,53 @@ class ThermalTicketLayoutTest {
     val longWord = "extraordinariamente"
     val characters = subject.wrapText(longWord, style, maxWidth = 50f)
 
+    assertEquals(listOf(""), subject.wrapText("", style, maxWidth = 50f))
     assertEquals(listOf("uno", "dos", "tres"), words)
     assertEquals(longWord, characters.joinToString(separator = ""))
     assertTrue(characters.all { measurer.width(it, style) <= 50f })
+  }
+
+  @Test
+  fun `long unbroken supplementary word wraps only at code point boundaries`() {
+    val word = "A" + iceCube.repeat(40)
+    val quantity = "1 x $1.00"
+    val layout = subject.layout(
+      ticket(
+        lines = listOf(TicketLine(1, word, quantity, "$1.00")),
+      ),
+    )
+    val dividerIndices = layout.commands.withIndex()
+      .filter { it.value is DrawCommand.Divider }
+      .map { it.index }
+    val productRegion = layout.commands.subList(dividerIndices[1] + 1, dividerIndices[2])
+      .filterIsInstance<DrawCommand.Text>()
+    val quantityIndex = productRegion.indexOfFirst { it.text == quantity }
+    assertTrue("Quantity command must follow product-name chunks", quantityIndex > 0)
+    val chunks = productRegion.subList(0, quantityIndex)
+    val productStyle = TextStyle(
+      sizePx = ThermalTicketLayout.BODY_SIZE_PX,
+      lineHeightPx = ThermalTicketLayout.BODY_LINE_HEIGHT_PX,
+      bold = true,
+    )
+    val availableWidth =
+      (ThermalTicketLayout.WIDTH_PX - 2 * ThermalTicketLayout.INSET_PX).toFloat()
+
+    assertTrue("Expected multiple product-name commands", chunks.size > 1)
+    chunks.map { it.text }.forEach(::assertCanonicalDisplayText)
+    assertEquals(word, chunks.joinToString(separator = "") { it.text })
+    assertEquals("A" + iceCube.repeat(17), chunks.first().text)
+    assertTrue(chunks.all { measurer.width(it.text, productStyle) <= availableWidth })
+  }
+
+  @Test
+  fun `supplementary code point wider than available width is invalid`() {
+    val style = TextStyle(sizePx = 20, lineHeightPx = 26)
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      subject.wrapText(iceCube, style, maxWidth = 15f)
+    }
+
+    assertEquals("invalid_ticket", error.code)
   }
 
   @Test

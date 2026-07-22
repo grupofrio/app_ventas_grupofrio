@@ -527,17 +527,18 @@ class BluetoothPrinterTransport internal constructor(
             completed.await(waitMillis, TimeUnit.MILLISECONDS)
           } catch (error: InterruptedException) {
             val aborted = WorkerState.Aborted(error, clock.nowMillis())
-            if (state.compareAndSet(observed, aborted)) {
-              cancelAndJoin(socket, worker)
-              Thread.currentThread().interrupt()
-              return WorkerOutcome.Completed(
-                error = error,
-                completionAtMillis = aborted.completionAtMillis,
-                operationReturned = false,
-                timeoutPhase = null,
-              )
-            }
+            state.compareAndSet(observed, aborted)
+            cancelAndJoin(socket, worker)
+            val captured = completion.get()
             Thread.currentThread().interrupt()
+            return interruptedOutcome(
+              interruption = error,
+              interruptedAtMillis = aborted.completionAtMillis,
+              captured = captured,
+              jobDeadline = jobDeadline,
+              operationDeadline = operationDeadline,
+              operationTimeoutPhase = operationTimeoutPhase,
+            )
           }
         }
         is WorkerState.Finished -> {
@@ -589,6 +590,28 @@ class BluetoothPrinterTransport internal constructor(
       operationTimeoutPhase,
     ),
   )
+
+  private fun interruptedOutcome(
+    interruption: InterruptedException,
+    interruptedAtMillis: Long,
+    captured: WorkerCompletion?,
+    jobDeadline: Long,
+    operationDeadline: Long,
+    operationTimeoutPhase: String,
+  ): WorkerOutcome.Completed {
+    val completionAtMillis = captured?.completionAtMillis ?: interruptedAtMillis
+    return WorkerOutcome.Completed(
+      error = interruption,
+      completionAtMillis = completionAtMillis,
+      operationReturned = captured?.operationReturned == true,
+      timeoutPhase = timeoutPhaseAt(
+        completionAtMillis,
+        jobDeadline,
+        operationDeadline,
+        operationTimeoutPhase,
+      ),
+    )
+  }
 
   private fun cancelAndJoin(socket: ManagedSocket, worker: Thread) {
     socket.close()

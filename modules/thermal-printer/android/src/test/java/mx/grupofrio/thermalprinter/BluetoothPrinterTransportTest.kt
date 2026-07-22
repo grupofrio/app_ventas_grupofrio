@@ -285,6 +285,115 @@ class BluetoothPrinterTransportTest {
   }
 
   @Test
+  fun `interrupted coordinator preserves a returned raster write and cancels worker safely`() {
+    val hooks = BlockCompletionPublicationHooks(workerKind = "write", targetCompletion = 2)
+    val socket = FakeSocket()
+    val gate = NonReentrantTestGate()
+    hooks.socketClosed = { socket.closeCalls > 0 }
+
+    val result = interruptCoordinatorAfterCompletionCaptured(hooks) {
+      transport(
+        FakeSocketFactory(socket),
+        gate = gate,
+        workerHooks = hooks,
+      ).print(ADDRESS, raster())
+    }
+    val error = result.failure as ThermalPrinterException
+    val callsAtReturn = socket.writeCalls
+    Thread.sleep(25)
+
+    assertEquals(WRITE_FAILED_CODE, error.code)
+    assertEquals("write", error.phase)
+    assertTrue(error.cause is InterruptedException)
+    assertEquals(11L, error.progress.transportBytesWritten)
+    assertEquals(1L, error.progress.rasterBytesWritten)
+    assertEquals(1L, error.progress.bandsCompleted)
+    assertTrue(error.progress.rasterPayloadAttempted)
+    assertEquals(2, callsAtReturn)
+    assertEquals(callsAtReturn, socket.writeCalls)
+    assertEquals(1, socket.closeCalls)
+    assertTrue(hooks.closeObservedBeforeInterrupt.get())
+    assertTrue(hooks.workerInterrupted.get())
+    assertFalse(hooks.workerThread!!.isAlive)
+    assertTrue(result.coordinatorInterrupted)
+    assertFalse(gate.isHeld())
+  }
+
+  @Test
+  fun `interrupted coordinator preserves returned control bytes without raster attempt`() {
+    val hooks = BlockCompletionPublicationHooks(workerKind = "write", targetCompletion = 1)
+    val socket = FakeSocket()
+    val gate = NonReentrantTestGate()
+    hooks.socketClosed = { socket.closeCalls > 0 }
+
+    val result = interruptCoordinatorAfterCompletionCaptured(hooks) {
+      transport(
+        FakeSocketFactory(socket),
+        gate = gate,
+        workerHooks = hooks,
+      ).print(ADDRESS, raster())
+    }
+    val error = result.failure as ThermalPrinterException
+    val callsAtReturn = socket.writeCalls
+    Thread.sleep(25)
+
+    assertEquals(WRITE_FAILED_CODE, error.code)
+    assertEquals("write", error.phase)
+    assertTrue(error.cause is InterruptedException)
+    assertEquals(2L, error.progress.transportBytesWritten)
+    assertEquals(0L, error.progress.rasterBytesWritten)
+    assertEquals(0L, error.progress.bandsCompleted)
+    assertFalse(error.progress.rasterPayloadAttempted)
+    assertEquals(1, callsAtReturn)
+    assertEquals(callsAtReturn, socket.writeCalls)
+    assertEquals(1, socket.closeCalls)
+    assertTrue(hooks.closeObservedBeforeInterrupt.get())
+    assertTrue(hooks.workerInterrupted.get())
+    assertFalse(hooks.workerThread!!.isAlive)
+    assertTrue(result.coordinatorInterrupted)
+    assertFalse(gate.isHeld())
+  }
+
+  @Test
+  fun `interrupted coordinator applies timeout policy to returned raster completion timestamp`() {
+    val clock = FakeClock()
+    val hooks = BlockCompletionPublicationHooks(workerKind = "write", targetCompletion = 2)
+    var writeCalls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        writeCalls++
+        if (writeCalls == 2) clock.advance(40)
+      },
+    )
+    val gate = NonReentrantTestGate()
+    hooks.socketClosed = { socket.closeCalls > 0 }
+
+    val result = interruptCoordinatorAfterCompletionCaptured(hooks) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        gate = gate,
+        workerHooks = hooks,
+        config = shortTimeouts(write = 40),
+      ).print(ADDRESS, raster())
+    }
+    val error = result.failure as ThermalPrinterException
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("write", error.phase)
+    assertEquals(11L, error.progress.transportBytesWritten)
+    assertEquals(1L, error.progress.rasterBytesWritten)
+    assertEquals(1L, error.progress.bandsCompleted)
+    assertTrue(error.progress.rasterPayloadAttempted)
+    assertEquals(1, socket.closeCalls)
+    assertTrue(hooks.closeObservedBeforeInterrupt.get())
+    assertTrue(hooks.workerInterrupted.get())
+    assertFalse(hooks.workerThread!!.isAlive)
+    assertTrue(result.coordinatorInterrupted)
+    assertFalse(gate.isHeld())
+  }
+
+  @Test
   fun `job expiry before raster worker construction starts no worker or write`() {
     val clock = FakeClock()
     val hooks = ExpireWorkerHooks(
@@ -510,6 +619,59 @@ class BluetoothPrinterTransportTest {
     assertEquals(1, secure.closeCalls)
     assertEquals(1, insecure.connectCalls)
     assertFalse(hooks.wasInterrupted.get())
+  }
+
+  @Test
+  fun `interrupted coordinator rejects a captured successful connect without continuing job`() {
+    val hooks = BlockCompletionPublicationHooks(workerKind = "connect", targetCompletion = 1)
+    val secure = FakeSocket()
+    val factory = FakeSocketFactory(secure)
+    val gate = NonReentrantTestGate()
+    hooks.socketClosed = { secure.closeCalls > 0 }
+
+    val result = interruptCoordinatorAfterCompletionCaptured(hooks) {
+      transport(factory, gate = gate, workerHooks = hooks).print(ADDRESS, raster())
+    }
+    val error = result.failure as ThermalPrinterException
+
+    assertEquals(CONNECT_FAILED_CODE, error.code)
+    assertEquals("connect", error.phase)
+    assertTrue(error.cause is InterruptedException)
+    assertEquals(0, factory.insecureCreates)
+    assertEquals(0, secure.writeCalls)
+    assertEquals(1, secure.closeCalls)
+    assertTrue(hooks.closeObservedBeforeInterrupt.get())
+    assertTrue(hooks.workerInterrupted.get())
+    assertFalse(hooks.workerThread!!.isAlive)
+    assertTrue(result.coordinatorInterrupted)
+    assertFalse(gate.isHeld())
+  }
+
+  @Test
+  fun `coordinator interruption outranks captured secure IOException without fallback`() {
+    val hooks = BlockCompletionPublicationHooks(workerKind = "connect", targetCompletion = 1)
+    val original = IOException("secure failure captured before coordinator interruption")
+    val secure = FakeSocket(connectAction = { throw original })
+    val factory = FakeSocketFactory(secure)
+    val gate = NonReentrantTestGate()
+    hooks.socketClosed = { secure.closeCalls > 0 }
+
+    val result = interruptCoordinatorAfterCompletionCaptured(hooks) {
+      transport(factory, gate = gate, workerHooks = hooks).print(ADDRESS, raster())
+    }
+    val error = result.failure as ThermalPrinterException
+
+    assertEquals(CONNECT_FAILED_CODE, error.code)
+    assertEquals("connect", error.phase)
+    assertTrue(error.cause is InterruptedException)
+    assertFalse(error.cause === original)
+    assertEquals(0, factory.insecureCreates)
+    assertEquals(1, secure.closeCalls)
+    assertTrue(hooks.closeObservedBeforeInterrupt.get())
+    assertTrue(hooks.workerInterrupted.get())
+    assertFalse(hooks.workerThread!!.isAlive)
+    assertTrue(result.coordinatorInterrupted)
+    assertFalse(gate.isHeld())
   }
 
   @Test
@@ -1031,6 +1193,31 @@ class BluetoothPrinterTransportTest {
     workerHooks = workerHooks,
   )
 
+  private fun interruptCoordinatorAfterCompletionCaptured(
+    hooks: BlockCompletionPublicationHooks,
+    action: () -> Unit,
+  ): InterruptedCoordinatorResult {
+    val failure = AtomicReference<Throwable?>(null)
+    val coordinatorInterrupted = AtomicBoolean()
+    val coordinator = Thread {
+      try {
+        action()
+      } catch (caught: Throwable) {
+        failure.set(caught)
+      } finally {
+        coordinatorInterrupted.set(Thread.currentThread().isInterrupted)
+      }
+    }.apply { isDaemon = true }
+
+    coordinator.start()
+    assertTrue(hooks.completionCaptured.await(1, TimeUnit.SECONDS))
+    coordinator.interrupt()
+    coordinator.join(2_000)
+    assertFalse(coordinator.isAlive)
+    assertNotNull(failure.get())
+    return InterruptedCoordinatorResult(failure.get(), coordinatorInterrupted.get())
+  }
+
   private fun shortTimeouts(
     connect: Long = 40,
     write: Long = 40,
@@ -1085,6 +1272,37 @@ class BluetoothPrinterTransportTest {
   }
 
   private object NoOpWorkerHooks : WorkerHooks
+
+  private class BlockCompletionPublicationHooks(
+    private val workerKind: String,
+    private val targetCompletion: Long,
+  ) : WorkerHooks {
+    val completionCaptured = CountDownLatch(1)
+    val closeObservedBeforeInterrupt = AtomicBoolean()
+    val workerInterrupted = AtomicBoolean()
+    private val completions = AtomicLong()
+    private val neverRelease = CountDownLatch(1)
+    var socketClosed: () -> Boolean = { false }
+    @Volatile var workerThread: Thread? = null
+
+    override fun afterOperationCompletionCaptured(workerKind: String) {
+      if (workerKind != this.workerKind || completions.incrementAndGet() != targetCompletion) return
+      workerThread = Thread.currentThread()
+      completionCaptured.countDown()
+      try {
+        neverRelease.await()
+      } catch (_: InterruptedException) {
+        closeObservedBeforeInterrupt.set(socketClosed())
+        workerInterrupted.set(true)
+        Thread.currentThread().interrupt()
+      }
+    }
+  }
+
+  private data class InterruptedCoordinatorResult(
+    val failure: Throwable?,
+    val coordinatorInterrupted: Boolean,
+  )
 
   private class BlockFirstConnectCompletionPublicationHooks : WorkerHooks {
     val completionCaptured = CountDownLatch(1)

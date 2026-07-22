@@ -43,6 +43,10 @@ class DiagnosticTicketFactoryTest {
     assertTrue(layout.commands.any { it is DrawCommand.Logo })
     assertTrue(textCommands.any { it.style.alignment == TextAlignment.LEFT })
     assertTrue(textCommands.any { it.style.alignment == TextAlignment.RIGHT })
+    val minimumSizeAmount = textCommands.single { it.text == "M".repeat(37) }
+    assertEquals(16, minimumSizeAmount.style.sizePx)
+    assertTrue(minimumSizeAmount.style.bold)
+    assertEquals(TextAlignment.RIGHT, minimumSizeAmount.style.alignment)
   }
 
   @Test

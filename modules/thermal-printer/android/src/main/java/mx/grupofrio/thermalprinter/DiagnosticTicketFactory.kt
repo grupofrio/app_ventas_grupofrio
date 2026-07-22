@@ -17,9 +17,10 @@ internal class DiagnosticTicketFactory {
     lines = calibrationLines(),
     subtotal = "$ 12,345.67",
     totalKg = "384 dots / 48 bytes por fila",
-    // A wide-glyph ruler forces the total amount down to the ticket's 16 px minimum while fitting.
-    total = "界界界界界界界界界界界界界界界界界界界界界界",
+    total = "$ 12,345.67",
     creditNote = "Verificar alineación de importes, logo, acentos, bordes y continuidad de franjas.",
+    // ASCII-only, rendered through an internal diagnostic-only fixed 16 px layout command.
+    diagnosticCalibrationText16 = "M".repeat(37),
   )
 
   /** Adds physical edge columns plus a full-width rule/checker without changing raster dimensions. */

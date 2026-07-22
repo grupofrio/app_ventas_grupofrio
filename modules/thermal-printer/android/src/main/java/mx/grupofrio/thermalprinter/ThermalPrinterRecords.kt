@@ -49,6 +49,8 @@ data class ThermalTicket(
   val totalKg: String,
   val total: String,
   val creditNote: String?,
+  /** Internal-only diagnostic seam; never exposed by the Expo Record or sale DTO. */
+  internal val diagnosticCalibrationText16: String? = null,
 )
 
 data class TicketBranding(
@@ -354,6 +356,11 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
   budget.required(totalKg, "totalKg", MAX_AMOUNT_CHARS)
   budget.required(total, "total", MAX_AMOUNT_CHARS)
   budget.optional(creditNote, "creditNote", MAX_LONG_TEXT_CHARS)
+  budget.optional(
+    diagnosticCalibrationText16,
+    "diagnosticCalibrationText16",
+    MAX_SHORT_TEXT_CHARS,
+  )
 
   val normalizedLines = ArrayList<TicketLine>(lines.size)
   lines.forEachIndexed { index, line ->
@@ -403,6 +410,11 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
     totalKg = requiredDisplayText(totalKg, "totalKg", MAX_AMOUNT_CHARS),
     total = requiredDisplayText(total, "total", MAX_AMOUNT_CHARS),
     creditNote = optionalDisplayText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
+    diagnosticCalibrationText16 = optionalDisplayText(
+      diagnosticCalibrationText16,
+      "diagnosticCalibrationText16",
+      MAX_SHORT_TEXT_CHARS,
+    ),
   )
 }
 

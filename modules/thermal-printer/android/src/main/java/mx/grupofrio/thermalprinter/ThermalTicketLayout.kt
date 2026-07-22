@@ -90,6 +90,8 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     builder.addAmountRow("Kilogramos:", safeTicket.totalKg, BODY_STYLE)
     builder.addAmountRow("Total:", safeTicket.total, TOTAL_BOLD)
 
+    safeTicket.diagnosticCalibrationText16?.let(builder::addDiagnosticCalibrationText16)
+
     safeTicket.creditNote?.let { note ->
       builder.addDivider()
       builder.addWrapped(note, BODY_STYLE)
@@ -261,6 +263,14 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       addGap(DIVIDER_BOTTOM_GAP_PX)
     }
 
+    /**
+     * Diagnostic-only fixed-size command. Android font hinting can make adjacent fitted sizes share
+     * a rounded advance, so this calibration line must exercise the 16 px ticket minimum directly.
+     */
+    fun addDiagnosticCalibrationText16(text: String) {
+      addTextLine(text, DIAGNOSTIC_MINIMUM_BOLD_RIGHT)
+    }
+
     fun addGap(pixels: Int) {
       if (pixels < 0) invalidTicket("Layout gaps must not be negative")
       ensureFits(y + pixels.toLong())
@@ -374,5 +384,11 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     private val SMALL_CENTER = SMALL_STYLE.copy(alignment = TextAlignment.CENTER)
     private val TOTAL_BOLD = TextStyle(TOTAL_SIZE_PX, TOTAL_LINE_HEIGHT_PX, bold = true)
     private val TOTAL_BOLD_CENTER = TOTAL_BOLD.copy(alignment = TextAlignment.CENTER)
+    private val DIAGNOSTIC_MINIMUM_BOLD_RIGHT = TextStyle(
+      MIN_AMOUNT_SIZE_PX,
+      MIN_AMOUNT_SIZE_PX + MIN_TEXT_LEADING_PX,
+      bold = true,
+      alignment = TextAlignment.RIGHT,
+    )
   }
 }

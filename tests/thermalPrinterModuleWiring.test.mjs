@@ -68,6 +68,10 @@ test('uses an optional TypeScript boundary and exposes the exact native printer 
   );
   assert.doesNotMatch(diagnosticSource, /SOLUCIONES EN PRODUCCION GLACIEM|SPG230420F52/);
   assert.doesNotMatch(diagnosticSource, /iVBOR[A-Za-z0-9+/=]{16,}/);
+  assert.doesNotMatch(diagnosticSource, /\u754c/u);
+  assert.match(kotlinSource, /appContext\.backgroundCoroutineScope/);
+  assert.match(kotlinSource, /ThermalPrinterCallRunner/);
+  assert.match(kotlinSource, /runInterruptible/);
 });
 
 test('declares only the exact Bluetooth permissions in the module manifest', () => {

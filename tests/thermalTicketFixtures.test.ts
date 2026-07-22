@@ -38,3 +38,29 @@ test('long sale JSON remains distinct from the diagnostic calibration document',
   assert.doesNotMatch(source, /GS v 0|x=383|checker|DIAGNOSTICO/i);
   assert.doesNotMatch(source, /logoPngBase64|logoVersion|legalName|rfcLabel/);
 });
+
+test('long sale aggregate currency and kilogram fields equal their product lines', () => {
+  const fixture = buildLongSaleThermalTicketFixture();
+  const lineTotalCents = fixture.lines.reduce(
+    (sum, line) => sum + parseCurrencyCents(line.lineTotal),
+    0,
+  );
+  const lineKilograms = fixture.lines.reduce((sum, line) => {
+    const match = line.quantityAndUnitPrice.match(/^([0-9]+(?:\.[0-9]+)?) kg\b/);
+    return sum + (match ? Number(match[1]) : 0);
+  }, 0);
+
+  assert.equal(parseCurrencyCents(fixture.subtotal), lineTotalCents);
+  assert.equal(parseCurrencyCents(fixture.total), lineTotalCents);
+  assert.equal(parseKilograms(fixture.totalKg), lineKilograms);
+});
+
+function parseCurrencyCents(value: string): number {
+  assert.match(value, /^\$[0-9,]+\.\d{2}$/);
+  return Math.round(Number(value.slice(1).replaceAll(',', '')) * 100);
+}
+
+function parseKilograms(value: string): number {
+  assert.match(value, /^[0-9]+\.\d{3} kg$/);
+  return Number(value.slice(0, -3));
+}

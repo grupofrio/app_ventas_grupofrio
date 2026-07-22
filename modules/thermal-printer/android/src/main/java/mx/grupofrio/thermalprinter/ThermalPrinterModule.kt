@@ -4,6 +4,12 @@ import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import org.json.JSONObject
 
 internal fun interface BondedPrinterVerifier {
@@ -16,6 +22,41 @@ internal fun interface TicketRasterRenderer {
 
 internal fun interface RasterPrintTransport {
   fun print(address: String, raster: MonochromeRaster): NativePrintResult
+}
+
+/** Dispatches long native calls concurrently on Expo's lifecycle-owned background scope. */
+internal class ThermalPrinterCallRunner(
+  private val backgroundScope: CoroutineScope,
+) {
+  fun launch(
+    promise: Promise,
+    block: () -> Any?,
+  ) {
+    backgroundScope.launch runner@{
+      val result = try {
+        runInterruptible { block() }
+      } catch (error: CancellationException) {
+        throw error
+      } catch (error: ThermalPrinterException) {
+        currentCoroutineContext().ensureActive()
+        rejectThermalPrinterCall(promise, error)
+        return@runner
+      } catch (error: Throwable) {
+        currentCoroutineContext().ensureActive()
+        rejectThermalPrinterCall(
+          promise,
+          ThermalPrinterException(
+            code = UNEXPECTED_ERROR_CODE,
+            message = "Thermal printer operation failed",
+            cause = error,
+          ),
+        )
+        return@runner
+      }
+      currentCoroutineContext().ensureActive()
+      promise.resolve(result)
+    }
+  }
 }
 
 internal class ThermalPrinterPrintCoordinator(
@@ -110,7 +151,7 @@ class ThermalPrinterModule : Module() {
         document: ThermalTicketDocumentRecord,
         promise: Promise,
       ->
-      settleThermalPrinterCall(promise) {
+      printCallRunner().launch(promise) {
         printCoordinator().printTicket(address, document).toWireValue()
       }
     }
@@ -120,11 +161,14 @@ class ThermalPrinterModule : Module() {
         branding: ThermalTicketBrandingRecord,
         promise: Promise,
       ->
-      settleThermalPrinterCall(promise) {
+      printCallRunner().launch(promise) {
         printCoordinator().printDiagnostic(address, branding).toWireValue()
       }
     }
   }
+
+  private fun printCallRunner(): ThermalPrinterCallRunner =
+    ThermalPrinterCallRunner(appContext.backgroundCoroutineScope)
 
   private fun bluetoothDirectory(): BluetoothDeviceDirectory {
     val reactContext = appContext.reactContext ?: throw bluetoothUnsupported()
@@ -166,8 +210,15 @@ internal fun settleThermalPrinterCall(
   try {
     promise.resolve(block())
   } catch (error: ThermalPrinterException) {
-    promise.reject(CodedException(error.code, error.toExpoErrorEnvelope(), error))
+    rejectThermalPrinterCall(promise, error)
   }
+}
+
+private fun rejectThermalPrinterCall(
+  promise: Promise,
+  error: ThermalPrinterException,
+) {
+  promise.reject(CodedException(error.code, error.toExpoErrorEnvelope(), error))
 }
 
 private fun ThermalPrinterException.toExpoErrorEnvelope(): String = JSONObject()

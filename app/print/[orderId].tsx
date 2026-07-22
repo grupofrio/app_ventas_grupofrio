@@ -6,6 +6,7 @@
 import React from 'react';
 import {
   View,
+  ScrollView,
   Text,
   StyleSheet,
   Alert,
@@ -36,14 +37,25 @@ import {
 } from '../../src/services/thermalPrinter';
 import type {
   BondedBluetoothDeviceSnapshot,
-  SavedThermalPrinterSnapshot,
   ThermalPrinterAccessResult,
 } from '../../src/services/thermalPrinter';
 import { createThermalPrinterSelectionStore } from '../../src/services/thermalPrinterSelection';
+import {
+  beginOutput,
+  createExplicitReprintAction,
+  createOutputGate,
+  createThermalPrinterScreenFlowState,
+  isCurrentOutput,
+  openSettingsSafely,
+  reduceThermalPrinterScreenFlow,
+  releaseOutput,
+} from '../../src/services/thermalPrinterScreenFlow';
+import type {
+  OutputToken,
+  PrinterJobState,
+} from '../../src/services/thermalPrinterScreenFlow';
 import { buildThermalTicketDocument } from '../../src/services/thermalTicketDocument';
 import { formatCurrency } from '../../src/utils/time';
-
-type PrinterJobState = 'idle' | 'permission' | 'connecting' | 'sending';
 
 const selectionStore = createThermalPrinterSelectionStore();
 const androidApiLevel = typeof Platform.Version === 'number'
@@ -89,27 +101,40 @@ function waitForUiFrame(): Promise<void> {
   });
 }
 
+async function openAndroidAppSettings() {
+  await openSettingsSafely(
+    () => Linking.openSettings(),
+    () => {
+      Alert.alert(
+        'No se pudieron abrir los ajustes',
+        'Abre los ajustes de Android manualmente y permite dispositivos cercanos. El PDF sigue disponible.',
+      );
+    },
+  );
+}
+
 export default function PrintTicketScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
   const [ticket, setTicket] = React.useState<SaleTicketSnapshot | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isOpening, setIsOpening] = React.useState(false);
   const [isSelectionLoading, setIsSelectionLoading] = React.useState(true);
-  const [selectedPrinter, setSelectedPrinter] = React.useState<SavedThermalPrinterSnapshot | null>(null);
   const [bondedDevices, setBondedDevices] = React.useState<readonly BondedBluetoothDeviceSnapshot[]>([]);
-  const [pickerVisible, setPickerVisible] = React.useState(false);
-  const [printerJobState, setPrinterJobState] = React.useState<PrinterJobState>('idle');
+  const [printerFlow, dispatchPrinterFlow] = React.useReducer(
+    reduceThermalPrinterScreenFlow,
+    undefined,
+    createThermalPrinterScreenFlowState,
+  );
   const mountedRef = React.useRef(false);
-  const operationIdRef = React.useRef(0);
-  const jobInFlightRef = React.useRef(false);
-  const pdfInFlightRef = React.useRef(false);
+  const outputGateRef = React.useRef(createOutputGate());
+  const { jobState: printerJobState, pickerVisible, selectedPrinter } = printerFlow;
   const isPrintJobActive = printerJobState !== 'idle';
 
   React.useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      operationIdRef.current += 1;
+      outputGateRef.current = createOutputGate();
     };
   }, []);
 
@@ -135,9 +160,13 @@ export default function PrintTicketScreen() {
     async function loadPrinterSelection() {
       try {
         const saved = await selectionStore.load();
-        if (mounted) setSelectedPrinter(saved);
+        if (mounted) {
+          dispatchPrinterFlow({ type: 'selection_loaded', printer: saved });
+        }
       } catch {
-        if (mounted) setSelectedPrinter(null);
+        if (mounted) {
+          dispatchPrinterFlow({ type: 'selection_loaded', printer: null });
+        }
       } finally {
         if (mounted) setIsSelectionLoading(false);
       }
@@ -150,13 +179,11 @@ export default function PrintTicketScreen() {
   }, []);
 
   async function handleOpenPdf() {
-    if (
-      !ticket ||
-      isPrintJobActive ||
-      jobInFlightRef.current ||
-      pdfInFlightRef.current
-    ) return;
-    pdfInFlightRef.current = true;
+    if (!ticket || isPrintJobActive) return;
+    const start = beginOutput(outputGateRef.current, 'pdf');
+    if (start.token === null) return;
+    outputGateRef.current = start.gate;
+    const token = start.token;
     setIsOpening(true);
     try {
       await openSaleTicketPdf(ticket);
@@ -164,34 +191,41 @@ export default function PrintTicketScreen() {
       const message = error instanceof Error ? error.message : 'No se pudo abrir el PDF del ticket.';
       if (mountedRef.current) Alert.alert('Ticket PDF', message);
     } finally {
-      pdfInFlightRef.current = false;
-      if (mountedRef.current) setIsOpening(false);
+      const wasCurrent = isCurrentOutput(outputGateRef.current, token);
+      outputGateRef.current = releaseOutput(outputGateRef.current, token);
+      if (mountedRef.current && wasCurrent) setIsOpening(false);
     }
   }
 
-  function startPrinterOperation(state: Exclude<PrinterJobState, 'idle'>): number | null {
-    if (jobInFlightRef.current || pdfInFlightRef.current) return null;
-    jobInFlightRef.current = true;
-    operationIdRef.current += 1;
-    const operationId = operationIdRef.current;
-    if (mountedRef.current) setPrinterJobState(state);
-    return operationId;
+  function startPrinterOperation(
+    state: Exclude<PrinterJobState, 'idle'>,
+  ): OutputToken | null {
+    const start = beginOutput(outputGateRef.current, 'printer');
+    if (start.token === null) return null;
+    outputGateRef.current = start.gate;
+    if (mountedRef.current) {
+      dispatchPrinterFlow({ type: 'job_state', value: state });
+    }
+    return start.token;
   }
 
-  function isCurrentOperation(operationId: number): boolean {
-    return mountedRef.current && operationIdRef.current === operationId;
+  function isCurrentOperation(token: OutputToken): boolean {
+    return mountedRef.current && isCurrentOutput(outputGateRef.current, token);
   }
 
-  function finishPrinterOperation(operationId: number) {
-    if (operationIdRef.current !== operationId) return;
-    jobInFlightRef.current = false;
-    if (mountedRef.current) setPrinterJobState('idle');
+  function finishPrinterOperation(token: OutputToken) {
+    const wasCurrent = isCurrentOutput(outputGateRef.current, token);
+    outputGateRef.current = releaseOutput(outputGateRef.current, token);
+    if (wasCurrent && mountedRef.current) {
+      dispatchPrinterFlow({ type: 'job_finished' });
+    }
   }
 
   function showPrinterError(error: unknown, retry: () => Promise<void>) {
     if (!mountedRef.current) return;
     if (error instanceof ThermalPrinterError) {
-      if (error.progress.rasterPayloadAttempted) {
+      const explicitReprint = createExplicitReprintAction(error.progress, retry);
+      if (explicitReprint !== null) {
         Alert.alert(
           'El ticket pudo salir incompleto',
           `${error.message} Revisa el papel antes de decidir si quieres enviarlo otra vez.`,
@@ -200,7 +234,7 @@ export default function PrintTicketScreen() {
             {
               text: 'Reimprimir',
               onPress: () => {
-                void retry();
+                void explicitReprint.reprint();
               },
             },
           ],
@@ -214,23 +248,23 @@ export default function PrintTicketScreen() {
   }
 
   async function runNativePrinterJob(
-    operationId: number,
+    token: OutputToken,
     job: () => Promise<unknown>,
     successMessage: string,
     retry: () => Promise<void>,
   ) {
-    if (!isCurrentOperation(operationId)) return;
-    setPrinterJobState('connecting');
+    if (!isCurrentOperation(token)) return;
+    dispatchPrinterFlow({ type: 'job_state', value: 'connecting' });
     try {
       await waitForUiFrame();
-      if (!isCurrentOperation(operationId)) return;
-      setPrinterJobState('sending');
+      if (!isCurrentOperation(token)) return;
+      dispatchPrinterFlow({ type: 'job_state', value: 'sending' });
       await job();
-      if (isCurrentOperation(operationId)) Alert.alert('MP210', successMessage);
+      if (isCurrentOperation(token)) Alert.alert('MP210', successMessage);
     } catch (error) {
-      if (isCurrentOperation(operationId)) showPrinterError(error, retry);
+      if (isCurrentOperation(token)) showPrinterError(error, retry);
     } finally {
-      finishPrinterOperation(operationId);
+      finishPrinterOperation(token);
     }
   }
 
@@ -238,11 +272,11 @@ export default function PrintTicketScreen() {
     document: ThermalTicketDocument,
     successMessage = 'Ticket enviado a MP210',
   ) {
-    const operationId = startPrinterOperation('connecting');
-    if (operationId === null) return;
+    const token = startPrinterOperation('connecting');
+    if (token === null) return;
     const retry = () => printTicketDocument(document, successMessage);
     await runNativePrinterJob(
-      operationId,
+      token,
       () => thermalPrinterService.printTicket(document),
       successMessage,
       retry,
@@ -250,11 +284,11 @@ export default function PrintTicketScreen() {
   }
 
   async function printDiagnostic() {
-    const operationId = startPrinterOperation('connecting');
-    if (operationId === null) return;
+    const token = startPrinterOperation('connecting');
+    if (token === null) return;
     const retry = () => printDiagnostic();
     await runNativePrinterJob(
-      operationId,
+      token,
       () => thermalPrinterService.printDiagnostic(),
       'Diagnóstico enviado a MP210',
       retry,
@@ -276,7 +310,7 @@ export default function PrintTicketScreen() {
           'Activa el permiso de dispositivos cercanos en los ajustes. El PDF sigue disponible.',
           [
             { text: 'Cancelar', style: 'cancel' },
-            { text: 'Abrir ajustes', onPress: () => { void Linking.openSettings(); } },
+            { text: 'Abrir ajustes', onPress: openAndroidAppSettings },
           ],
         );
         break;
@@ -314,11 +348,11 @@ export default function PrintTicketScreen() {
   }
 
   async function preparePrinterAccess(intent: 'print' | 'change') {
-    const operationId = startPrinterOperation('permission');
-    if (operationId === null) return;
+    const token = startPrinterOperation('permission');
+    if (token === null) return;
     try {
       const result = await thermalPrinterService.prepare(selectedPrinter);
-      if (!isCurrentOperation(operationId)) return;
+      if (!isCurrentOperation(token)) return;
 
       if (result.status !== 'ready') {
         showAccessFailure(result);
@@ -327,7 +361,7 @@ export default function PrintTicketScreen() {
 
       setBondedDevices(result.devices);
       if (intent === 'change' || result.savedPrinter === null) {
-        setPickerVisible(true);
+        dispatchPrinterFlow({ type: 'picker_opened' });
         return;
       }
       if (!result.savedPrinterBonded) {
@@ -335,7 +369,7 @@ export default function PrintTicketScreen() {
           'Impresora no vinculada',
           'La impresora seleccionada ya no está vinculada. Vincúlala en Android o elige otra.',
         );
-        setPickerVisible(true);
+        dispatchPrinterFlow({ type: 'picker_opened' });
         return;
       }
       if (!ticket) return;
@@ -343,20 +377,20 @@ export default function PrintTicketScreen() {
       const document = buildThermalTicketDocument(ticket);
       const retry = () => printTicketDocument(document);
       await runNativePrinterJob(
-        operationId,
+        token,
         () => thermalPrinterService.printTicket(document),
         'Ticket enviado a MP210',
         retry,
       );
     } catch (error) {
-      if (isCurrentOperation(operationId)) {
+      if (isCurrentOperation(token)) {
         Alert.alert(
           'No se pudo preparar la MP210',
           error instanceof Error ? error.message : 'Ocurrió un error inesperado.',
         );
       }
     } finally {
-      finishPrinterOperation(operationId);
+      finishPrinterOperation(token);
     }
   }
 
@@ -365,8 +399,7 @@ export default function PrintTicketScreen() {
       ? await thermalPrinterService.selectPrinter(device)
       : await thermalPrinterService.changePrinter(device);
     if (!mountedRef.current) return;
-    setSelectedPrinter(saved);
-    setPickerVisible(false);
+    dispatchPrinterFlow({ type: 'printer_selected', printer: saved });
   }
 
   function handlePickerActionError(error: unknown) {
@@ -380,7 +413,11 @@ export default function PrintTicketScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <TopBar title="Imprimir Ticket" showBack />
-      <View style={styles.container}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator
+      >
         {isLoading ? (
           <View style={styles.center}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -506,14 +543,14 @@ export default function PrintTicketScreen() {
             El PDF permanece disponible como alternativa.
           </Text>
         </View>
-      </View>
+      </ScrollView>
 
       <ThermalPrinterPicker
         visible={pickerVisible}
         devices={bondedDevices}
         selectedPrinter={selectedPrinter}
         loading={isPrintJobActive}
-        onCancel={() => setPickerVisible(false)}
+        onCancel={() => dispatchPrinterFlow({ type: 'picker_closed' })}
         onSelectPrinter={handleSelectPrinter}
         onPrintDiagnostic={printDiagnostic}
         onPrintTicket={(document) => printTicketDocument(document, 'Ticket de prueba enviado a MP210')}
@@ -528,8 +565,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  container: {
+  scroll: {
     flex: 1,
+  },
+  container: {
+    flexGrow: 1,
     padding: spacing.lg,
   },
   center: {

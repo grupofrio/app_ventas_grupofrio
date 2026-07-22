@@ -90,7 +90,8 @@
             "deploymentTarget": "15.1"
           }
         }
-      ]
+      ],
+      "./modules/thermal-printer/app.plugin.js"
     ],
     "extra": {
       "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"

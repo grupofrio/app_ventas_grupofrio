@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { DOMParser } from '@xmldom/xmldom';
 
@@ -94,4 +95,19 @@ test('tracks a structural verifier for the generated Android manifest', () => {
   assert.equal(existsSync(verifierPath), true, 'the generated Android manifest verifier must exist');
   const verifierSource = readFileSync(verifierPath, 'utf8');
   assert.match(verifierSource, /readAndroidManifestAsync/);
+});
+
+test('ignores nested Gradle build output from the tracked local module', () => {
+  const probePath = 'modules/thermal-printer/android/build/generated-probe.bin';
+  const result = spawnSync(
+    'git',
+    ['check-ignore', '--quiet', '--no-index', probePath],
+    { cwd: repoRoot },
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    `${probePath} must be ignored so native compilation cannot dirty the worktree`,
+  );
 });

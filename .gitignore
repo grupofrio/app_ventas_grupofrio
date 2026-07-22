@@ -39,6 +39,7 @@ yarn-error.*
 # generated native folders (expo prebuild)
 /ios
 /android
+/modules/thermal-printer/android/build/
 
 # builds
 *.apk

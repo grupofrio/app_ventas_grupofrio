@@ -13,12 +13,22 @@ const REQUIRED_PERMISSIONS = [
     name: 'android.permission.BLUETOOTH_CONNECT',
   },
 ];
+const PERMISSION_TAGS = ['uses-permission', 'uses-permission-sdk-23'];
+
+function removeManifestMergerDirectives(attributes) {
+  for (const attributeName of Object.keys(attributes)) {
+    if (attributeName.startsWith('tools:')) {
+      delete attributes[attributeName];
+    }
+  }
+}
 
 function upsertPermission(androidManifest, requiredPermission) {
   const manifest = androidManifest.manifest;
-  const permissions = manifest['uses-permission'] ?? [];
-  const matches = permissions.filter(
-    (permission) => permission?.$?.['android:name'] === requiredPermission.name,
+  const matches = PERMISSION_TAGS.flatMap((tagName) =>
+    (manifest[tagName] ?? []).filter(
+      (permission) => permission?.$?.['android:name'] === requiredPermission.name,
+    ),
   );
 
   const permission = matches[0] ?? {
@@ -26,6 +36,7 @@ function upsertPermission(androidManifest, requiredPermission) {
   };
   permission.$ ??= {};
   permission.$['android:name'] = requiredPermission.name;
+  removeManifestMergerDirectives(permission.$);
 
   if (requiredPermission.maxSdkVersion) {
     permission.$['android:maxSdkVersion'] = requiredPermission.maxSdkVersion;
@@ -33,13 +44,16 @@ function upsertPermission(androidManifest, requiredPermission) {
     delete permission.$['android:maxSdkVersion'];
   }
 
-  manifest['uses-permission'] = permissions.filter(
-    (candidate) =>
-      candidate === permission || candidate?.$?.['android:name'] !== requiredPermission.name,
-  );
-  if (!manifest['uses-permission'].includes(permission)) {
-    manifest['uses-permission'].push(permission);
+  for (const tagName of PERMISSION_TAGS) {
+    if (manifest[tagName]) {
+      manifest[tagName] = manifest[tagName].filter(
+        (candidate) => candidate?.$?.['android:name'] !== requiredPermission.name,
+      );
+    }
   }
+
+  manifest['uses-permission'] ??= [];
+  manifest['uses-permission'].push(permission);
 }
 
 function withThermalPrinterPermissions(config) {

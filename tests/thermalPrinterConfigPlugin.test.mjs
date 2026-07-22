@@ -92,3 +92,71 @@ test('repairs duplicates idempotently while preserving permissions owned by othe
   assert.equal('android:maxSdkVersion' in permissionsNamed(twice, bluetoothConnect)[0].$, false);
   assert.equal(permissionsNamed(twice, bluetoothScan).length, 0);
 });
+
+test('removes manifest-merger directives only from managed Bluetooth permissions', async () => {
+  const camera = {
+    $: {
+      'android:name': 'android.permission.CAMERA',
+      'tools:node': 'remove',
+      'tools:remove': 'android:required',
+    },
+  };
+  const location = {
+    $: {
+      'android:name': 'android.permission.ACCESS_FINE_LOCATION',
+      'tools:replace': 'android:maxSdkVersion',
+    },
+  };
+  const initial = minimalManifest([
+    structuredClone(camera),
+    {
+      $: {
+        'android:name': bluetooth,
+        'android:maxSdkVersion': '28',
+        'tools:node': 'remove',
+      },
+    },
+    {
+      $: {
+        'android:name': bluetooth,
+        'tools:replace': 'android:maxSdkVersion',
+      },
+    },
+    {
+      $: {
+        'android:name': bluetoothAdmin,
+        'tools:remove': 'android:maxSdkVersion',
+      },
+    },
+    {
+      $: {
+        'android:name': bluetoothConnect,
+        'android:maxSdkVersion': '30',
+        'tools:replace': 'android:maxSdkVersion',
+      },
+    },
+  ]);
+  initial.manifest['uses-permission-sdk-23'] = [
+    {
+      $: {
+        'android:name': bluetoothAdmin,
+        'tools:node': 'removeAll',
+      },
+    },
+    structuredClone(location),
+  ];
+
+  const manifest = await applyPlugin(initial);
+
+  assert.deepEqual(permissionsNamed(manifest, bluetooth), [
+    { $: { 'android:name': bluetooth, 'android:maxSdkVersion': '30' } },
+  ]);
+  assert.deepEqual(permissionsNamed(manifest, bluetoothAdmin), [
+    { $: { 'android:name': bluetoothAdmin, 'android:maxSdkVersion': '30' } },
+  ]);
+  assert.deepEqual(permissionsNamed(manifest, bluetoothConnect), [
+    { $: { 'android:name': bluetoothConnect } },
+  ]);
+  assert.deepEqual(permissionsNamed(manifest, 'android.permission.CAMERA'), [camera]);
+  assert.deepEqual(manifest.manifest['uses-permission-sdk-23'], [location]);
+});

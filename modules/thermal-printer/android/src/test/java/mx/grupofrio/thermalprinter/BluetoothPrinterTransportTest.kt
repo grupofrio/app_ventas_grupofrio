@@ -5,6 +5,8 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -76,9 +78,11 @@ class BluetoothPrinterTransportTest {
   fun `secure timeout never falls back and returns only after close interrupt and join`() {
     val secure = BlockingConnectSocket()
     val factory = FakeSocketFactory(secureSocket = secure)
+    val gate = NonReentrantTestGate()
 
     val error = assertThrows(ThermalPrinterException::class.java) {
-      transport(factory, config = shortTimeouts()).print(ADDRESS, raster())
+      transport(factory, clock = RealTestClock, gate = gate, config = shortTimeouts())
+        .print(ADDRESS, raster())
     }
 
     assertEquals(CONNECT_TIMEOUT_CODE, error.code)
@@ -88,6 +92,7 @@ class BluetoothPrinterTransportTest {
     assertFalse(secure.workerThread!!.isAlive)
     assertTrue(secure.workerThread!!.isInterrupted)
     assertZeroProgress(error.progress)
+    assertFalse(gate.isHeld())
   }
 
   @Test
@@ -159,11 +164,111 @@ class BluetoothPrinterTransportTest {
   }
 
   @Test
-  fun `write idle timeout closes interrupts joins and has no late worker writes`() {
+  fun `process gate is non reentrant even on the same thread`() {
+    assertTrue(ProcessPrintGate.tryAcquire())
+    try {
+      assertFalse(ProcessPrintGate.tryAcquire())
+    } finally {
+      ProcessPrintGate.release()
+    }
+  }
+
+  @Test
+  fun `process gate is shared across transports and reusable after release`() {
+    val firstSocket = ManuallyBlockedConnectSocket()
+    val firstFailure = AtomicReference<Throwable?>(null)
+    val first = Thread {
+      try {
+        transport(
+          FakeSocketFactory(firstSocket),
+          gate = ProcessPrintGate,
+          config = shortTimeouts(connect = 1_000),
+        ).print(ADDRESS, raster())
+      } catch (error: Throwable) {
+        firstFailure.set(error)
+      }
+    }
+
+    first.start()
+    assertTrue(firstSocket.started.await(1, TimeUnit.SECONDS))
+    try {
+      val busy = assertThrows(ThermalPrinterException::class.java) {
+        transport(FakeSocketFactory(FakeSocket()), gate = ProcessPrintGate)
+          .print(ADDRESS, raster())
+      }
+      assertEquals(BUSY_CODE, busy.code)
+    } finally {
+      firstSocket.allowConnect()
+      first.join(2_000)
+    }
+
+    assertFalse(first.isAlive)
+    assertEquals(null, firstFailure.get())
+    transport(FakeSocketFactory(FakeSocket()), gate = ProcessPrintGate).print(ADDRESS, raster())
+  }
+
+  @Test
+  fun `injected non reentrant gate releases after connect factory write and pacer failures`() {
+    fun assertReusable(gate: NonReentrantTestGate) {
+      transport(FakeSocketFactory(FakeSocket()), gate = gate).print(ADDRESS, raster())
+      assertFalse(gate.isHeld())
+    }
+
+    val factoryGate = NonReentrantTestGate()
+    assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(FakeSocket(), secureFactoryError = IOException("factory")),
+        gate = factoryGate,
+      ).print(ADDRESS, raster())
+    }
+    assertReusable(factoryGate)
+
+    val connectGate = NonReentrantTestGate()
+    assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(
+          secureSocket = FakeSocket(connectAction = { throw IOException("secure") }),
+          insecureSocket = FakeSocket(connectAction = { throw IOException("insecure") }),
+        ),
+        gate = connectGate,
+      ).print(ADDRESS, raster())
+    }
+    assertReusable(connectGate)
+
+    val writeGate = NonReentrantTestGate()
+    assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(FakeSocket(failWriteCall = 1)),
+        gate = writeGate,
+      ).print(ADDRESS, raster())
+    }
+    assertReusable(writeGate)
+
+    val pacerGate = NonReentrantTestGate()
+    assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(FakeSocket()),
+        gate = pacerGate,
+        encoder = EscPosRasterEncoder(bandRows = 1),
+        pacer = Pacer { throw IOException("pacer") },
+        config = shortTimeouts(bandPacing = 1),
+      ).print(ADDRESS, MonochromeRaster(8, 2, byteArrayOf(1, 2)))
+    }
+    assertReusable(pacerGate)
+  }
+
+  @Test
+  fun `returned write at idle timeout is confirmed before close interrupt join returns`() {
     val socket = BlockingWriteSocket()
+    val gate = NonReentrantTestGate()
 
     val error = assertThrows(ThermalPrinterException::class.java) {
-      transport(FakeSocketFactory(socket), config = shortTimeouts()).print(ADDRESS, raster())
+      transport(
+        FakeSocketFactory(socket),
+        clock = RealTestClock,
+        gate = gate,
+        config = shortTimeouts(),
+      ).print(ADDRESS, raster())
     }
     val callsAtReturn = socket.writeCalls
     Thread.sleep(25)
@@ -174,8 +279,122 @@ class BluetoothPrinterTransportTest {
     assertFalse(socket.workerThread!!.isAlive)
     assertTrue(socket.workerThread!!.isInterrupted)
     assertEquals(callsAtReturn, socket.writeCalls)
-    assertEquals(0L, error.progress.transportBytesWritten)
+    assertEquals(2L, error.progress.transportBytesWritten)
     assertFalse(error.progress.rasterPayloadAttempted)
+    assertFalse(gate.isHeld())
+  }
+
+  @Test
+  fun `job expiry before raster worker construction starts no worker or write`() {
+    val clock = FakeClock()
+    val hooks = ExpireWorkerHooks(
+      clock = clock,
+      expireAt = 100,
+      stage = ExpireWorkerHooks.Stage.BEFORE_CONSTRUCTION,
+      targetWrite = 2,
+    )
+    val socket = FakeSocket()
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        workerHooks = hooks,
+        config = shortTimeouts(write = 1_000, job = 100),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
+    assertEquals(1, socket.writeCalls)
+    assertEquals(1, hooks.writeWorkerEntries)
+    assertEquals(2L, error.progress.transportBytesWritten)
+    assertFalse(error.progress.rasterPayloadAttempted)
+    assertEquals(1, socket.closeCalls)
+  }
+
+  @Test
+  fun `job expiry after worker construction skips worker start and write`() {
+    val clock = FakeClock()
+    val hooks = ExpireWorkerHooks(
+      clock = clock,
+      expireAt = 100,
+      stage = ExpireWorkerHooks.Stage.BEFORE_START,
+      targetWrite = 2,
+    )
+    val socket = FakeSocket()
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        workerHooks = hooks,
+        config = shortTimeouts(write = 1_000, job = 100),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
+    assertEquals(1, socket.writeCalls)
+    assertEquals(1, hooks.writeWorkerEntries)
+    assertEquals(2L, error.progress.transportBytesWritten)
+    assertFalse(error.progress.rasterPayloadAttempted)
+    assertEquals(1, socket.closeCalls)
+  }
+
+  @Test
+  fun `job expiry inside started raster worker skips beforeOperation and write`() {
+    val clock = FakeClock()
+    val hooks = ExpireWorkerHooks(
+      clock = clock,
+      expireAt = 100,
+      stage = ExpireWorkerHooks.Stage.INSIDE_WORKER,
+      targetWrite = 2,
+    )
+    val socket = FakeSocket()
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        workerHooks = hooks,
+        config = shortTimeouts(write = 1_000, job = 100),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
+    assertEquals(1, socket.writeCalls)
+    assertEquals(2, hooks.writeWorkerEntries)
+    assertFalse(error.progress.rasterPayloadAttempted)
+    assertEquals(1, socket.closeCalls)
+  }
+
+  @Test
+  fun `job expiry before secure connect worker starts closes without fallback`() {
+    val clock = FakeClock()
+    val socket = FakeSocket()
+    val hooks = object : WorkerHooks {
+      override fun afterInitialDeadlineCheck(workerKind: String) {
+        if (workerKind == "connect") clock.advance(100)
+      }
+    }
+    val factory = FakeSocketFactory(socket)
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        factory,
+        clock = clock,
+        workerHooks = hooks,
+        config = shortTimeouts(connect = 1_000, job = 100),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(CONNECT_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
+    assertEquals(0, socket.connectCalls)
+    assertEquals(0, factory.insecureCreates)
+    assertEquals(1, socket.closeCalls)
   }
 
   @Test
@@ -244,6 +463,80 @@ class BluetoothPrinterTransportTest {
   }
 
   @Test
+  fun `secure completion one millisecond before connect deadline wins despite delayed coordinator`() {
+    val clock = CompletionClock(coordinatorAfterCompletion = 101)
+    val secure = FakeSocket(
+      connectAction = {
+        clock.completeAt(99)
+        throw IOException("connect failed before deadline")
+      },
+    )
+    val insecure = FakeSocket()
+    val factory = FakeSocketFactory(secure, insecure)
+
+    transport(
+      factory,
+      clock = clock,
+      config = shortTimeouts(connect = 100, job = 5_000),
+    ).print(ADDRESS, raster())
+
+    assertEquals(1, factory.insecureCreates)
+    assertEquals(1, secure.closeCalls)
+    assertEquals(1, insecure.connectCalls)
+  }
+
+  @Test
+  fun `captured pre-deadline connect completion wins a coordinator cancellation race`() {
+    val clock = CompletionClock(coordinatorAfterCompletion = 11)
+    val hooks = BlockFirstConnectCompletionPublicationHooks()
+    val secure = FakeSocket(
+      connectAction = {
+        clock.completeAt(9)
+        throw IOException("secure connect failed before deadline")
+      },
+    )
+    val insecure = FakeSocket()
+    val factory = FakeSocketFactory(secure, insecure)
+
+    transport(
+      factory,
+      clock = clock,
+      workerHooks = hooks,
+      config = shortTimeouts(connect = 10, job = 5_000),
+    ).print(ADDRESS, raster())
+
+    assertTrue(hooks.completionCaptured.await(1, TimeUnit.SECONDS))
+    assertEquals(1, factory.insecureCreates)
+    assertEquals(1, secure.closeCalls)
+    assertEquals(1, insecure.connectCalls)
+    assertFalse(hooks.wasInterrupted.get())
+  }
+
+  @Test
+  fun `secure completion exactly at connect deadline is timeout without fallback`() {
+    val clock = CompletionClock(coordinatorAfterCompletion = 101)
+    val secure = FakeSocket(
+      connectAction = {
+        clock.completeAt(100)
+        throw IOException("connect failed at deadline")
+      },
+    )
+    val factory = FakeSocketFactory(secure)
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        factory,
+        clock = clock,
+        config = shortTimeouts(connect = 100, job = 5_000),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(CONNECT_TIMEOUT_CODE, error.code)
+    assertEquals("connect", error.phase)
+    assertEquals(0, factory.insecureCreates)
+  }
+
+  @Test
   fun `job deadline during writing is write timeout with job phase and confirmed bytes`() {
     val clock = FakeClock()
     val socket = FakeSocket(writeAction = { _, _, _ -> clock.advance(6) })
@@ -292,6 +585,131 @@ class BluetoothPrinterTransportTest {
   }
 
   @Test
+  fun `confirmed write one millisecond before idle deadline wins despite delayed coordinator`() {
+    val clock = CompletionClock(coordinatorAfterCompletion = 101)
+    var calls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        calls++
+        if (calls == 1) clock.completeAt(99)
+      },
+    )
+
+    val result = transport(
+      FakeSocketFactory(socket),
+      clock = clock,
+      config = shortTimeouts(write = 100, job = 5_000),
+    ).print(ADDRESS, raster())
+
+    assertEquals(14L, result.transportBytesWritten)
+    assertEquals(1L, result.rasterBytesWritten)
+    assertEquals(1L, result.bandsCompleted)
+  }
+
+  @Test
+  fun `confirmed write exactly at idle deadline times out with confirmed progress`() {
+    val clock = CompletionClock(coordinatorAfterCompletion = 101)
+    var calls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        calls++
+        if (calls == 1) clock.completeAt(100)
+      },
+    )
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        config = shortTimeouts(write = 100, job = 5_000),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("write", error.phase)
+    assertEquals(2L, error.progress.transportBytesWritten)
+    assertEquals(0L, error.progress.rasterBytesWritten)
+    assertFalse(error.progress.rasterPayloadAttempted)
+  }
+
+  @Test
+  fun `idle budget is not rearmed after pacing before the next chunk`() {
+    val clock = FakeClock()
+    val pacer = RecordingPacer(clock)
+    var calls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        calls++
+        if (calls == 3) clock.advance(20)
+      },
+    )
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        clock = clock,
+        pacer = pacer,
+        config = shortTimeouts(write = 40, maxChunk = 8, chunkPacing = 30),
+      ).print(ADDRESS, raster())
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("write", error.phase)
+    assertEquals(11L, error.progress.transportBytesWritten)
+    assertEquals(1L, error.progress.rasterBytesWritten)
+    assertEquals(1L, error.progress.bandsCompleted)
+    assertEquals(listOf(30L), pacer.delays)
+  }
+
+  @Test
+  fun `write completion one millisecond before absolute idle boundary succeeds`() {
+    val clock = FakeClock()
+    val pacer = RecordingPacer(clock)
+    var calls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        calls++
+        if (calls == 3) clock.advance(9)
+      },
+    )
+
+    val result = transport(
+      FakeSocketFactory(socket),
+      clock = clock,
+      pacer = pacer,
+      config = shortTimeouts(write = 40, maxChunk = 8, chunkPacing = 30),
+    ).print(ADDRESS, raster())
+
+    assertEquals(14L, result.transportBytesWritten)
+  }
+
+  @Test
+  fun `confirmed control write resets idle deadline from its completion timestamp`() {
+    val clock = FakeClock()
+    val pacer = RecordingPacer(clock)
+    var calls = 0
+    val socket = FakeSocket(
+      writeAction = { _, _, _ ->
+        calls++
+        when (calls) {
+          2 -> clock.advance(20)
+          3 -> clock.advance(5)
+        }
+      },
+    )
+
+    val result = transport(
+      FakeSocketFactory(socket),
+      clock = clock,
+      pacer = pacer,
+      config = shortTimeouts(write = 40, maxChunk = 8, chunkPacing = 30),
+    ).print(ADDRESS, raster())
+
+    assertEquals(14L, result.transportBytesWritten)
+    assertEquals(55L, clock.nowMillis())
+  }
+
+  @Test
   fun `never writes a chunk larger than 2048 bytes`() {
     val socket = FakeSocket()
     val raster = MonochromeRaster(384, 100, ByteArray(48 * 100))
@@ -307,7 +725,12 @@ class BluetoothPrinterTransportTest {
     val clock = FakeClock()
     val pacer = RecordingPacer(clock)
     val socket = FakeSocket()
-    val config = shortTimeouts(maxChunk = 5, chunkPacing = 10, bandPacing = 40)
+    val config = shortTimeouts(
+      write = 100,
+      maxChunk = 5,
+      chunkPacing = 10,
+      bandPacing = 40,
+    )
 
     transport(
       FakeSocketFactory(socket),
@@ -414,6 +837,32 @@ class BluetoothPrinterTransportTest {
   }
 
   @Test
+  fun `coded printer error is a runtime transport error not an argument error`() {
+    val cause = IOException("internal detail")
+    val progress = NativePrintProgress(
+      transportBytesWritten = 3,
+      rasterBytesWritten = 1,
+      bandsCompleted = 1,
+      rasterPayloadAttempted = true,
+    )
+
+    val error = ThermalPrinterException(
+      code = WRITE_FAILED_CODE,
+      message = "Bluetooth write failed",
+      phase = "write",
+      progress = progress,
+      cause = cause,
+    )
+
+    assertFalse(IllegalArgumentException::class.java.isAssignableFrom(error.javaClass))
+    assertEquals(WRITE_FAILED_CODE, error.code)
+    assertEquals("Bluetooth write failed", error.message)
+    assertEquals("write", error.phase)
+    assertEquals(progress, error.progress)
+    assertEquals(cause, error.cause)
+  }
+
+  @Test
   fun `invalid raster and feed fail before gate discovery or socket creation`() {
     val factory = FakeSocketFactory(FakeSocket())
     val discovery = RecordingDiscoveryController()
@@ -453,7 +902,52 @@ class BluetoothPrinterTransportTest {
     assertEquals(11L, error.progress.transportBytesWritten)
     assertEquals(1L, error.progress.rasterBytesWritten)
     assertEquals(1L, error.progress.bandsCompleted)
-    assertEquals(listOf(40L), pacer.delays)
+    assertEquals(listOf(30L), pacer.delays)
+  }
+
+  @Test
+  fun `pacing is capped by remaining job budget and never starts next band`() {
+    val clock = FakeClock()
+    val pacer = RecordingPacer(clock)
+    val socket = FakeSocket()
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(socket),
+        encoder = EscPosRasterEncoder(bandRows = 1),
+        clock = clock,
+        pacer = pacer,
+        config = shortTimeouts(write = 100, job = 30, bandPacing = 40),
+      ).print(ADDRESS, MonochromeRaster(8, 2, byteArrayOf(1, 2)))
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
+    assertEquals(listOf(30L), pacer.delays)
+    assertEquals(2, socket.writeCalls)
+    assertEquals(1, socket.closeCalls)
+  }
+
+  @Test
+  fun `pacer exception after deadline is classified as timeout`() {
+    val clock = FakeClock()
+    val pacer = Pacer { millis ->
+      clock.advance(millis)
+      throw IOException("pacer failed after sleep")
+    }
+
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      transport(
+        FakeSocketFactory(FakeSocket()),
+        encoder = EscPosRasterEncoder(bandRows = 1),
+        clock = clock,
+        pacer = pacer,
+        config = shortTimeouts(write = 100, job = 30, bandPacing = 40),
+      ).print(ADDRESS, MonochromeRaster(8, 2, byteArrayOf(1, 2)))
+    }
+
+    assertEquals(WRITE_TIMEOUT_CODE, error.code)
+    assertEquals("job", error.phase)
   }
 
   @Test
@@ -523,8 +1017,9 @@ class BluetoothPrinterTransportTest {
     gate: PrintGate = FakePrintGate(),
     encoder: EscPosRasterEncoder = EscPosRasterEncoder(),
     clock: MonotonicClock = FakeClock(),
-    pacer: Pacer = RecordingPacer(clock as FakeClock),
+    pacer: Pacer = NoOpPacer,
     config: BluetoothTransportConfig = shortTimeouts(),
+    workerHooks: WorkerHooks = NoOpWorkerHooks,
   ): BluetoothPrinterTransport = BluetoothPrinterTransport(
     socketFactory = factory,
     discoveryController = discovery,
@@ -533,6 +1028,7 @@ class BluetoothPrinterTransportTest {
     clock = clock,
     pacer = pacer,
     config = config,
+    workerHooks = workerHooks,
   )
 
   private fun shortTimeouts(
@@ -571,12 +1067,99 @@ class BluetoothPrinterTransportTest {
     }
   }
 
+  private object RealTestClock : MonotonicClock {
+    override fun nowMillis(): Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+  }
+
   private class RecordingPacer(private val clock: FakeClock) : Pacer {
     val delays = mutableListOf<Long>()
 
     override fun pause(millis: Long) {
       delays += millis
       clock.advance(millis)
+    }
+  }
+
+  private object NoOpPacer : Pacer {
+    override fun pause(millis: Long) = Unit
+  }
+
+  private object NoOpWorkerHooks : WorkerHooks
+
+  private class BlockFirstConnectCompletionPublicationHooks : WorkerHooks {
+    val completionCaptured = CountDownLatch(1)
+    private val connectCompletions = AtomicLong()
+    val wasInterrupted = AtomicBoolean()
+
+    override fun afterOperationCompletionCaptured(workerKind: String) {
+      if (workerKind != "connect" || connectCompletions.incrementAndGet() != 1L) return
+      completionCaptured.countDown()
+      try {
+        Thread.sleep(50)
+      } catch (_: InterruptedException) {
+        wasInterrupted.set(true)
+        Thread.currentThread().interrupt()
+      }
+    }
+  }
+
+  private class ExpireWorkerHooks(
+    private val clock: FakeClock,
+    private val expireAt: Long,
+    private val stage: Stage,
+    private val targetWrite: Int,
+  ) : WorkerHooks {
+    private var constructionWriteCalls = 0
+    private var startWriteCalls = 0
+    var writeWorkerEntries = 0
+
+    override fun afterInitialDeadlineCheck(workerKind: String) {
+      if (workerKind != "write") return
+      constructionWriteCalls++
+      if (stage == Stage.BEFORE_CONSTRUCTION && constructionWriteCalls == targetWrite) {
+        clock.advance(expireAt - clock.nowMillis())
+      }
+    }
+
+    override fun beforeWorkerStartDeadlineCheck(workerKind: String) {
+      if (workerKind != "write") return
+      startWriteCalls++
+      if (stage == Stage.BEFORE_START && startWriteCalls == targetWrite) {
+        clock.advance(expireAt - clock.nowMillis())
+      }
+    }
+
+    override fun beforeOperationDeadlineCheck(workerKind: String) {
+      if (workerKind != "write") return
+      writeWorkerEntries++
+      if (stage == Stage.INSIDE_WORKER && writeWorkerEntries == targetWrite) {
+        clock.advance(expireAt - clock.nowMillis())
+      }
+    }
+
+    enum class Stage {
+      BEFORE_CONSTRUCTION,
+      BEFORE_START,
+      INSIDE_WORKER,
+    }
+  }
+
+  private class CompletionClock(
+    private val coordinatorAfterCompletion: Long,
+  ) : MonotonicClock {
+    private val current = AtomicLong()
+    @Volatile private var operationCompleted = false
+
+    override fun nowMillis(): Long {
+      if (operationCompleted && !Thread.currentThread().name.startsWith("thermal-printer-")) {
+        current.updateAndGet { maxOf(it, coordinatorAfterCompletion) }
+      }
+      return current.get()
+    }
+
+    fun completeAt(millis: Long) {
+      current.set(millis)
+      operationCompleted = true
     }
   }
 
@@ -668,6 +1251,26 @@ class BluetoothPrinterTransportTest {
     }
   }
 
+  private class ManuallyBlockedConnectSocket : PrinterSocket {
+    val started = CountDownLatch(1)
+    private val allowed = CountDownLatch(1)
+    var closeCalls = 0
+
+    override fun connect() {
+      started.countDown()
+      allowed.await(2, TimeUnit.SECONDS)
+    }
+
+    override fun write(buffer: ByteArray, offset: Int, length: Int) = Unit
+
+    override fun close() {
+      closeCalls++
+      allowed.countDown()
+    }
+
+    fun allowConnect() = allowed.countDown()
+  }
+
   private class FakeSocketFactory(
     private val secureSocket: PrinterSocket,
     private val insecureSocket: PrinterSocket = FakeSocket(),
@@ -713,6 +1316,18 @@ class BluetoothPrinterTransportTest {
     override fun release() {
       releaseCalls++
     }
+  }
+
+  private class NonReentrantTestGate : PrintGate {
+    private val held = AtomicBoolean()
+
+    override fun tryAcquire(): Boolean = held.compareAndSet(false, true)
+
+    override fun release() {
+      check(held.compareAndSet(true, false))
+    }
+
+    fun isHeld(): Boolean = held.get()
   }
 
   private class FakeLegacyDiscoveryAdapter(private val discovering: Boolean) : LegacyDiscoveryAdapter {

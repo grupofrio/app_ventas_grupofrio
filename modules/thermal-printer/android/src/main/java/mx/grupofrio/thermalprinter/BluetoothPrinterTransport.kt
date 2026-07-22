@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.ReentrantLock
 
 internal interface PrinterSocket {
   fun connect()
@@ -52,6 +51,16 @@ internal interface PrintGate {
   fun tryAcquire(): Boolean
 
   fun release()
+}
+
+internal interface WorkerHooks {
+  fun afterInitialDeadlineCheck(workerKind: String) = Unit
+
+  fun beforeWorkerStartDeadlineCheck(workerKind: String) = Unit
+
+  fun beforeOperationDeadlineCheck(workerKind: String) = Unit
+
+  fun afterOperationCompletionCaptured(workerKind: String) = Unit
 }
 
 internal data class BluetoothTransportConfig(
@@ -97,6 +106,7 @@ class BluetoothPrinterTransport internal constructor(
   private val clock: MonotonicClock,
   private val pacer: Pacer,
   private val config: BluetoothTransportConfig,
+  private val workerHooks: WorkerHooks,
 ) {
   constructor(context: Context) : this(
     socketFactory = AndroidPrinterSocketFactory(context.applicationContext),
@@ -106,6 +116,7 @@ class BluetoothPrinterTransport internal constructor(
     clock = SystemMonotonicClock,
     pacer = ThreadPacer,
     config = BluetoothTransportConfig(),
+    workerHooks = NoOpWorkerHooks,
   )
 
   fun print(
@@ -133,39 +144,44 @@ class BluetoothPrinterTransport internal constructor(
       cancelDiscovery()
       socket = connect(address, deadline)
 
-      var progress = NativePrintProgress()
-      progress = writeBlock(
+      // Idle time starts before the first control write. Every confirmed write, including ESC/GS
+      // control bytes, moves this absolute deadline from the worker's completion timestamp.
+      var writeState = WriteState(
+        progress = NativePrintProgress(),
+        idleDeadline = deadlineAfter(clock.nowMillis(), config.writeIdleTimeoutMillis),
+      )
+      writeState = writeBlock(
         socket = socket,
         bytes = initialize,
         rasterPayloadOffset = null,
-        initialProgress = progress,
-        deadline = deadline,
+        initialState = writeState,
+        jobDeadline = deadline,
       )
 
       while (bandIterator.hasNext()) {
         val band = bandIterator.next()
-        progress = writeBlock(
+        writeState = writeBlock(
           socket = socket,
           bytes = band.command,
           rasterPayloadOffset = RASTER_HEADER_BYTES,
-          initialProgress = progress,
-          deadline = deadline,
+          initialState = writeState,
+          jobDeadline = deadline,
           completesBand = true,
         )
 
         if (bandIterator.hasNext()) {
-          pace(config.bandPacingMillis, progress, deadline)
+          pace(config.bandPacingMillis, writeState, deadline)
         }
       }
 
-      progress = writeBlock(
+      writeState = writeBlock(
         socket = socket,
         bytes = feed,
         rasterPayloadOffset = null,
-        initialProgress = progress,
-        deadline = deadline,
+        initialState = writeState,
+        jobDeadline = deadline,
       )
-      return NativePrintResult(progress)
+      return NativePrintResult(writeState.progress)
     } finally {
       socket?.close()
       gate.release()
@@ -209,26 +225,24 @@ class BluetoothPrinterTransport internal constructor(
       throw connectFailed(error)
     }
 
+    val connectDeadline = deadlineAfter(clock.nowMillis(), config.connectTimeoutMillis)
     return when (
       val outcome = runWorker(
         socket = socket,
-        phaseTimeoutMillis = config.connectTimeoutMillis,
-        deadline = deadline,
+        operationDeadline = connectDeadline,
+        jobDeadline = deadline,
+        operationTimeoutPhase = "connect",
         workerKind = "connect",
       ) {
         socket.delegate.connect()
       }
     ) {
       is WorkerOutcome.Completed -> {
+        if (outcome.timeoutPhase != null) {
+          socket.close()
+          throw connectTimeout(outcome.timeoutPhase)
+        }
         val error = outcome.error
-        if (outcome.jobDeadlineExpired) {
-          socket.close()
-          throw connectTimeout("job")
-        }
-        if (outcome.phaseTimeoutExpired) {
-          socket.close()
-          throw connectTimeout("connect")
-        }
         if (error != null) {
           socket.close()
           if (secureAttempt && error is IOException) throw SecureConnectIOException()
@@ -237,7 +251,8 @@ class BluetoothPrinterTransport internal constructor(
         socket
       }
       is WorkerOutcome.TimedOut -> {
-        throw connectTimeout(if (outcome.jobDeadlineLimited) "job" else "connect")
+        socket.close()
+        throw connectTimeout(outcome.phase)
       }
     }
   }
@@ -246,21 +261,22 @@ class BluetoothPrinterTransport internal constructor(
     socket: ManagedSocket,
     bytes: ByteArray,
     rasterPayloadOffset: Int?,
-    initialProgress: NativePrintProgress,
-    deadline: Long,
+    initialState: WriteState,
+    jobDeadline: Long,
     completesBand: Boolean = false,
-  ): NativePrintProgress {
-    var progress = initialProgress
+  ): WriteState {
+    var writeState = initialState
     var offset = 0
     while (offset < bytes.size) {
-      ensureWriteDeadline(progress, deadline)
+      ensureWriteDeadlines(writeState, jobDeadline)
       val length = minOf(config.maxChunkBytes, bytes.size - offset)
       val rasterBytes = rasterBytesInSlice(offset, length, rasterPayloadOffset, bytes.size)
       val rasterAttemptStarted = AtomicBoolean()
       val outcome = runWorker(
         socket = socket,
-        phaseTimeoutMillis = config.writeIdleTimeoutMillis,
-        deadline = deadline,
+        operationDeadline = writeState.idleDeadline,
+        jobDeadline = jobDeadline,
+        operationTimeoutPhase = "write",
         workerKind = "write",
         beforeOperation = {
           if (rasterBytes > 0) rasterAttemptStarted.set(true)
@@ -268,71 +284,155 @@ class BluetoothPrinterTransport internal constructor(
       ) {
         socket.delegate.write(bytes, offset, length)
       }
+      var progress = writeState.progress
       if (rasterAttemptStarted.get()) progress = progress.withRasterPayloadAttempted()
 
       when (outcome) {
         is WorkerOutcome.Completed -> {
-          val error = outcome.error
-          if (error != null) {
-            if (outcome.jobDeadlineExpired) throw writeTimeout(progress, "job")
-            if (outcome.phaseTimeoutExpired) throw writeTimeout(progress, "write")
-            throw writeFailed(progress, error)
+          if (outcome.operationReturned) {
+            progress = progress.afterConfirmedWrite(
+              transportBytes = length.toLong(),
+              rasterBytes = rasterBytes.toLong(),
+              completesBand = completesBand && offset + length == bytes.size,
+            )
           }
-          progress = progress.afterConfirmedWrite(
-            transportBytes = length.toLong(),
-            rasterBytes = rasterBytes.toLong(),
-            completesBand = completesBand && offset + length == bytes.size,
+          if (outcome.timeoutPhase != null) throw writeTimeout(progress, outcome.timeoutPhase)
+          val error = outcome.error
+          if (error != null) throw writeFailed(progress, error)
+          writeState = WriteState(
+            progress = progress,
+            idleDeadline = deadlineAfter(
+              outcome.completionAtMillis,
+              config.writeIdleTimeoutMillis,
+            ),
           )
-          if (outcome.jobDeadlineExpired) throw writeTimeout(progress, "job")
-          if (outcome.phaseTimeoutExpired) throw writeTimeout(progress, "write")
         }
         is WorkerOutcome.TimedOut -> {
-          throw writeTimeout(progress, if (outcome.jobDeadlineLimited) "job" else "write")
+          throw writeTimeout(progress, outcome.phase)
         }
       }
 
       offset += length
-      if (offset < bytes.size) pace(config.chunkPacingMillis, progress, deadline)
+      if (offset < bytes.size) pace(config.chunkPacingMillis, writeState, jobDeadline)
     }
-    return progress
+    return writeState
   }
 
-  private fun pace(millis: Long, progress: NativePrintProgress, deadline: Long) {
-    ensureWriteDeadline(progress, deadline)
-    if (millis > 0) {
-      try {
-        pacer.pause(millis)
-      } catch (error: InterruptedException) {
-        Thread.currentThread().interrupt()
-        throw writeFailed(progress, error, phase = "pacing")
-      } catch (error: Throwable) {
-        throw writeFailed(progress, error, phase = "pacing")
-      }
+  private fun pace(requestedMillis: Long, writeState: WriteState, jobDeadline: Long) {
+    ensureWriteDeadlines(writeState, jobDeadline)
+    if (requestedMillis == 0L) return
+
+    val before = clock.nowMillis()
+    val budget = minOf(
+      remainingMillisAt(before, jobDeadline),
+      remainingMillisAt(before, writeState.idleDeadline),
+    )
+    val allowedMillis = minOf(requestedMillis, budget)
+    if (allowedMillis == 0L) throw writeTimeoutForTimestamp(writeState, jobDeadline, before)
+
+    try {
+      pacer.pause(allowedMillis)
+    } catch (error: InterruptedException) {
+      Thread.currentThread().interrupt()
+      val after = clock.nowMillis()
+      val timeoutPhase = timeoutPhaseAt(after, jobDeadline, writeState.idleDeadline, "write")
+      if (timeoutPhase != null) throw writeTimeout(writeState.progress, timeoutPhase)
+      throw writeFailed(writeState.progress, error, phase = "pacing")
+    } catch (error: Throwable) {
+      val after = clock.nowMillis()
+      val timeoutPhase = timeoutPhaseAt(after, jobDeadline, writeState.idleDeadline, "write")
+      if (timeoutPhase != null) throw writeTimeout(writeState.progress, timeoutPhase)
+      throw writeFailed(writeState.progress, error, phase = "pacing")
     }
-    ensureWriteDeadline(progress, deadline)
+
+    val after = clock.nowMillis()
+    val timeoutPhase = timeoutPhaseAt(after, jobDeadline, writeState.idleDeadline, "write")
+    if (timeoutPhase != null) throw writeTimeout(writeState.progress, timeoutPhase)
+    if (allowedMillis < requestedMillis) {
+      val limitingPhase = if (jobDeadline <= writeState.idleDeadline) "job" else "write"
+      throw writeTimeout(writeState.progress, limitingPhase)
+    }
   }
 
   private fun runWorker(
     socket: ManagedSocket,
-    phaseTimeoutMillis: Long,
-    deadline: Long,
+    operationDeadline: Long,
+    jobDeadline: Long,
+    operationTimeoutPhase: String,
     workerKind: String,
     beforeOperation: () -> Unit = {},
     operation: () -> Unit,
   ): WorkerOutcome {
-    val phaseDeadline = deadlineAfter(clock.nowMillis(), phaseTimeoutMillis)
-    val remainingJobMillis = remainingMillis(deadline)
-    val jobDeadlineLimited = remainingJobMillis <= phaseTimeoutMillis
-    val waitMillis = minOf(phaseTimeoutMillis, remainingJobMillis)
+    val initialTimeout = timeoutPhaseAt(
+      clock.nowMillis(),
+      jobDeadline,
+      operationDeadline,
+      operationTimeoutPhase,
+    )
+    if (initialTimeout != null) {
+      socket.close()
+      return WorkerOutcome.TimedOut(initialTimeout)
+    }
+    workerHooks.afterInitialDeadlineCheck(workerKind)
+    val preConstructionTimeout = timeoutPhaseAt(
+      clock.nowMillis(),
+      jobDeadline,
+      operationDeadline,
+      operationTimeoutPhase,
+    )
+    if (preConstructionTimeout != null) {
+      socket.close()
+      return WorkerOutcome.TimedOut(preConstructionTimeout)
+    }
+
     val completed = CountDownLatch(1)
-    val failure = AtomicReference<Throwable?>(null)
+    val completion = AtomicReference<WorkerCompletion?>(null)
+    val state = AtomicReference<WorkerState>(WorkerState.Running)
     val worker = Thread(
       {
         try {
+          workerHooks.beforeOperationDeadlineCheck(workerKind)
+          val operationStart = clock.nowMillis()
+          val startTimeout = timeoutPhaseAt(
+            operationStart,
+            jobDeadline,
+            operationDeadline,
+            operationTimeoutPhase,
+          )
+          if (startTimeout != null) {
+            state.compareAndSet(
+              WorkerState.Running,
+              WorkerState.DeadlineReached(startTimeout),
+            )
+            return@Thread
+          }
+          if (!state.compareAndSet(WorkerState.Running, WorkerState.Operating)) return@Thread
+
+          var error: Throwable? = null
+          var operationReturned = false
           beforeOperation()
-          operation()
+          try {
+            operation()
+            operationReturned = true
+          } catch (caught: Throwable) {
+            error = caught
+          }
+          val completionAtMillis = clock.nowMillis()
+          val finished = WorkerCompletion(error, completionAtMillis, operationReturned)
+          completion.set(finished)
+          workerHooks.afterOperationCompletionCaptured(workerKind)
+          state.compareAndSet(
+            WorkerState.Operating,
+            WorkerState.Finished(finished),
+          )
         } catch (error: Throwable) {
-          failure.set(error)
+          val completionAtMillis = clock.nowMillis()
+          val failed = WorkerCompletion(error, completionAtMillis, operationReturned = false)
+          completion.set(failed)
+          val failedState = WorkerState.Finished(failed)
+          if (!state.compareAndSet(WorkerState.Running, failedState)) {
+            state.compareAndSet(WorkerState.Operating, failedState)
+          }
         } finally {
           completed.countDown()
         }
@@ -340,40 +440,155 @@ class BluetoothPrinterTransport internal constructor(
       "thermal-printer-$workerKind-${WORKER_SEQUENCE.incrementAndGet()}",
     ).apply { isDaemon = true }
 
+    fun capturedCompletionBeforeDeadline(): WorkerCompletion? = completion.get()?.takeIf {
+      timeoutPhaseAt(
+        it.completionAtMillis,
+        jobDeadline,
+        operationDeadline,
+        operationTimeoutPhase,
+      ) == null
+    }
+
+    workerHooks.beforeWorkerStartDeadlineCheck(workerKind)
+    val preStartTimeout = timeoutPhaseAt(
+      clock.nowMillis(),
+      jobDeadline,
+      operationDeadline,
+      operationTimeoutPhase,
+    )
+    if (preStartTimeout != null) {
+      socket.close()
+      return WorkerOutcome.TimedOut(preStartTimeout)
+    }
+
     try {
       worker.start()
     } catch (error: Throwable) {
+      val completionAtMillis = clock.nowMillis()
       return WorkerOutcome.Completed(
         error = error,
-        phaseTimeoutExpired = false,
-        jobDeadlineExpired = false,
+        completionAtMillis = completionAtMillis,
+        operationReturned = false,
+        timeoutPhase = timeoutPhaseAt(
+          completionAtMillis,
+          jobDeadline,
+          operationDeadline,
+          operationTimeoutPhase,
+        ),
       )
     }
 
-    val didComplete = try {
-      completed.await(waitMillis, TimeUnit.MILLISECONDS)
-    } catch (error: InterruptedException) {
-      cancelAndJoin(socket, worker)
-      Thread.currentThread().interrupt()
-      return WorkerOutcome.Completed(
-        error = error,
-        phaseTimeoutExpired = false,
-        jobDeadlineExpired = false,
-      )
-    }
+    while (true) {
+      when (val observed = state.get()) {
+        WorkerState.Running,
+        WorkerState.Operating,
+        -> {
+          val observedAt = clock.nowMillis()
+          val timeoutPhase = timeoutPhaseAt(
+            observedAt,
+            jobDeadline,
+            operationDeadline,
+            operationTimeoutPhase,
+          )
+          if (timeoutPhase != null) {
+            capturedCompletionBeforeDeadline()?.let { captured ->
+              joinCompletely(worker)
+              return completedOutcome(
+                captured,
+                jobDeadline,
+                operationDeadline,
+                operationTimeoutPhase,
+              )
+            }
+            val cancelled = WorkerState.Cancelled(timeoutPhase)
+            if (state.compareAndSet(observed, cancelled)) {
+              capturedCompletionBeforeDeadline()?.let { captured ->
+                joinCompletely(worker)
+                return completedOutcome(
+                  captured,
+                  jobDeadline,
+                  operationDeadline,
+                  operationTimeoutPhase,
+                )
+              }
+              cancelAndJoin(socket, worker)
+              return completion.get()?.let {
+                completedOutcome(it, jobDeadline, operationDeadline, operationTimeoutPhase)
+              } ?: WorkerOutcome.TimedOut(timeoutPhase)
+            }
+            continue
+          }
 
-    if (!didComplete) {
-      cancelAndJoin(socket, worker)
-      return WorkerOutcome.TimedOut(jobDeadlineLimited)
+          val waitMillis = minOf(
+            remainingMillisAt(observedAt, jobDeadline),
+            remainingMillisAt(observedAt, operationDeadline),
+          ).coerceAtLeast(1)
+          try {
+            completed.await(waitMillis, TimeUnit.MILLISECONDS)
+          } catch (error: InterruptedException) {
+            val aborted = WorkerState.Aborted(error, clock.nowMillis())
+            if (state.compareAndSet(observed, aborted)) {
+              cancelAndJoin(socket, worker)
+              Thread.currentThread().interrupt()
+              return WorkerOutcome.Completed(
+                error = error,
+                completionAtMillis = aborted.completionAtMillis,
+                operationReturned = false,
+                timeoutPhase = null,
+              )
+            }
+            Thread.currentThread().interrupt()
+          }
+        }
+        is WorkerState.Finished -> {
+          joinCompletely(worker)
+          return completedOutcome(
+            observed.completion,
+            jobDeadline,
+            operationDeadline,
+            operationTimeoutPhase,
+          )
+        }
+        is WorkerState.DeadlineReached -> {
+          joinCompletely(worker)
+          socket.close()
+          return WorkerOutcome.TimedOut(observed.phase)
+        }
+        is WorkerState.Cancelled -> {
+          joinCompletely(worker)
+          return completion.get()?.let {
+            completedOutcome(it, jobDeadline, operationDeadline, operationTimeoutPhase)
+          } ?: WorkerOutcome.TimedOut(observed.phase)
+        }
+        is WorkerState.Aborted -> {
+          joinCompletely(worker)
+          return WorkerOutcome.Completed(
+            error = observed.error,
+            completionAtMillis = observed.completionAtMillis,
+            operationReturned = false,
+            timeoutPhase = null,
+          )
+        }
+      }
     }
-
-    joinCompletely(worker)
-    return WorkerOutcome.Completed(
-      error = failure.get(),
-      phaseTimeoutExpired = remainingMillis(phaseDeadline) == 0L,
-      jobDeadlineExpired = remainingMillis(deadline) == 0L,
-    )
   }
+
+  private fun completedOutcome(
+    completion: WorkerCompletion,
+    jobDeadline: Long,
+    operationDeadline: Long,
+    operationTimeoutPhase: String,
+  ) = WorkerOutcome.Completed(
+    error = completion.error,
+    completionAtMillis = completion.completionAtMillis,
+    operationReturned = completion.operationReturned,
+    timeoutPhase = timeoutPhaseAt(
+      completion.completionAtMillis,
+      jobDeadline,
+      operationDeadline,
+      operationTimeoutPhase,
+    ),
+  )
 
   private fun cancelAndJoin(socket: ManagedSocket, worker: Thread) {
     socket.close()
@@ -394,16 +609,41 @@ class BluetoothPrinterTransport internal constructor(
   }
 
   private fun ensureConnectDeadline(deadline: Long) {
-    if (remainingMillis(deadline) == 0L) throw connectTimeout("job")
+    if (clock.nowMillis() >= deadline) throw connectTimeout("job")
   }
 
-  private fun ensureWriteDeadline(progress: NativePrintProgress, deadline: Long) {
-    if (remainingMillis(deadline) == 0L) throw writeTimeout(progress, "job")
-  }
-
-  private fun remainingMillis(deadline: Long): Long {
+  private fun ensureWriteDeadlines(writeState: WriteState, jobDeadline: Long) {
     val now = clock.nowMillis()
-    return if (deadline <= now) 0 else deadline - now
+    val phase = timeoutPhaseAt(now, jobDeadline, writeState.idleDeadline, "write")
+    if (phase != null) throw writeTimeout(writeState.progress, phase)
+  }
+
+  private fun writeTimeoutForTimestamp(
+    writeState: WriteState,
+    jobDeadline: Long,
+    timestamp: Long,
+  ): ThermalPrinterException {
+    val phase = checkNotNull(
+      timeoutPhaseAt(timestamp, jobDeadline, writeState.idleDeadline, "write"),
+    )
+    return writeTimeout(writeState.progress, phase)
+  }
+
+  private fun timeoutPhaseAt(
+    timestamp: Long,
+    jobDeadline: Long,
+    operationDeadline: Long,
+    operationPhase: String,
+  ): String? {
+    val earliestDeadline = minOf(jobDeadline, operationDeadline)
+    if (timestamp < earliestDeadline) return null
+    return if (jobDeadline <= operationDeadline) "job" else operationPhase
+  }
+
+  private fun remainingMillisAt(timestamp: Long, deadline: Long): Long {
+    if (timestamp >= deadline) return 0
+    if (deadline == Long.MAX_VALUE && timestamp < 0) return Long.MAX_VALUE
+    return deadline - timestamp
   }
 
   private fun connectTimeout(phase: String) = ThermalPrinterException(
@@ -453,12 +693,41 @@ class BluetoothPrinterTransport internal constructor(
   private sealed interface WorkerOutcome {
     data class Completed(
       val error: Throwable?,
-      val phaseTimeoutExpired: Boolean,
-      val jobDeadlineExpired: Boolean,
+      val completionAtMillis: Long,
+      val operationReturned: Boolean,
+      val timeoutPhase: String?,
     ) : WorkerOutcome
 
-    data class TimedOut(val jobDeadlineLimited: Boolean) : WorkerOutcome
+    data class TimedOut(val phase: String) : WorkerOutcome
   }
+
+  private sealed interface WorkerState {
+    object Running : WorkerState
+
+    object Operating : WorkerState
+
+    data class Finished(val completion: WorkerCompletion) : WorkerState
+
+    data class DeadlineReached(val phase: String) : WorkerState
+
+    data class Cancelled(val phase: String) : WorkerState
+
+    data class Aborted(
+      val error: Throwable,
+      val completionAtMillis: Long,
+    ) : WorkerState
+  }
+
+  private data class WorkerCompletion(
+    val error: Throwable?,
+    val completionAtMillis: Long,
+    val operationReturned: Boolean,
+  )
+
+  private data class WriteState(
+    val progress: NativePrintProgress,
+    val idleDeadline: Long,
+  )
 
   private class ManagedSocket(val delegate: PrinterSocket) {
     private val closed = AtomicBoolean()
@@ -517,12 +786,14 @@ private class AndroidLegacyDiscoveryAdapter(
   }
 }
 
-private object ProcessPrintGate : PrintGate {
-  private val lock = ReentrantLock()
+internal object ProcessPrintGate : PrintGate {
+  private val held = AtomicBoolean()
 
-  override fun tryAcquire(): Boolean = lock.tryLock()
+  override fun tryAcquire(): Boolean = held.compareAndSet(false, true)
 
-  override fun release() = lock.unlock()
+  override fun release() {
+    check(held.compareAndSet(true, false)) { "Printer gate was not held" }
+  }
 }
 
 private object SystemMonotonicClock : MonotonicClock {
@@ -532,6 +803,8 @@ private object SystemMonotonicClock : MonotonicClock {
 private object ThreadPacer : Pacer {
   override fun pause(millis: Long) = Thread.sleep(millis)
 }
+
+private object NoOpWorkerHooks : WorkerHooks
 
 private fun productionDiscoveryController(context: Context): DiscoveryController {
   return AndroidDiscoveryController(

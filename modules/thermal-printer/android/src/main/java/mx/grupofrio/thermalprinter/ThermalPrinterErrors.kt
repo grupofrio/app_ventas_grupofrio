@@ -41,7 +41,7 @@ class ThermalPrinterException(
   val phase: String? = null,
   val progress: NativePrintProgress = NativePrintProgress(),
   cause: Throwable? = null,
-) : IllegalArgumentException(message, cause)
+) : RuntimeException(message, cause)
 
 internal fun invalidTicket(message: String): Nothing =
   throw ThermalPrinterException(INVALID_TICKET_CODE, message)

@@ -207,6 +207,118 @@ class ThermalTicketLayoutTest {
     assertFalse(domain.branding.legalName.contains("Mutated"))
   }
 
+  @Test
+  fun `record conversion canonicalizes every display string but leaves base64 opaque`() {
+    val record = validRecord().apply {
+      branding!!.apply {
+        logoPngBase64 = "iVBORw0KGgo=\r\n"
+        legalName = "  Razón\r\n  Social\t "
+        rfcLabel = " RFC:\tAAA010101AAA "
+        title = " NOTA\nDE\rVENTA "
+        footer = " Gracias\t por\n su compra "
+      }
+      folio = " VENTA-\r\n42 "
+      formattedDate = " 21/07/2026\t10:30 "
+      customerName = " Ana\n  María\u2003\tMuñoz "
+      sellerName = " José\rÁngel "
+      paymentLabel = " Crédito\t diferido "
+      lines!!.single().apply {
+        productName = " Hielo\r\n premium\tazul "
+        quantityAndUnitPrice = " 2\t x\n $50.00 "
+        lineTotal = " $100.00\r\n MXN "
+      }
+      subtotal = " $100.00\t MXN "
+      totalKg = " 2\n kg "
+      total = " $100.00\r MXN "
+      creditNote = " Pagaré:\r\n pago\t incondicional "
+    }
+
+    val domain = record.toDomain()
+
+    assertEquals("iVBORw0KGgo=\r\n", domain.branding.logoPngBase64)
+    assertEquals("Razón Social", domain.branding.legalName)
+    assertEquals("RFC: AAA010101AAA", domain.branding.rfcLabel)
+    assertEquals("NOTA DE VENTA", domain.branding.title)
+    assertEquals("Gracias por su compra", domain.branding.footer)
+    assertEquals("VENTA- 42", domain.folio)
+    assertEquals("21/07/2026 10:30", domain.formattedDate)
+    assertEquals("Ana María Muñoz", domain.customerName)
+    assertEquals("José Ángel", domain.sellerName)
+    assertEquals("Crédito diferido", domain.paymentLabel)
+    assertEquals("Hielo premium azul", domain.lines.single().productName)
+    assertEquals("2 x $50.00", domain.lines.single().quantityAndUnitPrice)
+    assertEquals("$100.00 MXN", domain.lines.single().lineTotal)
+    assertEquals("$100.00 MXN", domain.subtotal)
+    assertEquals("2 kg", domain.totalKg)
+    assertEquals("$100.00 MXN", domain.total)
+    assertEquals("Pagaré: pago incondicional", domain.creditNote)
+  }
+
+  @Test
+  fun `required display text is validated after normalization and optional blanks disappear`() {
+    val requiredBlank = validRecord().apply { customerName = " \r\n\t " }
+    val optionalBlank = validRecord().apply { creditNote = " \r\n\t " }
+    val invalidIdentifier = validRecord().apply { branding!!.logoVersion = "version\t1" }
+
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { requiredBlank.toDomain() }.code,
+    )
+    assertEquals(null, optionalBlank.toDomain().creditNote)
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { invalidIdentifier.toDomain() }.code,
+    )
+  }
+
+  @Test
+  fun `layout defensively canonicalizes direct domain values before creating text commands`() {
+    val directDomain = ticket(
+      customerName = " Ana\r\n María\t Muñoz ",
+      sellerName = " José\r Ángel ",
+      paymentLabel = " Crédito\n diferido ",
+      total = " $100.00\t MXN ",
+      creditNote = " Pagaré:\r\n pago\t incondicional ",
+      branding = branding().copy(
+        legalName = " Soluciones\r\n Frías ",
+        footer = " Gracias\t por\n su compra ",
+      ),
+      lines = listOf(
+        TicketLine(1, " Hielo\r\n premium\tazul ", " 2\t x\n $50.00 ", " $100.00\r MXN "),
+      ),
+    ).copy(
+      folio = " VENTA-\r\n42 ",
+      formattedDate = " 21/07/2026\t10:30 ",
+      subtotal = " $100.00\t MXN ",
+      totalKg = " 2\n kg ",
+    )
+
+    val textCommands = subject.layout(directDomain).commands.filterIsInstance<DrawCommand.Text>()
+    val renderedText = textCommands.joinToString(" ") { it.text }
+
+    assertTrue(textCommands.all { command ->
+      command.text.none { it == '\r' || it == '\n' || it == '\t' } &&
+        command.text == command.text.trim() &&
+        !command.text.contains(Regex("\\s{2,}"))
+    })
+    listOf(
+      "Soluciones Frías",
+      "VENTA- 42",
+      "21/07/2026 10:30",
+      "Ana María Muñoz",
+      "José Ángel",
+      "Crédito diferido",
+      "Hielo premium azul",
+      "2 x $50.00",
+      "$100.00 MXN",
+      "2 kg",
+      "Pagaré: pago incondicional",
+      "Gracias por su compra",
+    ).forEach { expected ->
+      assertTrue("Missing canonical text: $expected", renderedText.contains(expected))
+    }
+  }
+
   private fun TicketLayout.text(value: String): DrawCommand.Text =
     commands.filterIsInstance<DrawCommand.Text>().single { it.text == value }
 

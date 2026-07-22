@@ -53,39 +53,40 @@ data class TicketLayout internal constructor(
 class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
   fun layout(ticket: ThermalTicket, logoDimensions: LogoDimensions? = null): TicketLayout {
     if (ticket.schemaVersion != 1) invalidTicket("Unsupported schemaVersion")
+    val safeTicket = ticket.normalizedForLayout()
     val builder = LayoutBuilder()
 
     logoDimensions?.let(builder::addLogo)
-    builder.addWrapped(ticket.branding.legalName, BODY_BOLD_CENTER)
-    builder.addWrapped(ticket.branding.rfcLabel, SMALL_CENTER)
-    builder.addWrapped(ticket.branding.title, TOTAL_BOLD_CENTER)
+    builder.addWrapped(safeTicket.branding.legalName, BODY_BOLD_CENTER)
+    builder.addWrapped(safeTicket.branding.rfcLabel, SMALL_CENTER)
+    builder.addWrapped(safeTicket.branding.title, TOTAL_BOLD_CENTER)
     builder.addDivider()
 
-    builder.addLabelValue("Folio:", ticket.folio, BODY_STYLE)
-    builder.addLabelValue("Fecha:", ticket.formattedDate, BODY_STYLE)
-    builder.addLabelValue("Cliente:", ticket.customerName, BODY_STYLE)
-    builder.addLabelValue("Vendedor:", ticket.sellerName, BODY_STYLE)
-    builder.addLabelValue("Pago:", ticket.paymentLabel, BODY_STYLE)
+    builder.addLabelValue("Folio:", safeTicket.folio, BODY_STYLE)
+    builder.addLabelValue("Fecha:", safeTicket.formattedDate, BODY_STYLE)
+    builder.addLabelValue("Cliente:", safeTicket.customerName, BODY_STYLE)
+    builder.addLabelValue("Vendedor:", safeTicket.sellerName, BODY_STYLE)
+    builder.addLabelValue("Pago:", safeTicket.paymentLabel, BODY_STYLE)
     builder.addDivider()
 
-    ticket.lines.forEach { line ->
+    safeTicket.lines.forEach { line ->
       builder.addWrapped(line.productName, BODY_BOLD)
       builder.addAmountRow(line.quantityAndUnitPrice, line.lineTotal, SMALL_STYLE)
       builder.addGap(PRODUCT_GAP_PX)
     }
 
     builder.addDivider()
-    builder.addAmountRow("Subtotal:", ticket.subtotal, BODY_STYLE)
-    builder.addAmountRow("Kilogramos:", ticket.totalKg, BODY_STYLE)
-    builder.addAmountRow("Total:", ticket.total, TOTAL_BOLD)
+    builder.addAmountRow("Subtotal:", safeTicket.subtotal, BODY_STYLE)
+    builder.addAmountRow("Kilogramos:", safeTicket.totalKg, BODY_STYLE)
+    builder.addAmountRow("Total:", safeTicket.total, TOTAL_BOLD)
 
-    ticket.creditNote?.let { note ->
+    safeTicket.creditNote?.let { note ->
       builder.addDivider()
       builder.addWrapped(note, BODY_STYLE)
     }
 
     builder.addGap(SECTION_GAP_PX)
-    builder.addWrapped(ticket.branding.footer, SMALL_CENTER)
+    builder.addWrapped(safeTicket.branding.footer, SMALL_CENTER)
     builder.addGap(BOTTOM_PADDING_PX)
     return builder.build()
   }
@@ -94,15 +95,10 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     if (!maxWidth.isFinite() || maxWidth <= 0f) invalidTicket("Text width must be positive")
     if (textMeasurer.width("M", style) <= 0f) invalidTicket("Text measurer returned an invalid width")
 
+    val normalized = normalizeDisplayText(text)
+    if (normalized.isEmpty()) return listOf("")
     val result = mutableListOf<String>()
-    val paragraphs = text.replace("\r\n", "\n").replace('\r', '\n').split('\n')
-    paragraphs.forEach { paragraph ->
-      if (paragraph.isBlank()) {
-        result += ""
-      } else {
-        wrapParagraph(paragraph, style, maxWidth, result)
-      }
-    }
+    wrapParagraph(normalized, style, maxWidth, result)
     return result.ifEmpty { listOf("") }
   }
 
@@ -113,7 +109,7 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     destination: MutableList<String>,
   ) {
     var current = ""
-    paragraph.trim().split(WHITESPACE).filter { it.isNotEmpty() }.forEach { word ->
+    paragraph.split(' ').forEach { word ->
       if (measuredWidth(word, style) > maxWidth) {
         if (current.isNotEmpty()) {
           destination += current
@@ -188,8 +184,8 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       val sameLineWidth = labelWidth + LABEL_GAP_PX + measuredWidth(value, valueStyle)
       if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
         ensureLine(style.lineHeightPx)
-        commands += DrawCommand.Text(label, INSET_PX.toFloat(), baseline(style), labelStyle)
-        commands += DrawCommand.Text(
+        appendText(label, INSET_PX.toFloat(), baseline(style), labelStyle)
+        appendText(
           value,
           INSET_PX + labelWidth + LABEL_GAP_PX,
           baseline(style),
@@ -212,8 +208,8 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
         val lineHeight = max(labelStyle.lineHeightPx, amountStyle.lineHeightPx)
         ensureLine(lineHeight)
-        commands += DrawCommand.Text(label, INSET_PX.toFloat(), baseline(labelStyle), labelStyle)
-        commands += DrawCommand.Text(
+        appendText(label, INSET_PX.toFloat(), baseline(labelStyle), labelStyle)
+        appendText(
           amount,
           (WIDTH_PX - INSET_PX).toFloat(),
           baseline(amountStyle),
@@ -257,8 +253,15 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
         TextAlignment.CENTER -> WIDTH_PX / 2f
         TextAlignment.RIGHT -> (WIDTH_PX - INSET_PX).toFloat()
       }
-      commands += DrawCommand.Text(text, x, baseline(style), style)
+      appendText(text, x, baseline(style), style)
       y += style.lineHeightPx.toLong()
+    }
+
+    private fun appendText(text: String, x: Float, baseline: Float, style: TextStyle) {
+      if (text != normalizeDisplayText(text)) {
+        invalidTicket("Layout text must use canonical display whitespace")
+      }
+      commands += DrawCommand.Text(text, x, baseline, style)
     }
 
     private fun fitAmount(amount: String, style: TextStyle): TextStyle {
@@ -306,7 +309,6 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     private const val DIVIDER_THICKNESS_PX = 1L
     private const val MIN_TEXT_LEADING_PX = 4
 
-    private val WHITESPACE = Regex("\\s+")
     private val BODY_STYLE = TextStyle(BODY_SIZE_PX, BODY_LINE_HEIGHT_PX)
     private val BODY_BOLD = BODY_STYLE.copy(bold = true)
     private val BODY_BOLD_CENTER = BODY_BOLD.copy(alignment = TextAlignment.CENTER)

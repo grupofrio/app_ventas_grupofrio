@@ -89,30 +89,30 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   return ThermalTicket(
     schemaVersion = safeSchemaVersion,
     branding = safeBranding.toDomain(),
-    folio = requiredText(folio, "folio", MAX_SHORT_TEXT_CHARS),
-    formattedDate = requiredText(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS),
-    customerName = requiredText(customerName, "customerName", MAX_TEXT_CHARS),
-    sellerName = requiredText(sellerName, "sellerName", MAX_TEXT_CHARS),
-    paymentLabel = requiredText(paymentLabel, "paymentLabel", MAX_TEXT_CHARS),
+    folio = requiredDisplayText(folio, "folio", MAX_SHORT_TEXT_CHARS),
+    formattedDate = requiredDisplayText(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS),
+    customerName = requiredDisplayText(customerName, "customerName", MAX_TEXT_CHARS),
+    sellerName = requiredDisplayText(sellerName, "sellerName", MAX_TEXT_CHARS),
+    paymentLabel = requiredDisplayText(paymentLabel, "paymentLabel", MAX_TEXT_CHARS),
     lines = immutableList(domainLines),
-    subtotal = requiredText(subtotal, "subtotal", MAX_AMOUNT_CHARS),
-    totalKg = requiredText(totalKg, "totalKg", MAX_AMOUNT_CHARS),
-    total = requiredText(total, "total", MAX_AMOUNT_CHARS),
-    creditNote = optionalText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
+    subtotal = requiredDisplayText(subtotal, "subtotal", MAX_AMOUNT_CHARS),
+    totalKg = requiredDisplayText(totalKg, "totalKg", MAX_AMOUNT_CHARS),
+    total = requiredDisplayText(total, "total", MAX_AMOUNT_CHARS),
+    creditNote = optionalDisplayText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
   )
 }
 
 private fun ThermalTicketBrandingRecord.toDomain(): TicketBranding = TicketBranding(
-  logoPngBase64 = requiredText(
+  logoPngBase64 = requiredOpaqueText(
     logoPngBase64,
     "branding.logoPngBase64",
     MAX_LOGO_BASE64_CHARS,
   ),
-  logoVersion = requiredText(logoVersion, "branding.logoVersion", MAX_SHORT_TEXT_CHARS),
-  legalName = requiredText(legalName, "branding.legalName", MAX_TEXT_CHARS),
-  rfcLabel = requiredText(rfcLabel, "branding.rfcLabel", MAX_TEXT_CHARS),
-  title = requiredText(title, "branding.title", MAX_TEXT_CHARS),
-  footer = requiredText(footer, "branding.footer", MAX_LONG_TEXT_CHARS),
+  logoVersion = requiredIdentifier(logoVersion, "branding.logoVersion", MAX_SHORT_TEXT_CHARS),
+  legalName = requiredDisplayText(legalName, "branding.legalName", MAX_TEXT_CHARS),
+  rfcLabel = requiredDisplayText(rfcLabel, "branding.rfcLabel", MAX_TEXT_CHARS),
+  title = requiredDisplayText(title, "branding.title", MAX_TEXT_CHARS),
+  footer = requiredDisplayText(footer, "branding.footer", MAX_LONG_TEXT_CHARS),
 )
 
 private fun ThermalTicketLineRecord.toDomain(index: Int): TicketLine {
@@ -125,36 +125,127 @@ private fun ThermalTicketLineRecord.toDomain(index: Int): TicketLine {
 
   return TicketLine(
     productId = safeProductId.toLong(),
-    productName = requiredText(productName, "lines[$index].productName", MAX_TEXT_CHARS),
-    quantityAndUnitPrice = requiredText(
+    productName = requiredDisplayText(productName, "lines[$index].productName", MAX_TEXT_CHARS),
+    quantityAndUnitPrice = requiredDisplayText(
       quantityAndUnitPrice,
       "lines[$index].quantityAndUnitPrice",
       MAX_TEXT_CHARS,
     ),
-    lineTotal = requiredText(lineTotal, "lines[$index].lineTotal", MAX_AMOUNT_CHARS),
+    lineTotal = requiredDisplayText(lineTotal, "lines[$index].lineTotal", MAX_AMOUNT_CHARS),
   )
 }
 
-private fun requiredText(value: String?, field: String, maxChars: Int): String {
-  val safeValue = value ?: invalidTicket("$field is required")
-  if (safeValue.isBlank()) invalidTicket("$field must not be blank")
-  validateText(safeValue, field, maxChars)
-  return safeValue
+/**
+ * Printer display policy: CR/LF/TAB become spaces, every whitespace run collapses to one space,
+ * and surrounding whitespace is removed. Required/optional validation happens after this step.
+ * Opaque base64 and identifiers deliberately use separate validators below.
+ */
+internal fun normalizeDisplayText(value: String): String = buildString(value.length) {
+  var spacePending = false
+  value.forEach { character ->
+    if (character.isWhitespace() || character == '\u00A0') {
+      spacePending = isNotEmpty()
+    } else {
+      if (spacePending) append(' ')
+      append(character)
+      spacePending = false
+    }
+  }
 }
 
-private fun optionalText(value: String?, field: String, maxChars: Int): String? {
+private fun requiredDisplayText(value: String?, field: String, maxChars: Int): String {
+  val normalized = normalizeDisplayText(value ?: invalidTicket("$field is required"))
+  if (normalized.isEmpty()) invalidTicket("$field must not be blank")
+  validateDisplayText(normalized, field, maxChars)
+  return normalized
+}
+
+private fun optionalDisplayText(value: String?, field: String, maxChars: Int): String? {
   if (value == null) return null
-  if (value.isBlank()) invalidTicket("$field must not be blank when present")
-  validateText(value, field, maxChars)
-  return value
+  val normalized = normalizeDisplayText(value)
+  if (normalized.isEmpty()) return null
+  validateDisplayText(normalized, field, maxChars)
+  return normalized
 }
 
-private fun validateText(value: String, field: String, maxChars: Int) {
+private fun validateDisplayText(value: String, field: String, maxChars: Int) {
   if (value.length > maxChars) invalidTicket("$field is too long")
-  if (value.any { it == '\u0000' || (it < ' ' && it != '\n' && it != '\r' && it != '\t') }) {
+  if (value.any { Character.isISOControl(it.code) }) {
     invalidTicket("$field contains unsupported control characters")
   }
 }
+
+/** Base64 is opaque at the record boundary; canonical PNG validation belongs to the renderer. */
+private fun requiredOpaqueText(value: String?, field: String, maxChars: Int): String {
+  val safeValue = value ?: invalidTicket("$field is required")
+  if (safeValue.isBlank()) invalidTicket("$field must not be blank")
+  if (safeValue.length > maxChars) invalidTicket("$field is too long")
+  return safeValue
+}
+
+/** Identifiers are never whitespace-normalized because that could silently change cache identity. */
+private fun requiredIdentifier(value: String?, field: String, maxChars: Int): String {
+  val safeValue = value ?: invalidTicket("$field is required")
+  if (safeValue.isBlank()) invalidTicket("$field must not be blank")
+  if (safeValue.length > maxChars) invalidTicket("$field is too long")
+  if (safeValue.any { it.isWhitespace() || Character.isISOControl(it.code) }) {
+    invalidTicket("$field contains invalid identifier whitespace")
+  }
+  return safeValue
+}
+
+/**
+ * Layout also accepts immutable domain fixtures directly in tests/native code. Reapplying this
+ * idempotent copy keeps every generated Text command under the same display policy.
+ */
+internal fun ThermalTicket.normalizedForLayout(): ThermalTicket = copy(
+  branding = branding.copy(
+    logoPngBase64 = requiredOpaqueText(
+      branding.logoPngBase64,
+      "branding.logoPngBase64",
+      MAX_LOGO_BASE64_CHARS,
+    ),
+    logoVersion = requiredIdentifier(
+      branding.logoVersion,
+      "branding.logoVersion",
+      MAX_SHORT_TEXT_CHARS,
+    ),
+    legalName = requiredDisplayText(branding.legalName, "branding.legalName", MAX_TEXT_CHARS),
+    rfcLabel = requiredDisplayText(branding.rfcLabel, "branding.rfcLabel", MAX_TEXT_CHARS),
+    title = requiredDisplayText(branding.title, "branding.title", MAX_TEXT_CHARS),
+    footer = requiredDisplayText(branding.footer, "branding.footer", MAX_LONG_TEXT_CHARS),
+  ),
+  folio = requiredDisplayText(folio, "folio", MAX_SHORT_TEXT_CHARS),
+  formattedDate = requiredDisplayText(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS),
+  customerName = requiredDisplayText(customerName, "customerName", MAX_TEXT_CHARS),
+  sellerName = requiredDisplayText(sellerName, "sellerName", MAX_TEXT_CHARS),
+  paymentLabel = requiredDisplayText(paymentLabel, "paymentLabel", MAX_TEXT_CHARS),
+  lines = immutableList(
+    lines.mapIndexed { index, line ->
+      line.copy(
+        productName = requiredDisplayText(
+          line.productName,
+          "lines[$index].productName",
+          MAX_TEXT_CHARS,
+        ),
+        quantityAndUnitPrice = requiredDisplayText(
+          line.quantityAndUnitPrice,
+          "lines[$index].quantityAndUnitPrice",
+          MAX_TEXT_CHARS,
+        ),
+        lineTotal = requiredDisplayText(
+          line.lineTotal,
+          "lines[$index].lineTotal",
+          MAX_AMOUNT_CHARS,
+        ),
+      )
+    },
+  ),
+  subtotal = requiredDisplayText(subtotal, "subtotal", MAX_AMOUNT_CHARS),
+  totalKg = requiredDisplayText(totalKg, "totalKg", MAX_AMOUNT_CHARS),
+  total = requiredDisplayText(total, "total", MAX_AMOUNT_CHARS),
+  creditNote = optionalDisplayText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
+)
 
 private fun <T> immutableList(values: List<T>): List<T> =
   Collections.unmodifiableList(ArrayList(values))

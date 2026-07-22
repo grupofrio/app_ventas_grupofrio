@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 class ThermalTicketRendererTest {
@@ -135,6 +136,44 @@ class ThermalTicketRendererTest {
   }
 
   @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun `every promissory note line and final footer leave ink inside their command bands`() {
+    val creditTicket = ticket(
+      creditNote = longPromissoryNote(),
+    )
+    val layout = subject.measure(creditTicket)
+    val raster = subject.render(creditTicket)
+    val evidence = creditEvidence(layout)
+
+    assertTrue(
+      "Fixture must wrap the promissory note; found ${evidence.noteCommands.size} commands",
+      evidence.noteCommands.size >= 3,
+    )
+    (evidence.noteCommands + evidence.footerCommand).forEach { command ->
+      assertTextCommandHasInk(raster, layout, command)
+    }
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun `pixel evidence rejects an omitted final promissory line or footer command`() {
+    val creditTicket = ticket(
+      creditNote = longPromissoryNote(),
+    )
+    val layout = subject.measure(creditTicket)
+    val raster = subject.render(creditTicket)
+    val evidence = creditEvidence(layout)
+    val omittedTargets = listOf(evidence.noteCommands.last(), evidence.footerCommand)
+
+    omittedTargets.forEach { omitted ->
+      val rasterWithOmittedBand = raster.clearing(textLineBand(omitted))
+      assertThrows(AssertionError::class.java) {
+        assertTextCommandHasInk(rasterWithOmittedBand, layout, omitted)
+      }
+    }
+  }
+
+  @Test
   fun `repeated renders have identical height and bytes`() {
     val ticket = ticket(creditNote = "Pagaré estable para impresión térmica")
 
@@ -246,17 +285,84 @@ class ThermalTicketRendererTest {
 
   private class RasterBits(raster: MonochromeRaster) {
     private val width = raster.width
+    private val height = raster.height
     private val bytes = raster.bytes
 
     fun isInk(x: Int, y: Int): Boolean {
       val packed = bytes[y * (width / 8) + x / 8].toInt() and 0xFF
       return packed and (0x80 ushr (x % 8)) != 0
     }
+
+    fun hasInk(band: RowBand): Boolean = (band.top until band.bottomExclusive).any { y ->
+      (0 until width).any { x -> isInk(x, y) }
+    }
+
+    fun inkRows(): List<Int> = (0 until height).filter { y ->
+      (0 until width).any { x -> isInk(x, y) }
+    }
+  }
+
+  private data class RowBand(val top: Int, val bottomExclusive: Int)
+
+  private data class CreditEvidence(
+    val noteCommands: List<DrawCommand.Text>,
+    val footerCommand: DrawCommand.Text,
+  )
+
+  private fun creditEvidence(layout: TicketLayout): CreditEvidence {
+    val footerIndex = layout.commands.indexOfLast { it is DrawCommand.Text }
+    val noteDividerIndex = layout.commands.indexOfLast { it is DrawCommand.Divider }
+    assertTrue("Credit divider must precede footer", noteDividerIndex in 0 until footerIndex)
+    val noteCommands = layout.commands.subList(noteDividerIndex + 1, footerIndex)
+      .filterIsInstance<DrawCommand.Text>()
+    return CreditEvidence(
+      noteCommands = noteCommands,
+      footerCommand = layout.commands[footerIndex] as DrawCommand.Text,
+    )
+  }
+
+  private fun textLineBand(command: DrawCommand.Text): RowBand {
+    val top = (command.baseline - command.style.sizePx).toInt()
+    return RowBand(top, top + command.style.lineHeightPx)
+  }
+
+  private fun assertTextCommandHasInk(
+    raster: MonochromeRaster,
+    layout: TicketLayout,
+    command: DrawCommand.Text,
+  ) {
+    val band = textLineBand(command)
+    // The tolerance is the complete line box allocated by the layout: textSize above the baseline
+    // plus the remaining lineHeight leading below it. It is portable across Canvas font metrics and
+    // cannot borrow ink from an adjacent command's non-overlapping line box.
+    assertTrue("Text command starts outside its layout", band.top >= 0)
+    assertTrue("Text command ends outside its layout", band.bottomExclusive <= layout.height)
+    val bits = RasterBits(raster)
+    if (!bits.hasInk(band)) {
+      val nearbyInkRows = bits.inkRows()
+        .filter { it in (band.top - 40)..(band.bottomExclusive + 40) }
+      throw AssertionError(
+        "Expected '${command.text}' ink in rows ${band.top}..<${band.bottomExclusive}; " +
+          "nearby ink rows=$nearbyInkRows",
+      )
+    }
+  }
+
+  private fun MonochromeRaster.clearing(band: RowBand): MonochromeRaster {
+    val copy = bytes
+    val bytesPerRow = width / 8
+    copy.fill(0, band.top * bytesPerRow, band.bottomExclusive * bytesPerRow)
+    return MonochromeRaster(width, height, copy)
   }
 
   private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
+
+  private fun longPromissoryNote(): String = List(10) {
+    "Reconozco el adeudo total y pagaré incondicionalmente en la fecha acordada " +
+      "sin recortar ninguna condición escrita en este pagaré de crédito."
+  }.joinToString(" ")
 
   private fun pngBase64(width: Int, height: Int): String {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)

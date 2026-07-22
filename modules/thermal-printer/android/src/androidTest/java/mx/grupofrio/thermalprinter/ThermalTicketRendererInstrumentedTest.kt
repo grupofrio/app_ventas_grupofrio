@@ -21,21 +21,30 @@ class ThermalTicketRendererInstrumentedTest {
   @Test
   fun realCanvasProducesBounded384DotMonochromeCashAndCreditTickets() {
     val cashTicket = ticket(creditNote = null)
-    val creditTicket = ticket(creditNote = "Pagaré: pagaré el importe total incondicionalmente.")
+    val creditTicket = ticket(
+      creditNote = longPromissoryNote(),
+    )
 
     val cash = renderer.render(cashTicket)
     val credit = renderer.render(creditTicket)
+    val creditLayout = renderer.measure(creditTicket)
 
     assertThat(cash.width).isEqualTo(384)
     assertThat(credit.width).isEqualTo(384)
     assertThat(cash.height).isEqualTo(renderer.measure(cashTicket).height)
-    assertThat(credit.height).isEqualTo(renderer.measure(creditTicket).height)
+    assertThat(credit.height).isEqualTo(creditLayout.height)
     assertThat(credit.height).isGreaterThan(cash.height)
     listOf(cash, credit).forEach { raster ->
       val bits = RasterBits(raster)
       assertThat(raster.bytes.size).isEqualTo(48 * raster.height)
       assertThat((0 until raster.height).any { y -> bits.isInk(0, y) && bits.isInk(383, y) }).isTrue()
       assertThat(bits.lastInkRow()).isLessThan(raster.height - 1)
+    }
+
+    val evidence = creditEvidence(creditLayout)
+    assertThat(evidence.noteCommands.size).isAtLeast(3)
+    (evidence.noteCommands + evidence.footerCommand).forEach { command ->
+      assertTextCommandHasInk(credit, creditLayout, command)
     }
   }
 
@@ -98,6 +107,11 @@ class ThermalTicketRendererInstrumentedTest {
     }
   }
 
+  private fun longPromissoryNote(): String = List(10) {
+    "Reconozco el adeudo total y pagaré incondicionalmente en la fecha acordada " +
+      "sin recortar ninguna condición escrita en este pagaré de crédito."
+  }.joinToString(" ")
+
   private class RasterBits(raster: MonochromeRaster) {
     private val width = raster.width
     private val height = raster.height
@@ -111,6 +125,43 @@ class ThermalTicketRendererInstrumentedTest {
     fun lastInkRow(): Int = (height - 1 downTo 0).first { y ->
       (0 until width).any { x -> isInk(x, y) }
     }
+
+    fun hasInk(band: RowBand): Boolean = (band.top until band.bottomExclusive).any { y ->
+      (0 until width).any { x -> isInk(x, y) }
+    }
+  }
+
+  private data class RowBand(val top: Int, val bottomExclusive: Int)
+
+  private data class CreditEvidence(
+    val noteCommands: List<DrawCommand.Text>,
+    val footerCommand: DrawCommand.Text,
+  )
+
+  private fun creditEvidence(layout: TicketLayout): CreditEvidence {
+    val footerIndex = layout.commands.indexOfLast { it is DrawCommand.Text }
+    val noteDividerIndex = layout.commands.indexOfLast { it is DrawCommand.Divider }
+    assertThat(noteDividerIndex).isAtLeast(0)
+    assertThat(noteDividerIndex).isLessThan(footerIndex)
+    return CreditEvidence(
+      noteCommands = layout.commands.subList(noteDividerIndex + 1, footerIndex)
+        .filterIsInstance<DrawCommand.Text>(),
+      footerCommand = layout.commands[footerIndex] as DrawCommand.Text,
+    )
+  }
+
+  private fun assertTextCommandHasInk(
+    raster: MonochromeRaster,
+    layout: TicketLayout,
+    command: DrawCommand.Text,
+  ) {
+    val top = (command.baseline - command.style.sizePx).toInt()
+    val band = RowBand(top, top + command.style.lineHeightPx)
+    // This tolerance is derived from the command's textSize/lineHeight allocation, not a
+    // device-specific glyph-height constant, and adjacent command boxes do not overlap.
+    assertThat(band.top).isAtLeast(0)
+    assertThat(band.bottomExclusive).isAtMost(layout.height)
+    assertThat(RasterBits(raster).hasInk(band)).isTrue()
   }
 
   private companion object {

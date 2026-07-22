@@ -87,12 +87,21 @@ export class ThermalPrinterError extends Error {
     phase: string | null = null,
     progress: NativePrintProgressSnapshot = ZERO_PRINT_PROGRESS,
   ) {
-    super(toThermalPrinterMessage(code));
+    const safeCode = snapshotErrorCode(code);
+    const safePhase = snapshotPhase(phase);
+    const safeProgress = snapshotProgress(progress) ?? ZERO_PRINT_PROGRESS;
+    super(toThermalPrinterMessage(safeCode));
     this.name = 'ThermalPrinterError';
-    this.code = code;
-    this.phase = phase;
-    this.progress = progress;
-    this.requiresManualReprint = requiresManualReprintConfirmation(progress);
+    this.code = safeCode;
+    this.phase = safePhase;
+    this.progress = safeProgress;
+    this.requiresManualReprint = requiresManualReprintConfirmation(safeProgress);
+    try {
+      Object.freeze(this);
+    } catch {
+      // Some Error implementations may expose non-freezable native state. All public fields
+      // above still point only at validated, immutable snapshots.
+    }
   }
 }
 
@@ -140,6 +149,7 @@ const BLUETOOTH_MAC_ADDRESS = /^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 const STABLE_NATIVE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const STABLE_NATIVE_PHASE = /^[a-z][a-z0-9_-]{0,63}$/;
 const MAX_NATIVE_ERROR_ENVELOPE_LENGTH = 65_536;
+const MAX_TICKET_SNAPSHOT_LINES = 10_000;
 
 let thermalPrintJobInFlight = false;
 
@@ -297,6 +307,12 @@ function snapshotPhase(value: unknown): string | null {
   return typeof value === 'string' && STABLE_NATIVE_PHASE.test(value) ? value : null;
 }
 
+function snapshotErrorCode(value: unknown): string {
+  return typeof value === 'string' && STABLE_NATIVE_CODE.test(value)
+    ? value
+    : 'unexpected_error';
+}
+
 function nativeErrorEnvelope(error: unknown): {
   valid: boolean;
   phase: string | null;
@@ -337,10 +353,22 @@ function nativeErrorEnvelope(error: unknown): {
 }
 
 function normalizeThermalPrinterError(error: unknown): ThermalPrinterError {
+  let isThermalPrinterError = false;
   try {
-    if (error instanceof ThermalPrinterError) return error;
+    isThermalPrinterError = error instanceof ThermalPrinterError;
   } catch {
     return unexpectedThermalPrinterError();
+  }
+  if (isThermalPrinterError && error !== null && typeof error === 'object') {
+    try {
+      return new ThermalPrinterError(
+        snapshotErrorCode(dataProperty(error, 'code')),
+        snapshotPhase(dataProperty(error, 'phase')),
+        snapshotProgress(dataProperty(error, 'progress')) ?? ZERO_PRINT_PROGRESS,
+      );
+    } catch {
+      return unexpectedThermalPrinterError();
+    }
   }
   const envelope = nativeErrorEnvelope(error);
   const code = envelope.valid ? nativeErrorCode(error) ?? 'unexpected_error' : 'unexpected_error';
@@ -360,6 +388,107 @@ function thermalTicketBranding(): ThermalTicketBranding {
     title: SALE_TICKET_BRANDING.title,
     footer: SALE_TICKET_BRANDING.footer,
   });
+}
+
+function ownDataValue(object: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor || !('value' in descriptor)) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  return descriptor.value;
+}
+
+function requiredTicketString(object: object, key: string): string {
+  const value = ownDataValue(object, key);
+  if (typeof value !== 'string') throw new ThermalPrinterError('invalid_ticket');
+  return value;
+}
+
+function snapshotTicketBranding(value: unknown): ThermalTicketBranding {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  return Object.freeze({
+    logoPngBase64: requiredTicketString(value, 'logoPngBase64'),
+    logoVersion: requiredTicketString(value, 'logoVersion'),
+    legalName: requiredTicketString(value, 'legalName'),
+    rfcLabel: requiredTicketString(value, 'rfcLabel'),
+    title: requiredTicketString(value, 'title'),
+    footer: requiredTicketString(value, 'footer'),
+  });
+}
+
+function snapshotTicketLine(value: unknown): ThermalTicketDocument['lines'][number] {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  const productId = ownDataValue(value, 'productId');
+  if (typeof productId !== 'number' || !Number.isFinite(productId)) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  return Object.freeze({
+    productId,
+    productName: requiredTicketString(value, 'productName'),
+    quantityAndUnitPrice: requiredTicketString(value, 'quantityAndUnitPrice'),
+    lineTotal: requiredTicketString(value, 'lineTotal'),
+  });
+}
+
+function snapshotTicketLines(value: unknown): ThermalTicketDocument['lines'] {
+  if (!Array.isArray(value)) throw new ThermalPrinterError('invalid_ticket');
+  const length = ownDataValue(value, 'length');
+  if (
+    typeof length !== 'number' ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    length > MAX_TICKET_SNAPSHOT_LINES
+  ) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+
+  const lines: ThermalTicketDocument['lines'] = [];
+  for (let index = 0; index < length; index += 1) {
+    lines.push(snapshotTicketLine(ownDataValue(value, String(index))));
+  }
+  Object.freeze(lines);
+  return lines;
+}
+
+function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new ThermalPrinterError('invalid_ticket');
+    }
+    if (ownDataValue(value, 'schemaVersion') !== 1) {
+      throw new ThermalPrinterError('invalid_ticket');
+    }
+
+    const creditNote = Object.getOwnPropertyDescriptor(value, 'creditNote');
+    if (creditNote && !('value' in creditNote)) {
+      throw new ThermalPrinterError('invalid_ticket');
+    }
+    const creditNoteValue = creditNote && 'value' in creditNote ? creditNote.value : undefined;
+    if (creditNoteValue !== undefined && typeof creditNoteValue !== 'string') {
+      throw new ThermalPrinterError('invalid_ticket');
+    }
+
+    return Object.freeze({
+      schemaVersion: 1,
+      branding: snapshotTicketBranding(ownDataValue(value, 'branding')),
+      folio: requiredTicketString(value, 'folio'),
+      formattedDate: requiredTicketString(value, 'formattedDate'),
+      customerName: requiredTicketString(value, 'customerName'),
+      sellerName: requiredTicketString(value, 'sellerName'),
+      paymentLabel: requiredTicketString(value, 'paymentLabel'),
+      lines: snapshotTicketLines(ownDataValue(value, 'lines')),
+      subtotal: requiredTicketString(value, 'subtotal'),
+      totalKg: requiredTicketString(value, 'totalKg'),
+      total: requiredTicketString(value, 'total'),
+      ...(creditNoteValue === undefined ? {} : { creditNote: creditNoteValue }),
+    });
+  } catch {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
 }
 
 function frozenResult<Result extends ThermalPrinterAccessResult>(result: Result): Result {
@@ -414,8 +543,8 @@ export function createThermalPrinterService(
         address: snapshot.address,
       });
       return snapshot;
-    } catch (error) {
-      throw normalizeThermalPrinterError(error);
+    } catch {
+      throw unexpectedThermalPrinterError();
     }
   };
 
@@ -427,8 +556,8 @@ export function createThermalPrinterService(
     let loaded: SavedThermalPrinterV1 | null;
     try {
       loaded = await jobDependencies.selectionStore.load();
-    } catch (error) {
-      throw normalizeThermalPrinterError(error);
+    } catch {
+      throw unexpectedThermalPrinterError();
     }
     const selected = snapshotSavedPrinter(loaded);
     if (selected === null) throw new ThermalPrinterError('printer_not_bonded');
@@ -451,11 +580,13 @@ export function createThermalPrinterService(
     return selected;
   };
 
-  const runPrintJob = async (
+  const runPrintJob = async <Payload>(
     kind: ThermalPrintJobKind,
+    snapshotPayload: () => Payload,
     print: (
       availableNative: ThermalPrinterNativeModule,
       printer: SavedThermalPrinterSnapshot,
+      payload: Payload,
     ) => Promise<NativePrintResult>,
   ): Promise<ThermalPrintJobResult> => {
     if (thermalPrintJobInFlight) {
@@ -464,9 +595,10 @@ export function createThermalPrinterService(
     thermalPrintJobInFlight = true;
 
     try {
+      const payload = snapshotPayload();
       const printer = await selectedBondedPrinter();
       if (native === null) throw unexpectedThermalPrinterError();
-      const nativeResult = await print(native, printer);
+      const nativeResult = await print(native, printer, payload);
       const progress = snapshotProgress(nativeResult);
       if (progress === null) throw unexpectedThermalPrinterError();
       return Object.freeze({ status: 'sent', kind, printer, progress });
@@ -568,13 +700,21 @@ export function createThermalPrinterService(
     },
 
     printTicket(document: ThermalTicketDocument) {
-      return runPrintJob('ticket', (availableNative, printer) =>
-        availableNative.printTicket(printer.address, document));
+      return runPrintJob(
+        'ticket',
+        () => snapshotThermalTicketDocument(document),
+        (availableNative, printer, snapshot) =>
+          availableNative.printTicket(printer.address, snapshot),
+      );
     },
 
     printDiagnostic() {
-      return runPrintJob('diagnostic', (availableNative, printer) =>
-        availableNative.printDiagnostic(printer.address, thermalTicketBranding()));
+      return runPrintJob(
+        'diagnostic',
+        thermalTicketBranding,
+        (availableNative, printer, branding) =>
+          availableNative.printDiagnostic(printer.address, branding),
+      );
     },
   });
 }

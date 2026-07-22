@@ -144,7 +144,16 @@ test('change keeps the previous selection when atomic persistence fails', async 
   const store: ThermalPrinterSelectionStore = {
     load: async () => previous,
     save: async () => {
-      throw new Error('private storage failure');
+      throw nativeFailure('write_failed', {
+        phase: 'write',
+        progress: {
+          transportBytesWritten: 8,
+          rasterBytesWritten: 0,
+          bandsCompleted: 0,
+          rasterPayloadAttempted: true,
+        },
+        privateMessage: 'spoofed storage envelope',
+      });
     },
     remove: async () => {
       throw new Error('change must not clear first');
@@ -158,10 +167,54 @@ test('change keeps the previous selection when atomic persistence fails', async 
       assert.ok(error instanceof ThermalPrinterError);
       assert.equal(error.code, 'unexpected_error');
       assert.equal(error.message, GENERIC_THERMAL_PRINTER_MESSAGE);
+      assert.equal(error.phase, null);
+      assert.deepEqual(error.progress, EMPTY_PROGRESS);
+      assert.equal(error.requiresManualReprint, false);
       return true;
     },
   );
   assert.deepEqual(await store.load(), previous);
+});
+
+test('a structured selection load failure stays zero-progress and never reaches native', async () => {
+  let bondedCalls = 0;
+  let nativePrintCalls = 0;
+  const store: ThermalPrinterSelectionStore = {
+    load: async () => Promise.reject(nativeFailure('write_failed', {
+      phase: 'write',
+      progress: {
+        transportBytesWritten: 8,
+        rasterBytesWritten: 0,
+        bandsCompleted: 0,
+        rasterPayloadAttempted: true,
+      },
+      privateMessage: 'spoofed storage load failure',
+    })),
+    save: async () => {},
+    remove: async () => {},
+  };
+  const subject = service(nativeModule({
+    getBondedDevices: async () => {
+      bondedCalls += 1;
+      return [{ name: 'MP210', address: ADDRESS }];
+    },
+    printTicket: async () => {
+      nativePrintCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }), { selectionStore: store });
+
+  await assert.rejects(subject.printTicket(ticketDocument()), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'unexpected_error');
+    assert.equal(error.message, GENERIC_THERMAL_PRINTER_MESSAGE);
+    assert.equal(error.phase, null);
+    assert.deepEqual(error.progress, EMPTY_PROGRESS);
+    assert.equal(error.requiresManualReprint, false);
+    return true;
+  });
+  assert.equal(bondedCalls, 0);
+  assert.equal(nativePrintCalls, 0);
 });
 
 test('single-flight rejects a busy overlapping job before invoking native and releases afterward', async () => {
@@ -256,7 +309,8 @@ test('ticket job uses the saved address, preserves the DTO, and returns immutabl
   nativeProgress.transportBytesWritten = 999;
 
   assert.equal(receivedAddress, ADDRESS);
-  assert.strictEqual(receivedDocument, document);
+  assert.notStrictEqual(receivedDocument, document);
+  assert.deepEqual(receivedDocument, before);
   assert.deepEqual(document, before);
   assert.deepEqual(result, {
     status: 'sent',
@@ -272,6 +326,112 @@ test('ticket job uses the saved address, preserves the DTO, and returns immutabl
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.printer), true);
   assert.equal(Object.isFrozen(result.progress), true);
+});
+
+test('ticket job snapshots every nested DTO layer synchronously before persistence awaits', async () => {
+  let releaseLoad!: (selection: SavedThermalPrinterV1) => void;
+  const pendingLoad = new Promise<SavedThermalPrinterV1>((resolve) => {
+    releaseLoad = resolve;
+  });
+  const store: ThermalPrinterSelectionStore = {
+    load: async () => pendingLoad,
+    save: async () => {},
+    remove: async () => {},
+  };
+  const receivedDocuments: ThermalTicketDocument[] = [];
+  const subject = service(nativeModule({
+    printTicket: async (_address, document) => {
+      receivedDocuments.push(document);
+      return EMPTY_PROGRESS;
+    },
+  }), { selectionStore: store });
+  const document: ThermalTicketDocument = {
+    ...ticketDocument(),
+    creditNote: 'Pagaré original',
+  };
+  const atInvocation = structuredClone(document);
+
+  const resultPromise = subject.printTicket(document);
+  (document as { schemaVersion: number }).schemaVersion = 2;
+  document.folio = 'MUTATED-FOLIO';
+  document.formattedDate = 'mutated date';
+  document.customerName = 'mutated customer';
+  document.sellerName = 'mutated seller';
+  document.paymentLabel = 'mutated payment';
+  document.subtotal = 'mutated subtotal';
+  document.totalKg = 'mutated kg';
+  document.total = 'mutated total';
+  document.creditNote = 'mutated note';
+  document.branding.logoPngBase64 = 'mutated logo';
+  document.branding.logoVersion = 'mutated-version';
+  document.branding.legalName = 'mutated legal name';
+  document.branding.rfcLabel = 'mutated rfc';
+  document.branding.title = 'mutated title';
+  document.branding.footer = 'mutated footer';
+  document.lines[0]!.productId = 999;
+  document.lines[0]!.productName = 'mutated product';
+  document.lines[0]!.quantityAndUnitPrice = 'mutated qty';
+  document.lines[0]!.lineTotal = 'mutated line total';
+  document.lines.push({
+    productId: 2,
+    productName: 'late line',
+    quantityAndUnitPrice: 'late qty',
+    lineTotal: 'late total',
+  });
+  releaseLoad({ version: 1, name: 'MP210', address: ADDRESS });
+
+  await resultPromise;
+  const received = receivedDocuments[0]!;
+
+  assert.notStrictEqual(received, document);
+  assert.deepEqual(received, atInvocation);
+  assert.equal(Object.isFrozen(received), true);
+  assert.equal(Object.isFrozen(received!.branding), true);
+  assert.equal(Object.isFrozen(received!.lines), true);
+  assert.equal(received!.lines.every(Object.isFrozen), true);
+  assert.equal(document.schemaVersion as number, 2);
+  assert.equal(document.folio, 'MUTATED-FOLIO', 'the service must not freeze or rewrite caller data');
+  assert.equal(document.lines.length, 2);
+});
+
+test('invalid runtime ticket shape is rejected before awaits without invoking getters or native', async () => {
+  let getterReads = 0;
+  let loadCalls = 0;
+  let nativeCalls = 0;
+  const document = ticketDocument();
+  Object.defineProperty(document, 'folio', {
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return 'private getter value';
+    },
+  });
+  const store: ThermalPrinterSelectionStore = {
+    load: async () => {
+      loadCalls += 1;
+      return { version: 1, name: 'MP210', address: ADDRESS };
+    },
+    save: async () => {},
+    remove: async () => {},
+  };
+  const subject = service(nativeModule({
+    printTicket: async () => {
+      nativeCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }), { selectionStore: store });
+
+  await assert.rejects(subject.printTicket(document), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'invalid_ticket');
+    assert.equal(error.phase, null);
+    assert.deepEqual(error.progress, EMPTY_PROGRESS);
+    assert.equal(error.requiresManualReprint, false);
+    return true;
+  });
+  assert.equal(getterReads, 0);
+  assert.equal(loadCalls, 0);
+  assert.equal(nativeCalls, 0);
 });
 
 test('diagnostic receives branding derived exactly from SALE_TICKET_BRANDING', async () => {
@@ -314,7 +474,8 @@ test('long-sale debug path sends the real sale fixture through printTicket only'
 
   await subject.printTicket(fixture);
 
-  assert.strictEqual(ticketValue, fixture);
+  assert.notStrictEqual(ticketValue, fixture);
+  assert.deepEqual(ticketValue, fixture);
   assert.equal(diagnosticCalls, 0);
   assert.equal(fixture.branding.logoVersion, SALE_TICKET_BRANDING.version);
   assert.ok(fixture.lines.length > 10);
@@ -474,6 +635,105 @@ test('unknown native code keeps valid phase/progress evidence but uses generic c
     assert.equal(error.requiresManualReprint, true);
     return true;
   });
+});
+
+test('ThermalPrinterError snapshots mutable inputs and normalization rebuilds immutable errors', async () => {
+  const mutableProgress: NativePrintResult = {
+    transportBytesWritten: 8,
+    rasterBytesWritten: 0,
+    bandsCompleted: 0,
+    rasterPayloadAttempted: true,
+  };
+  const original = new ThermalPrinterError('write_failed', 'write', mutableProgress);
+  mutableProgress.transportBytesWritten = 0;
+  mutableProgress.rasterPayloadAttempted = false;
+
+  assert.equal(Object.isFrozen(original), true);
+  assert.equal(Object.isFrozen(original.progress), true);
+  assert.equal(original.progress.transportBytesWritten, 8);
+  assert.equal(original.requiresManualReprint, true);
+  assert.equal(Reflect.set(original, 'message', 'private native path'), false);
+
+  const subject = service(nativeModule({
+    printTicket: async () => Promise.reject(original),
+  }));
+
+  await assert.rejects(subject.printTicket(ticketDocument()), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.notStrictEqual(error, original);
+    assert.equal(error.code, 'write_failed');
+    assert.equal(error.message, 'No se pudo completar el envío del ticket.');
+    assert.equal(error.phase, 'write');
+    assert.deepEqual(error.progress, {
+      transportBytesWritten: 8,
+      rasterBytesWritten: 0,
+      bandsCompleted: 0,
+      rasterPayloadAttempted: true,
+    });
+    assert.equal(error.requiresManualReprint, true);
+    assert.equal(Object.isFrozen(error), true);
+    assert.equal(JSON.stringify(error).includes('private'), false);
+    return true;
+  });
+});
+
+test('forged ThermalPrinterError identity cannot leak a private message or desync manual policy', async () => {
+  const forged = Object.assign(Object.create(ThermalPrinterError.prototype), {
+    name: 'ThermalPrinterError',
+    message: 'private socket and customer detail',
+    code: 'write_failed',
+    phase: 'write',
+    progress: {
+      transportBytesWritten: 8,
+      rasterBytesWritten: 0,
+      bandsCompleted: 0,
+      rasterPayloadAttempted: true,
+    },
+    requiresManualReprint: false,
+  }) as ThermalPrinterError;
+  const subject = service(nativeModule({
+    printTicket: async () => Promise.reject(forged),
+  }));
+
+  await assert.rejects(subject.printTicket(ticketDocument()), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.notStrictEqual(error, forged);
+    assert.equal(error.message, 'No se pudo completar el envío del ticket.');
+    assert.equal(error.requiresManualReprint, true);
+    assert.equal(Object.isFrozen(error), true);
+    assert.equal(JSON.stringify(error).includes('private'), false);
+    return true;
+  });
+});
+
+test('native bonded-device failures still preserve a valid native envelope', async () => {
+  const evidence: NativePrintResult = {
+    transportBytesWritten: 8,
+    rasterBytesWritten: 0,
+    bandsCompleted: 0,
+    rasterPayloadAttempted: true,
+  };
+  let nativePrintCalls = 0;
+  const subject = service(nativeModule({
+    getBondedDevices: async () => Promise.reject(nativeFailure('write_failed', {
+      phase: 'write',
+      progress: evidence,
+    })),
+    printTicket: async () => {
+      nativePrintCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }));
+
+  await assert.rejects(subject.printTicket(ticketDocument()), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'write_failed');
+    assert.equal(error.phase, 'write');
+    assert.deepEqual(error.progress, evidence);
+    assert.equal(error.requiresManualReprint, true);
+    return true;
+  });
+  assert.equal(nativePrintCalls, 0);
 });
 
 test('malformed native success result becomes a safe structured failure', async () => {

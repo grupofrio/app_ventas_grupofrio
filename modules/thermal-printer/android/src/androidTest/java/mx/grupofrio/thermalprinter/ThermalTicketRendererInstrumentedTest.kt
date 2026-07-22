@@ -46,6 +46,12 @@ class ThermalTicketRendererInstrumentedTest {
     (evidence.noteCommands + evidence.footerCommand).forEach { command ->
       assertTextCommandHasInk(credit, creditLayout, command)
     }
+    creditLayout.commands.filterIsInstance<DrawCommand.Text>()
+      .map { it.top to it.bottomExclusive }
+      .distinct()
+      .sortedBy { it.first }
+      .zipWithNext()
+      .forEach { (previous, next) -> assertThat(previous.second).isAtMost(next.first) }
   }
 
   @Test
@@ -155,10 +161,9 @@ class ThermalTicketRendererInstrumentedTest {
     layout: TicketLayout,
     command: DrawCommand.Text,
   ) {
-    val top = (command.baseline - command.style.sizePx).toInt()
-    val band = RowBand(top, top + command.style.lineHeightPx)
-    // This tolerance is derived from the command's textSize/lineHeight allocation, not a
-    // device-specific glyph-height constant, and adjacent command boxes do not overlap.
+    val band = RowBand(command.top.toInt(), command.bottomExclusive.toInt())
+    // The renderer and instrumented assertion share the font-metric-derived command box; adjacent
+    // boxes are required to be disjoint, so a missing line cannot borrow another row's ink.
     assertThat(band.top).isAtLeast(0)
     assertThat(band.bottomExclusive).isAtMost(layout.height)
     assertThat(RasterBits(raster).hasInk(band)).isTrue()

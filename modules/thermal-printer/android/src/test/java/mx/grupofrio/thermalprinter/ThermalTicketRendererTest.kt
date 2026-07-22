@@ -9,7 +9,9 @@ import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -161,16 +163,111 @@ class ThermalTicketRendererTest {
       creditNote = longPromissoryNote(),
     )
     val layout = subject.measure(creditTicket)
-    val raster = subject.render(creditTicket)
     val evidence = creditEvidence(layout)
     val omittedTargets = listOf(evidence.noteCommands.last(), evidence.footerCommand)
 
     omittedTargets.forEach { omitted ->
-      val rasterWithOmittedBand = raster.clearing(textLineBand(omitted))
-      assertThrows(AssertionError::class.java) {
-        assertTextCommandHasInk(rasterWithOmittedBand, layout, omitted)
+      val rasterWithOmittedCommand = subject.render(creditTicket) { generated ->
+        generated.copy(commands = generated.commands.filterNot { it == omitted })
       }
+      assertFalse(
+        "Omitted '${omitted.text}' must leave its isolated command box white",
+        RasterBits(rasterWithOmittedCommand).hasInk(textLineBand(omitted)),
+      )
     }
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun `packaged font metrics bound accented ink for every thermal text style`() {
+    val base = ticket(
+      logo = pngBase64(32, 16, Color.WHITE),
+      logoVersion = "metrics-v1",
+      creditNote = "Nota regular ņẲ",
+    )
+    val metricTicket = base.copy(
+      branding = base.branding.copy(
+        legalName = "Marca bold ņẲ",
+        rfcLabel = "RFC small ņẲ",
+        title = "Título total ņẲ",
+        footer = "Pie small ņẲ",
+      ),
+    )
+    val layout = subject.measure(metricTicket)
+    val raster = subject.render(metricTicket)
+    val rows = layout.commands.filterIsInstance<DrawCommand.Text>()
+      .map { it.top to it.bottomExclusive }
+      .distinct()
+      .sortedBy { it.first }
+    val representatives = listOf(
+      layout.text("Marca bold ņẲ"),
+      layout.text("RFC small ņẲ"),
+      layout.text("Título total ņẲ"),
+      layout.text("Nota regular ņẲ"),
+      layout.text("Pie small ņẲ"),
+    )
+
+    representatives.forEach { command ->
+      assertTextCommandHasInk(raster, layout, command)
+      val isolated = subject.render(metricTicket) { generated ->
+        generated.copy(
+          commands = generated.commands.filter { candidate ->
+            candidate is DrawCommand.Logo || candidate == command
+          },
+        )
+      }
+      val band = textLineBand(command)
+      val isolatedInkRows = RasterBits(isolated).inkRows()
+      assertTrue("Isolated '${command.text}' must render ink", isolatedInkRows.isNotEmpty())
+      assertTrue(
+        "Isolated '${command.text}' escaped rows ${band.top}..<${band.bottomExclusive}: $isolatedInkRows",
+        isolatedInkRows.all { it in band.top until band.bottomExclusive },
+      )
+    }
+    rows.zipWithNext().forEach { (previous, next) ->
+      assertTrue("Native font command boxes overlap: $previous then $next", previous.second <= next.first)
+    }
+  }
+
+  @Test
+  fun `same logo version with different PNG digest is rejected instead of serving stale pixels`() {
+    val tracker = TrackingBitmapAllocator()
+    val renderer = ThermalTicketRenderer(context, bitmapAllocator = tracker)
+    val black = pngBase64(40, 20, Color.BLACK)
+    val white = pngBase64(40, 20, Color.WHITE)
+
+    renderer.render(ticket(logo = black, logoVersion = "collision-v1"))
+    val error = assertThrows(ThermalPrinterException::class.java) {
+      renderer.render(ticket(logo = white, logoVersion = "collision-v1"))
+    }
+
+    assertEquals("invalid_ticket", error.code)
+    assertEquals("Digest mismatch must fail before a second render allocation", 1, tracker.created.size)
+  }
+
+  @Test
+  fun `cache hit leases owned copies and replacement only recycles the old canonical bitmap`() {
+    val leases = TrackingLogoBitmapLeaseFactory()
+    val renderer = ThermalTicketRenderer(context, logoBitmapLeaseFactory = leases)
+    val firstTicket = ticket(logo = pngBase64(40, 20), logoVersion = "owned-v1")
+
+    renderer.render(firstTicket)
+    renderer.render(firstTicket)
+
+    assertEquals(2, leases.sources.size)
+    assertSame("Same version digest and dimensions must hit one canonical bitmap", leases.sources[0], leases.sources[1])
+    assertNotSame(leases.sources[0], leases.leases[0])
+    assertNotSame(leases.leases[0], leases.leases[1])
+    assertTrue(leases.leases.all(Bitmap::isRecycled))
+    assertFalse(leases.sources[0].isRecycled)
+
+    renderer.render(
+      ticket(logo = pngBase64(40, 20, Color.WHITE), logoVersion = "owned-v2"),
+    )
+
+    assertTrue("Size-one replacement must recycle the previous canonical bitmap", leases.sources[0].isRecycled)
+    assertFalse(leases.sources.last().isRecycled)
+    assertNotSame(leases.sources[0], leases.sources.last())
   }
 
   @Test
@@ -242,7 +339,7 @@ class ThermalTicketRendererTest {
     val huge = ticket(
       lines = List(260) { index ->
         TicketLine(
-          index.toLong(),
+          index.toLong() + 1,
           "Producto número $index con descripción refrigerada suficientemente larga",
           "1 x $10.00",
           "$10.00",
@@ -270,17 +367,20 @@ class ThermalTicketRendererTest {
   @Test
   fun `temporary bitmap is recycled when rendering rejects an allocator result`() {
     lateinit var allocated: Bitmap
+    val leases = TrackingLogoBitmapLeaseFactory()
     val renderer = ThermalTicketRenderer(
       context,
       bitmapAllocator = RenderBitmapAllocator { width, height ->
         Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565).also { allocated = it }
       },
+      logoBitmapLeaseFactory = leases,
     )
 
     val error = assertThrows(ThermalPrinterException::class.java) { renderer.render(ticket()) }
 
     assertEquals("invalid_ticket", error.code)
     assertTrue(allocated.isRecycled)
+    assertTrue(leases.leases.single().isRecycled)
   }
 
   private class RasterBits(raster: MonochromeRaster) {
@@ -322,8 +422,7 @@ class ThermalTicketRendererTest {
   }
 
   private fun textLineBand(command: DrawCommand.Text): RowBand {
-    val top = (command.baseline - command.style.sizePx).toInt()
-    return RowBand(top, top + command.style.lineHeightPx)
+    return RowBand(command.top.toInt(), command.bottomExclusive.toInt())
   }
 
   private fun assertTextCommandHasInk(
@@ -348,13 +447,6 @@ class ThermalTicketRendererTest {
     }
   }
 
-  private fun MonochromeRaster.clearing(band: RowBand): MonochromeRaster {
-    val copy = bytes
-    val bytesPerRow = width / 8
-    copy.fill(0, band.top * bytesPerRow, band.bottomExclusive * bytesPerRow)
-    return MonochromeRaster(width, height, copy)
-  }
-
   private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
@@ -364,10 +456,10 @@ class ThermalTicketRendererTest {
       "sin recortar ninguna condición escrita en este pagaré de crédito."
   }.joinToString(" ")
 
-  private fun pngBase64(width: Int, height: Int): String {
+  private fun pngBase64(width: Int, height: Int, color: Int = Color.BLACK): String {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     return try {
-      bitmap.eraseColor(Color.BLACK)
+      bitmap.eraseColor(color)
       ByteArrayOutputStream().use { output ->
         assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
         Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
@@ -412,4 +504,17 @@ class ThermalTicketRendererTest {
     override fun create(width: Int, height: Int): Bitmap =
       Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also(created::add)
   }
+
+  private class TrackingLogoBitmapLeaseFactory : LogoBitmapLeaseFactory {
+    val sources = mutableListOf<Bitmap>()
+    val leases = mutableListOf<Bitmap>()
+
+    override fun copy(source: Bitmap): Bitmap {
+      sources += source
+      return checkNotNull(source.copy(Bitmap.Config.ARGB_8888, false)).also(leases::add)
+    }
+  }
+
+  private fun TicketLayout.text(value: String): DrawCommand.Text =
+    commands.filterIsInstance<DrawCommand.Text>().single { it.text == value }
 }

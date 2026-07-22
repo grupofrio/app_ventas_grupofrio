@@ -1,13 +1,22 @@
 package mx.grupofrio.thermalprinter
 
 import java.util.Collections
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
 fun interface TextMeasurer {
-  fun width(text: String, style: TextStyle): Float
+  fun measure(text: String, style: TextStyle): TextMeasurement
 }
+
+data class TextMeasurement(
+  val width: Float,
+  /** Font top relative to the baseline; Android font metrics normally make this negative. */
+  val top: Float,
+  /** Font bottom relative to the baseline; Android font metrics normally make this positive. */
+  val bottom: Float,
+)
 
 enum class TextAlignment {
   LEFT,
@@ -32,6 +41,8 @@ sealed interface DrawCommand {
     val text: String,
     val x: Float,
     val baseline: Float,
+    val top: Float,
+    val bottomExclusive: Float,
     val style: TextStyle,
   ) : DrawCommand
 
@@ -52,7 +63,6 @@ data class TicketLayout internal constructor(
 
 class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
   fun layout(ticket: ThermalTicket, logoDimensions: LogoDimensions? = null): TicketLayout {
-    if (ticket.schemaVersion != 1) invalidTicket("Unsupported schemaVersion")
     val safeTicket = ticket.normalizedForLayout()
     val builder = LayoutBuilder()
 
@@ -93,7 +103,9 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
 
   internal fun wrapText(text: String, style: TextStyle, maxWidth: Float): List<String> {
     if (!maxWidth.isFinite() || maxWidth <= 0f) invalidTicket("Text width must be positive")
-    if (textMeasurer.width("M", style) <= 0f) invalidTicket("Text measurer returned an invalid width")
+    if (measurement("M", style).width <= 0f) {
+      invalidTicket("Text measurer returned an invalid width")
+    }
 
     val normalized = normalizeDisplayText(text)
     if (normalized.isEmpty()) return listOf("")
@@ -152,10 +164,27 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
   }
 
   private fun measuredWidth(text: String, style: TextStyle): Float {
-    val result = textMeasurer.width(text, style)
-    if (!result.isFinite() || result < 0f) invalidTicket("Text measurer returned an invalid width")
+    return measurement(text, style).width
+  }
+
+  private fun measurement(text: String, style: TextStyle): TextMeasurement {
+    val result = textMeasurer.measure(text, style)
+    if (!result.width.isFinite() || result.width < 0f) {
+      invalidTicket("Text measurer returned an invalid width")
+    }
+    if (!result.top.isFinite() || !result.bottom.isFinite() || result.top > 0f ||
+      result.bottom < 0f || result.top > result.bottom
+    ) {
+      invalidTicket("Text measurer returned invalid vertical metrics")
+    }
     return result
   }
+
+  private data class RowGeometry(
+    val top: Long,
+    val baseline: Long,
+    val bottomExclusive: Long,
+  )
 
   private inner class LayoutBuilder {
     private val commands = mutableListOf<DrawCommand>()
@@ -186,15 +215,15 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       val labelWidth = measuredWidth(label, labelStyle)
       val sameLineWidth = labelWidth + LABEL_GAP_PX + measuredWidth(value, valueStyle)
       if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
-        ensureLine(style.lineHeightPx)
-        appendText(label, INSET_PX.toFloat(), baseline(style), labelStyle)
+        val row = rowGeometry(labelStyle, valueStyle)
+        appendText(label, INSET_PX.toFloat(), row, labelStyle)
         appendText(
           value,
           INSET_PX + labelWidth + LABEL_GAP_PX,
-          baseline(style),
+          row,
           valueStyle,
         )
-        y += style.lineHeightPx.toLong()
+        y = row.bottomExclusive
       } else {
         addTextLine(label, labelStyle)
         wrapText(value, valueStyle, AVAILABLE_WIDTH_PX.toFloat()).forEach { line ->
@@ -209,16 +238,15 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       val amountWidth = measuredWidth(amount, amountStyle)
       val sameLineWidth = measuredWidth(label, labelStyle) + LABEL_GAP_PX + amountWidth
       if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
-        val lineHeight = max(labelStyle.lineHeightPx, amountStyle.lineHeightPx)
-        ensureLine(lineHeight)
-        appendText(label, INSET_PX.toFloat(), baseline(labelStyle), labelStyle)
+        val row = rowGeometry(labelStyle, amountStyle)
+        appendText(label, INSET_PX.toFloat(), row, labelStyle)
         appendText(
           amount,
           (WIDTH_PX - INSET_PX).toFloat(),
-          baseline(amountStyle),
+          row,
           amountStyle.copy(alignment = TextAlignment.RIGHT),
         )
-        y += lineHeight.toLong()
+        y = row.bottomExclusive
       } else {
         addWrapped(label, labelStyle)
         addTextLine(amount, amountStyle.copy(alignment = TextAlignment.RIGHT))
@@ -250,21 +278,28 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     }
 
     private fun addTextLine(text: String, style: TextStyle) {
-      ensureLine(style.lineHeightPx)
+      val row = rowGeometry(style)
       val x = when (style.alignment) {
         TextAlignment.LEFT -> INSET_PX.toFloat()
         TextAlignment.CENTER -> WIDTH_PX / 2f
         TextAlignment.RIGHT -> (WIDTH_PX - INSET_PX).toFloat()
       }
-      appendText(text, x, baseline(style), style)
-      y += style.lineHeightPx.toLong()
+      appendText(text, x, row, style)
+      y = row.bottomExclusive
     }
 
-    private fun appendText(text: String, x: Float, baseline: Float, style: TextStyle) {
+    private fun appendText(text: String, x: Float, row: RowGeometry, style: TextStyle) {
       if (text != normalizeDisplayText(text)) {
         invalidTicket("Layout text must use canonical display whitespace")
       }
-      commands += DrawCommand.Text(text, x, baseline, style)
+      commands += DrawCommand.Text(
+        text = text,
+        x = x,
+        baseline = row.baseline.toFloat(),
+        top = row.top.toFloat(),
+        bottomExclusive = row.bottomExclusive.toFloat(),
+        style = style,
+      )
     }
 
     private fun fitAmount(amount: String, style: TextStyle): TextStyle {
@@ -277,9 +312,29 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       invalidTicket("Amount does not fit at minimum size")
     }
 
-    private fun ensureLine(lineHeight: Int) = ensureFits(y + lineHeight.toLong())
-
-    private fun baseline(style: TextStyle): Float = y.toFloat() + style.sizePx
+    private fun rowGeometry(vararg styles: TextStyle): RowGeometry {
+      var topExtent = 0L
+      var bottomExtent = 0L
+      var minimumHeight = 0L
+      styles.distinct().forEach { style ->
+        val metrics = measurement("M", style)
+        topExtent = max(topExtent, ceil(-metrics.top.toDouble()).toLong())
+        bottomExtent = max(bottomExtent, ceil(metrics.bottom.toDouble()).toLong())
+        minimumHeight = max(minimumHeight, style.lineHeightPx.toLong())
+      }
+      if (topExtent > MAX_HEIGHT_PX || bottomExtent > MAX_HEIGHT_PX) {
+        ticketTooLarge("Text metrics exceed $MAX_HEIGHT_PX pixels")
+      }
+      val contentHeight = topExtent + bottomExtent
+      val rowHeight = max(minimumHeight, contentHeight)
+      val bottomExclusive = y + rowHeight
+      ensureFits(bottomExclusive)
+      return RowGeometry(
+        top = y,
+        baseline = y + topExtent,
+        bottomExclusive = bottomExclusive,
+      )
+    }
 
     private fun ensureFits(endExclusive: Long) {
       if (endExclusive > MAX_HEIGHT_PX.toLong()) {

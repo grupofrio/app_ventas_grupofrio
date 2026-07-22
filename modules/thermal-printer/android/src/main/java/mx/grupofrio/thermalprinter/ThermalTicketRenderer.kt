@@ -9,9 +9,14 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.util.Base64
+import java.security.MessageDigest
 
 internal fun interface RenderBitmapAllocator {
   fun create(width: Int, height: Int): Bitmap
+}
+
+internal fun interface LogoBitmapLeaseFactory {
+  fun copy(source: Bitmap): Bitmap
 }
 
 internal interface FontProvider {
@@ -40,6 +45,10 @@ internal class ThermalTicketRenderer(
     Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
   },
   private val fontProvider: FontProvider = PackagedFontProvider(context.assets),
+  private val logoBitmapLeaseFactory: LogoBitmapLeaseFactory = LogoBitmapLeaseFactory { source ->
+    source.copy(Bitmap.Config.ARGB_8888, false)
+      ?: invalidTicket("Cached logo could not be copied")
+  },
 ) {
   private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = Color.BLACK
@@ -49,7 +58,12 @@ internal class ThermalTicketRenderer(
   }
   private val layoutEngine = ThermalTicketLayout { text, style ->
     configureTextPaint(style)
-    textPaint.measureText(text)
+    val metrics = textPaint.fontMetrics
+    TextMeasurement(
+      width = textPaint.measureText(text),
+      top = metrics.top,
+      bottom = metrics.bottom,
+    )
   }
 
   // A single entry makes ownership simple and prevents logo versions from growing memory forever.
@@ -62,30 +76,41 @@ internal class ThermalTicketRenderer(
   }
 
   @Synchronized
-  fun render(ticket: ThermalTicket): MonochromeRaster {
+  fun render(ticket: ThermalTicket): MonochromeRaster = render(ticket) { it }
+
+  /** Internal rendering seam used to prove that a missing command cannot borrow adjacent ink. */
+  @Synchronized
+  internal fun render(
+    ticket: ThermalTicket,
+    layoutTransform: (TicketLayout) -> TicketLayout,
+  ): MonochromeRaster {
     val inspectedLogo = inspectLogo(ticket.branding.logoPngBase64)
-    val layout = layoutEngine.layout(ticket, inspectedLogo.dimensions)
+    val layout = layoutTransform(layoutEngine.layout(ticket, inspectedLogo.dimensions))
     validateLayoutBeforeAllocation(layout)
     val logoCommand = layout.commands.filterIsInstance<DrawCommand.Logo>().singleOrNull()
       ?: invalidTicket("Ticket layout must contain exactly one logo")
-    val logo = decodedLogo(
+    val logo = logoLease(
       ticket.branding.logoVersion,
       inspectedLogo,
       LogoDimensions(logoCommand.width, logoCommand.height),
     )
 
-    val renderBitmap = bitmapAllocator.create(layout.width, layout.height)
     try {
-      if (renderBitmap.width != layout.width || renderBitmap.height != layout.height ||
-        renderBitmap.config != Bitmap.Config.ARGB_8888
-      ) {
-        invalidTicket("Render bitmap does not match the required ARGB layout")
+      val renderBitmap = bitmapAllocator.create(layout.width, layout.height)
+      try {
+        if (renderBitmap.width != layout.width || renderBitmap.height != layout.height ||
+          renderBitmap.config != Bitmap.Config.ARGB_8888
+        ) {
+          invalidTicket("Render bitmap does not match the required ARGB layout")
+        }
+        renderBitmap.eraseColor(Color.WHITE)
+        draw(Canvas(renderBitmap), layout, logo)
+        return toMonochromeRaster(renderBitmap)
+      } finally {
+        if (!renderBitmap.isRecycled) renderBitmap.recycle()
       }
-      renderBitmap.eraseColor(Color.WHITE)
-      draw(Canvas(renderBitmap), layout, logo)
-      return toMonochromeRaster(renderBitmap)
     } finally {
-      if (!renderBitmap.isRecycled) renderBitmap.recycle()
+      if (!logo.isRecycled) logo.recycle()
     }
   }
 
@@ -198,7 +223,11 @@ internal class ThermalTicketRenderer(
     }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     validateLogoDimensions(options.outWidth, options.outHeight)
-    return InspectedLogo(bytes, LogoDimensions(options.outWidth, options.outHeight))
+    return InspectedLogo(
+      bytes = bytes,
+      digest = MessageDigest.getInstance(SHA_256).digest(bytes),
+      dimensions = LogoDimensions(options.outWidth, options.outHeight),
+    )
   }
 
   private fun validateLogoDimensions(width: Int, height: Int) {
@@ -211,7 +240,7 @@ internal class ThermalTicketRenderer(
     if (pixels > MAX_SOURCE_LOGO_PIXELS) invalidTicket("Logo has too many pixels")
   }
 
-  private fun decodedLogo(
+  private fun logoLease(
     version: String,
     inspected: InspectedLogo,
     target: LogoDimensions,
@@ -219,9 +248,15 @@ internal class ThermalTicketRenderer(
     if (version.isBlank() || version.length > MAX_LOGO_VERSION_CHARS) {
       invalidTicket("Logo version is invalid")
     }
-    cachedLogo?.takeIf {
-      it.version == version && it.bitmap.width == target.width && it.bitmap.height == target.height
-    }?.let { return it.bitmap }
+    val current = cachedLogo
+    if (current?.version == version && !current.digest.contentEquals(inspected.digest)) {
+      invalidTicket("Logo version is already bound to different PNG content")
+    }
+    if (current != null && current.version == version &&
+      current.digest.contentEquals(inspected.digest) && current.target == target
+    ) {
+      return leaseCopy(current.bitmap, target)
+    }
 
     val options = BitmapFactory.Options().apply {
       inJustDecodeBounds = false
@@ -242,17 +277,32 @@ internal class ThermalTicketRenderer(
       if (scaled !== decoded && !decoded.isRecycled) decoded.recycle()
     }
     val cachedBitmap = scaled ?: invalidTicket("Logo scaling failed")
-    if (cachedBitmap.width != target.width || cachedBitmap.height != target.height) {
+    if (cachedBitmap.width != target.width || cachedBitmap.height != target.height ||
+      cachedBitmap.config != Bitmap.Config.ARGB_8888
+    ) {
       cachedBitmap.recycle()
       invalidTicket("Scaled logo dimensions are invalid")
     }
 
     val previous = cachedLogo
-    cachedLogo = CachedLogo(version, cachedBitmap)
+    cachedLogo = CachedLogo(version, inspected.digest.copyOf(), target, cachedBitmap)
     if (previous != null && previous.bitmap !== cachedBitmap && !previous.bitmap.isRecycled) {
       previous.bitmap.recycle()
     }
-    return cachedBitmap
+    return leaseCopy(cachedBitmap, target)
+  }
+
+  private fun leaseCopy(source: Bitmap, target: LogoDimensions): Bitmap {
+    if (source.isRecycled) invalidTicket("Cached logo is no longer available")
+    val lease = logoBitmapLeaseFactory.copy(source)
+    if (lease === source) invalidTicket("Logo lease must own a distinct bitmap")
+    if (lease.isRecycled || lease.width != target.width || lease.height != target.height ||
+      lease.config != Bitmap.Config.ARGB_8888
+    ) {
+      if (!lease.isRecycled) lease.recycle()
+      invalidTicket("Logo lease does not match its draw command")
+    }
+    return lease
   }
 
   private fun toMonochromeRaster(bitmap: Bitmap): MonochromeRaster {
@@ -289,8 +339,18 @@ internal class ThermalTicketRenderer(
       bytes[index] == PNG_SIGNATURE[index]
     }
 
-  private data class InspectedLogo(val bytes: ByteArray, val dimensions: LogoDimensions)
-  private data class CachedLogo(val version: String, val bitmap: Bitmap)
+  private data class InspectedLogo(
+    val bytes: ByteArray,
+    val digest: ByteArray,
+    val dimensions: LogoDimensions,
+  )
+
+  private data class CachedLogo(
+    val version: String,
+    val digest: ByteArray,
+    val target: LogoDimensions,
+    val bitmap: Bitmap,
+  )
 
   private companion object {
     const val BITS_PER_BYTE = 8
@@ -299,6 +359,7 @@ internal class ThermalTicketRenderer(
     const val MAX_SOURCE_LOGO_DIMENSION = 2_048
     const val MAX_SOURCE_LOGO_PIXELS = 1_048_576L
     const val MAX_LOGO_VERSION_CHARS = 256
+    const val SHA_256 = "SHA-256"
 
     val BASE64_PATTERN = Regex("^[A-Za-z0-9+/]*={0,2}$")
     val PNG_SIGNATURE = byteArrayOf(

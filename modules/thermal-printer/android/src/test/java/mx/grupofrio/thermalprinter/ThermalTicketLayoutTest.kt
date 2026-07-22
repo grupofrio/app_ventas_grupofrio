@@ -7,7 +7,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ThermalTicketLayoutTest {
-  private val measurer = TextMeasurer { text, style -> text.length * style.sizePx * 0.5f }
+  private val measurer = TextMeasurer { text, style ->
+    TextMeasurement(
+      width = text.length * style.sizePx * 0.5f,
+      top = -style.sizePx.toFloat(),
+      bottom = (style.lineHeightPx - style.sizePx).toFloat(),
+    )
+  }
   private val subject = ThermalTicketLayout(measurer)
 
   @Test
@@ -56,7 +62,7 @@ class ThermalTicketLayoutTest {
     assertEquals(listOf(""), subject.wrapText("", style, maxWidth = 50f))
     assertEquals(listOf("uno", "dos", "tres"), words)
     assertEquals(longWord, characters.joinToString(separator = ""))
-    assertTrue(characters.all { measurer.width(it, style) <= 50f })
+    assertTrue(characters.all { measurer.measure(it, style).width <= 50f })
   }
 
   @Test
@@ -88,7 +94,57 @@ class ThermalTicketLayoutTest {
     chunks.map { it.text }.forEach(::assertCanonicalDisplayText)
     assertEquals(word, chunks.joinToString(separator = "") { it.text })
     assertEquals("A" + iceCube.repeat(17), chunks.first().text)
-    assertTrue(chunks.all { measurer.width(it.text, productStyle) <= availableWidth })
+    assertTrue(chunks.all { measurer.measure(it.text, productStyle).width <= availableWidth })
+  }
+
+  @Test
+  fun `real vertical metrics expand rows beyond nominal line height without overlap`() {
+    val tallSubject = ThermalTicketLayout(
+      TextMeasurer { text, style ->
+        TextMeasurement(
+          width = text.length * style.sizePx * 0.5f,
+          top = -30.2f,
+          bottom = 7.2f,
+        )
+      },
+    )
+
+    val layout = tallSubject.layout(ticket(customerName = "Ana"))
+    val commands = layout.commands.filterIsInstance<DrawCommand.Text>()
+    val distinctRows = commands.map { it.top to it.bottomExclusive }.distinct().sortedBy { it.first }
+
+    commands.forEach { command ->
+      assertEquals(31f, command.baseline - command.top, 0f)
+      assertTrue(command.bottomExclusive - command.top >= 39f)
+      assertTrue(command.top >= 0f)
+      assertTrue(command.bottomExclusive <= layout.height)
+    }
+    distinctRows.zipWithNext().forEach { (previous, next) ->
+      assertTrue("Text row boxes overlap: $previous then $next", previous.second <= next.first)
+    }
+  }
+
+  @Test
+  fun `mixed style row uses common font extrema and one baseline`() {
+    val mixedSubject = ThermalTicketLayout(
+      TextMeasurer { text, style ->
+        TextMeasurement(
+          width = text.length * style.sizePx * 0.5f,
+          top = if (style.bold) -35.1f else -21.1f,
+          bottom = if (style.bold) 5.1f else 12.1f,
+        )
+      },
+    )
+
+    val layout = mixedSubject.layout(ticket(customerName = "Ana"))
+    val label = layout.text("Cliente:")
+    val value = layout.text("Ana")
+
+    assertEquals(label.baseline, value.baseline)
+    assertEquals(label.top, value.top)
+    assertEquals(label.bottomExclusive, value.bottomExclusive)
+    assertEquals(36f, label.baseline - label.top, 0f)
+    assertEquals(13f, label.bottomExclusive - label.baseline, 0f)
   }
 
   @Test
@@ -173,7 +229,7 @@ class ThermalTicketLayoutTest {
 
     assertTrue(credit.height > cash.height)
     assertTrue(noteCommands.isNotEmpty())
-    assertTrue(noteCommands.maxOf { it.baseline + it.style.lineHeightPx } <= credit.height)
+    assertTrue(noteCommands.maxOf { it.bottomExclusive } <= credit.height)
   }
 
   @Test
@@ -212,7 +268,7 @@ class ThermalTicketLayoutTest {
     val huge = ticket(
       lines = List(260) { index ->
         TicketLine(
-          productId = index.toLong(),
+          productId = index.toLong() + 1,
           productName = "Producto refrigerado número $index con descripción larga",
           quantityAndUnitPrice = "1 x $10.00",
           lineTotal = "$10.00",
@@ -229,6 +285,7 @@ class ThermalTicketLayoutTest {
   fun `record validation returns coded errors instead of trusting mutable Expo input`() {
     val missing = ThermalTicketDocumentRecord()
     val wrongSchema = validRecord().apply { schemaVersion = 2 }
+    val nonPositiveProduct = validRecord().apply { lines!!.single().productId = 0.0 }
 
     assertEquals(
       "invalid_ticket",
@@ -237,6 +294,100 @@ class ThermalTicketLayoutTest {
     assertEquals(
       "invalid_ticket",
       assertThrows(ThermalPrinterException::class.java) { wrongSchema.toDomain() }.code,
+    )
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { nonPositiveProduct.toDomain() }.code,
+    )
+  }
+
+  @Test
+  fun `record rejects raw display text before whitespace normalization can allocate its full size`() {
+    val record = validRecord().apply {
+      customerName = " ".repeat(100_000) + "Ana"
+    }
+
+    val error = assertThrows(ThermalPrinterException::class.java) { record.toDomain() }
+
+    assertEquals("invalid_ticket", error.code)
+  }
+
+  @Test
+  fun `record validates line count before converting mutable line records`() {
+    val empty = validRecord().apply { lines = mutableListOf() }
+    val tooMany = validRecord().apply {
+      lines = MutableList(501) { validLineRecord(it + 1) }
+    }
+
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { empty.toDomain() }.code,
+    )
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { tooMany.toDomain() }.code,
+    )
+  }
+
+  @Test
+  fun `record aggregate budget is enforced across lines before domain copies`() {
+    val record = validRecord().apply {
+      lines = MutableList(5) { index ->
+        validLineRecord(index + 1).apply { productName = "P".repeat(8_192) }
+      }
+    }
+
+    val error = assertThrows(ThermalPrinterException::class.java) { record.toDomain() }
+
+    assertEquals("invalid_ticket", error.code)
+  }
+
+  @Test
+  fun `direct domain validation rejects empty excessive and non-positive product lines`() {
+    val cases = listOf(
+      ticket(lines = emptyList()),
+      ticket(lines = List(501) { index -> TicketLine(index.toLong() + 1, "P", "Q", "T") }),
+      ticket(lines = listOf(TicketLine(0, "P", "Q", "T"))),
+      ticket(lines = listOf(TicketLine(-1, "P", "Q", "T"))),
+      ticket(customerName = " ".repeat(100_000) + "Ana"),
+    )
+
+    cases.forEach { directDomain ->
+      assertEquals(
+        "invalid_ticket",
+        assertThrows(ThermalPrinterException::class.java) { subject.layout(directDomain) }.code,
+      )
+    }
+  }
+
+  @Test
+  fun `aggregate display budget accepts exact UTF-16 boundary and rejects one unit over`() {
+    val exactBoundary = aggregateBoundaryTicket(quantityLength = 8_180)
+    val oneUnitOver = aggregateBoundaryTicket(quantityLength = 8_181)
+
+    assertEquals(32_768, exactBoundary.normalizedForLayout().aggregateDisplayLength())
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { oneUnitOver.normalizedForLayout() }.code,
+    )
+  }
+
+  @Test
+  fun `aggregate display budget spans multiple lines and excludes opaque logo base64`() {
+    val base = aggregateBoundaryTicket(quantityLength = 8_180)
+    val withinBudget = base.copy(
+      branding = base.branding.copy(logoPngBase64 = "A".repeat(100_000)),
+    )
+    val overSeveralLines = ticket(
+      lines = List(5) { index ->
+        TicketLine(index.toLong() + 1, "P".repeat(8_192), "Q", "T")
+      },
+    )
+
+    assertEquals(32_768, withinBudget.normalizedForLayout().aggregateDisplayLength())
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { overSeveralLines.normalizedForLayout() }.code,
     )
   }
 
@@ -249,6 +400,10 @@ class ThermalTicketLayoutTest {
 
     assertEquals(1, domain.lines.size)
     assertFalse(domain.branding.legalName.contains("Mutated"))
+    assertThrows(UnsupportedOperationException::class.java) {
+      @Suppress("UNCHECKED_CAST")
+      (domain.lines as MutableList<TicketLine>).clear()
+    }
   }
 
   @Test
@@ -418,6 +573,32 @@ class ThermalTicketLayoutTest {
     listOf(line.productName, line.quantityAndUnitPrice, line.lineTotal)
   }
 
+  private fun ThermalTicket.aggregateDisplayLength(): Int = displayValues().sumOf(String::length)
+
+  private fun aggregateBoundaryTicket(quantityLength: Int): ThermalTicket = ThermalTicket(
+    schemaVersion = 1,
+    branding = TicketBranding(
+      logoPngBase64 = "iVBORw0KGgo=",
+      logoVersion = "v1",
+      legalName = "L",
+      rfcLabel = "R",
+      title = "T",
+      footer = "F".repeat(16_384),
+    ),
+    folio = "F",
+    formattedDate = "D",
+    customerName = "C",
+    sellerName = "S",
+    paymentLabel = "P",
+    lines = listOf(
+      TicketLine(1, "N".repeat(8_192), "Q".repeat(quantityLength), "A"),
+    ),
+    subtotal = "S",
+    totalKg = "K",
+    total = "T",
+    creditNote = null,
+  )
+
   private fun assertCanonicalDisplayText(value: String) {
     assertFalse("Display text must be trimmed: '$value'", value.startsWith(' ') || value.endsWith(' '))
     var index = 0
@@ -467,6 +648,13 @@ class ThermalTicketLayoutTest {
     subtotal = "$10.00"
     totalKg = "1 kg"
     total = "$10.00"
+  }
+
+  private fun validLineRecord(id: Int): ThermalTicketLineRecord = ThermalTicketLineRecord().apply {
+    productId = id.toDouble()
+    productName = "Hielo"
+    quantityAndUnitPrice = "1 x $10.00"
+    lineTotal = "$10.00"
   }
 
   private fun ticket(

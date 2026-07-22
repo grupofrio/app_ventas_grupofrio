@@ -22,7 +22,11 @@ class EscPosRasterEncoderTest {
     val pixels = byteArrayOf(0b1000_0001.toByte(), 0b0100_0000)
     val raster = MonochromeRaster(16, 1, pixels)
 
-    val payload = EscPosRasterEncoder().bands(raster).single().command.copyOfRange(HEADER_SIZE, HEADER_SIZE + pixels.size)
+    val payload = EscPosRasterEncoder()
+      .bands(raster)
+      .single()
+      .command
+      .copyOfRange(HEADER_SIZE, HEADER_SIZE + pixels.size)
 
     assertArrayEquals(pixels, payload)
     assertEquals(0, payload[0].toInt() and 0b0111_1110)
@@ -62,6 +66,26 @@ class EscPosRasterEncoderTest {
   }
 
   @Test
+  fun `GS v 0 width header preserves a nonzero high byte`() {
+    val bytesPerRow = 257
+    val raster = MonochromeRaster(bytesPerRow * 8, 1, ByteArray(bytesPerRow))
+
+    val command = EscPosRasterEncoder().bands(raster).single().command
+
+    assertArrayEquals(byteArrayOf(0x01, 0x01), command.copyOfRange(4, 6))
+  }
+
+  @Test
+  fun `GS v 0 height header preserves a nonzero high byte`() {
+    val rows = 257
+    val raster = MonochromeRaster(8, rows, ByteArray(rows))
+
+    val command = EscPosRasterEncoder(bandRows = rows).bands(raster).single().command
+
+    assertArrayEquals(byteArrayOf(0x01, 0x01), command.copyOfRange(6, 8))
+  }
+
+  @Test
   fun `initialize emits ESC at`() {
     assertArrayEquals(byteArrayOf(0x1B, 0x40), EscPosRasterEncoder().initialize())
   }
@@ -95,7 +119,28 @@ class EscPosRasterEncoderTest {
   }
 
   @Test
-  fun `sequence materializes the next band only when requested`() {
+  fun `raster snapshots input before bands are requested`() {
+    val source = byteArrayOf(0x01)
+    val raster = MonochromeRaster(8, 1, source)
+    source[0] = 0x02
+
+    val band = EscPosRasterEncoder().bands(raster).single()
+
+    assertArrayEquals(byteArrayOf(0x01), band.payload())
+  }
+
+  @Test
+  fun `raster snapshot stays stable after sequence creation but before iteration`() {
+    val source = byteArrayOf(0x01)
+    val raster = MonochromeRaster(8, 1, source)
+    val bands = EscPosRasterEncoder().bands(raster)
+    source[0] = 0x02
+
+    assertArrayEquals(byteArrayOf(0x01), bands.single().payload())
+  }
+
+  @Test
+  fun `raster snapshot keeps unmaterialized later bands stable`() {
     val bytes = byteArrayOf(0x01, 0x02)
     val iterator = EscPosRasterEncoder(bandRows = 1)
       .bands(MonochromeRaster(8, 2, bytes))
@@ -104,8 +149,43 @@ class EscPosRasterEncoderTest {
     assertArrayEquals(byteArrayOf(0x01), iterator.next().payload())
     bytes[1] = 0x04
 
-    assertArrayEquals(byteArrayOf(0x04), iterator.next().payload())
+    assertArrayEquals(byteArrayOf(0x02), iterator.next().payload())
     assertFalse(iterator.hasNext())
+  }
+
+  @Test
+  fun `raster byte getter returns a defensive copy`() {
+    val raster = MonochromeRaster(8, 1, byteArrayOf(0x01))
+    val exposed = raster.bytes
+    exposed[0] = 0x02
+
+    val band = EscPosRasterEncoder().bands(raster).single()
+
+    assertArrayEquals(byteArrayOf(0x01), band.payload())
+  }
+
+  @Test
+  fun `raster band snapshots its constructor command`() {
+    val source = byteArrayOf(0x01, 0x02)
+    val band = RasterBand(rowOffset = 0, rowCount = 1, command = source)
+    source[0] = 0x03
+
+    assertArrayEquals(byteArrayOf(0x01, 0x02), band.command)
+  }
+
+  @Test
+  fun `raster band command getter returns a defensive copy`() {
+    val band = EscPosRasterEncoder()
+      .bands(MonochromeRaster(8, 1, byteArrayOf(0x01)))
+      .single()
+    val exposed = band.command
+    exposed[0] = 0x00
+    exposed[HEADER_SIZE] = 0x02
+
+    assertArrayEquals(
+      byteArrayOf(0x1D, 0x76, 0x30, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01),
+      band.command,
+    )
   }
 
   @Test
@@ -121,32 +201,45 @@ class EscPosRasterEncoderTest {
   }
 
   @Test
+  fun `accepts the largest payload below 40 KiB`() {
+    val bytesPerRow = 111
+    val rows = 369
+    val payloadSize = bytesPerRow * rows
+    val raster = MonochromeRaster(bytesPerRow * 8, rows, ByteArray(payloadSize))
+
+    val band = EscPosRasterEncoder().bands(raster).single()
+
+    assertEquals(MAX_BAND_PAYLOAD_BYTES - 1, payloadSize)
+    assertEquals(payloadSize, band.command.size - HEADER_SIZE)
+  }
+
+  @Test
   fun `rejects width not divisible by eight`() {
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(9, 1, ByteArray(1))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(9, 1, ByteArray(1)))
     }
   }
 
   @Test
   fun `rejects non positive raster dimensions`() {
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(0, 1, ByteArray(0))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(0, 1, ByteArray(0)))
     }
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(8, 0, ByteArray(0))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(8, 0, ByteArray(0)))
     }
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(-8, 1, ByteArray(0))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(-8, 1, ByteArray(0)))
     }
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(8, -1, ByteArray(0))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(8, -1, ByteArray(0)))
     }
   }
 
   @Test
   fun `rejects raster byte length mismatch`() {
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(MonochromeRaster(16, 2, ByteArray(3))).toList()
+      EscPosRasterEncoder().bands(MonochromeRaster(16, 2, ByteArray(3)))
     }
   }
 
@@ -162,7 +255,7 @@ class EscPosRasterEncoderTest {
     assertThrows(IllegalArgumentException::class.java) {
       EscPosRasterEncoder().bands(
         MonochromeRaster(tooWideInBytes * 8, 1, ByteArray(tooWideInBytes)),
-      ).toList()
+      )
     }
     assertThrows(IllegalArgumentException::class.java) { EscPosRasterEncoder(bandRows = 65_536) }
   }
@@ -181,7 +274,7 @@ class EscPosRasterEncoderTest {
 
     assertEquals(MAX_BAND_PAYLOAD_BYTES, payloadAtLimit)
     assertThrows(IllegalArgumentException::class.java) {
-      EscPosRasterEncoder().bands(raster).toList()
+      EscPosRasterEncoder().bands(raster)
     }
   }
 
@@ -193,7 +286,7 @@ class EscPosRasterEncoderTest {
     val error = assertThrows(IllegalArgumentException::class.java) {
       EscPosRasterEncoder().bands(
         MonochromeRaster(maxWidthInBytes * 8, overflowingHeight, ByteArray(0)),
-      ).toList()
+      )
     }
 
     assertTrue(error.message.orEmpty().contains("too large", ignoreCase = true))

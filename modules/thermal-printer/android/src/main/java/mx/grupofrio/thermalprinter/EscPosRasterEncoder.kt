@@ -1,16 +1,64 @@
 package mx.grupofrio.thermalprinter
 
-data class MonochromeRaster(
+/**
+ * Immutable snapshot of packed monochrome pixels.
+ *
+ * Construction copies the complete input once. Reading [bytes] returns another copy, while the
+ * encoder uses bounded internal copies so it never duplicates the complete raster per band.
+ */
+class MonochromeRaster(
   val width: Int,
   val height: Int,
-  val bytes: ByteArray,
-)
+  bytes: ByteArray,
+) {
+  private val byteSnapshot = bytes.copyOf()
 
-data class RasterBand(
+  val bytes: ByteArray
+    get() = byteSnapshot.copyOf()
+
+  internal val byteCount: Int
+    get() = byteSnapshot.size
+
+  internal fun copyBytesInto(
+    destination: ByteArray,
+    destinationOffset: Int,
+    startIndex: Int,
+    endIndex: Int,
+  ) {
+    byteSnapshot.copyInto(
+      destination = destination,
+      destinationOffset = destinationOffset,
+      startIndex = startIndex,
+      endIndex = endIndex,
+    )
+  }
+}
+
+/**
+ * Immutable raster command for one contiguous row range.
+ *
+ * The public constructor snapshots [command], and every read returns a copy. The encoder can take
+ * ownership only of a newly allocated, unexposed command to avoid an otherwise redundant copy.
+ */
+class RasterBand private constructor(
   val rowOffset: Int,
   val rowCount: Int,
-  val command: ByteArray,
-)
+  command: ByteArray,
+  copyCommand: Boolean,
+) {
+  private val commandSnapshot = if (copyCommand) command.copyOf() else command
+
+  constructor(rowOffset: Int, rowCount: Int, command: ByteArray) :
+    this(rowOffset, rowCount, command, copyCommand = true)
+
+  val command: ByteArray
+    get() = commandSnapshot.copyOf()
+
+  companion object {
+    internal fun fromOwnedCommand(rowOffset: Int, rowCount: Int, command: ByteArray): RasterBand =
+      RasterBand(rowOffset, rowCount, command, copyCommand = false)
+  }
+}
 
 class EscPosRasterEncoder(private val bandRows: Int = DEFAULT_BAND_ROWS) {
   init {
@@ -20,36 +68,45 @@ class EscPosRasterEncoder(private val bandRows: Int = DEFAULT_BAND_ROWS) {
 
   fun initialize(): ByteArray = byteArrayOf(ESC, AT)
 
-  fun bands(raster: MonochromeRaster): Sequence<RasterBand> = sequence {
+  fun bands(raster: MonochromeRaster): Sequence<RasterBand> {
     val bytesPerRow = validateRaster(raster)
-    val largestBandRows = minOf(bandRows, raster.height)
+    val height = raster.height
+    val largestBandRows = minOf(bandRows, height)
     val largestPayloadSize = bytesPerRow.toLong() * largestBandRows.toLong()
     require(largestPayloadSize < MAX_BAND_PAYLOAD_BYTES) {
       "Raster band payload must be smaller than $MAX_BAND_PAYLOAD_BYTES bytes"
     }
 
-    var rowOffset = 0
-    while (rowOffset < raster.height) {
-      val rowCount = minOf(bandRows, raster.height - rowOffset)
-      val payloadSize = (bytesPerRow.toLong() * rowCount.toLong()).toInt()
-      val sourceOffset = (bytesPerRow.toLong() * rowOffset.toLong()).toInt()
-      val command = ByteArray(HEADER_SIZE + payloadSize)
+    return sequence {
+      var rowOffset = 0
+      while (rowOffset < height) {
+        val rowCount = minOf(bandRows, height - rowOffset)
+        val payloadSize = (bytesPerRow.toLong() * rowCount.toLong()).toInt()
+        val sourceOffset = (bytesPerRow.toLong() * rowOffset.toLong()).toInt()
+        val command = ByteArray(HEADER_SIZE + payloadSize)
 
-      command[0] = GS
-      command[1] = LOWERCASE_V
-      command[2] = ASCII_ZERO
-      command[3] = RASTER_MODE
-      writeUnsignedShortLittleEndian(command, WIDTH_OFFSET, bytesPerRow)
-      writeUnsignedShortLittleEndian(command, HEIGHT_OFFSET, rowCount)
-      raster.bytes.copyInto(
-        destination = command,
-        destinationOffset = HEADER_SIZE,
-        startIndex = sourceOffset,
-        endIndex = sourceOffset + payloadSize,
-      )
+        command[0] = GS
+        command[1] = LOWERCASE_V
+        command[2] = ASCII_ZERO
+        command[3] = RASTER_MODE
+        writeUnsignedShortLittleEndian(command, WIDTH_OFFSET, bytesPerRow)
+        writeUnsignedShortLittleEndian(command, HEIGHT_OFFSET, rowCount)
+        raster.copyBytesInto(
+          destination = command,
+          destinationOffset = HEADER_SIZE,
+          startIndex = sourceOffset,
+          endIndex = sourceOffset + payloadSize,
+        )
 
-      yield(RasterBand(rowOffset = rowOffset, rowCount = rowCount, command = command))
-      rowOffset += rowCount
+        yield(
+          RasterBand.fromOwnedCommand(
+            rowOffset = rowOffset,
+            rowCount = rowCount,
+            command = command,
+          ),
+        )
+        rowOffset += rowCount
+      }
     }
   }
 
@@ -68,7 +125,7 @@ class EscPosRasterEncoder(private val bandRows: Int = DEFAULT_BAND_ROWS) {
 
     val expectedLength = bytesPerRow.toLong() * raster.height.toLong()
     require(expectedLength <= Int.MAX_VALUE.toLong()) { "Raster byte length is too large for a ByteArray" }
-    require(raster.bytes.size.toLong() == expectedLength) {
+    require(raster.byteCount.toLong() == expectedLength) {
       "Raster byte length must equal bytesPerRow * height"
     }
     return bytesPerRow

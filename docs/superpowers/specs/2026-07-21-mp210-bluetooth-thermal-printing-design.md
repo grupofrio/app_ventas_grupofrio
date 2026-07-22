@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-07-21
 
-**Estado:** Diseño conversacional y revisión técnica aprobados; pendiente de aprobación final del usuario
+**Estado:** Aprobado por el usuario el 2026-07-22
 
 **Plataforma inicial:** Android
 

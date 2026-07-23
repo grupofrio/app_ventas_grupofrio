@@ -59,7 +59,7 @@ interface SalesListEntry {
   operationId: string;
   origin: 'odoo' | 'local';
   customerName: string;
-  amountTotal: number;
+  amountTotal: number | null;
   kgTotal: number | null;
   createdAtMs: number;
   localStatus?: LocalSaleStatus;
@@ -69,6 +69,14 @@ interface SalesListEntry {
 ```
 
 La cola seguirá siendo la fuente de verdad de estados locales. El ticket será la fuente preferida para nombre, total, kilogramos y detalle de líneas. Los campos `_clientCustomerName` y `_clientTotal` del payload serán fallback para ventas legacy o tickets todavía no cargados.
+
+Para un ítem legacy sin ticket ni metadatos:
+
+- `customerName` será `Cliente sin nombre`;
+- `amountTotal` y `kgTotal` serán `null`;
+- la tarjeta seguirá visible y contará como una venta pendiente;
+- su monto no se sumará al subtotal pendiente;
+- la UI mostrará `Monto no disponible`, sin inventar cero.
 
 ## Adaptación de estados
 
@@ -85,7 +93,9 @@ Solo se proyectarán ítems `sale_order`. Los eventos de foto, visita, pago, GPS
 
 ## Combinación y deduplicación
 
-La clave de conciliación será `operation_id`. Para soportar registros históricos que pudieron cambiar mayúsculas, la comparación usará `trim().toLowerCase()` exclusivamente para deduplicar; el valor original se conservará para API, almacenamiento e impresión.
+La clave de conciliación será `operation_id` cuando sea un string no vacío. Para soportar registros históricos que pudieron cambiar mayúsculas, la comparación usará `trim().toLowerCase()` exclusivamente para deduplicar; el valor original se conservará para API, almacenamiento e impresión.
+
+Un pedido remoto con `operation_id` vacío no participa en conciliación. Su clave de presentación será `odoo:<order.id>`, por lo que varios pedidos históricos sin operación permanecen separados. Una venta local siempre usa el `id` no vacío de la cola como clave `local:<operationId>`.
 
 Reglas:
 
@@ -115,12 +125,12 @@ La pantalla añadirá un resumen independiente:
 Pendiente de sincronizar: $1,250.00 · 2 ventas
 ```
 
-Se sumarán `pending`, `syncing` y `error`. `dead` se reportará además como operaciones que requieren atención y no se mezclará con el total oficial.
+Se sumarán los montos conocidos de `pending`, `syncing` y `error`. Todos esos registros cuentan en la cantidad, incluso si el monto es desconocido; la UI indicará cuántos no tienen monto. `dead` se reportará además como operaciones que requieren atención y no se mezclará con el total oficial.
 
 ## Navegación y ticket
 
 - Una tarjeta remota construye o abre el ticket desde `GFSalesOrder`, como hoy.
-- Una tarjeta local abre directamente `sale-ticket:<operationId>`.
+- Una tarjeta local carga el snapshot persistido con la clave `sale-ticket:<operationId>` y navega a `/print/<operationId>`.
 - Si el snapshot todavía no está disponible, la tarjeta permanece visible y deshabilita temporalmente la impresión con un mensaje recuperable.
 - La reimpresión posterior a sincronización usa el pedido remoto y sus precios definitivos.
 
@@ -137,22 +147,23 @@ Se sumarán `pending`, `syncing` y `error`. `dead` se reportará además como op
 1. Adaptación de cada estado de cola.
 2. Exclusión de tipos distintos a `sale_order`.
 3. Lectura preferente del ticket y fallback al payload.
-4. Deduplicación exacta y compatible con mayúsculas.
-5. El pedido remoto reemplaza la tarjeta local.
-6. Orden por fecha y filtro del día local.
-7. Pendientes no alteran los KPI oficiales.
-8. Resumen pendiente calcula cantidad y monto.
-9. Un error remoto conserva datos locales.
-10. Navegación al ticket local y remoto.
-11. Una transición a `done` dispara refresco.
-12. Suite existente de ventas, cola, rehidratación y tickets.
+4. Venta legacy sin ticket ni metadatos conserva tarjeta, cantidad y monto desconocido.
+5. Deduplicación exacta y compatible con mayúsculas.
+6. Varios pedidos remotos sin `operation_id` conservan claves distintas.
+7. El pedido remoto reemplaza la tarjeta local.
+8. Orden por fecha y filtro del día local.
+9. Pendientes no alteran los KPI oficiales.
+10. Resumen pendiente calcula cantidad, monto conocido y registros sin monto.
+11. Un error remoto conserva datos locales.
+12. Navegación al ticket local y remoto.
+13. Una transición a `done` dispara refresco.
+14. Suite existente de ventas, cola, rehidratación y tickets.
 
 ## Criterios de aceptación
 
 - La venta aparece en Ventas inmediatamente después de encolarse.
 - Su tarjeta sobrevive un reinicio mientras siga pendiente o con error.
 - El estado de sincronización es visible.
-- Nunca aparecen dos tarjetas para el mismo `operation_id`.
+- Nunca aparecen dos tarjetas para el mismo `operation_id` no vacío.
 - Pendientes no se suman a indicadores oficiales ni al corte.
 - Al confirmarse en Odoo, la tarjeta remota sustituye a la local.
-

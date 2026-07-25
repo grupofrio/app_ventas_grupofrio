@@ -50,7 +50,10 @@ import {
 } from '../../src/services/routeLoadAcceptance';
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
-import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
+import {
+  buildSaleTicketSnapshot,
+  withSaleTicketOdooFolio,
+} from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import {
@@ -453,6 +456,25 @@ function SaleScreenInner() {
     // ya bloquean el cierre/liquidación mientras haya pendientes en la cola.
     if (!isOnline) {
       try {
+        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
+      } catch (ticketError) {
+        setSaleRecoveryPersistenceFailed(true);
+        setSaleSubmitting(false);
+        logError('sync', 'offline_sale_ticket_persist_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            ticketError,
+            'Error desconocido al guardar el comprobante sin conexión.',
+          ),
+        });
+        Alert.alert(
+          'Comprobante local no guardado',
+          'No pudimos guardar de forma segura el comprobante local. La operación permanece bloqueada y se recuperará con el mismo identificador; mantén esta pantalla abierta.',
+        );
+        return;
+      }
+
+      try {
         await persistAmbiguousSaleRecovery({
           operationId: recoveryIntent.operationId,
           payload: recoveryIntent.queuePayload,
@@ -481,25 +503,7 @@ function SaleScreenInner() {
         return;
       }
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
-      try {
-        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
-        setLastSaleTicketId(operationId);
-      } catch (ticketError) {
-        setSaleRecoveryPersistenceFailed(true);
-        setSaleSubmitting(false);
-        logError('sync', 'offline_sale_ticket_persist_failed', {
-          operation_id: operationId,
-          message: safeUnknownErrorMessage(
-            ticketError,
-            'Error desconocido al guardar el comprobante sin conexión.',
-          ),
-        });
-        Alert.alert(
-          'Pedido guardado sin comprobante',
-          'El pedido quedó guardado en la cola y se enviará al reconectar, pero el comprobante local no está disponible. Mantén esta pantalla abierta para reintentar la recuperación.',
-        );
-        return;
-      }
+      setLastSaleTicketId(operationId);
       setSaleSubmitting(false);
       Alert.alert(
         'Pedido guardado',
@@ -514,8 +518,13 @@ function SaleScreenInner() {
       return;
     }
 
+    let confirmedTicketSnapshot: typeof recoveryIntent.ticketSnapshot;
     try {
-      await createSale(buildSalesCreatePayload(payload));
+      const saleResult = await createSale(buildSalesCreatePayload(payload));
+      confirmedTicketSnapshot = withSaleTicketOdooFolio(
+        recoveryIntent.ticketSnapshot,
+        saleResult.name,
+      );
     } catch (error) {
       const outcome = classifySaleSubmissionError(error);
       const metadata = readSaleSubmissionErrorMetadata(error);
@@ -570,6 +579,7 @@ function SaleScreenInner() {
       }
 
       try {
+        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
         await persistAmbiguousSaleRecovery({
           operationId: recoveryIntent.operationId,
           payload: recoveryIntent.queuePayload,
@@ -612,22 +622,7 @@ function SaleScreenInner() {
       ));
 
       useVisitStore.setState({ saleOperationId: operationId });
-      try {
-        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
-        setLastSaleTicketId(operationId);
-      } catch (ticketError) {
-        logError('sync', 'ambiguous_sale_ticket_failed', {
-          operation_id: operationId,
-          message: safeUnknownErrorMessage(
-            ticketError,
-            'Error desconocido al guardar el comprobante.',
-          ),
-        });
-        Alert.alert(
-          'Comprobante no disponible',
-          'El pedido quedó guardado para verificación, pero no pudimos guardar el comprobante local.',
-        );
-      }
+      setLastSaleTicketId(operationId);
       setSaleSubmitting(false);
       Alert.alert(
         'Pedido pendiente de verificación',
@@ -674,7 +669,7 @@ function SaleScreenInner() {
         enqueue,
         imageType: 'sale',
       });
-      await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
+      await saveSaleTicketSnapshot(confirmedTicketSnapshot);
       setLastSaleTicketId(operationId);
     } catch (error) {
       const message = safeUnknownErrorMessage(

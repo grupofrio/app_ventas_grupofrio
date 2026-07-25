@@ -89,6 +89,7 @@ import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
+import { promoteStoredSaleTicketOdooFolio } from '../services/saleTicketStorage';
 
 // ═══ Constants ═══
 
@@ -1220,7 +1221,16 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // write required ACLs the driver user doesn't have and failed
       // noisily. The REST endpoint also tolerates obsolete stop_id
       // (treated as offroute server-side).
-      await createSale(buildSalesCreatePayload(payload as Record<string, unknown>), meta);
+      const saleResult = await createSale(
+        buildSalesCreatePayload(payload as Record<string, unknown>),
+        meta,
+      );
+      const promotion = await promoteStoredSaleTicketOdooFolio(item.id, saleResult.name);
+      if (promotion === 'missing') {
+        logWarn('sync', 'sale_ticket_odoo_folio_missing', {
+          operation_id: item.id,
+        });
+      }
       break;
 
     case 'checkin':

@@ -98,12 +98,31 @@ function tryCatchContaining(source, needle, fromIndex = 0) {
 // post-confirmacion y no pueden convertir una venta valida en un reintento.
 const createPhase = tryCatchContaining(
   sale,
-  'await createSale(buildSalesCreatePayload(payload));',
+  'const saleResult = await createSale(buildSalesCreatePayload(payload));',
 );
 assert.doesNotMatch(
   createPhase.tryBody,
   /enqueueVisitPhotos|saveSaleTicketSnapshot/,
   'el try de createSale debe terminar antes de fotos y ticket online',
+);
+const resultCaptureIndex = createPhase.tryBody.indexOf(
+  'const saleResult = await createSale(buildSalesCreatePayload(payload));',
+);
+const confirmedSnapshotIndex = createPhase.tryBody.indexOf(
+  'confirmedTicketSnapshot = withSaleTicketOdooFolio(',
+);
+assert(
+  resultCaptureIndex >= 0 && confirmedSnapshotIndex > resultCaptureIndex,
+  'el ticket oficial se promueve solamente después del resultado validado de Odoo',
+);
+assert.match(
+  createPhase.tryBody,
+  /confirmedTicketSnapshot = withSaleTicketOdooFolio\(\s*recoveryIntent\.ticketSnapshot,\s*saleResult\.name,?\s*\)/,
+);
+assert.doesNotMatch(
+  sale,
+  /recoveryIntent\.ticketSnapshot\.(?:odooFolio|name)\s*=|recoveryIntent\.ticketSnapshot\s*=/,
+  'el snapshot del intent durable debe permanecer pendiente e inmutable',
 );
 
 const lockBarrierPhase = tryCatchContaining(
@@ -315,8 +334,8 @@ assert.doesNotMatch(
 assert.match(recoveryPhase.catchBody, /return;/);
 assert.match(
   recoveryPhase.tryBody,
-  /await persistAmbiguousSaleRecovery\(\{[\s\S]*?setSaleRecoveryPersistenceFailed\(false\)/,
-  'la recuperacion durable conserva el flag desbloqueado',
+  /await saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?setSaleRecoveryPersistenceFailed\(false\)/,
+  'el ticket pendiente se guarda antes de persistir y liberar la cola ambigua',
 );
 assert.doesNotMatch(
   recoveryPhase.catchBody,
@@ -325,10 +344,15 @@ assert.doesNotMatch(
 );
 
 const recoveryCallIndex = createPhase.catchBody.indexOf('await persistAmbiguousSaleRecovery({');
+const recoveryTicketSaveIndex = createPhase.catchBody.indexOf(
+  'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
+);
 const processQueueIndex = createPhase.catchBody.indexOf('void processQueue().catch', recoveryCallIndex);
 assert(
-  processQueueIndex > recoveryPhase.tryEnd,
-  'processQueue solo puede arrancar despues de esperar la persistencia durable',
+  recoveryTicketSaveIndex >= recoveryPhase.tryStart
+    && recoveryTicketSaveIndex < recoveryCallIndex
+    && processQueueIndex > recoveryPhase.tryEnd,
+  'ticket, persistencia durable y processQueue conservan el orden sin carrera',
 );
 assert.doesNotMatch(recoveryPhase.tryBody, /processQueue/);
 assert.doesNotMatch(
@@ -347,10 +371,10 @@ assert.match(
 
 const ambiguousSuccess = createPhase.catchBody.slice(recoveryPhase.catchEnd + 1);
 assert.match(ambiguousSuccess, /saleOperationId:\s*operationId/);
-assert.match(
+assert.doesNotMatch(
   ambiguousSuccess,
   /saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/,
-  'ticket ambiguo usa el identificador original',
+  'el ticket ambiguo no se guarda por duplicado después de arrancar la cola',
 );
 assert.match(
   ambiguousSuccess,
@@ -361,20 +385,10 @@ assert.match(ambiguousSuccess, /setAfterSaleAction\(['"]route['"]\)/);
 assert.match(ambiguousSuccess, /setAfterSaleAction\(['"]checkout['"]\)/);
 assert.match(ambiguousSuccess, /return;/);
 
-const ambiguousTicket = tryCatchContaining(
-  createPhase.catchBody,
-  'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
-);
-assert.match(
-  ambiguousTicket.catchBody,
-  /logError\(\s*['"]sync['"],\s*['"]ambiguous_sale_ticket_failed['"],[\s\S]*?operation_id:\s*operationId/,
-);
-assert.match(ambiguousTicket.catchBody, /Alert\.alert\(/);
-assert.match(ambiguousTicket.catchBody, /safeUnknownErrorMessage\(\s*ticketError,/);
 assert.doesNotMatch(
-  ambiguousTicket.catchBody,
-  /unlockSaleConfirm|enqueue\(\s*['"]sale_order['"]|return;|instanceof\s+Error|\bString\s*\(/,
-  'fallar el ticket ambiguo no desbloquea, reencola ni evita la ruta pendiente',
+  createPhase.catchBody,
+  /ambiguous_sale_ticket_failed/,
+  'el flujo ambiguo elimina el catch tardío del guardado duplicado',
 );
 
 const postConfirmationNeedleIndex = sale.indexOf(
@@ -393,7 +407,15 @@ const postConfirmation = tryCatchContaining(
 );
 assert(postConfirmation.tryStart > createPhase.catchEnd);
 assert(postConfirmation.tryStart > terminalMarkerPhase.catchEnd);
-assert.match(postConfirmation.tryBody, /saveSaleTicketSnapshot/);
+assert.match(
+  postConfirmation.tryBody,
+  /saveSaleTicketSnapshot\(confirmedTicketSnapshot\)/,
+  'el guardado post-confirmación usa el snapshot con folio oficial',
+);
+assert.doesNotMatch(
+  postConfirmation.tryBody,
+  /saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/,
+);
 assert.match(
   postConfirmation.catchBody,
   /logError\(\s*['"]sync['"],\s*['"]sale_post_confirmation_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message(?:\s*:|\s*,)/,

@@ -4,6 +4,9 @@
 import assert from 'node:assert/strict';
 
 interface Mod {
+  findSaleQuantityIssues: (
+    lines: Array<{ productId: number; productName: string; qty: number; stock?: number | null }>,
+  ) => Array<{ productId: number; kind: string; requested: number }>;
   findFreshStockIssues: (
     lines: Array<{ productId: number; productName: string; qty: number }>,
     products: Array<{ id: number; qty_display?: number }>,
@@ -17,6 +20,23 @@ function run(m: Mod) {
     { id: 20, qty_display: 0 },
     { id: 30, qty_display: 100 },
   ];
+
+  const staleCapturedLine = {
+    productId: 10,
+    productName: 'A',
+    qty: 5,
+    stock: 1,
+  };
+  assert.equal(m.findSaleQuantityIssues([staleCapturedLine]).length, 0);
+  assert.equal(m.findFreshStockIssues([staleCapturedLine], [
+    { id: 10, qty_display: 10 },
+  ]).length, 0);
+  assert.equal(m.findFreshStockIssues([staleCapturedLine], [
+    { id: 10, qty_display: 4 },
+  ])[0].kind, 'over_stock');
+  assert.equal(m.findSaleQuantityIssues([
+    { ...staleCapturedLine, qty: 1.5 },
+  ])[0].kind, 'invalid_qty');
 
   // OK: qty <= fresh stock
   assert.equal(m.findFreshStockIssues([{ productId: 10, productName: 'A', qty: 5 }], products).length, 0);

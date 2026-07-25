@@ -31,12 +31,18 @@ import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
-import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import {
+  findFreshStockIssues,
+  findSaleQuantityIssues,
+} from '../../src/services/saleStockValidation';
+import {
+  captureSaleSubmissionInput,
   decideSaleStockEnforcement,
   isApplicableAuthoritativeSaleInventory,
   isApplicableSaleSubmissionContext,
+  isSameSaleSubmissionInput,
   isSameSaleConfirmationContext,
+  type CapturedSaleSubmissionInput,
   type SaleConfirmationContext,
 } from '../../src/services/saleStockEnforcement';
 import type { InventoryLoadResult } from '../../src/services/legacyRefreshRunner';
@@ -132,14 +138,31 @@ function readLiveSaleInventoryAuthority() {
   };
 }
 
+function readLiveSaleSubmissionInput(): CapturedSaleSubmissionInput {
+  const visit = useVisitStore.getState();
+  return captureSaleSubmissionInput({
+    saleLines: visit.saleLines,
+    salePaymentMethod: visit.salePaymentMethod,
+    salePhotoTaken: visit.salePhotoTaken,
+    salePhotoUri: visit.salePhotoUri,
+    salePhotoUris: visit.salePhotoUris,
+  });
+}
+
 function isLiveSaleSubmissionContextApplicable(
   expectedContext: SaleConfirmationContext,
+  expectedInput?: CapturedSaleSubmissionInput,
 ): boolean {
-  return isApplicableSaleSubmissionContext({
+  const contextApplicable = isApplicableSaleSubmissionContext({
     expectedContext,
     currentContext: readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
     inventory: readLiveSaleInventoryAuthority(),
   });
+  return contextApplicable
+    && (
+      expectedInput === undefined
+      || isSameSaleSubmissionInput(expectedInput, readLiveSaleSubmissionInput())
+    );
 }
 
 function SaleScreenInner() {
@@ -328,8 +351,6 @@ function SaleScreenInner() {
 
   // V1.2: Stock validation + anti-duplicate
   const saleConfirmed = useVisitStore((s) => s.saleConfirmed);
-  const hasStockIssues = useVisitStore((s) => s.hasStockIssues);
-  const getStockIssues = useVisitStore((s) => s.getStockIssues);
   const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
   const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
   const persistSaleConfirmationLock = useVisitStore((s) => s.persistSaleConfirmationLock);
@@ -341,9 +362,7 @@ function SaleScreenInner() {
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
-  const enforceCapturedStock = saleStockEnforcement.enforceFreshStock;
-  const stockIssues = getStockIssues({ enforceStock: enforceCapturedStock });
-  const hasStock = !hasStockIssues({ enforceStock: enforceCapturedStock });
+  const quantityIssues = findSaleQuantityIssues(saleLines);
   const implicitAnalytics = resolveImplicitSaleAnalytics({
     employeeAnalyticPlazaId,
   });
@@ -399,7 +418,7 @@ function SaleScreenInner() {
     updateSaleQty(
       productId,
       digits ? Number(digits) : 0,
-      { enforceStock: enforceCapturedStock },
+      { enforceStock: false },
     );
   }
 
@@ -433,6 +452,7 @@ function SaleScreenInner() {
     if (!stop) return;
 
     const confirmationContext = readLiveSaleConfirmationContext(stop.id);
+    const confirmationInput = readLiveSaleSubmissionInput();
     const confirmationIsOnline = confirmationContext.isOnline;
     if (
       (confirmationIsOnline !== true && confirmationIsOnline !== false)
@@ -471,7 +491,7 @@ function SaleScreenInner() {
         const inventoryRefreshApplicable = await refreshInventoryAuthority(confirmationContext);
         if (
           !inventoryRefreshApplicable
-          || !isLiveSaleSubmissionContextApplicable(confirmationContext)
+          || !isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)
         ) {
           Alert.alert(
             'Contexto actualizado',
@@ -495,7 +515,7 @@ function SaleScreenInner() {
         return;
       }
     }
-    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)) {
       Alert.alert(
         'Contexto actualizado',
         'La sesión, ruta, conexión o inventario cambió. Revisa la venta y vuelve a confirmar.',
@@ -503,16 +523,11 @@ function SaleScreenInner() {
       return;
     }
 
-    const liveStockIssues = useVisitStore.getState().getStockIssues({
-      enforceStock: liveStockEnforcement.enforceFreshStock,
-    });
-    const liveHasStock = liveStockIssues.length === 0;
-    if (!liveHasStock) {
+    const quantityIssues = findSaleQuantityIssues(confirmationInput.saleLines);
+    if (quantityIssues.length > 0) {
       Alert.alert(
-        'Stock insuficiente',
-        liveStockIssues.map((i) =>
-          `${i.name}: pides ${i.requested}, disponible ${i.available}`
-        ).join('\n'),
+        'Cantidad inválida',
+        quantityIssues.map((issue) => `${issue.name}: cantidad inválida`).join('\n'),
       );
       return;
     }
@@ -522,7 +537,7 @@ function SaleScreenInner() {
     // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
     // localmente ni reemplaza la validación backend.
     const freshIssues = liveStockEnforcement.enforceFreshStock
-      ? findFreshStockIssues(saleLines, useProductStore.getState().products)
+      ? findFreshStockIssues(confirmationInput.saleLines, useProductStore.getState().products)
       : [];
     if (freshIssues.length > 0) {
       Alert.alert(
@@ -536,12 +551,14 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!(saleLines.length > 0 && salePhotoTaken && salePaymentMethod
+    if (!(confirmationInput.saleLines.length > 0
+      && confirmationInput.salePhotoTaken
+      && confirmationInput.salePaymentMethod
       && hasAnalyticSelection && hasWarehouse)) {
       const missing = [];
-      if (saleLines.length === 0) missing.push('productos');
-      if (!salePhotoTaken) missing.push('foto de entrega');
-      if (!salePaymentMethod) missing.push('metodo de pago');
+      if (confirmationInput.saleLines.length === 0) missing.push('productos');
+      if (!confirmationInput.salePhotoTaken) missing.push('foto de entrega');
+      if (!confirmationInput.salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       if (!hasWarehouse) missing.push('almacén del empleado');
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
@@ -553,7 +570,7 @@ function SaleScreenInner() {
       Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
       return;
     }
-    const confirmedPaymentMethod = salePaymentMethod;
+    const confirmedPaymentMethod = confirmationInput.salePaymentMethod;
     if (!confirmedPaymentMethod) return;
 
     if (useVisitStore.getState().saleConfirmed) return;
@@ -605,7 +622,7 @@ function SaleScreenInner() {
       Alert.alert('Venta rechazada', message);
       return;
     }
-    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)) {
       setSaleSubmitting(false);
       saleConfirmationSingleFlight.release();
       unlockSaleConfirm();
@@ -627,9 +644,9 @@ function SaleScreenInner() {
       analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
       analytic_un_id: implicitAnalytics.analytic_un_id,
       analytic_distribution: implicitAnalytics.analytic_distribution,
-      payment_method: salePaymentMethod,
-      create_invoice: salePaymentMethod === 'cash',
-      lines: saleLines.map((l) => ({
+      payment_method: confirmedPaymentMethod,
+      create_invoice: confirmedPaymentMethod === 'cash',
+      lines: confirmationInput.saleLines.map((l) => ({
         product_id: l.productId,
         quantity: l.qty,
         discount: 0,
@@ -641,7 +658,17 @@ function SaleScreenInner() {
       sellerName: employeeName,
       paymentMethod: confirmedPaymentMethod,
       createdAt: new Date().toISOString(),
-      lines: saleLines,
+      lines: confirmationInput.saleLines.map((line) => ({
+        productId: line.productId,
+        productName: line.productName,
+        price: line.price,
+        ...(line.priceSource === null ? {} : { priceSource: line.priceSource }),
+        priceCapturedAtMs: line.priceCapturedAtMs,
+        pricelistId: line.pricelistId,
+        qty: line.qty,
+        stock: line.stock,
+        weight: line.weight,
+      })),
     });
     const recoveryIntent = createSaleRecoveryIntent({
       version: 1,
@@ -649,11 +676,11 @@ function SaleScreenInner() {
       queuePayload: {
         ...payload,
         _clientCustomerName: stop.customer_name,
-        _clientTotal: total,
+        _clientTotal: confirmationInput.total,
       },
       stopId: confirmationStopId,
       ticketSnapshot,
-      photoUris: [...salePhotoUris],
+      photoUris: [...confirmationInput.salePhotoUris],
     });
 
     logInfo('general', 'sale_confirm_payload', {
@@ -693,7 +720,7 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)) {
       try {
         const cleared = await clearSaleConfirmationLock(operationId);
         if (!cleared) {
@@ -760,7 +787,17 @@ function SaleScreenInner() {
         return;
       }
       try {
-        await recordRecentProducts(saleLines);
+        await recordRecentProducts(confirmationInput.saleLines.map((line) => ({
+          productId: line.productId,
+          productName: line.productName,
+          price: line.price,
+          ...(line.priceSource === null ? {} : { priceSource: line.priceSource }),
+          priceCapturedAtMs: line.priceCapturedAtMs,
+          pricelistId: line.pricelistId,
+          qty: line.qty,
+          stock: line.stock,
+          weight: line.weight,
+        })));
       } catch (recentError) {
         logWarn('inventory', 'offline_sale_recent_products_failed', {
           operation_id: operationId,
@@ -873,7 +910,17 @@ function SaleScreenInner() {
       }
 
       try {
-        await recordRecentProducts(saleLines);
+        await recordRecentProducts(confirmationInput.saleLines.map((line) => ({
+          productId: line.productId,
+          productName: line.productName,
+          price: line.price,
+          ...(line.priceSource === null ? {} : { priceSource: line.priceSource }),
+          priceCapturedAtMs: line.priceCapturedAtMs,
+          pricelistId: line.pricelistId,
+          qty: line.qty,
+          stock: line.stock,
+          weight: line.weight,
+        })));
       } catch (recentError) {
         logWarn('inventory', 'ambiguous_sale_recent_products_failed', {
           operation_id: operationId,
@@ -955,7 +1002,7 @@ function SaleScreenInner() {
     try {
       enqueueVisitPhotos({
         stopId: confirmationStopId,
-        photoUris: salePhotoUris,
+        photoUris: [...confirmationInput.salePhotoUris],
         enqueue,
         imageType: 'sale',
       });
@@ -1041,7 +1088,7 @@ function SaleScreenInner() {
                 <Text style={styles.productInfo}>
                   {formatCatalogPrice(line.price)} · {line.stock === null
                     ? 'Stock sin validar'
-                    : `Stock: ${line.stock}${!enforceCapturedStock ? ' · ref.' : ''}`}
+                    : `Stock: ${line.stock} · ref.`}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
@@ -1050,7 +1097,7 @@ function SaleScreenInner() {
                   onPress={() => updateSaleQty(
                     line.productId,
                     line.qty - 1,
-                    { enforceStock: enforceCapturedStock },
+                    { enforceStock: false },
                   )}
                 >
                   <Text style={styles.qtyBtnText}>−</Text>
@@ -1070,7 +1117,7 @@ function SaleScreenInner() {
                   onPress={() => updateSaleQty(
                     line.productId,
                     line.qty + 1,
-                    { enforceStock: enforceCapturedStock },
+                    { enforceStock: false },
                   )}
                 >
                   <Text style={styles.qtyBtnText}>+</Text>
@@ -1222,13 +1269,13 @@ function SaleScreenInner() {
           </View>
         )}
 
-        {/* V1.2: Stock issues warning */}
-        {stockIssues.length > 0 && (
+        {/* Cantidad local inválida; el stock se valida con inventario fresco al confirmar. */}
+        {quantityIssues.length > 0 && (
           <View style={styles.stockWarning}>
-            <Text style={styles.stockWarningTitle}>⚠️ Stock insuficiente</Text>
-            {stockIssues.map((issue) => (
+            <Text style={styles.stockWarningTitle}>⚠️ Cantidad inválida</Text>
+            {quantityIssues.map((issue) => (
               <Text key={issue.productId} style={styles.stockWarningLine}>
-                {issue.name}: pides {issue.requested}, disponible {issue.available}
+                {issue.name}: usa piezas enteras mayores a cero
               </Text>
             ))}
           </View>
@@ -1281,7 +1328,7 @@ function SaleScreenInner() {
         {!saleConfirmed && (() => {
           const reason = describeSaleConfirmBlock({
             hasLines: saleLines.length > 0,
-            hasStock,
+            hasValidQuantities: quantityIssues.length === 0,
             photoTaken: salePhotoTaken,
             paymentSelected: !!salePaymentMethod,
             hasPlaza: !!implicitAnalytics.analytic_plaza_id,

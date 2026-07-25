@@ -16,7 +16,7 @@ interface Mod {
     accuracyMeters?: number | null; withinThresholdMeters?: number; lowAccuracyMeters?: number;
   }) => { tone: string; label: string; withinRange: boolean; distanceKnown: boolean; distanceMeters: number | null };
   describeSaleConfirmBlock: (i: {
-    hasLines: boolean; hasStock: boolean; photoTaken: boolean; paymentSelected: boolean;
+    hasLines: boolean; hasValidQuantities: boolean; photoTaken: boolean; paymentSelected: boolean;
     hasPlaza: boolean; hasWarehouse: boolean; routeLoadAccepted: boolean;
   }) => string | null;
   describeRetryBlock: (i: { isOnline: boolean; pendingCount: number; isSyncing: boolean }) => string | null;
@@ -116,25 +116,25 @@ function testGeoNoFictitiousDistance(m: Mod) {
 function testDisabledReasons(m: Mod) {
   // Sin líneas → null (no se muestra hint).
   assert.equal(m.describeSaleConfirmBlock({
-    hasLines: false, hasStock: true, photoTaken: true, paymentSelected: true,
+    hasLines: false, hasValidQuantities: true, photoTaken: true, paymentSelected: true,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }), null);
   // Todo OK → null.
   assert.equal(m.describeSaleConfirmBlock({
-    hasLines: true, hasStock: true, photoTaken: true, paymentSelected: true,
+    hasLines: true, hasValidQuantities: true, photoTaken: true, paymentSelected: true,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }), null);
-  // Orden de prioridad: stock → foto → pago.
+  // Orden de prioridad: cantidad → foto → pago.
   assert.match(m.describeSaleConfirmBlock({
-    hasLines: true, hasStock: false, photoTaken: false, paymentSelected: false,
+    hasLines: true, hasValidQuantities: false, photoTaken: false, paymentSelected: false,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
-  }) ?? '', /stock/i);
+  }) ?? '', /cantidades/i);
   assert.match(m.describeSaleConfirmBlock({
-    hasLines: true, hasStock: true, photoTaken: false, paymentSelected: false,
+    hasLines: true, hasValidQuantities: true, photoTaken: false, paymentSelected: false,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }) ?? '', /foto/i);
   assert.match(m.describeSaleConfirmBlock({
-    hasLines: true, hasStock: true, photoTaken: true, paymentSelected: false,
+    hasLines: true, hasValidQuantities: true, photoTaken: true, paymentSelected: false,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }) ?? '', /pago/i);
 

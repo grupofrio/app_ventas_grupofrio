@@ -51,10 +51,10 @@ assert.match(
   /const saleStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline,[\s\S]*?policy:\s*'offline_sale',[\s\S]*?inventoryFreshness,[\s\S]*?\}\)/,
   'venta debe decidir conectividad y autoridad mediante el helper puro',
 );
-assert.match(
+assert.doesNotMatch(
   sale,
-  /const enforceCapturedStock\s*=\s*saleStockEnforcement\.enforceFreshStock/,
-  'la pantalla debe consumir el resultado del helper sin duplicar la fórmula',
+  /enforceCapturedStock|hasStockIssues|getStockIssues/,
+  'la pantalla de venta no debe tratar line.stock capturado como autoridad online',
 );
 assert.match(
   saleStockEnforcement,
@@ -62,10 +62,11 @@ assert.match(
   'la política estricta debe conservar su validación de stock existente',
 );
 assert.match(sale, /stockPolicy="offline_sale"/);
-assert.match(sale, /updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*enforceCapturedStock\s*\},?\s*\)/);
-assert.match(sale, /hasStockIssues\(\{\s*enforceStock:\s*enforceCapturedStock\s*\}\)/);
-assert.match(sale, /getStockIssues\(\{\s*enforceStock:\s*enforceCapturedStock\s*\}\)/);
-assert.match(sale, /line\.stock\s*===\s*null[\s\S]*?Stock sin validar/);
+assert.match(sale, /const quantityIssues\s*=\s*findSaleQuantityIssues\(saleLines\)/);
+assert.match(sale, /updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*false\s*\},?\s*\)/);
+assert.match(sale, /line\.stock\s*===\s*null[\s\S]*?Stock sin validar[\s\S]*?Stock:\s*\$\{line\.stock\}\s*·\s*ref\./);
+assert.match(sale, /quantityIssues\.length\s*>\s*0[\s\S]*?Cantidad inválida/);
+assert.match(sale, /hasValidQuantities:\s*quantityIssues\.length\s*===\s*0/);
 
 assert.doesNotMatch(presale, /stockPolicy=/, 'preventa debe conservar política estricta');
 assert.doesNotMatch(consignment, /stockPolicy=/, 'consignación debe conservar política estricta');

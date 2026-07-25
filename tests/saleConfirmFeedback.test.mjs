@@ -111,12 +111,12 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /payment_method:\s*salePaymentMethod/,
+    /payment_method:\s*confirmedPaymentMethod/,
     'La venta debe enviar al backend el metodo seleccionado para que efectivo cree pago atomico',
   );
   assert.match(
     saleScreen,
-    /create_invoice:\s*salePaymentMethod === 'cash'/,
+    /create_invoice:\s*confirmedPaymentMethod === 'cash'/,
     'Una venta en efectivo debe pedir al backend generar el account.move',
   );
   assert.doesNotMatch(

@@ -221,7 +221,7 @@ export function describeGeoStatus(input: {
 /** Razón por la que "Confirmar venta" está bloqueado, o null si se puede. */
 export function describeSaleConfirmBlock(input: {
   hasLines: boolean;
-  hasStock: boolean;
+  hasValidQuantities: boolean;
   photoTaken: boolean;
   paymentSelected: boolean;
   hasPlaza: boolean;
@@ -229,7 +229,7 @@ export function describeSaleConfirmBlock(input: {
   routeLoadAccepted: boolean;
 }): string | null {
   if (!input.hasLines) return null; // sin líneas no se muestra hint (igual que hoy)
-  if (!input.hasStock) return '⚠️ Ajusta cantidades al stock disponible';
+  if (!input.hasValidQuantities) return '⚠️ Usa cantidades enteras mayores a cero';
   if (!input.photoTaken) return '📸 Toma la foto de entrega';
   if (!input.paymentSelected) return '💰 Selecciona método de pago';
   if (!input.hasPlaza) return '📍 Configura la plaza del empleado';

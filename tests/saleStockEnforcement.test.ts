@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  captureSaleSubmissionInput,
+  createSaleSubmissionFingerprint,
   decideSaleStockEnforcement,
   isApplicableAuthoritativeSaleInventory,
   isApplicableSaleSubmissionContext,
+  isSameSaleSubmissionInput,
   isSameSaleConfirmationContext,
   shouldEnforceFreshSaleStock,
   type SaleConfirmationContext,
+  type SaleSubmissionInput,
 } from '../src/services/saleStockEnforcement.ts';
 
 const confirmationContext: SaleConfirmationContext = {
@@ -328,4 +332,85 @@ test('offline submission ignores inventory authority only while its live context
     currentContext: { ...offlineContext, isOnline: true },
     inventory: cachedInventory,
   }), false);
+});
+
+const saleSubmissionInput: SaleSubmissionInput = {
+  saleLines: [{
+    productId: 10,
+    productName: 'Producto reservado',
+    price: 42.5,
+    priceSource: 'prepared_customer',
+    priceCapturedAtMs: 1_725_000_000_000,
+    pricelistId: 5,
+    qty: 3,
+    stock: 1,
+    weight: 5,
+  }],
+  salePaymentMethod: 'cash',
+  salePhotoTaken: true,
+  salePhotoUri: 'file:///private/proof-primary.jpg?token=secret-value',
+  salePhotoUris: [
+    'file:///private/proof-primary.jpg?token=secret-value',
+    'file:///private/proof-secondary.jpg',
+  ],
+};
+
+test('captures a deep immutable sale input with a deterministic opaque fingerprint', () => {
+  const mutableInput = structuredClone(saleSubmissionInput);
+  const captured = captureSaleSubmissionInput(mutableInput);
+  const same = captureSaleSubmissionInput(structuredClone(saleSubmissionInput));
+
+  assert.equal(Object.isFrozen(captured), true);
+  assert.equal(Object.isFrozen(captured.saleLines), true);
+  assert.equal(Object.isFrozen(captured.saleLines[0]), true);
+  assert.equal(Object.isFrozen(captured.salePhotoUris), true);
+  assert.equal(captured.fingerprint, same.fingerprint);
+  assert.equal(isSameSaleSubmissionInput(captured, same), true);
+  assert.match(captured.fingerprint, /^sale_input_v1_[0-9a-f]+$/);
+  assert.equal(captured.fingerprint.includes('secret-value'), false);
+  assert.equal(captured.fingerprint.includes('Producto reservado'), false);
+  assert.equal(
+    captured.fingerprint,
+    createSaleSubmissionFingerprint(saleSubmissionInput),
+  );
+
+  mutableInput.saleLines[0].qty = 99;
+  mutableInput.salePhotoUris[0] = 'file:///mutated.jpg';
+  assert.equal(captured.saleLines[0].qty, 3);
+  assert.equal(captured.salePhotoUris[0], saleSubmissionInput.salePhotoUris[0]);
+});
+
+test('rejects cart, payment, and proof mutations across awaited boundaries', () => {
+  const captured = captureSaleSubmissionInput(saleSubmissionInput);
+  const mutations: SaleSubmissionInput[] = [
+    {
+      ...saleSubmissionInput,
+      saleLines: [{ ...saleSubmissionInput.saleLines[0], qty: 4 }],
+    },
+    {
+      ...saleSubmissionInput,
+      saleLines: [{ ...saleSubmissionInput.saleLines[0], price: 43 }],
+    },
+    {
+      ...saleSubmissionInput,
+      saleLines: [{
+        ...saleSubmissionInput.saleLines[0],
+        priceSource: 'last_known_customer',
+      }],
+    },
+    { ...saleSubmissionInput, salePaymentMethod: 'credit' },
+    { ...saleSubmissionInput, salePhotoTaken: false },
+    { ...saleSubmissionInput, salePhotoUri: 'file:///private/other.jpg' },
+    {
+      ...saleSubmissionInput,
+      salePhotoUris: [...saleSubmissionInput.salePhotoUris].reverse(),
+    },
+  ];
+
+  for (const mutation of mutations) {
+    assert.equal(isSameSaleSubmissionInput(
+      captured,
+      captureSaleSubmissionInput(mutation),
+    ), false);
+  }
 });

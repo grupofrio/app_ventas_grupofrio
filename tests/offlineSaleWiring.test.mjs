@@ -309,27 +309,37 @@ assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhot
 const confirmBody = extractBracedBlockAfter(sale, 'async function handleConfirm()');
 assert.match(
   confirmBody,
-  /const confirmationContext = readLiveSaleConfirmationContext\(stop\.id\);[\s\S]*?const confirmationIsOnline = confirmationContext\.isOnline;/,
-  'handleConfirm debe capturar conectividad, sesión, almacén y parada una sola vez al inicio',
+  /const confirmationContext = readLiveSaleConfirmationContext\(stop\.id\);[\s\S]*?const confirmationInput = readLiveSaleSubmissionInput\(\);[\s\S]*?const confirmationIsOnline = confirmationContext\.isOnline;/,
+  'handleConfirm debe capturar contexto y entrada de venta vivos una sola vez al inicio',
 );
 const authorityGuardIdx = confirmBody.indexOf('if (!liveStockEnforcement.allowConfirm)');
-const capturedStockGuardIdx = confirmBody.indexOf('if (!liveHasStock)');
+const quantityGuardIdx = confirmBody.indexOf('if (quantityIssues.length > 0)');
 const freshStockGuardIdx = confirmBody.indexOf('findFreshStockIssues(');
 assert(
   authorityGuardIdx >= 0
-    && capturedStockGuardIdx > authorityGuardIdx
+    && quantityGuardIdx > authorityGuardIdx
     && freshStockGuardIdx > authorityGuardIdx,
-  'handleConfirm debe resolver autoridad antes de cualquier alerta de stock insuficiente',
+  'handleConfirm debe resolver autoridad antes de validar cantidades o stock fresco',
 );
 assert.match(
   confirmBody,
-  /await refreshInventoryAuthority\(confirmationContext\);[\s\S]*?isLiveSaleSubmissionContextApplicable\(confirmationContext\)[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement/,
+  /await refreshInventoryAuthority\(confirmationContext\);[\s\S]*?isLiveSaleSubmissionContextApplicable\(confirmationContext, confirmationInput\)[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement/,
   'después del refresh debe releer conectividad y autoridad vivas antes de continuar',
 );
 assert.match(
   confirmBody,
-  /getStockIssues\(\{\s*enforceStock:\s*liveStockEnforcement\.enforceFreshStock,?\s*\}\)/,
-  'la validación capturada debe usar la política viva y conservar cantidades positivas offline',
+  /findSaleQuantityIssues\(confirmationInput\.saleLines\)/,
+  'la primera barrera debe validar sólo integridad de cantidades del snapshot',
+);
+assert.doesNotMatch(
+  confirmBody,
+  /getStockIssues\(/,
+  'la confirmación no debe comparar contra line.stock capturado antes del stock fresco',
+);
+assert.match(
+  confirmBody,
+  /findFreshStockIssues\(confirmationInput\.saleLines,\s*useProductStore\.getState\(\)\.products\)/,
+  'el inventario autoritativo recién cargado debe ser la única barrera online de stock',
 );
 assert.match(
   confirmBody,
@@ -345,11 +355,11 @@ const pricingAwaitIdx = confirmBody.indexOf('await getPartnerPricelistId(');
 const lockPersistIdx = confirmBody.indexOf('await persistSaleConfirmationLock(');
 const branchIdx = confirmBody.indexOf('if (confirmationIsOnline === false)');
 const guardAfterPricingIdx = confirmBody.indexOf(
-  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext))',
+  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput))',
   pricingAwaitIdx,
 );
 const guardAfterLockIdx = confirmBody.indexOf(
-  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext))',
+  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput))',
   lockPersistIdx,
 );
 assert(
@@ -390,6 +400,26 @@ assert.doesNotMatch(
   /persistAmbiguousSaleRecovery|createSale\(|recordRecentProducts/,
   'un fallo de autoridad tras el lock no debe enviar, encolar ni registrar recientes',
 );
+assert.match(
+  sale,
+  /function readLiveSaleSubmissionInput\(\)[\s\S]*?useVisitStore\.getState\(\)[\s\S]*?captureSaleSubmissionInput\(\{[\s\S]*?saleLines:[\s\S]*?salePaymentMethod:[\s\S]*?salePhotoTaken:[\s\S]*?salePhotoUri:[\s\S]*?salePhotoUris:/,
+  'el snapshot debe salir del estado vivo e incluir carrito, pago y toda la evidencia',
+);
+assert.match(
+  confirmBody,
+  /payment_method:\s*confirmedPaymentMethod[\s\S]*?lines:\s*confirmationInput\.saleLines\.map/,
+  'el payload debe usar pago y líneas del snapshot capturado',
+);
+assert.match(
+  confirmBody,
+  /buildSaleTicketSnapshot\(\{[\s\S]*?lines:\s*confirmationInput\.saleLines\.map/,
+  'el ticket debe usar líneas del mismo snapshot',
+);
+assert.match(
+  confirmBody,
+  /photoUris:\s*\[\.\.\.confirmationInput\.salePhotoUris\][\s\S]*?recordRecentProducts\(confirmationInput\.saleLines\.map/,
+  'recovery y recientes deben reutilizar el snapshot inmutable',
+);
 
 assert.match(
   sale,
@@ -408,7 +438,10 @@ assert.match(
 );
 
 const offlineRecoveryIdx = sale.indexOf('await persistAmbiguousSaleRecovery({');
-const recentRecordIdx = sale.indexOf('await recordRecentProducts(saleLines);', offlineRecoveryIdx);
+const recentRecordIdx = sale.indexOf(
+  'await recordRecentProducts(confirmationInput.saleLines.map',
+  offlineRecoveryIdx,
+);
 const offlineTicketIdx = sale.indexOf('await saveSaleTicketSnapshot(', offlineRecoveryIdx);
 assert(
   offlineRecoveryIdx >= 0
@@ -418,7 +451,7 @@ assert(
 );
 assert.match(
   sale.slice(offlineRecoveryIdx, offlineTicketIdx),
-  /try \{[\s\S]*?await recordRecentProducts\(saleLines\);[\s\S]*?\} catch \(recentError\) \{[\s\S]*?logWarn\(/,
+  /try \{[\s\S]*?await recordRecentProducts\(confirmationInput\.saleLines\.map[\s\S]*?\} catch \(recentError\) \{[\s\S]*?logWarn\(/,
   'fallar al guardar productos recientes debe ser best-effort y no revertir la venta',
 );
 assert.doesNotMatch(

@@ -31,11 +31,27 @@ export interface FreshStockIssue {
   kind: 'invalid_qty' | 'over_stock' | 'unknown_product';
 }
 
-function freshAvailable(products: StockProduct[], productId: number): number | null {
+function freshAvailable(products: readonly StockProduct[], productId: number): number | null {
   const p = products.find((x) => x.id === productId);
   if (!p) return null;
   const n = typeof p.qty_display === 'number' ? p.qty_display : NaN;
   return Number.isFinite(n) ? n : null;
+}
+
+function isValidSaleQuantity(qty: unknown): qty is number {
+  return typeof qty === 'number' && Number.isSafeInteger(qty) && qty > 0;
+}
+
+export function findSaleQuantityIssues(lines: readonly StockLine[]): FreshStockIssue[] {
+  return lines
+    .filter((line) => !isValidSaleQuantity(line.qty))
+    .map((line) => ({
+      productId: line.productId,
+      name: line.productName,
+      requested: line.qty,
+      available: 0,
+      kind: 'invalid_qty' as const,
+    }));
 }
 
 /**
@@ -49,14 +65,14 @@ function freshAvailable(products: StockProduct[], productId: number): number | n
  *        stock data, so default is false to avoid false positives).
  */
 export function findFreshStockIssues(
-  lines: StockLine[],
-  products: StockProduct[],
+  lines: readonly StockLine[],
+  products: readonly StockProduct[],
   options: { requireKnownProduct?: boolean } = {},
 ): FreshStockIssue[] {
   const issues: FreshStockIssue[] = [];
   for (const line of lines) {
     // Always reject incoherent quantities regardless of stock data.
-    if (!Number.isFinite(line.qty) || line.qty <= 0) {
+    if (!isValidSaleQuantity(line.qty)) {
       issues.push({
         productId: line.productId,
         name: line.productName,

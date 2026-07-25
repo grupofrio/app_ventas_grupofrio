@@ -16,7 +16,7 @@ test('sale confirmation persists a complete intent before enqueue or createSale'
   assert(offlineIndex > barrierIndex);
   assert(createIndex > barrierIndex);
   assert.match(source, /queuePayload:\s*\{[\s\S]*?_clientCustomerName:[\s\S]*?_clientTotal:/);
-  assert.match(source, /ticketSnapshot,[\s\S]*?photoUris:\s*\[\.\.\.salePhotoUris\]/);
+  assert.match(source, /ticketSnapshot,[\s\S]*?photoUris:\s*\[\.\.\.confirmationInput\.salePhotoUris\]/);
 });
 
 test('direct definitive rejection awaits strict matching clear and stays fail-closed on failure', () => {

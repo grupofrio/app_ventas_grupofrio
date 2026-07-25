@@ -7,6 +7,7 @@ import {
   buildSaleTicketSnapshot,
   getSaleTicketFolioPresentation,
   getSaleTicketStorageKey,
+  mergeSaleTicketFromOrder,
   withSaleTicketOdooFolio,
 } from '../src/services/saleTicket.ts';
 
@@ -265,6 +266,135 @@ test('buildSaleTicketSnapshotFromOrder falls back to order id when operation id 
 
   assert.equal(snapshot.saleId, 'odoo-order-42');
   assert.equal(snapshot.customerName, 'Cliente sin nombre');
+});
+
+test('mergeSaleTicketFromOrder refreshes authoritative folio and seller while preserving local ticket details', () => {
+  const current = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-42',
+    customerName: 'Cliente local completo',
+    sellerName: 'Vendedor local',
+    paymentMethod: 'credit',
+    paymentLabel: 'Credito de ruta',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [
+      { productId: 10, productName: 'Bolsa 5kg', qty: 2, price: 42.5, weight: 5 },
+      { productId: 20, productName: 'Hielo 3kg', qty: 1, price: 30, weight: 3 },
+    ],
+  });
+
+  const merged = mergeSaleTicketFromOrder(current, {
+    id: 42,
+    name: 'S00042',
+    operation_id: 'mobile-op-42',
+    partner_name: 'Cliente resumido de Odoo',
+    employee_name: 'María López',
+    amount_total: 999,
+    kg_total: 99,
+    confirmation_date: '2026-05-29T19:00:00.000Z',
+    date_order: '2026-05-29T18:59:00.000Z',
+  });
+
+  assert.deepEqual(merged, {
+    ...current,
+    odooFolio: 'S00042',
+    sellerName: 'María López',
+  });
+});
+
+test('mergeSaleTicketFromOrder preserves a meaningful seller when the order employee is blank', () => {
+  const current = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-42',
+    customerName: 'Cliente local',
+    sellerName: 'Vendedor original',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  const merged = mergeSaleTicketFromOrder(current, {
+    id: 42,
+    name: 'S00042',
+    operation_id: 'mobile-op-42',
+    partner_name: 'Cliente local',
+    employee_name: '   ',
+    amount_total: 250,
+    kg_total: 18,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+  });
+
+  assert.equal(merged.sellerName, 'Vendedor original');
+});
+
+test('mergeSaleTicketFromOrder builds an authoritative ticket when no local snapshot exists', () => {
+  const order = {
+    id: 42,
+    name: 'S00042',
+    operation_id: 'mobile-op-42',
+    partner_name: 'Cliente Ruta',
+    employee_name: '   ',
+    amount_total: 250,
+    kg_total: 18,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+  };
+
+  const merged = mergeSaleTicketFromOrder(null, order);
+
+  assert.deepEqual(merged, buildSaleTicketSnapshotFromOrder(order));
+  assert.equal(merged.sellerName, 'Vendedor no especificado');
+});
+
+test('mergeSaleTicketFromOrder preserves an official folio when the order name is blank', () => {
+  const current = {
+    ...buildSaleTicketSnapshot({
+      saleId: 'mobile-op-42',
+      odooFolio: 'S00042',
+      customerName: 'Cliente local',
+      sellerName: 'Vendedor original',
+      paymentMethod: 'cash',
+      createdAt: '2026-05-28T18:30:00.000Z',
+      lines: [],
+    }),
+  };
+
+  const merged = mergeSaleTicketFromOrder(current, {
+    id: 42,
+    name: '   ',
+    operation_id: 'mobile-op-42',
+    partner_name: 'Cliente local',
+    amount_total: 250,
+    kg_total: 18,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+  });
+
+  assert.equal(merged.odooFolio, 'S00042');
+});
+
+test('mergeSaleTicketFromOrder accepts a later nonblank authoritative Odoo folio', () => {
+  const current = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-42',
+    odooFolio: 'S00042',
+    customerName: 'Cliente local',
+    sellerName: 'Vendedor original',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  const merged = mergeSaleTicketFromOrder(current, {
+    id: 42,
+    name: 'S00084',
+    operation_id: 'mobile-op-42',
+    partner_name: 'Cliente local',
+    amount_total: 250,
+    kg_total: 18,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+  });
+
+  assert.equal(merged.odooFolio, 'S00084');
 });
 
 test('getSaleTicketStorageKey namespaces tickets by sale id', () => {

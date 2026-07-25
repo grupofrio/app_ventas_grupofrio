@@ -6,6 +6,7 @@ const REPO_ROOT = process.cwd();
 
 function main() {
   const saleScreen = readFileSync(resolve(REPO_ROOT, 'app/sale/[stopId].tsx'), 'utf8');
+  const salesScreen = readFileSync(resolve(REPO_ROOT, 'app/(tabs)/sales.tsx'), 'utf8');
   const printScreen = readFileSync(resolve(REPO_ROOT, 'app/print/[orderId].tsx'), 'utf8');
   const saleTicketService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicket.ts'), 'utf8');
   const saleTicketBrandingService = readFileSync(
@@ -88,6 +89,55 @@ function main() {
     printScreen,
     /KOLD FIELD/,
     'La vista previa del ticket ya no debe mostrar la marca anterior',
+  );
+
+  const openTicketMatch = salesScreen.match(
+    /async function openTicketForOrder\(order: GFSalesOrder\) \{([\s\S]*?)\n  \}/,
+  );
+  assert.ok(openTicketMatch, 'Ventas debe definir openTicketForOrder');
+  const openTicketBody = openTicketMatch[1];
+
+  const authoritativeMatch = openTicketBody.match(
+    /const\s+(\w+)\s*=\s*buildSaleTicketSnapshotFromOrder\(order\)/,
+  );
+  assert.ok(
+    authoritativeMatch,
+    'Ventas debe derivar el ticket autoritativo para obtener el saleId tecnico',
+  );
+  assert.match(
+    openTicketBody,
+    new RegExp(`loadSaleTicketSnapshot\\(${authoritativeMatch[1]}\\.saleId\\)`),
+    'Ventas debe cargar el snapshot actual usando el saleId tecnico autoritativo',
+  );
+
+  const mergedMatch = openTicketBody.match(
+    /const\s+(\w+)\s*=\s*mergeSaleTicketFromOrder\(\w+,\s*order\)/,
+  );
+  assert.ok(
+    mergedMatch,
+    'Ventas debe combinar el snapshot local con folio y vendedor autoritativos',
+  );
+  assert.match(
+    openTicketBody,
+    new RegExp(`await\\s+saveSaleTicketSnapshot\\(${mergedMatch[1]}\\)`),
+    'Ventas siempre debe guardar el ticket combinado aunque ya exista localmente',
+  );
+  const ticketIdMatch = openTicketBody.match(
+    new RegExp(`const\\s+(\\w+)\\s*=\\s*${mergedMatch[1]}\\.saleId`),
+  );
+  assert.ok(
+    ticketIdMatch,
+    'Ventas debe derivar el id de navegacion desde el ticket combinado',
+  );
+  assert.match(
+    openTicketBody,
+    new RegExp(`router\\.push\\(\\\`/print/\\$\\{${ticketIdMatch[1]}\\}\\\``),
+    'Ventas debe navegar usando el saleId del ticket combinado',
+  );
+  assert.doesNotMatch(
+    openTicketBody,
+    /if\s*\(\s*!\s*\w+\s*\)/,
+    'Ventas no debe omitir el guardado cuando ya existe un ticket local',
   );
 
   console.log('sale ticket wiring tests: ok');

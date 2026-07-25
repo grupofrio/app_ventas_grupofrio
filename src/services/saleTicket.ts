@@ -203,6 +203,21 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   });
 }
 
+export function mergeSaleTicketFromOrder(
+  current: SaleTicketSnapshot | null,
+  order: SaleTicketOrderSource,
+): SaleTicketSnapshot {
+  const authoritative = buildSaleTicketSnapshotFromOrder(order);
+  if (!current) return authoritative;
+
+  const employeeName = order.employee_name?.trim();
+  return {
+    ...current,
+    odooFolio: authoritative.odooFolio ?? current.odooFolio,
+    sellerName: employeeName || current.sellerName,
+  };
+}
+
 export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
   const rows = snapshot.lines.map((line) => `
     <tr>

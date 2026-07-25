@@ -15,7 +15,10 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
-import { buildSaleTicketSnapshotFromOrder } from '../../src/services/saleTicket';
+import {
+  buildSaleTicketSnapshotFromOrder,
+  mergeSaleTicketFromOrder,
+} from '../../src/services/saleTicket';
 import { loadSaleTicketSnapshot, saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
 export default function SalesScreen() {
@@ -39,12 +42,11 @@ export default function SalesScreen() {
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
   async function openTicketForOrder(order: GFSalesOrder) {
-    const ticket = buildSaleTicketSnapshotFromOrder(order);
-    const ticketId = ticket.saleId;
-    const existingTicket = await loadSaleTicketSnapshot(ticketId);
-    if (!existingTicket) {
-      await saveSaleTicketSnapshot(ticket);
-    }
+    const authoritativeTicket = buildSaleTicketSnapshotFromOrder(order);
+    const existingTicket = await loadSaleTicketSnapshot(authoritativeTicket.saleId);
+    const mergedTicket = mergeSaleTicketFromOrder(existingTicket, order);
+    await saveSaleTicketSnapshot(mergedTicket);
+    const ticketId = mergedTicket.saleId;
     router.push(`/print/${ticketId}` as never);
   }
 

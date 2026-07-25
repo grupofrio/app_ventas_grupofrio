@@ -31,6 +31,16 @@ function main() {
   );
   assert.match(
     productPicker,
+    /products:\s*refreshedProducts,[\s\S]*?forceFullResponse:\s*true/,
+    'refresh manual debe forzar un full response nuevo aunque el contexto no cambie',
+  );
+  assert.match(
+    productPicker,
+    /return inFlightFullCustomerPricing\.run\([\s\S]*?force:\s*input\.force/,
+    'el loader local debe pasar force al dedupe sin cambiar el transporte compartido',
+  );
+  assert.match(
+    productPicker,
     /Refrescar/,
     'ProductPicker debe exponer un boton visible de Refrescar dentro del modal',
   );

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createLatestProductPricingRequestGate,
+  createProductPricingInFlightLoader,
   createProductSelectionCommitGuard,
+  decideProductSelectionReadiness,
   selectProductPrice,
   type ProductPriceSelectionInput,
 } from '../src/services/productPriceSelection.ts';
@@ -352,4 +354,158 @@ test('selection commit guard resets uncommitted attempts on cancel and context c
   const newContext = guard.begin('visible=1|partner=100|product=10');
   assert.ok(newContext, 'prop/context switch must permit a fresh selection');
   assert.equal(guard.commit(oldContext, () => assert.fail('stale sink ran')), false);
+});
+
+test('online customer pricing is not selectable before an exact context is published', () => {
+  const pending = decideProductSelectionReadiness({
+    isOnline: true,
+    partnerId: 99,
+    publishedPricingContextKey: null,
+    currentPricingContextKey: 'company=34|partner=99|list=81',
+    isRefreshing: false,
+  });
+  const switchedContext = decideProductSelectionReadiness({
+    isOnline: true,
+    partnerId: 100,
+    publishedPricingContextKey: 'company=34|partner=99|list=81',
+    currentPricingContextKey: 'company=34|partner=100|list=82',
+    isRefreshing: false,
+  });
+
+  assert.deepEqual(pending, {
+    canSelect: false,
+    isWaitingForCustomerPrice: true,
+    isRefreshingCustomerPrice: false,
+  });
+  assert.deepEqual(switchedContext, pending);
+});
+
+test('an exact cached, full-response, or settled fallback context is selectable online', () => {
+  const exactContext = 'company=34|partner=99|list=81';
+
+  for (const settledSource of [
+    'exact cached compatibility result',
+    'strict full response',
+    'settled client-only fallback',
+  ]) {
+    assert.deepEqual(
+      decideProductSelectionReadiness({
+        isOnline: true,
+        partnerId: 99,
+        publishedPricingContextKey: exactContext,
+        currentPricingContextKey: exactContext,
+        isRefreshing: false,
+      }),
+      {
+        canSelect: true,
+        isWaitingForCustomerPrice: false,
+        isRefreshingCustomerPrice: false,
+      },
+      settledSource,
+    );
+  }
+});
+
+test('offline and partnerless online public-price flows remain selectable', () => {
+  for (const input of [
+    {
+      isOnline: false,
+      partnerId: 99,
+      publishedPricingContextKey: null,
+      currentPricingContextKey: 'offline-customer',
+      isRefreshing: false,
+    },
+    {
+      isOnline: true,
+      partnerId: null,
+      publishedPricingContextKey: null,
+      currentPricingContextKey: 'partnerless',
+      isRefreshing: false,
+    },
+  ]) {
+    assert.equal(decideProductSelectionReadiness(input).canSelect, true);
+    assert.equal(
+      decideProductSelectionReadiness(input).isWaitingForCustomerPrice,
+      false,
+    );
+  }
+});
+
+test('refresh keeps an exact settled context selectable but still blocks an unmatched context', () => {
+  const exactContext = 'company=34|partner=99|list=81';
+  const exactRefresh = decideProductSelectionReadiness({
+    isOnline: true,
+    partnerId: 99,
+    publishedPricingContextKey: exactContext,
+    currentPricingContextKey: exactContext,
+    isRefreshing: true,
+  });
+  const pendingRefresh = decideProductSelectionReadiness({
+    isOnline: true,
+    partnerId: 99,
+    publishedPricingContextKey: null,
+    currentPricingContextKey: exactContext,
+    isRefreshing: true,
+  });
+
+  assert.deepEqual(exactRefresh, {
+    canSelect: true,
+    isWaitingForCustomerPrice: false,
+    isRefreshingCustomerPrice: true,
+  });
+  assert.deepEqual(pendingRefresh, {
+    canSelect: false,
+    isWaitingForCustomerPrice: true,
+    isRefreshingCustomerPrice: false,
+  });
+});
+
+test('forced pricing request replaces an in-flight entry without older cleanup or publication winning', async () => {
+  const loader = createProductPricingInFlightLoader();
+  const gate = createLatestProductPricingRequestGate();
+  const initialResponse = Promise.withResolvers<string>();
+  const forcedResponse = Promise.withResolvers<string>();
+  const published: string[] = [];
+  let transportCalls = 0;
+
+  const initialToken = gate.begin('same-context', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+  const initial = loader.run('same-context', () => {
+    transportCalls += 1;
+    return initialResponse.promise;
+  });
+  const initialPublication = initial.then((value) => {
+    if (gate.isCurrent(initialToken)) published.push(value);
+  });
+
+  const forcedToken = gate.begin('same-context', {
+    capturedAtMs: 1_001,
+    captureRunId: 'picker:1001',
+  });
+  const forced = loader.run('same-context', () => {
+    transportCalls += 1;
+    return forcedResponse.promise;
+  }, { force: true });
+  const forcedPublication = forced.then((value) => {
+    if (gate.isCurrent(forcedToken)) published.push(value);
+  });
+
+  assert.equal(transportCalls, 2, 'forced refresh must start a second request');
+  assert.notEqual(forced, initial);
+
+  initialResponse.resolve('initial');
+  await initialPublication;
+  const stillForced = loader.run('same-context', () => {
+    transportCalls += 1;
+    return Promise.resolve('unexpected-third-request');
+  });
+  assert.equal(stillForced, forced, 'older finally must not delete the forced entry');
+  assert.deepEqual(published, [], 'older response must not publish through the gate');
+  assert.equal(transportCalls, 2);
+
+  forcedResponse.resolve('forced');
+  await forcedPublication;
+  assert.deepEqual(published, ['forced']);
 });

@@ -48,7 +48,9 @@ import {
 } from '../../services/customerPricingSnapshotRepository';
 import {
   createLatestProductPricingRequestGate,
+  createProductPricingInFlightLoader,
   createProductSelectionCommitGuard,
+  decideProductSelectionReadiness,
   selectProductPrice,
   type LatestProductPricingRequestGate,
   type ProductPricingRequestToken,
@@ -108,10 +110,7 @@ interface LoadedCustomerPricing {
   stale: boolean;
 }
 
-const inFlightFullCustomerPricing = new Map<
-  string,
-  Promise<ValidatedServerPriceSnapshot>
->();
+const inFlightFullCustomerPricing = createProductPricingInFlightLoader();
 
 function maxCustomerPricingCaptureAtMs(
   current: PricingSnapshotStateV1,
@@ -180,24 +179,20 @@ function fetchFullCustomerPricingOnce(input: {
   products: TruckProduct[];
   companyId: number | null;
   requestedPricelistId: number | null;
+  force?: boolean;
 }): Promise<ValidatedServerPriceSnapshot> {
-  const existing = inFlightFullCustomerPricing.get(input.contextKey);
-  if (existing) return existing;
-
-  const request = fetchServerCustomerPricingSnapshot(
-    input.partnerId,
-    input.products,
-    {
-      companyId: input.companyId,
-      fallbackPricelistId: input.requestedPricelistId,
-    },
-  ).finally(() => {
-    if (inFlightFullCustomerPricing.get(input.contextKey) === request) {
-      inFlightFullCustomerPricing.delete(input.contextKey);
-    }
-  });
-  inFlightFullCustomerPricing.set(input.contextKey, request);
-  return request;
+  return inFlightFullCustomerPricing.run(
+    input.contextKey,
+    () => fetchServerCustomerPricingSnapshot(
+      input.partnerId,
+      input.products,
+      {
+        companyId: input.companyId,
+        fallbackPricelistId: input.requestedPricelistId,
+      },
+    ),
+    { force: input.force },
+  );
 }
 
 async function loadOnlineCustomerPricing(input: {
@@ -205,6 +200,7 @@ async function loadOnlineCustomerPricing(input: {
   products: TruckProduct[];
   companyId: number | null;
   requestedPricelistId: number | null;
+  forceFullResponse?: boolean;
   requestToken: ProductPricingRequestToken;
   requestGate: LatestProductPricingRequestGate;
 }): Promise<LoadedCustomerPricing> {
@@ -228,6 +224,7 @@ async function loadOnlineCustomerPricing(input: {
       products: input.products,
       companyId: input.companyId,
       requestedPricelistId: input.requestedPricelistId,
+      force: input.forceFullResponse,
     });
     if (!input.requestGate.isCurrent(input.requestToken)) {
       return staleCustomerPricingResult();
@@ -428,6 +425,22 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   });
   const pricingContextKeyRef = useRef(currentPricingContextKey);
   pricingContextKeyRef.current = currentPricingContextKey;
+  const selectionReadiness = useMemo(
+    () => decideProductSelectionReadiness({
+      isOnline,
+      partnerId: partnerId ?? null,
+      publishedPricingContextKey,
+      currentPricingContextKey,
+      isRefreshing: refreshingCatalog,
+    }),
+    [
+      currentPricingContextKey,
+      isOnline,
+      partnerId,
+      publishedPricingContextKey,
+      refreshingCatalog,
+    ],
+  );
 
   useEffect(() => {
     pendingPublicFallbackRef.current = null;
@@ -580,6 +593,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           products: refreshedProducts,
           companyId,
           requestedPricelistId: pricelistId ?? null,
+          forceFullResponse: true,
           requestToken,
           requestGate,
         });
@@ -778,6 +792,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
+    if (!selectionReadiness.canSelect) return;
     if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
     if (pendingPublicFallbackRef.current) return;
@@ -859,6 +874,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     addSaleLine,
     closePicker,
     selectionCommitGuard,
+    selectionReadiness.canSelect,
   ]);
 
   // ═══ Product Image ═══
@@ -900,7 +916,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = outOfStock || alreadyAdded;
+    const disabled =
+      outOfStock || alreadyAdded || !selectionReadiness.canSelect;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -949,14 +966,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, selectionReadiness.canSelect, setQty]);
 
   // ═══ Grid View Card ═══
 
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = outOfStock || alreadyAdded;
+    const disabled =
+      outOfStock || alreadyAdded || !selectionReadiness.canSelect;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -1014,7 +1032,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, selectionReadiness.canSelect, setQty]);
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;
@@ -1108,7 +1126,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         <View style={styles.infoBar}>
           <Text style={styles.infoText}>
             {inStockCount} disponible{inStockCount !== 1 ? 's' : ''}
-            {priceLoading ? ' · Cargando precios...' : ''}
+            {selectionReadiness.isWaitingForCustomerPrice
+              ? ' · Esperando precio del cliente...'
+              : selectionReadiness.isRefreshingCustomerPrice
+                ? ' · Actualizando precio del cliente...'
+                : priceLoading ? ' · Cargando precios...' : ''}
           </Text>
           <Text style={styles.infoText}>
             {!isOnline

@@ -102,6 +102,26 @@ assert.match(
   /priceSource:\s*product\.priceSelection\.price\.source[\s\S]*?priceCapturedAtMs:\s*product\.priceSelection\.price\.capturedAtMs[\s\S]*?pricelistId:\s*product\.priceSelection\.price\.pricelistId/,
   'la línea debe conservar procedencia, captura y lista canónica',
 );
+assert(
+  picker.includes('decideProductSelectionReadiness')
+    && picker.includes('publishedPricingContextKey')
+    && picker.includes('currentPricingContextKey'),
+  'la selección debe usar readiness pura ligada al contexto exacto publicado',
+);
+assert.match(
+  picker,
+  /const handleSelect = useCallback\([\s\S]*?if \(!selectionReadiness\.canSelect\) return;[\s\S]*?const line: SaleLineItem/,
+  'handleSelect debe cortar sin construir línea mientras falta precio cliente exacto',
+);
+assert.equal(
+  (picker.match(/outOfStock \|\| alreadyAdded \|\| !selectionReadiness\.canSelect/g) ?? []).length,
+  2,
+  'lista y grid deben deshabilitar su acción mientras esperan precio cliente',
+);
+assert(
+  picker.includes('Esperando precio del cliente'),
+  'el picker debe explicar claramente por qué las acciones están deshabilitadas',
+);
 
 // Sólo public_fallback offline envuelve el add/close existente en una alerta.
 assert.match(

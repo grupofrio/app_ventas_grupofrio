@@ -11,6 +11,76 @@ export interface ProductPriceSelection {
   readonly requiresPublicFallbackConfirmation: boolean;
 }
 
+export interface ProductSelectionReadinessInput {
+  readonly isOnline: boolean;
+  readonly partnerId: number | null;
+  readonly publishedPricingContextKey: string | null;
+  readonly currentPricingContextKey: string;
+  readonly isRefreshing: boolean;
+}
+
+export interface ProductSelectionReadiness {
+  readonly canSelect: boolean;
+  readonly isWaitingForCustomerPrice: boolean;
+  readonly isRefreshingCustomerPrice: boolean;
+}
+
+export function decideProductSelectionReadiness(
+  input: ProductSelectionReadinessInput,
+): ProductSelectionReadiness {
+  const hasCustomerPricingContext =
+    input.isOnline
+    && typeof input.partnerId === 'number'
+    && Number.isInteger(input.partnerId)
+    && input.partnerId > 0;
+  const hasExactPublishedContext =
+    input.publishedPricingContextKey !== null
+    && input.publishedPricingContextKey === input.currentPricingContextKey;
+  const canSelect =
+    !hasCustomerPricingContext || hasExactPublishedContext;
+
+  return {
+    canSelect,
+    isWaitingForCustomerPrice:
+      hasCustomerPricingContext && !hasExactPublishedContext,
+    isRefreshingCustomerPrice:
+      hasCustomerPricingContext
+      && hasExactPublishedContext
+      && input.isRefreshing,
+  };
+}
+
+export interface ProductPricingInFlightLoader {
+  run<T>(
+    contextKey: string,
+    load: () => Promise<T>,
+    options?: { readonly force?: boolean },
+  ): Promise<T>;
+}
+
+export function createProductPricingInFlightLoader(): ProductPricingInFlightLoader {
+  const inFlight = new Map<string, Promise<unknown>>();
+
+  return {
+    run<T>(
+      contextKey: string,
+      load: () => Promise<T>,
+      options: { readonly force?: boolean } = {},
+    ): Promise<T> {
+      const existing = inFlight.get(contextKey) as Promise<T> | undefined;
+      if (existing && !options.force) return existing;
+
+      const request = load().finally(() => {
+        if (inFlight.get(contextKey) === request) {
+          inFlight.delete(contextKey);
+        }
+      });
+      inFlight.set(contextKey, request);
+      return request;
+    },
+  };
+}
+
 export interface ProductPricingCaptureIdentity {
   readonly capturedAtMs: number;
   readonly captureRunId: string;

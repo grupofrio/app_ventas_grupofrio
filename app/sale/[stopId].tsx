@@ -83,6 +83,8 @@ function SaleScreenInner() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const inventoryFreshness = useProductStore((s) => s.inventoryFreshness);
+  const recentProductCount = useProductStore((s) => s.recentProducts.length);
   // BLD-20260424-LOOP: pasamos productCount y lastSync al guard del
   // useFocusEffect para evitar el loop de /truck_stock (18 reqs en 7s).
   const productCount = useProductStore((s) => s.productCount);
@@ -171,8 +173,9 @@ function SaleScreenInner() {
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
-  const stockIssues = getStockIssues();
-  const hasStock = !hasStockIssues();
+  const enforceCapturedStock = isOnline && inventoryFreshness === 'authoritative';
+  const stockIssues = getStockIssues({ enforceStock: enforceCapturedStock });
+  const hasStock = !hasStockIssues({ enforceStock: enforceCapturedStock });
   const implicitAnalytics = resolveImplicitSaleAnalytics({
     employeeAnalyticPlazaId,
   });
@@ -228,7 +231,11 @@ function SaleScreenInner() {
 
   function setSaleQtyFromText(productId: number, qtyText: string) {
     const digits = qtyText.replace(/\D/g, '');
-    updateSaleQty(productId, digits ? Number(digits) : 0);
+    updateSaleQty(
+      productId,
+      digits ? Number(digits) : 0,
+      { enforceStock: enforceCapturedStock },
+    );
   }
 
   async function handleAddSalePhoto() {
@@ -284,7 +291,9 @@ function SaleScreenInner() {
     // del carrito usa el stock capturado al agregar, que pudo quedar obsoleto).
     // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
     // localmente ni reemplaza la validación backend.
-    const freshIssues = findFreshStockIssues(saleLines, useProductStore.getState().products);
+    const freshIssues = enforceCapturedStock
+      ? findFreshStockIssues(saleLines, useProductStore.getState().products)
+      : [];
     if (freshIssues.length > 0) {
       Alert.alert(
         'Stock insuficiente',
@@ -739,13 +748,19 @@ function SaleScreenInner() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{line.productName}</Text>
                 <Text style={styles.productInfo}>
-                  {formatCatalogPrice(line.price)} · Stock: {line.stock}{!isOnline ? ' · ref.' : ''}
+                  {formatCatalogPrice(line.price)} · {line.stock === null
+                    ? 'Stock sin validar'
+                    : `Stock: ${line.stock}${!enforceCapturedStock ? ' · ref.' : ''}`}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
                 <TouchableOpacity
                   style={styles.qtyBtn}
-                  onPress={() => updateSaleQty(line.productId, line.qty - 1)}
+                  onPress={() => updateSaleQty(
+                    line.productId,
+                    line.qty - 1,
+                    { enforceStock: enforceCapturedStock },
+                  )}
                 >
                   <Text style={styles.qtyBtnText}>−</Text>
                 </TouchableOpacity>
@@ -761,7 +776,11 @@ function SaleScreenInner() {
                 />
                 <TouchableOpacity
                   style={styles.qtyBtn}
-                  onPress={() => updateSaleQty(line.productId, line.qty + 1)}
+                  onPress={() => updateSaleQty(
+                    line.productId,
+                    line.qty + 1,
+                    { enforceStock: enforceCapturedStock },
+                  )}
                 >
                   <Text style={styles.qtyBtnText}>+</Text>
                 </TouchableOpacity>
@@ -777,7 +796,7 @@ function SaleScreenInner() {
             <Text style={[typography.dim, { marginTop: 8 }]}>Cargando productos...</Text>
           </View>
         )}
-        {!isLoadingProducts && productError && products.length === 0 && (
+        {!isLoadingProducts && productError && products.length === 0 && recentProductCount === 0 && (
           <View style={styles.emptyProducts}>
             <Text style={typography.dim}>{productError}</Text>
           </View>
@@ -788,7 +807,7 @@ function SaleScreenInner() {
           small
           fullWidth
           onPress={() => setPickerVisible(true)}
-          disabled={isLoadingProducts || (!!productError && products.length === 0)}
+          disabled={isLoadingProducts || (!!productError && products.length === 0 && recentProductCount === 0)}
           style={{ marginVertical: 10 }}
         />
         <ProductPicker
@@ -797,6 +816,7 @@ function SaleScreenInner() {
           existingProductIds={saleLines.map((l) => l.productId)}
           partnerId={salePartnerId}
           pricelistId={stop._pricelistId}
+          stockPolicy="offline_sale"
         />
 
         {/* Totals card */}

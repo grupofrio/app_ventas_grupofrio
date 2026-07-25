@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useProductStore, TruckProduct } from '../../stores/useProductStore';
+import { useProductStore, type TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
@@ -33,6 +33,7 @@ import {
   computeCustomerPricesClientFallback,
   fetchServerCustomerPricingSnapshot,
   peekCachedCustomerPrices,
+  type PricingProduct,
 } from '../../services/pricelist';
 import { schedulePersistPriceCache } from '../../services/offlineCache';
 import {
@@ -66,6 +67,18 @@ import { typography, fonts } from '../../theme/typography';
 import { formatCurrency } from '../../utils/time';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { logWarn } from '../../utils/logger';
+import {
+  buildEffectiveOfflineCatalog,
+  type EffectiveProductOrigin,
+  type InventoryFreshness,
+} from '../../services/effectiveOfflineCatalog';
+import {
+  canSelectProduct,
+  formatProductStockLabel,
+  normalizeProductQuantity,
+  type ProductStockPolicy,
+} from '../../services/productStockPolicy';
+import type { RecentProductSnapshot } from '../../services/recentProductIndex';
 
 // ═══ Types ═══
 
@@ -77,6 +90,7 @@ interface ProductPickerProps {
   existingProductIds: number[];
   partnerId?: number;
   pricelistId?: number | null;
+  stockPolicy?: ProductStockPolicy;
   /**
    * Optional sink for the selected line. When provided, the picker calls this
    * INSTEAD of writing to useVisitStore.saleLines — used by flows that keep
@@ -152,7 +166,7 @@ function customerPricingContextKey(input: {
   companyId: number | null;
   partnerId: number;
   requestedPricelistId: number | null;
-  products: TruckProduct[];
+  products: PricingProduct[];
 }): string {
   const productIds = [...new Set(input.products.map((product) => product.id))]
     .sort((left, right) => left - right)
@@ -176,7 +190,7 @@ function staleCustomerPricingResult(): LoadedCustomerPricing {
 function fetchFullCustomerPricingOnce(input: {
   contextKey: string;
   partnerId: number;
-  products: TruckProduct[];
+  products: PricingProduct[];
   companyId: number | null;
   requestedPricelistId: number | null;
   force?: boolean;
@@ -197,7 +211,7 @@ function fetchFullCustomerPricingOnce(input: {
 
 async function loadOnlineCustomerPricing(input: {
   partnerId: number;
-  products: TruckProduct[];
+  products: PricingProduct[];
   companyId: number | null;
   requestedPricelistId: number | null;
   forceFullResponse?: boolean;
@@ -349,7 +363,17 @@ function displayPrice(basePrice: number): string {
   return formatCurrency(getVisiblePricelistPrice(basePrice));
 }
 
-type EnrichedProduct = TruckProduct & {
+interface PickerCatalogProduct extends PricingProduct {
+  name: string;
+  default_code?: string;
+  weight: number;
+  qty_display: number | null;
+  origin: EffectiveProductOrigin;
+  inventoryFreshness: InventoryFreshness;
+  inventoryCapturedAtMs: number | null;
+}
+
+type EnrichedProduct = PickerCatalogProduct & {
   category: CategoryKey;
   isRecommended: boolean;
   isAlreadyAdded: boolean;
@@ -365,10 +389,52 @@ interface PendingPublicFallback {
   selectionCommit: ProductSelectionCommitToken;
 }
 
+function buildPickerCatalogProducts(input: {
+  products: TruckProduct[];
+  recentProducts: RecentProductSnapshot[];
+  inventoryFreshness: InventoryFreshness;
+  inventoryCapturedAtMs: number | null;
+  includeRecent: boolean;
+}): PickerCatalogProduct[] {
+  const currentById = new Map(input.products.map((product) => [product.id, product]));
+  return buildEffectiveOfflineCatalog({
+    currentProducts: input.products,
+    currentInventoryFreshness: input.inventoryFreshness,
+    currentInventoryCapturedAtMs: input.inventoryCapturedAtMs,
+    recentProducts: input.includeRecent ? input.recentProducts : [],
+  }).map((product) => {
+    const current = currentById.get(product.productId);
+    return {
+      id: product.productId,
+      name: product.name,
+      ...(product.defaultCode ? { default_code: product.defaultCode } : {}),
+      list_price: product.listPrice,
+      weight: product.weight,
+      qty_display: product.qtyDisplay,
+      ...(current?.product_tmpl_id ? { product_tmpl_id: current.product_tmpl_id } : {}),
+      ...(current?.categ_id ? { categ_id: current.categ_id } : {}),
+      origin: product.origin,
+      inventoryFreshness: product.inventoryFreshness,
+      inventoryCapturedAtMs: product.inventoryCapturedAtMs,
+    };
+  });
+}
+
 // ═══ Component ═══
 
-export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId, onAddLine }: ProductPickerProps) {
+export function ProductPicker({
+  visible,
+  onClose,
+  existingProductIds,
+  partnerId,
+  pricelistId,
+  onAddLine,
+  stockPolicy = 'strict',
+}: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
+  const recentProducts = useProductStore((s) => s.recentProducts);
+  const inventoryFreshness = useProductStore((s) => s.inventoryFreshness);
+  const inventoryCapturedAtMs = useProductStore((s) => s.cachedAtMs);
   const inventorySource = useProductStore((s) => s.inventorySource);
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
   // dd78489). Reemplaza la heurística client-side anterior.
@@ -381,6 +447,20 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const isOnline = useSyncStore((s) => s.isOnline);
   const isGlobalFallback = inventorySource === 'global_legacy';
+  const pickerProducts = useMemo(() => buildPickerCatalogProducts({
+    products,
+    recentProducts,
+    inventoryFreshness,
+    inventoryCapturedAtMs,
+    includeRecent: stockPolicy === 'offline_sale' && !isOnline,
+  }), [
+    inventoryCapturedAtMs,
+    inventoryFreshness,
+    isOnline,
+    products,
+    recentProducts,
+    stockPolicy,
+  ]);
   const requestGate = useMemo(
     () => createLatestProductPricingRequestGate(),
     [],
@@ -421,7 +501,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     companyId,
     partnerId: partnerId ?? 0,
     requestedPricelistId: pricelistId ?? null,
-    products,
+    products: pickerProducts,
   });
   const pricingContextKeyRef = useRef(currentPricingContextKey);
   pricingContextKeyRef.current = currentPricingContextKey;
@@ -470,7 +550,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       return;
     }
     const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
-    const cached = peekCachedCustomerPrices(partnerId, products, pricingOptions);
+    const cached = peekCachedCustomerPrices(partnerId, pickerProducts, pricingOptions);
     if (cached) {
       setPriceMap(cached);
       setPublishedPricingContextKey(currentPricingContextKey);
@@ -503,7 +583,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     );
     loadOnlineCustomerPricing({
       partnerId,
-      products,
+      products: pickerProducts,
       companyId,
       requestedPricelistId: pricelistId ?? null,
       requestToken,
@@ -538,7 +618,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     isOnline,
     partnerId,
     pricelistId,
-    products,
+    pickerProducts,
     requestGate,
     selectionContextKey,
     visible,
@@ -626,6 +706,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     pricelistId,
     refreshingCatalog,
     requestGate,
+    stockPolicy,
     warehouseId,
   ]);
 
@@ -650,7 +731,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       && partnerId > 0
     ) ? partnerId : 0;
 
-    return products.flatMap((p): EnrichedProduct[] => {
+    return pickerProducts.flatMap((p): EnrichedProduct[] => {
       const pricingContextMatches =
         publishedPricingContextKey === currentPricingContextKey;
       const legacyOnlinePrice = pricingContextMatches
@@ -728,7 +809,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     pricelistId,
     priceMap,
     publishedPricingContextKey,
-    products,
+    pickerProducts,
     recommendations,
   ]);
 
@@ -753,16 +834,28 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       // Ocultar agotados solo en modo normal (truck_stock con stock real).
       // En modo referencia o fallback global, dejamos pasar para no dejar
       // al vendedor con pantalla en blanco.
-      if (!isGlobalFallback && !showOutOfStockAsReference && p.qty_display <= 0) return false;
+      const keepsReferentialStock = stockPolicy === 'offline_sale' && !isOnline;
+      if (
+        !keepsReferentialStock
+        && !isGlobalFallback
+        && !showOutOfStockAsReference
+        && (p.qty_display === null || p.qty_display <= 0)
+      ) return false;
       return true;
     }).sort((a, b) => {
       if (a.isRecommended && !b.isRecommended) return -1;
       if (!a.isRecommended && b.isRecommended) return 1;
-      if (a.qty_display > 0 && b.qty_display <= 0) return -1;
-      if (a.qty_display <= 0 && b.qty_display > 0) return 1;
+      if ((a.qty_display ?? 0) > 0 && (b.qty_display ?? 0) <= 0) return -1;
+      if ((a.qty_display ?? 0) <= 0 && (b.qty_display ?? 0) > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, debouncedSearch, isGlobalFallback, showOutOfStockAsReference]);
+  }, [activeCategory, debouncedSearch,
+    enrichedProducts,
+    isGlobalFallback,
+    isOnline,
+    showOutOfStockAsReference,
+    stockPolicy,
+  ]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
@@ -773,13 +866,19 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     return counts;
   }, [enrichedProducts]);
 
-  const setQty = useCallback((productId: number, delta: number, maxStock: number) => {
+  const setQty = useCallback((product: EnrichedProduct, delta: number) => {
     setQuantities((prev) => {
-      const current = prev[productId] || 1;
-      const next = Math.max(1, Math.min(maxStock, current + delta));
-      return { ...prev, [productId]: next };
+      const current = prev[product.id] || 1;
+      const next = normalizeProductQuantity({
+        policy: stockPolicy,
+        isOnline,
+        requestedQty: current + delta,
+        qtyDisplay: product.qty_display,
+        freshness: product.inventoryFreshness,
+      });
+      return next === null ? prev : { ...prev, [product.id]: next };
     });
-  }, []);
+  }, [isOnline, stockPolicy]);
 
   const closePicker = useCallback(() => {
     requestGate.invalidate();
@@ -793,11 +892,24 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
     if (!selectionReadiness.canSelect) return;
-    if (product.qty_display <= 0) return;
+    if (!canSelectProduct({
+      policy: stockPolicy,
+      isOnline,
+      qtyDisplay: product.qty_display,
+      freshness: product.inventoryFreshness,
+    })) return;
     if (existingProductIds.includes(product.id)) return;
     if (pendingPublicFallbackRef.current) return;
 
     const qty = quantities[product.id] || 1;
+    const normalizedQty = normalizeProductQuantity({
+      policy: stockPolicy,
+      isOnline,
+      requestedQty: qty,
+      qtyDisplay: product.qty_display,
+      freshness: product.inventoryFreshness,
+    });
+    if (normalizedQty === null) return;
     // SaleLineItem.price = base price SIN IVA (for Odoo sync).
     // Both public and customer pricelist prices are already base values.
     const line: SaleLineItem = {
@@ -809,7 +921,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         priceCapturedAtMs: product.priceSelection.price.capturedAtMs,
         pricelistId: product.priceSelection.price.pricelistId,
       } : {}),
-      qty: Math.min(qty, product.qty_display),
+      qty: normalizedQty,
       stock: product.qty_display,
       weight: product.weight || 5,
     };
@@ -875,6 +987,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     closePicker,
     selectionCommitGuard,
     selectionReadiness.canSelect,
+    isOnline,
+    stockPolicy,
   ]);
 
   // ═══ Product Image ═══
@@ -914,11 +1028,30 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Perf Fase 1C: renderItem memoizado (estable entre re-renders que no cambian
   // quantities/handlers) → menos recreación de filas en FlatList.
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
-    const outOfStock = p.qty_display <= 0;
+    const outOfStock = !canSelectProduct({
+      policy: stockPolicy,
+      isOnline,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+    });
     const alreadyAdded = p.isAlreadyAdded;
     const disabled =
       outOfStock || alreadyAdded || !selectionReadiness.canSelect;
     const qty = quantities[p.id] || 1;
+    const canIncrement = normalizeProductQuantity({
+      policy: stockPolicy,
+      isOnline,
+      requestedQty: qty + 1,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+    }) === qty + 1;
+    const stockLabel = formatProductStockLabel({
+      policy: stockPolicy,
+      isOnline,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+      capturedAtMs: p.inventoryCapturedAtMs,
+    });
 
     return (
       <View style={[styles.listRow, disabled && styles.rowDisabled]}>
@@ -944,21 +1077,21 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             {p.hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
             <Text style={styles.sep}>·</Text>
             <Text style={[styles.listStock, outOfStock && styles.textRed]}>
-              {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
+              {stockLabel}
             </Text>
           </View>
         </TouchableOpacity>
 
         {!disabled && (
           <View style={styles.qtyRow}>
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(p.id, -1, p.qty_display)}>
+            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(p, -1)}>
               <Text style={styles.qtyBtnText}>-</Text>
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
-              style={[styles.qtyBtn, qty >= p.qty_display && styles.qtyBtnOff]}
-              onPress={() => setQty(p.id, 1, p.qty_display)}
-              disabled={qty >= p.qty_display}
+              style={[styles.qtyBtn, !canIncrement && styles.qtyBtnOff]}
+              onPress={() => setQty(p, 1)}
+              disabled={!canIncrement}
             >
               <Text style={styles.qtyBtnText}>+</Text>
             </TouchableOpacity>
@@ -966,16 +1099,42 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, selectionReadiness.canSelect, setQty]);
+  }, [
+    handleSelect,
+    isOnline,
+    quantities,
+    selectionReadiness.canSelect,
+    setQty,
+    stockPolicy,
+  ]);
 
   // ═══ Grid View Card ═══
 
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
-    const outOfStock = p.qty_display <= 0;
+    const outOfStock = !canSelectProduct({
+      policy: stockPolicy,
+      isOnline,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+    });
     const alreadyAdded = p.isAlreadyAdded;
     const disabled =
       outOfStock || alreadyAdded || !selectionReadiness.canSelect;
     const qty = quantities[p.id] || 1;
+    const canIncrement = normalizeProductQuantity({
+      policy: stockPolicy,
+      isOnline,
+      requestedQty: qty + 1,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+    }) === qty + 1;
+    const stockLabel = formatProductStockLabel({
+      policy: stockPolicy,
+      isOnline,
+      qtyDisplay: p.qty_display,
+      freshness: p.inventoryFreshness,
+      capturedAtMs: p.inventoryCapturedAtMs,
+    });
 
     return (
       <View style={[styles.gridCard, disabled && styles.rowDisabled]}>
@@ -1011,20 +1170,20 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           </View>
 
           <Text style={[styles.gridStock, outOfStock && styles.textRed]}>
-            {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
+            {stockLabel}
           </Text>
         </TouchableOpacity>
 
         {!disabled && (
           <View style={styles.gridQtyRow}>
-            <TouchableOpacity style={styles.qtyBtnSm} onPress={() => setQty(p.id, -1, p.qty_display)}>
+            <TouchableOpacity style={styles.qtyBtnSm} onPress={() => setQty(p, -1)}>
               <Text style={styles.qtyBtnText}>-</Text>
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
-              style={[styles.qtyBtnSm, qty >= p.qty_display && styles.qtyBtnOff]}
-              onPress={() => setQty(p.id, 1, p.qty_display)}
-              disabled={qty >= p.qty_display}
+              style={[styles.qtyBtnSm, !canIncrement && styles.qtyBtnOff]}
+              onPress={() => setQty(p, 1)}
+              disabled={!canIncrement}
             >
               <Text style={styles.qtyBtnText}>+</Text>
             </TouchableOpacity>
@@ -1032,9 +1191,21 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, selectionReadiness.canSelect, setQty]);
+  }, [
+    handleSelect,
+    isOnline,
+    quantities,
+    selectionReadiness.canSelect,
+    setQty,
+    stockPolicy,
+  ]);
 
-  const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
+  const inStockCount = filtered.filter((product) => canSelectProduct({
+    policy: stockPolicy,
+    isOnline,
+    qtyDisplay: product.qty_display,
+    freshness: product.inventoryFreshness,
+  }) && !product.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;
 
   return (

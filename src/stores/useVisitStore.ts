@@ -40,8 +40,19 @@ export interface SaleLineItem {
   priceCapturedAtMs?: number | null;
   pricelistId?: number | null;
   qty: number;
-  stock: number;
+  stock: number | null;
   weight: number; // kg per unit
+}
+
+export interface SaleStockOptions {
+  enforceStock?: boolean;
+}
+
+export interface SaleStockIssue {
+  productId: number;
+  name: string;
+  requested: number;
+  available: number | null;
 }
 
 interface VisitState {
@@ -83,7 +94,11 @@ interface VisitState {
 
   // Sale actions
   addSaleLine: (line: SaleLineItem) => void;
-  updateSaleQty: (productId: number, qty: number) => void;
+  updateSaleQty: (
+    productId: number,
+    qty: number,
+    options?: { enforceStock?: boolean },
+  ) => void;
   removeSaleLine: (productId: number) => void;
   setSalePayment: (method: 'cash' | 'credit') => void;
   setSaleAnalyticPlaza: (analyticPlazaId: number | null) => void;
@@ -117,8 +132,8 @@ interface VisitState {
   saleTotalKg: () => number;
 
   // V1.2: Stock validation
-  hasStockIssues: () => boolean;
-  getStockIssues: () => Array<{ productId: number; name: string; requested: number; available: number }>;
+  hasStockIssues: (options?: { enforceStock?: boolean }) => boolean;
+  getStockIssues: (options?: { enforceStock?: boolean }) => SaleStockIssue[];
 
   // V1.2: Confirm lock
   lockSaleConfirm: () => string; // Returns operationId
@@ -202,12 +217,27 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     }
   },
 
-  updateSaleQty: (productId, qty) => set({
-    saleLines: qty <= 0
-      ? get().saleLines.filter((l) => l.productId !== productId)
-      : get().saleLines.map((l) =>
-          l.productId === productId ? { ...l, qty: Math.min(qty, l.stock) } : l
-        ),
+  updateSaleQty: (productId, qty, options) => set((state) => {
+    const enforceStock = options?.enforceStock !== false;
+    if (!Number.isSafeInteger(qty)) return state;
+    if (qty <= 0) {
+      return enforceStock
+        ? { saleLines: state.saleLines.filter((line) => line.productId !== productId) }
+        : state;
+    }
+
+    return {
+      saleLines: state.saleLines.map((line) => {
+        if (line.productId !== productId) return line;
+        if (!enforceStock) return { ...line, qty };
+        if (
+          typeof line.stock !== 'number'
+          || !Number.isFinite(line.stock)
+          || line.stock <= 0
+        ) return line;
+        return { ...line, qty: Math.min(qty, Math.floor(line.stock)) };
+      }),
+    };
   }),
 
   removeSaleLine: (productId) => set({
@@ -280,18 +310,35 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   saleTotalKg: () => get().saleLines.reduce((sum, l) => sum + l.weight * l.qty, 0),
 
   // V1.2: Stock validation — checks if any line exceeds available stock
-  hasStockIssues: () => {
-    return get().saleLines.some((l) => l.qty > l.stock);
+  hasStockIssues: (options) => {
+    const enforceStock = options?.enforceStock !== false;
+    return get().saleLines.some((line) => {
+      if (!Number.isSafeInteger(line.qty) || line.qty <= 0) return true;
+      return enforceStock
+        && typeof line.stock === 'number'
+        && Number.isFinite(line.stock)
+        && line.qty > line.stock;
+    });
   },
 
-  getStockIssues: () => {
+  getStockIssues: (options) => {
+    const enforceStock = options?.enforceStock !== false;
     return get().saleLines
-      .filter((l) => l.qty > l.stock)
-      .map((l) => ({
-        productId: l.productId,
-        name: l.productName,
-        requested: l.qty,
-        available: l.stock,
+      .filter((line) => (
+        !Number.isSafeInteger(line.qty)
+        || line.qty <= 0
+        || (
+          enforceStock
+          && typeof line.stock === 'number'
+          && Number.isFinite(line.stock)
+          && line.qty > line.stock
+        )
+      ))
+      .map((line) => ({
+        productId: line.productId,
+        name: line.productName,
+        requested: line.qty,
+        available: line.stock,
       }));
   },
 

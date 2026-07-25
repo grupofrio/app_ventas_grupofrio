@@ -33,6 +33,43 @@ test('classifies data.error_code insufficient_stock as a protected terminal sale
   assert.deepEqual(classifySyncFailure(sale, error), terminalStockFailure);
 });
 
+test('structured stock stays protected despite timeout-like business copy after a response', () => {
+  for (const error of [
+    Object.assign(new Error('Timeout 5 kg sin stock'), {
+      code: 'insufficient_stock',
+      responseReceived: true,
+    }),
+    Object.assign(new Error('Network request failed: Timeout 5 kg sin stock'), {
+      responseReceived: true,
+      httpStatus: 422,
+      data: { error_code: 'insufficient_stock' },
+    }),
+  ]) {
+    assert.deepEqual(classifySyncFailure(sale, error), terminalStockFailure);
+  }
+});
+
+test('no-response and 5xx transport evidence override structured stock codes', () => {
+  for (const error of [
+    Object.assign(new Error('Timeout 5 kg sin stock'), {
+      code: 'insufficient_stock',
+      responseReceived: false,
+    }),
+    Object.assign(new Error('upstream stock body'), {
+      responseReceived: true,
+      httpStatus: 503,
+      data: { error_code: 'insufficient_stock' },
+    }),
+  ]) {
+    assert.deepEqual(classifySyncFailure(sale, error), {
+      retryAutomatically: true,
+      terminalStatus: 'error',
+      errorCode: null,
+      protectFromGenericClear: false,
+    });
+  }
+});
+
 test('reuses the compatible insufficient-stock parser without requiring a structured code', () => {
   assert.deepEqual(
     classifySyncFailure(sale, new Error('Stock insuficiente para completar la venta')),
@@ -147,4 +184,21 @@ test('never exposes raw validation or network diagnostics in the persisted user 
   for (const message of [validationMessage, networkMessage]) {
     assert.doesNotMatch(message, /Bearer|secret|odoo\.internal|https?:\/\//i);
   }
+});
+
+test('builds safe GPS copy without exposing batch transport secrets', () => {
+  const error = new Error(
+    'Network request failed Authorization: Bearer gps-secret https://odoo.internal/gps',
+  );
+  const classification = classifySyncFailure({ type: 'gps' }, error);
+
+  assert.deepEqual(classification, {
+    retryAutomatically: true,
+    terminalStatus: 'error',
+    errorCode: null,
+    protectFromGenericClear: false,
+  });
+  const message = describeSyncFailureForUser(error, classification);
+  assert.equal(message, 'No se pudo sincronizar. Se reintentará automáticamente.');
+  assert.doesNotMatch(message, /Bearer|gps-secret|odoo\.internal|https?:\/\//i);
 });

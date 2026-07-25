@@ -123,6 +123,19 @@ assert.match(
   /async function handleGpsItemError\([\s\S]*?try\s*\{[\s\S]*?await get\(\)\.markDead[\s\S]*?catch\s*\{[\s\S]*?applySyncTerminalStateDeferral/,
   'GPS tampoco queda syncing si falla la persistencia strict de dead',
 );
+const gpsBatchCatch = syncStore.match(
+  /catch\s*\(e:\s*unknown\)\s*\{[\s\S]*?return\s*\{\s*processed:/,
+)?.[0] ?? '';
+assert.notEqual(gpsBatchCatch, '', 'se localiza el catch del batch GPS');
+assert.match(gpsBatchCatch, /await handleGpsItemError\(item, e, get, set\)/);
+assert.doesNotMatch(gpsBatchCatch, /e\s+instanceof\s+Error\s*\?\s*e\.message|errMsg/);
+const gpsHandler = syncStore.match(
+  /async function handleGpsItemError\([\s\S]*?\n\}\n\n\/\/ ═══ DAG resolver/,
+)?.[0] ?? '';
+assert.notEqual(gpsHandler, '', 'se localiza handleGpsItemError');
+assert.match(gpsHandler, /classifySyncFailure\(item, error\)/);
+assert.match(gpsHandler, /describeSyncFailureForUser\(error, classification\)/);
+assert.doesNotMatch(gpsHandler, /error\.message|\bString\s*\(\s*error\s*\)/);
 assert.match(
   syncStore,
   /if\s*\(outcome\s*===\s*['"]deferred['"]\)\s*hadDeferredStorageFailure\s*=\s*true/,

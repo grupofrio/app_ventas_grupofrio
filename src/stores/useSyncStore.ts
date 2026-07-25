@@ -1167,9 +1167,8 @@ async function processGpsBatch(
             chunkSucceeded++;
           }
         } catch (e: unknown) {
-          const errMsg = e instanceof Error ? e.message : 'GPS sync error';
           for (const item of dispatchChunk) {
-            await handleGpsItemError(item, errMsg, get, set);
+            await handleGpsItemError(item, e, get, set);
             chunkFailed++;
           }
         }
@@ -1212,10 +1211,12 @@ async function tryGpsBatchCreate(items: SyncQueueItem[]): Promise<boolean> {
 
 async function handleGpsItemError(
   item: SyncQueueItem,
-  message: string,
+  error: unknown,
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): Promise<void> {
+  const classification = classifySyncFailure(item, error);
+  const message = describeSyncFailureForUser(error, classification);
   const newRetries = item.retries + 1;
   if (newRetries >= MAX_RETRIES) {
     try {

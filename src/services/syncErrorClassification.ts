@@ -69,18 +69,56 @@ export function classifySyncFailure(
     const saleOutcome = classifySaleSubmissionError(error);
     const metadata = readSaleSubmissionErrorMetadata(error);
     const directCode = normalizedCode(metadata.code);
+    const dataCode = normalizedCode(readProperty(readProperty(error, 'data'), 'error_code'));
     const errorName = normalizedCode(metadata.name);
-    const explicitTransportAmbiguity =
+    const authoritativeTransportAmbiguity =
       metadata.responseReceived === false
       || (metadata.httpStatus !== undefined
         && metadata.httpStatus >= 500
-        && metadata.httpStatus <= 599)
-      || isRetryableSyncErrorMessage(metadata.message)
-      || (saleOutcome.kind === 'ambiguous_result'
-        && ((directCode !== null && directCode !== 'insufficient_stock')
-          || (errorName !== null && errorName !== 'error')));
+        && metadata.httpStatus <= 599);
 
-    if (!explicitTransportAmbiguity && readInsufficientStockDetail(error)) {
+    if (authoritativeTransportAmbiguity) {
+      return {
+        retryAutomatically: true,
+        terminalStatus: 'error',
+        errorCode: null,
+        protectFromGenericClear: false,
+      };
+    }
+
+    const hasStructuredStockCode =
+      directCode === 'insufficient_stock' || dataCode === 'insufficient_stock';
+    if (hasStructuredStockCode) {
+      return {
+        retryAutomatically: false,
+        terminalStatus: 'dead',
+        errorCode: 'insufficient_stock',
+        protectFromGenericClear: true,
+      };
+    }
+
+    if (isRetryableSyncErrorMessage(metadata.message)) {
+      return {
+        retryAutomatically: true,
+        terminalStatus: 'error',
+        errorCode: null,
+        protectFromGenericClear: false,
+      };
+    }
+
+    const hasStructuredAmbiguousMetadata =
+      saleOutcome.kind === 'ambiguous_result'
+      && (directCode !== null || (errorName !== null && errorName !== 'error'));
+    if (hasStructuredAmbiguousMetadata) {
+      return {
+        retryAutomatically: true,
+        terminalStatus: 'error',
+        errorCode: null,
+        protectFromGenericClear: false,
+      };
+    }
+
+    if (readInsufficientStockDetail(error)) {
       return {
         retryAutomatically: false,
         terminalStatus: 'dead',

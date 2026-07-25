@@ -40,6 +40,19 @@ test('drops invalid partner IDs without disturbing valid target order', () => {
   ]);
 });
 
+test('normalizes an omitted requested pricelist to the exact null target', () => {
+  const targets = buildRoutePricingTargets([
+    { customer_id: 99 },
+    { customer_id: 99, _pricelistId: undefined },
+    { customer_id: 100 },
+  ]);
+
+  assert.deepEqual(targets, [
+    { partnerId: 99, requestedPricelistId: null },
+    { partnerId: 100, requestedPricelistId: null },
+  ]);
+});
+
 test('drops explicitly invalid requested-pricelist values instead of aliasing them to null', () => {
   const targets = buildRoutePricingTargets([
     { customer_id: 99, _pricelistId: null },

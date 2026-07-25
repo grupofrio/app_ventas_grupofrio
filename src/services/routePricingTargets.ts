@@ -20,7 +20,9 @@ export function buildRoutePricingTargets(
 
   for (const stop of stops) {
     const partnerId = stop?.customer_id;
-    const requestedPricelistId = stop?._pricelistId;
+    const requestedPricelistId = stop?._pricelistId === undefined
+      ? null
+      : stop._pricelistId;
     if (!isPositiveInteger(partnerId)) {
       continue;
     }

@@ -278,7 +278,6 @@ function sanitizeLastKnownPrices(
 function sanitizeManifest(
   value: unknown,
   snapshots: PricingSnapshotStateV1['snapshots'],
-  requestedMappings: PricingSnapshotStateV1['requestedMappings'],
 ): PricingPreparationManifest | null {
   if (
     !isRecord(value)
@@ -304,17 +303,11 @@ function sanitizeManifest(
     }
 
     const snapshot = snapshots[target.snapshotId];
-    const mapping = requestedMappings[[
-      value.companyId,
-      target.partnerId,
-      target.requestedPricelistId ?? 'null',
-    ].join(':')];
     if (
       isPreparedPricingSnapshotPointerValid(
         value as unknown as PricingPreparationManifest,
         target,
         snapshot,
-        mapping,
       )
     ) {
       targets.push(target);
@@ -385,7 +378,6 @@ function hasStrictLastKnownPrices(
 function isStrictManifest(
   value: unknown,
   snapshots: PricingSnapshotStateV1['snapshots'],
-  requestedMappings: PricingSnapshotStateV1['requestedMappings'],
 ): value is PricingPreparationManifest {
   if (
     !isRecord(value)
@@ -406,17 +398,11 @@ function isStrictManifest(
       return true;
     }
 
-    const mapping = requestedMappings[[
-      value.companyId,
-      target.partnerId,
-      target.requestedPricelistId ?? 'null',
-    ].join(':')];
     return (
       isPreparedPricingSnapshotPointerValid(
         value as unknown as PricingPreparationManifest,
         target,
         snapshots[target.snapshotId],
-        mapping,
       )
     );
   });
@@ -438,7 +424,7 @@ function isStrictPricingSnapshotState(
     && hasStrictLastKnownPrices(value.lastKnownPrices)
     && (
       activeManifest === null
-      || isStrictManifest(activeManifest, snapshots, value.requestedMappings)
+      || isStrictManifest(activeManifest, snapshots)
     )
   );
 }
@@ -457,7 +443,6 @@ function sanitizeAndCompactState(
     activeManifest: sanitizeManifest(
       value.activeManifest,
       snapshots,
-      requestedMappings,
     ),
     snapshots,
     requestedMappings,

@@ -198,7 +198,6 @@ export function isPreparedPricingSnapshotPointerValid(
   manifest: PricingPreparationManifest,
   target: PricingPreparationTarget,
   snapshot: PreparedCustomerPricingSnapshot | undefined,
-  mapping: ResolvedPricelistMapping | undefined,
 ): snapshot is PreparedCustomerPricingSnapshot {
   if (
     target.status !== 'prepared'
@@ -207,7 +206,6 @@ export function isPreparedPricingSnapshotPointerValid(
     || typeof target.snapshotId !== 'string'
     || target.snapshotId.length === 0
     || !snapshot
-    || !mapping
   ) {
     return false;
   }
@@ -228,10 +226,6 @@ export function isPreparedPricingSnapshotPointerValid(
     && snapshot.preparedPlanId === manifest.planId
     && Number.isFinite(snapshot.preparedAtMs)
     && snapshot.preparedAtMs >= 0
-    && mapping.companyId === manifest.companyId
-    && mapping.partnerId === target.partnerId
-    && mapping.requestedPricelistId === target.requestedPricelistId
-    && mapping.resolvedPricelistId === target.resolvedPricelistId
   );
 }
 
@@ -773,7 +767,6 @@ export function resolveCapturedCustomerPrice(
         manifest,
         preparedTarget,
         snapshot,
-        mapping,
       )
     ) {
       const preparedPrice = snapshot.prices.find(

@@ -948,6 +948,95 @@ test('strict writes and tolerant hydration share mixed-run pointer identity rule
   );
 });
 
+test('a strict foreground remap preserves the structurally valid active manifest', async () => {
+  const initial = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'prepare-before-remap',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  const repository = createCustomerPricingSnapshotRepository({
+    load: async () => null,
+    saveStrict: async () => {},
+  });
+  await repository.replace(initial);
+
+  const remapped = await repository.update((current) => recordPrice(current, {
+    runId: 'foreground-remap',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 18,
+    productId: 101,
+    unitPrice: 82,
+    capturedAtMs: 2_000,
+  }));
+
+  assert.deepEqual(remapped.activeManifest, initial.activeManifest);
+  assert.deepEqual(
+    Object.keys(remapped.snapshots),
+    ['prepare-before-remap:3:11:17'],
+  );
+  assert.equal(remapped.requestedMappings['3:11:7'].resolvedPricelistId, 18);
+  assert.deepEqual(resolveCapturedCustomerPrice(remapped, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 101,
+    publicPrice: 100,
+  }), {
+    unitPrice: 82,
+    source: 'last_known_customer',
+    capturedAtMs: 2_000,
+    pricelistId: 18,
+  });
+});
+
+test('tolerant hydration keeps a structurally valid manifest after a mapping remap', async () => {
+  const initial = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'prepare-before-hydrated-remap',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  const remapped = recordPrice(initial, {
+    runId: 'foreground-hydrated-remap',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 18,
+    productId: 101,
+    unitPrice: 82,
+    capturedAtMs: 2_000,
+  });
+
+  const hydrated = await hydrateRawState(remapped);
+
+  assert.deepEqual(hydrated.activeManifest, initial.activeManifest);
+  assert.deepEqual(
+    Object.keys(hydrated.snapshots),
+    ['prepare-before-hydrated-remap:3:11:17'],
+  );
+  assert.deepEqual(resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 101,
+    publicPrice: 100,
+  }), {
+    unitPrice: 82,
+    source: 'last_known_customer',
+    capturedAtMs: 2_000,
+    pricelistId: 18,
+  });
+});
+
 test('boot hydrates durable pricing snapshots before catalog and legacy price caches', () => {
   const source = readFileSync(
     new URL('../src/services/rehydrate.ts', import.meta.url),

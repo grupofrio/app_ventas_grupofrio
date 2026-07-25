@@ -36,6 +36,9 @@ export interface SaleLineItem {
   productId: number;
   productName: string;
   price: number;
+  priceSource?: 'prepared_customer' | 'last_known_customer' | 'public_fallback';
+  priceCapturedAtMs?: number | null;
+  pricelistId?: number | null;
   qty: number;
   stock: number;
   weight: number; // kg per unit

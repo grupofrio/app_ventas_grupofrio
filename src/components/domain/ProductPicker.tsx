@@ -25,10 +25,30 @@ import { useProductStore, TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
+import { useRouteStore } from '../../stores/useRouteStore';
 import { useSyncStore } from '../../stores/useSyncStore';
 import { getBaseUrl } from '../../services/api';
-import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
+import {
+  clearPricelistCaches,
+  computeCustomerPrices,
+  fetchServerCustomerPricingSnapshot,
+  peekCachedCustomerPrices,
+} from '../../services/pricelist';
 import { schedulePersistPriceCache } from '../../services/offlineCache';
+import {
+  recordLastKnownServerPrices,
+  resolveCapturedCustomerPrice,
+  type CapturedCustomerPrice,
+  type PricingSnapshotStateV1,
+} from '../../services/customerPricingSnapshot';
+import {
+  getCustomerPricingSnapshotState,
+  updateCustomerPricingSnapshotState,
+} from '../../services/customerPricingSnapshotRepository';
+import {
+  selectProductPrice,
+  type ProductPriceSelection,
+} from '../../services/productPriceSelection';
 import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { describeCatalogTrustBanner } from '../../services/trustSignals';
@@ -37,6 +57,7 @@ import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
 import { formatCurrency } from '../../utils/time';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { logWarn } from '../../utils/logger';
 
 // ═══ Types ═══
 
@@ -73,6 +94,148 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const GRID_GAP = 8;
 const GRID_PADDING = spacing.screenPadding;
 const GRID_CARD_WIDTH = (SCREEN_WIDTH - GRID_PADDING * 2 - GRID_GAP) / 2;
+let lastForegroundPricingCaptureAtMs = 0;
+
+interface LoadedCustomerPricing {
+  displayPrices: Map<number, number>;
+  capturedPrices: Map<number, CapturedCustomerPrice>;
+}
+
+function maxCustomerPricingCaptureAtMs(
+  current: PricingSnapshotStateV1,
+): number {
+  let latest = current.activeManifest?.activatedAtMs ?? 0;
+  for (const mapping of Object.values(current.requestedMappings)) {
+    latest = Math.max(latest, mapping.capturedAtMs);
+  }
+  for (const snapshot of Object.values(current.snapshots)) {
+    latest = Math.max(latest, snapshot.preparedAtMs);
+  }
+  for (const productLedger of Object.values(current.lastKnownPrices)) {
+    for (const price of Object.values(productLedger)) {
+      latest = Math.max(latest, price.capturedAtMs);
+    }
+  }
+  return latest;
+}
+
+function nextForegroundPricingCapture(
+  minimumCapturedAtMs = 0,
+): {
+  capturedAtMs: number;
+  captureRunId: string;
+} {
+  const capturedAtMs = Math.max(
+    Date.now(),
+    lastForegroundPricingCaptureAtMs + 1,
+    minimumCapturedAtMs + 1,
+  );
+  lastForegroundPricingCaptureAtMs = capturedAtMs;
+  return {
+    capturedAtMs,
+    captureRunId: `product-picker:${capturedAtMs}`,
+  };
+}
+
+async function loadOnlineCustomerPricing(input: {
+  partnerId: number;
+  products: TruckProduct[];
+  companyId: number | null;
+  requestedPricelistId: number | null;
+}): Promise<LoadedCustomerPricing> {
+  const pricingOptions = {
+    companyId: input.companyId,
+    fallbackPricelistId: input.requestedPricelistId,
+  };
+  const cachedPrices = peekCachedCustomerPrices(
+    input.partnerId,
+    input.products,
+    pricingOptions,
+  );
+
+  try {
+    const validation = await fetchServerCustomerPricingSnapshot(
+      input.partnerId,
+      input.products,
+      pricingOptions,
+    );
+    const displayPrices = new Map(validation.prices);
+    let foregroundCapture = nextForegroundPricingCapture();
+
+    if (
+      typeof input.companyId === 'number'
+      && Number.isInteger(input.companyId)
+      && input.companyId > 0
+    ) {
+      const companyId = input.companyId;
+      try {
+        await updateCustomerPricingSnapshotState((current) => {
+          foregroundCapture = nextForegroundPricingCapture(
+            maxCustomerPricingCaptureAtMs(current),
+          );
+          return recordLastKnownServerPrices(current, {
+            companyId,
+            partnerId: input.partnerId,
+            requestedPricelistId: input.requestedPricelistId,
+            capturedAtMs: foregroundCapture.capturedAtMs,
+            captureRunId: foregroundCapture.captureRunId,
+            validation,
+          });
+        });
+      } catch (error) {
+        logWarn('general', 'product_picker_price_ledger_write_failed', {
+          partner_id: input.partnerId,
+          requested_pricelist_id: input.requestedPricelistId,
+          captured_at_ms: foregroundCapture.capturedAtMs,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const { capturedAtMs } = foregroundCapture;
+    const capturedPrices = new Map<number, CapturedCustomerPrice>(
+      validation.prices.map(([productId, unitPrice]) => [
+        productId,
+        {
+          unitPrice,
+          source: 'last_known_customer',
+          capturedAtMs,
+          pricelistId: validation.resolvedPricelistId,
+        },
+      ]),
+    );
+
+    return { displayPrices, capturedPrices };
+  } catch (strictError) {
+    try {
+      const displayPrices = cachedPrices ?? await computeCustomerPrices(
+        input.partnerId,
+        input.products,
+        pricingOptions,
+      );
+      if (!cachedPrices) schedulePersistPriceCache();
+      return {
+        displayPrices,
+        capturedPrices: new Map(),
+      };
+    } catch (fallbackError) {
+      logWarn('general', 'product_picker_online_pricing_failed', {
+        partner_id: input.partnerId,
+        requested_pricelist_id: input.requestedPricelistId,
+        strict_message: strictError instanceof Error
+          ? strictError.message
+          : String(strictError),
+        fallback_message: fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError),
+      });
+      return {
+        displayPrices: cachedPrices ?? new Map(),
+        capturedPrices: new Map(),
+      };
+    }
+  }
+}
 
 // ═══ Helpers ═══
 
@@ -108,6 +271,8 @@ type EnrichedProduct = TruckProduct & {
   isAlreadyAdded: boolean;
   customerPrice: number; // price for this customer (may differ from list_price)
   hasCustomPrice: boolean; // true when price comes from customer pricelist
+  priceSelection: ProductPriceSelection;
+  hasCapturedPriceMetadata: boolean;
 };
 
 // ═══ Component ═══
@@ -123,6 +288,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const forecasts = useKoldStore((s) => s.forecasts);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const isOnline = useSyncStore((s) => s.isOnline);
   const isGlobalFallback = inventorySource === 'global_legacy';
 
@@ -136,6 +302,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const [baseUrl, setBaseUrlState] = useState('');
   // Customer pricelist
   const [priceMap, setPriceMap] = useState<Map<number, number>>(new Map());
+  const [onlineCapturedPrices, setOnlineCapturedPrices] = useState<
+    Map<number, CapturedCustomerPrice>
+  >(new Map());
   const [priceLoading, setPriceLoading] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
@@ -155,6 +324,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   useEffect(() => {
     if (!visible || !partnerId) {
       setPriceMap(new Map());
+      setOnlineCapturedPrices(new Map());
       setPriceLoading(false);
       return;
     }
@@ -163,26 +333,32 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     if (cached) {
       setPriceMap(cached);
       setPriceLoading(false);
-      return;
+    } else {
+      setPriceMap(new Map());
+      setPriceLoading(isOnline);
     }
-    // Sin red y sin caché: NO disparar el RPC de precios (cuelga hasta el
-    // timeout de 45s → "se queda cargando al agregar productos"). Caemos a
-    // list_price; los precios reales se ven al reconectar/reabrir.
+    setOnlineCapturedPrices(new Map());
+
+    // Offline never invokes pricing RPCs. Product enrichment below resolves
+    // each product from the durable customer/list snapshot instead.
     if (!isOnline) {
       setPriceMap(new Map());
       setPriceLoading(false);
       return;
     }
+
     let cancelled = false;
-    setPriceLoading(true);
-    computeCustomerPrices(partnerId, products, pricingOptions).then((map) => {
+    loadOnlineCustomerPricing({
+      partnerId,
+      products,
+      companyId,
+      requestedPricelistId: pricelistId ?? null,
+    }).then((loaded) => {
       if (!cancelled) {
-        setPriceMap(map);
+        setPriceMap(loaded.displayPrices);
+        setOnlineCapturedPrices(loaded.capturedPrices);
         setPriceLoading(false);
       }
-      // Perf Fase 2B: persistir el precio recién computado para lectura offline
-      // tras un reinicio (partner no precargado en la preparación de ruta).
-      schedulePersistPriceCache();
     }).catch(() => {
       if (!cancelled) setPriceLoading(false);
     });
@@ -208,12 +384,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     try {
       await loadProducts(warehouseId);
       if (partnerId) {
-        const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
-        const map = await computeCustomerPrices(partnerId, useProductStore.getState().products, pricingOptions);
-        setPriceMap(map);
-        schedulePersistPriceCache();
+        const loaded = await loadOnlineCustomerPricing({
+          partnerId,
+          products: useProductStore.getState().products,
+          companyId,
+          requestedPricelistId: pricelistId ?? null,
+        });
+        setPriceMap(loaded.displayPrices);
+        setOnlineCapturedPrices(loaded.capturedPrices);
       } else {
         setPriceMap(new Map());
+        setOnlineCapturedPrices(new Map());
       }
     } finally {
       setPriceLoading(false);
@@ -231,18 +412,90 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
   // Enrich products with customer price
   const enrichedProducts = useMemo(() => {
-    return products.map((p) => {
-      const custom = priceMap.get(p.id);
-      return {
-        ...p,
-        category: categorizeProduct(p.name),
-        isRecommended: recommendations.has(p.id),
-        isAlreadyAdded: existingProductIds.includes(p.id),
-        customerPrice: custom ?? p.list_price,
-        hasCustomPrice: custom !== undefined,
-      };
+    const resolvedCompanyId = (
+      typeof companyId === 'number'
+      && Number.isInteger(companyId)
+      && companyId > 0
+    ) ? companyId : 0;
+    const resolvedPartnerId = (
+      typeof partnerId === 'number'
+      && Number.isInteger(partnerId)
+      && partnerId > 0
+    ) ? partnerId : 0;
+
+    return products.flatMap((p): EnrichedProduct[] => {
+      const legacyOnlinePrice = priceMap.get(p.id);
+      let snapshotPrice: CapturedCustomerPrice | null;
+      let hasCapturedPriceMetadata: boolean;
+
+      if (!isOnline) {
+        snapshotPrice = resolveCapturedCustomerPrice(
+          getCustomerPricingSnapshotState(),
+          {
+            companyId: resolvedCompanyId,
+            planId,
+            partnerId: resolvedPartnerId,
+            requestedPricelistId: pricelistId ?? null,
+            productId: p.id,
+            publicPrice: p.list_price,
+          },
+        );
+        hasCapturedPriceMetadata = true;
+      } else {
+        const serverCapturedPrice = onlineCapturedPrices.get(p.id);
+        snapshotPrice = serverCapturedPrice ?? (
+          legacyOnlinePrice !== undefined
+            ? {
+                unitPrice: legacyOnlinePrice,
+                source: 'public_fallback',
+                capturedAtMs: null,
+                pricelistId: null,
+              }
+            : null
+        );
+        hasCapturedPriceMetadata = serverCapturedPrice !== undefined;
+      }
+
+      try {
+        const priceSelection = selectProductPrice({
+          isOnline,
+          snapshotPrice,
+          publicPrice: p.list_price,
+        });
+        return [{
+          ...p,
+          category: categorizeProduct(p.name),
+          isRecommended: recommendations.has(p.id),
+          isAlreadyAdded: existingProductIds.includes(p.id),
+          customerPrice: priceSelection.price.unitPrice,
+          hasCustomPrice:
+            priceSelection.price.source !== 'public_fallback'
+            || legacyOnlinePrice !== undefined,
+          priceSelection,
+          hasCapturedPriceMetadata,
+        }];
+      } catch (error) {
+        logWarn('general', 'product_picker_invalid_price_omitted', {
+          product_id: p.id,
+          partner_id: resolvedPartnerId || null,
+          requested_pricelist_id: pricelistId ?? null,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return [];
+      }
     });
-  }, [products, recommendations, existingProductIds, priceMap]);
+  }, [
+    companyId,
+    existingProductIds,
+    isOnline,
+    onlineCapturedPrices,
+    partnerId,
+    planId,
+    pricelistId,
+    priceMap,
+    products,
+    recommendations,
+  ]);
 
   // BLD-20260424-STOCKMETA: usamos el flag explícito hasStockData del
   // backend (commit dd78489 de Sebastián) en vez de la heurística
@@ -301,24 +554,44 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     const qty = quantities[product.id] || 1;
     // SaleLineItem.price = base price SIN IVA (for Odoo sync).
     // Both public and customer pricelist prices are already base values.
-    const rawPrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
-      ? product.customerPrice : 0;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
-      price: normalizeSaleLineBasePrice(rawPrice),
+      price: normalizeSaleLineBasePrice(product.priceSelection.price.unitPrice),
+      ...(product.hasCapturedPriceMetadata ? {
+        priceSource: product.priceSelection.price.source,
+        priceCapturedAtMs: product.priceSelection.price.capturedAtMs,
+        pricelistId: product.priceSelection.price.pricelistId,
+      } : {}),
       qty: Math.min(qty, product.qty_display),
       stock: product.qty_display,
       weight: product.weight || 5,
     };
-    if (onAddLine) {
-      onAddLine(line); // caller-managed cart (e.g. Preventa)
-    } else {
-      addSaleLine(line); // default: active-visit cart
+
+    const commitSelection = () => {
+      if (onAddLine) {
+        onAddLine(line); // caller-managed cart (e.g. Preventa)
+      } else {
+        addSaleLine(line); // default: active-visit cart
+      }
+      setSearch('');
+      setQuantities({});
+      onClose();
+    };
+
+    if (product.priceSelection.requiresPublicFallbackConfirmation) {
+      Alert.alert(
+        'Precio público sin validar',
+        'Esta ruta no tiene un precio del cliente guardado para este producto. Se usará el precio público. ¿Deseas continuar?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Usar precio público', onPress: commitSelection },
+        ],
+      );
+      return;
     }
-    setSearch('');
-    setQuantities({});
-    onClose();
+
+    commitSelection();
   }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose]);
 
   // ═══ Product Image ═══

@@ -29,6 +29,7 @@ function extractBracedBlockAfter(source, marker) {
 const root = process.cwd();
 const picker = fs.readFileSync(path.join(root, 'src/components/domain/ProductPicker.tsx'), 'utf8');
 const sale = fs.readFileSync(path.join(root, 'app/sale/[stopId].tsx'), 'utf8');
+const visitStore = fs.readFileSync(path.join(root, 'src/stores/useVisitStore.ts'), 'utf8');
 
 // PR-4a: la confirmación offline decide la tarifa solo con datos locales.
 assert(
@@ -64,6 +65,87 @@ assert.match(
 // #1 ProductPicker: guard isOnline antes del fetch de precios (no cuelga offline).
 assert(picker.includes('useSyncStore'), 'ProductPicker debe leer isOnline');
 assert(/if \(!isOnline\)/.test(picker), 'price effect debe cortar el fetch si !isOnline');
+
+// Snapshot de precio offline: identidad exacta y decisión pura para cada producto.
+assert(
+  picker.includes('getCustomerPricingSnapshotState')
+    && picker.includes('resolveCapturedCustomerPrice')
+    && picker.includes('selectProductPrice'),
+  'ProductPicker debe resolver y seleccionar el snapshot offline con servicios puros',
+);
+assert(
+  picker.includes('useRouteStore'),
+  'ProductPicker debe leer el plan actual para distinguir prepared de last-known',
+);
+assert.match(
+  picker,
+  /resolveCapturedCustomerPrice\(\s*getCustomerPricingSnapshotState\(\),\s*\{[\s\S]*?companyId:\s*resolvedCompanyId,[\s\S]*?planId,[\s\S]*?partnerId:\s*resolvedPartnerId,[\s\S]*?requestedPricelistId:\s*pricelistId\s*\?\?\s*null,[\s\S]*?productId:\s*p\.id,[\s\S]*?publicPrice:\s*p\.list_price,[\s\S]*?\}\s*\)/,
+  'offline debe resolver por empresa, plan, cliente, lista solicitada, producto y precio publico exactos',
+);
+assert.match(
+  picker,
+  /const priceSelection = selectProductPrice\(\{[\s\S]*?isOnline,[\s\S]*?snapshotPrice,[\s\S]*?publicPrice:\s*p\.list_price,[\s\S]*?\}\)/,
+  'cada producto debe pasar por la decisión pura de precio',
+);
+
+// La línea congela precio y procedencia; los snapshots legacy siguen siendo válidos.
+assert.match(visitStore, /priceSource\?:\s*'prepared_customer'\s*\|\s*'last_known_customer'\s*\|\s*'public_fallback'/);
+assert.match(visitStore, /priceCapturedAtMs\?:\s*number\s*\|\s*null/);
+assert.match(visitStore, /pricelistId\?:\s*number\s*\|\s*null/);
+assert.match(
+  picker,
+  /price:\s*normalizeSaleLineBasePrice\(product\.priceSelection\.price\.unitPrice\)/,
+  'la línea debe usar exactamente el precio capturado por la decisión',
+);
+assert.match(
+  picker,
+  /priceSource:\s*product\.priceSelection\.price\.source[\s\S]*?priceCapturedAtMs:\s*product\.priceSelection\.price\.capturedAtMs[\s\S]*?pricelistId:\s*product\.priceSelection\.price\.pricelistId/,
+  'la línea debe conservar procedencia, captura y lista canónica',
+);
+
+// Sólo public_fallback offline envuelve el add/close existente en una alerta.
+assert.match(
+  picker,
+  /if \(product\.priceSelection\.requiresPublicFallbackConfirmation\) \{[\s\S]*?Alert\.alert\([\s\S]*?precio del cliente guardado[\s\S]*?precio público[\s\S]*?text:\s*'Cancelar'[\s\S]*?style:\s*'cancel'[\s\S]*?text:\s*'Usar precio público'[\s\S]*?onPress:\s*commitSelection/,
+  'fallback público debe pedir una confirmación cancelable antes de agregar',
+);
+assert.equal(
+  (picker.match(/\bonAddLine\(line\)/g) ?? []).length,
+  1,
+  'la confirmación debe conservar un solo sink onAddLine',
+);
+assert.equal(
+  (picker.match(/\baddSaleLine\(line\)/g) ?? []).length,
+  1,
+  'la confirmación debe conservar un solo sink addSaleLine',
+);
+
+// Un full response online alimenta display + ledger; nunca activa preparación.
+assert(
+  picker.includes('fetchServerCustomerPricingSnapshot')
+    && picker.includes('recordLastKnownServerPrices')
+    && picker.includes('updateCustomerPricingSnapshotState'),
+  'ProductPicker online debe usar el contrato full y publicar el ledger',
+);
+assert.equal(
+  (picker.match(/\bfetchServerCustomerPricingSnapshot\s*\(/g) ?? []).length,
+  1,
+  'un loader compartido debe realizar una sola petición full por carga',
+);
+assert.match(
+  picker,
+  /const validation = await fetchServerCustomerPricingSnapshot\([\s\S]*?const displayPrices = new Map\(validation\.prices\)[\s\S]*?updateCustomerPricingSnapshotState\(\(current\) =>[\s\S]*?recordLastKnownServerPrices\(current,[\s\S]*?validation,[\s\S]*?\)\s*\)/,
+  'la misma respuesta completa debe alimentar display y recordLastKnownServerPrices',
+);
+assert.match(
+  picker,
+  /updateCustomerPricingSnapshotState\(\(current\) => \{[\s\S]*?nextForegroundPricingCapture\(\s*maxCustomerPricingCaptureAtMs\(current\),?\s*\)[\s\S]*?recordLastKnownServerPrices\(current,/,
+  'la captura foreground debe ser monótona incluso frente al estado persistido',
+);
+assert(
+  !picker.includes('activatePreparedPricingRun'),
+  'ProductPicker nunca debe activar un manifiesto preparado',
+);
 
 // #2 ONLINE: venta sigue siendo online-first (createSale directo).
 assert(sale.includes('await createSale('), 'venta online usa createSale directo');

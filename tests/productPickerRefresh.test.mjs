@@ -26,8 +26,8 @@ function main() {
   );
   assert.match(
     productPicker,
-    /computeCustomerPrices\(partnerId, useProductStore\.getState\(\)\.products/,
-    'ProductPicker debe recalcular precios con los productos recien cargados',
+    /loadOnlineCustomerPricing\(\{[\s\S]*?partnerId,[\s\S]*?products:\s*useProductStore\.getState\(\)\.products/,
+    'ProductPicker debe recalcular el full response con los productos recien cargados',
   );
   assert.match(
     productPicker,

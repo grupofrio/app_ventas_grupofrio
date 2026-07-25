@@ -39,18 +39,21 @@ assert(
   'el catálogo debe guardarse en un sobre versionado con contextKey de jornada',
 );
 
-// 3. El stock cacheado es referencial: existe la acción de rehidratar y marca
-//    fromCache (no se trata como autoritativo).
+// 3. El stock cacheado es referencial: la acción offline conserva la API legacy
+//    y marca fromCache/cached (no se trata como autoritativo).
 assert(
-  productStore.includes('hydrateFromCache:') && productStore.includes('fromCache: true'),
+  productStore.includes('hydrateFromCache:') &&
+    productStore.includes('hydrateOfflineCatalog:') &&
+    productStore.includes('fromCache: hasCatalog') &&
+    productStore.includes("inventoryFreshness: hasCatalog ? 'cached' : 'unknown'"),
   'debe rehidratar marcando fromCache (stock referencial)',
 );
 
 // 4. rehydrate.ts ya NO borra el catálogo a ciegas: lo rehidrata, y solo
 //    limpia la key legacy entities:products.
 assert(
-  rehydrate.includes('hydrateFromCache('),
-  'rehydrate debe rehidratar el catálogo desde caché',
+  rehydrate.includes('hydrateOfflineCatalog('),
+  'rehydrate debe rehidratar el catálogo del día, last-known y recientes',
 );
 assert(
   rehydrate.includes('hydratePriceCacheFromDisk('),

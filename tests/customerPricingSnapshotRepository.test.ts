@@ -1045,7 +1045,7 @@ test('boot hydrates durable pricing snapshots before catalog and legacy price ca
   const snapshotHydration = source.indexOf(
     'await hydrateCustomerPricingSnapshots()',
   );
-  const catalogHydration = source.indexOf('hydrateFromCache(');
+  const catalogHydration = source.indexOf('hydrateOfflineCatalog(warehouseId)');
   const legacyPriceHydration = source.indexOf('hydratePriceCacheFromDisk(');
 
   assert.notEqual(snapshotHydration, -1);

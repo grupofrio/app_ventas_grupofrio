@@ -147,7 +147,9 @@ export async function rehydrateAppState(): Promise<{
     // Limpiamos la key legacy `entities:products` que ya no se usa.
     await storeRemove(STORAGE_KEYS.PRODUCTS);
     const warehouseId = useAuthStore.getState().warehouseId;
-    productCount = await useProductStore.getState().hydrateFromCache(warehouseId);
+    // Startup uses the full exact-context fallback so recent products are also
+    // ready before sale UI; hydrateFromCache remains only as a store alias.
+    productCount = await useProductStore.getState().hydrateOfflineCatalog(warehouseId);
     const restoredPrices = await hydratePriceCacheFromDisk();
 
     // 4. Migración de compatibilidad (UNA versión): descarta de la cola cualquier

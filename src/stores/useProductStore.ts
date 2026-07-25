@@ -14,6 +14,7 @@
  */
 
 import { create } from 'zustand';
+import NetInfo from '@react-native-community/netinfo';
 import { Product } from '../types/product';
 import { odooRead } from '../services/odooRpc';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
@@ -28,6 +29,23 @@ import {
 import { todayLocalISO } from '../utils/localDate';
 import { schedulePersistPriceCache } from '../services/offlineCache';
 import type { InventoryLoadResult } from '../services/legacyRefreshRunner';
+import type { SaleLineItem } from './useVisitStore';
+import type { InventoryFreshness } from '../services/effectiveOfflineCatalog';
+import {
+  buildOfflineCatalogContext,
+  buildOfflineCatalogContextIdentity,
+  loadLastKnownCatalog,
+  loadRecentProducts,
+  saveLastKnownCatalogStrict,
+  saveRecentProductsStrict,
+  type LastKnownCatalogSnapshot,
+  type OfflineCatalogContext,
+} from '../services/offlineCatalogRepository';
+import {
+  upsertRecentProducts,
+  type RecentProductSnapshot,
+} from '../services/recentProductIndex';
+import { describeInventoryAuthority } from '../services/productInventoryFreshness';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
 
@@ -65,6 +83,8 @@ interface ProductState {
   // red). cachedAtMs = cuándo se generó el caché rehidratado.
   fromCache: boolean;
   cachedAtMs: number | null;
+  inventoryFreshness: InventoryFreshness;
+  recentProducts: RecentProductSnapshot[];
 
   // Derived
   totalStockKg: number;
@@ -88,6 +108,8 @@ interface ProductState {
    * NO hace red; la carga online sigue siendo `loadProducts`.
    */
   hydrateFromCache: (warehouseId: number | null) => Promise<number>;
+  hydrateOfflineCatalog: (warehouseId: number | null) => Promise<number>;
+  recordRecentProducts: (lines: SaleLineItem[]) => Promise<void>;
   reset: () => void;
 }
 
@@ -134,23 +156,139 @@ interface CatalogCachePayload {
   hasStockData: boolean | null;
 }
 
-/** contextKey de catálogo: día + empleado + empresa + almacén. */
-function buildCatalogContextKey(warehouseId: number | null): string {
-  const auth = useAuthStore.getState();
-  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, warehouseId]);
+let catalogGeneration = 0;
+let recentWriteChain: Promise<void> = Promise.resolve();
+let activeCatalogContextIdentity: string | null = null;
+
+function positiveSafeId(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value > 0;
 }
 
-/** Persiste el catálogo actual en disco (fire-and-forget). */
-function persistCatalogToDisk(
+function validOfflineCatalogContext(
+  context: OfflineCatalogContext,
+): context is OfflineCatalogContext & {
+  employeeId: number;
+  companyId: number;
+  warehouseId: number;
+} {
+  return positiveSafeId(context.employeeId)
+    && positiveSafeId(context.companyId)
+    && positiveSafeId(context.warehouseId)
+    && (context.mobileLocationId === null || positiveSafeId(context.mobileLocationId));
+}
+
+function currentOfflineCatalogContext(
+  warehouseId: number | null,
+): (OfflineCatalogContext & {
+  employeeId: number;
+  companyId: number;
+  warehouseId: number;
+}) | null {
+  const auth = useAuthStore.getState();
+  if (!positiveSafeId(warehouseId) || auth.warehouseId !== warehouseId) return null;
+  const context = buildOfflineCatalogContext({
+    employeeId: auth.employeeId,
+    companyId: auth.companyId,
+    warehouseId,
+    mobileLocationId: auth.mobileLocationId,
+  });
+  return validOfflineCatalogContext(context) ? context : null;
+}
+
+/** contextKey de catálogo: día + contexto completo de auth/logística. */
+function buildCatalogContextKey(context: OfflineCatalogContext): string {
+  return buildContextKey([
+    todayLocalISO(),
+    context.employeeId,
+    context.companyId,
+    context.warehouseId,
+    context.mobileLocationId,
+  ]);
+}
+
+/** Persiste el catálogo actual de jornada sin convertirlo en autoridad. */
+async function persistCatalogToDisk(
   products: TruckProduct[],
   inventorySource: InventorySource | null,
   hasStockData: boolean | null,
-  warehouseId: number | null,
-): void {
+  context: OfflineCatalogContext,
+  fetchedAtMs = Date.now(),
+): Promise<void> {
   if (products.length === 0) return;
   const payload: CatalogCachePayload = { products, inventorySource, hasStockData };
-  const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(warehouseId), Date.now());
-  void storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
+  const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(context), fetchedAtMs);
+  await storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
+}
+
+function safeInventorySource(value: unknown): InventorySource | null {
+  return value === 'truck_stock'
+    || value === 'stock_quant'
+    || value === 'global_legacy'
+    ? value
+    : null;
+}
+
+function validCachedProduct(value: unknown): value is TruckProduct {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const product = value as Partial<TruckProduct>;
+  return positiveSafeId(product.id)
+    && typeof product.name === 'string'
+    && product.name.trim().length > 0
+    && typeof product.list_price === 'number'
+    && Number.isFinite(product.list_price)
+    && product.list_price >= 0
+    && typeof product.qty_available === 'number'
+    && Number.isFinite(product.qty_available)
+    && typeof product.sale_ok === 'boolean'
+    && typeof product._totalKg === 'number'
+    && Number.isFinite(product._totalKg)
+    && typeof product.qty_reserved === 'number'
+    && Number.isFinite(product.qty_reserved)
+    && product.qty_reserved >= 0
+    && typeof product.qty_display === 'number'
+    && Number.isFinite(product.qty_display)
+    && product.qty_display >= 0
+    && typeof product._isGlobalFallback === 'boolean';
+}
+
+function parseCatalogCachePayload(value: unknown): CatalogCachePayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const payload = value as Partial<CatalogCachePayload>;
+  if (
+    !Array.isArray(payload.products)
+    || payload.products.length === 0
+    || !payload.products.every(validCachedProduct)
+    || !(
+      payload.inventorySource === null
+      || payload.inventorySource === 'truck_stock'
+      || payload.inventorySource === 'stock_quant'
+      || payload.inventorySource === 'global_legacy'
+    )
+    || !(
+      payload.hasStockData === null
+      || typeof payload.hasStockData === 'boolean'
+    )
+  ) {
+    return null;
+  }
+  const ids = new Set(payload.products.map(({ id }) => id));
+  if (ids.size !== payload.products.length) return null;
+  return {
+    products: payload.products.map((product) => ({ ...product })),
+    inventorySource: safeInventorySource(payload.inventorySource),
+    hasStockData: payload.hasStockData,
+  };
+}
+
+async function currentNetworkStatus(): Promise<boolean> {
+  try {
+    const state = await NetInfo.fetch();
+    return state.isConnected === true && state.isInternetReachable !== false;
+  } catch {
+    return false;
+  }
 }
 
 export const useProductStore = create<ProductState>((set, get) => ({
@@ -163,6 +301,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   hasStockData: null,
   fromCache: false,
   cachedAtMs: null,
+  inventoryFreshness: 'unknown',
+  recentProducts: [],
   totalStockKg: 0,
   productCount: 0,
 
@@ -170,7 +310,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
     // BLD-20260408-P0: Guard against null/0 warehouseId — this was the root
     // cause of inventory loading the global product list (104 products,
     // 595k kg) instead of the truck's scoped stock.
-    if (!warehouseId || warehouseId <= 0) {
+    if (!positiveSafeId(warehouseId)) {
       logWarn('inventory', 'load_skipped_no_warehouse', {
         warehouseId,
         message: 'Cannot load inventory without a valid warehouseId',
@@ -179,6 +319,47 @@ export const useProductStore = create<ProductState>((set, get) => ({
       return;
     }
 
+    const context = currentOfflineCatalogContext(warehouseId);
+    if (!context) {
+      catalogGeneration += 1;
+      activeCatalogContextIdentity = null;
+      set({
+        products: [],
+        recentProducts: [],
+        error: 'La sesión no tiene un contexto logístico válido.',
+        isLoading: false,
+        lastSync: null,
+        totalStockKg: 0,
+        productCount: 0,
+        inventorySource: null,
+        loadedWarehouseId: null,
+        hasStockData: null,
+        fromCache: false,
+        cachedAtMs: null,
+        inventoryFreshness: 'unknown',
+      });
+      return;
+    }
+    const contextIdentity = buildOfflineCatalogContextIdentity(context);
+    const loadGeneration = ++catalogGeneration;
+    if (
+      activeCatalogContextIdentity !== null
+      && activeCatalogContextIdentity !== contextIdentity
+    ) {
+      set({
+        products: [],
+        recentProducts: [],
+        lastSync: null,
+        totalStockKg: 0,
+        productCount: 0,
+        inventorySource: null,
+        loadedWarehouseId: null,
+        hasStockData: null,
+        fromCache: false,
+        cachedAtMs: null,
+        inventoryFreshness: 'unknown',
+      });
+    }
     set({ isLoading: true, error: null });
 
     // Preserve current reserved amounts (for refresh during active operations)
@@ -202,6 +383,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // sincronizado en el almacén" ahora la determina el backend vía el
       // flag `has_stock_data` (commit dd78489 de Sebastián). El cliente
       // solo lo lee y lo expone al store; ProductPicker decide la UI.
+      // Keep the endpoint input visibly sourced from the current auth session;
+      // `context` captured the same value synchronously and guards stale writes.
       const mobileLocationId = useAuthStore.getState().mobileLocationId;
       const scoped = await fetchTruckStock(warehouseId, mobileLocationId);
       if (scoped && scoped.products.length > 0) {
@@ -326,11 +509,28 @@ export const useProductStore = create<ProductState>((set, get) => ({
         .sort((a, b) => b.qty_available - a.qty_available);
 
       const totalKg = products.reduce((sum, p) => sum + p._totalKg, 0);
+      const isOnline = await currentNetworkStatus();
+      const currentContext = currentOfflineCatalogContext(warehouseId);
+      if (
+        loadGeneration !== catalogGeneration
+        || !currentContext
+        || buildOfflineCatalogContextIdentity(currentContext) !== contextIdentity
+      ) {
+        return;
+      }
+      const fetchedAtMs = Date.now();
+      const inventoryFreshness = describeInventoryAuthority({
+        isOnline,
+        loadedWarehouseId: warehouseId,
+        expectedWarehouseId: currentContext.warehouseId,
+        inventorySource: source,
+        fromCache: false,
+      });
 
       set({
         products,
         isLoading: false,
-        lastSync: Date.now(),
+        lastSync: fetchedAtMs,
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         inventorySource: source,
@@ -339,7 +539,9 @@ export const useProductStore = create<ProductState>((set, get) => ({
         // Carga fresca de red → ya no provienen del caché.
         fromCache: false,
         cachedAtMs: null,
+        inventoryFreshness,
       });
+      activeCatalogContextIdentity = contextIdentity;
 
       // BLD-20260424-BUGA: resumen estructurado de la carga para poder
       // diagnosticar en campo sin rebuild. Útil cuando el operador reporta
@@ -361,11 +563,43 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // se guarda como referencial — la venta sigue online-first y el backend
       // valida stock/precio al confirmar. Limpiamos la key legacy sin uso.
       void storeRemove(STORAGE_KEYS.PRODUCTS);
-      persistCatalogToDisk(products, source, hasStockData, warehouseId);
+      if (products.length > 0) {
+        await persistCatalogToDisk(
+          products,
+          source,
+          hasStockData,
+          context,
+          fetchedAtMs,
+        );
+        try {
+          await saveLastKnownCatalogStrict({
+            version: 1,
+            companyId: context.companyId,
+            employeeId: context.employeeId,
+            warehouseId: context.warehouseId,
+            mobileLocationId: context.mobileLocationId,
+            fetchedAtMs,
+            inventorySource: source,
+            hasStockData,
+            products: products.map((product) => ({ ...product })),
+          } satisfies LastKnownCatalogSnapshot);
+        } catch (error) {
+          logWarn('inventory', 'last_known_catalog_save_failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       schedulePersistPriceCache();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
-      set({ error: msg, isLoading: false });
+      const currentContext = currentOfflineCatalogContext(warehouseId);
+      if (
+        loadGeneration === catalogGeneration
+        && currentContext
+        && buildOfflineCatalogContextIdentity(currentContext) === contextIdentity
+      ) {
+        set({ error: msg, isLoading: false });
+      }
       logWarn('inventory', 'load_failed', { error: msg });
     }
   },
@@ -373,8 +607,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   // P1-2: carga con resultado AUTORITATIVO explícito. loadProducts absorbe sus
   // errores (setea `error`, resuelve) y puede terminar en `global_legacy` (lista
   // global sin scope de almacén). Aquí NO inferimos éxito por Promise/error null:
-  // exigimos fuente scoped (truck_stock/stock_quant), sin error, y que el
-  // warehouseId cargado coincida con el solicitado.
+  // exigimos la misma autoridad estricta expuesta a la UI: truck_stock fresco,
+  // online, sin caché y para el warehouse solicitado.
   loadProductsAuthoritative: async (warehouseId: number): Promise<InventoryLoadResult> => {
     if (!warehouseId || warehouseId <= 0) {
       return { ok: false, authoritative: false, reason: 'missing_warehouse' };
@@ -390,6 +624,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
     const err = get().error;
     const source = get().inventorySource;
     const loadedWh = get().loadedWarehouseId;
+    const inventoryFreshness = get().inventoryFreshness;
     if (err) {
       return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
     }
@@ -399,7 +634,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
     if (loadedWh !== warehouseId) {
       return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
     }
-    if (source === 'truck_stock' || source === 'stock_quant') {
+    if (source === 'truck_stock' && inventoryFreshness === 'authoritative') {
       return { ok: true, authoritative: true, warehouseId, source };
     }
     return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };
@@ -435,62 +670,230 @@ export const useProductStore = create<ProductState>((set, get) => ({
     set({ products, totalStockKg: Math.round(totalKg) });
     // Perf Fase 2B: re-persistir el catálogo con las reservas locales para que
     // qty_reserved/qty_display sobrevivan un reinicio (display de lectura).
-    persistCatalogToDisk(
-      products,
-      get().inventorySource,
-      get().hasStockData,
-      useAuthStore.getState().warehouseId,
-    );
+    const context = currentOfflineCatalogContext(get().loadedWarehouseId);
+    if (
+      context
+      && buildOfflineCatalogContextIdentity(context) === activeCatalogContextIdentity
+    ) {
+      void persistCatalogToDisk(
+        products,
+        get().inventorySource,
+        get().hasStockData,
+        context,
+      );
+    }
   },
 
   getProduct: (productId) => get().products.find((p) => p.id === productId),
 
-  hydrateFromCache: async (warehouseId: number | null) => {
+  hydrateFromCache: async (warehouseId: number | null) =>
+    get().hydrateOfflineCatalog(warehouseId),
+
+  hydrateOfflineCatalog: async (warehouseId: number | null) => {
+    const hydrationGeneration = ++catalogGeneration;
+    const context = currentOfflineCatalogContext(warehouseId);
+    if (!context) {
+      activeCatalogContextIdentity = null;
+      set({
+        products: [],
+        recentProducts: [],
+        isLoading: false,
+        error: null,
+        lastSync: null,
+        totalStockKg: 0,
+        productCount: 0,
+        inventorySource: null,
+        loadedWarehouseId: null,
+        hasStockData: null,
+        fromCache: false,
+        cachedAtMs: null,
+        inventoryFreshness: 'unknown',
+      });
+      return 0;
+    }
+    const contextIdentity = buildOfflineCatalogContextIdentity(context);
+
+    let sameDayPayload: CatalogCachePayload | null = null;
+    let sameDayCachedAtMs: number | null = null;
     try {
       const raw = await storeLoad<unknown>(STORAGE_KEYS.PRODUCTS_CATALOG);
-      if (raw === null) return 0;
-      const result = readCacheEnvelope<CatalogCachePayload>(
-        raw,
-        buildCatalogContextKey(warehouseId),
-        CATALOG_CACHE_TTL_MS,
-        Date.now(),
-      );
-      if (result.status !== 'ok' || !result.payload || !Array.isArray(result.payload.products)) {
-        // miss (otro día/empleado/almacén/corrupto) o stale → limpiar, no hidratar.
-        await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG);
-        if (result.status === 'stale') {
-          logInfo('inventory', 'catalog_cache_stale_cleared', {});
+      if (raw !== null) {
+        const result = readCacheEnvelope<unknown>(
+          raw,
+          buildCatalogContextKey(context),
+          CATALOG_CACHE_TTL_MS,
+          Date.now(),
+        );
+        if (result.status === 'ok') {
+          sameDayPayload = parseCatalogCachePayload(result.payload);
+          sameDayCachedAtMs = sameDayPayload ? result.cachedAtMs : null;
         }
-        return 0;
+        if (result.status !== 'ok' || !sameDayPayload) {
+          await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG);
+          if (result.status === 'stale') {
+            logInfo('inventory', 'catalog_cache_stale_cleared', {});
+          }
+        }
       }
-      const products = result.payload.products;
-      const totalKg = products.reduce((sum, p) => sum + (p._totalKg || 0), 0);
-      set({
-        products,
-        inventorySource: result.payload.inventorySource ?? 'truck_stock',
-        hasStockData: result.payload.hasStockData ?? null,
-        totalStockKg: Math.round(totalKg),
-        productCount: products.length,
-        lastSync: result.cachedAtMs,
-        fromCache: true,
-        cachedAtMs: result.cachedAtMs,
-      });
-      logInfo('inventory', 'catalog_cache_hydrated', {
-        count: products.length,
-        cachedAtMs: result.cachedAtMs,
-      });
-      return products.length;
     } catch (error) {
       logWarn('inventory', 'catalog_cache_hydrate_failed', { error: String(error) });
       try { await storeRemove(STORAGE_KEYS.PRODUCTS_CATALOG); } catch { /* noop */ }
+    }
+
+    const lastKnown = sameDayPayload
+      ? null
+      : await loadLastKnownCatalog(context);
+    const recentProducts = await loadRecentProducts(context);
+    const currentContext = currentOfflineCatalogContext(warehouseId);
+    if (
+      hydrationGeneration !== catalogGeneration
+      || !currentContext
+      || buildOfflineCatalogContextIdentity(currentContext) !== contextIdentity
+    ) {
       return 0;
     }
+
+    const products = sameDayPayload?.products
+      ?? lastKnown?.products.map((product) => ({ ...product }))
+      ?? [];
+    const inventorySource = sameDayPayload?.inventorySource
+      ?? lastKnown?.inventorySource
+      ?? null;
+    const hasStockData = sameDayPayload?.hasStockData
+      ?? lastKnown?.hasStockData
+      ?? null;
+    const cachedAtMs = sameDayCachedAtMs ?? lastKnown?.fetchedAtMs ?? null;
+    const totalKg = products.reduce((sum, product) => sum + product._totalKg, 0);
+    const hasCatalog = products.length > 0;
+
+    set({
+      products,
+      recentProducts: recentProducts.map((product) => ({ ...product })),
+      isLoading: false,
+      error: null,
+      inventorySource,
+      loadedWarehouseId: hasCatalog ? context.warehouseId : null,
+      hasStockData,
+      totalStockKg: Math.round(totalKg),
+      productCount: products.length,
+      lastSync: cachedAtMs,
+      fromCache: hasCatalog,
+      cachedAtMs,
+      inventoryFreshness: hasCatalog ? 'cached' : 'unknown',
+    });
+    activeCatalogContextIdentity = contextIdentity;
+    logInfo('inventory', 'offline_catalog_hydrated', {
+      count: products.length,
+      recentCount: recentProducts.length,
+      source: sameDayPayload ? 'same_day' : lastKnown ? 'last_known' : 'none',
+      cachedAtMs,
+    });
+    return products.length;
   },
 
-  reset: () => set({
-    products: [], isLoading: false, error: null,
-    lastSync: null, totalStockKg: 0, productCount: 0,
-    inventorySource: null, hasStockData: null,
-    fromCache: false, cachedAtMs: null,
-  }),
+  recordRecentProducts: async (lines: SaleLineItem[]) => {
+    const authWarehouseId = useAuthStore.getState().warehouseId;
+    const context = currentOfflineCatalogContext(authWarehouseId);
+    if (!context || !Array.isArray(lines)) return;
+    const contextIdentity = buildOfflineCatalogContextIdentity(context);
+    const recordGeneration = catalogGeneration;
+    const productsById = new Map(
+      get().products.map((product) => [product.id, product] as const),
+    );
+    const recentById = new Map(
+      get().recentProducts.map((product) => [product.productId, product] as const),
+    );
+    const lastSeenAtMs = Date.now();
+    const incoming: RecentProductSnapshot[] = [];
+
+    for (const line of lines) {
+      if (
+        !line
+        || !positiveSafeId(line.productId)
+        || typeof line.productName !== 'string'
+        || line.productName.trim().length === 0
+        || typeof line.qty !== 'number'
+        || !Number.isSafeInteger(line.qty)
+        || line.qty <= 0
+        || typeof line.weight !== 'number'
+        || !Number.isFinite(line.weight)
+        || line.weight < 0
+      ) {
+        continue;
+      }
+      const product = productsById.get(line.productId);
+      const previous = recentById.get(line.productId);
+      const publicListPrice = product?.list_price ?? previous?.listPrice ?? 0;
+      if (!Number.isFinite(publicListPrice) || publicListPrice < 0) continue;
+      const productName = product?.name?.trim() || previous?.name || line.productName.trim();
+      const rawDefaultCode = product?.default_code;
+      const defaultCode = typeof rawDefaultCode === 'string'
+        ? rawDefaultCode.trim() || null
+        : previous?.defaultCode ?? null;
+      const publicWeight = typeof product?.weight === 'number'
+        && Number.isFinite(product.weight)
+        && product.weight >= 0
+        ? product.weight
+        : previous?.weight ?? line.weight;
+      incoming.push({
+        productId: line.productId,
+        name: productName,
+        defaultCode,
+        listPrice: publicListPrice,
+        weight: publicWeight,
+        lastSeenAtMs,
+      });
+    }
+    if (incoming.length === 0) return;
+
+    const write = recentWriteChain.then(async () => {
+      const persisted = await loadRecentProducts(context);
+      const next = upsertRecentProducts(persisted, incoming);
+      try {
+        await saveRecentProductsStrict(context, next);
+      } catch (error) {
+        logWarn('inventory', 'recent_products_save_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      const currentContext = currentOfflineCatalogContext(authWarehouseId);
+      if (
+        recordGeneration !== catalogGeneration
+        || !currentContext
+        || buildOfflineCatalogContextIdentity(currentContext) !== contextIdentity
+      ) {
+        return;
+      }
+      set({ recentProducts: next.map((product) => ({ ...product })) });
+    });
+    recentWriteChain = write.catch(() => undefined);
+    await write;
+  },
+
+  reset: () => {
+    catalogGeneration += 1;
+    activeCatalogContextIdentity = null;
+    set({
+      products: [], isLoading: false, error: null,
+      lastSync: null, totalStockKg: 0, productCount: 0,
+      inventorySource: null, loadedWarehouseId: null, hasStockData: null,
+      fromCache: false, cachedAtMs: null,
+      inventoryFreshness: 'unknown', recentProducts: [],
+    });
+  },
 }));
+
+// Product data is memory-scoped. Logging out or switching any auth/logistics
+// identity immediately clears it; durable snapshots remain partitioned on disk.
+useAuthStore.subscribe((state, previous) => {
+  const currentIdentity = buildOfflineCatalogContextIdentity(
+    buildOfflineCatalogContext(state),
+  );
+  const previousIdentity = buildOfflineCatalogContextIdentity(
+    buildOfflineCatalogContext(previous),
+  );
+  if (currentIdentity !== previousIdentity) {
+    useProductStore.getState().reset();
+  }
+});

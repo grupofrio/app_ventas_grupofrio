@@ -146,3 +146,36 @@ export async function loadSaleTicketSnapshot(
   );
   return parseSaleTicketSnapshot(stored, normalizedOperationId);
 }
+
+type SaleTicketSnapshotLoader = (
+  saleId: string,
+) => Promise<SaleTicketSnapshot | null>;
+
+export async function loadSaleTicketSnapshots(
+  saleIds: string[],
+  loadSnapshot: SaleTicketSnapshotLoader = loadSaleTicketSnapshot,
+): Promise<Map<string, SaleTicketSnapshot>> {
+  const seen = new Set<string>();
+  const uniqueIds: Array<{ original: string; normalized: string }> = [];
+
+  for (const original of saleIds) {
+    const normalized = normalizeOperationId(original);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    uniqueIds.push({ original, normalized });
+  }
+
+  const settled = await Promise.allSettled(
+    uniqueIds.map(({ normalized }) => (
+      Promise.resolve().then(() => loadSnapshot(normalized))
+    )),
+  );
+  const snapshots = new Map<string, SaleTicketSnapshot>();
+
+  settled.forEach((result, index) => {
+    if (result.status !== 'fulfilled' || result.value === null) return;
+    snapshots.set(uniqueIds[index].original, result.value);
+  });
+
+  return snapshots;
+}

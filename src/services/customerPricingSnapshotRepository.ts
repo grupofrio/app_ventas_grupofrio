@@ -21,13 +21,6 @@ export interface PricingSnapshotStorage {
 
 type UnknownRecord = Record<string, unknown>;
 
-const STATE_KEYS = [
-  'version',
-  'activeManifest',
-  'snapshots',
-  'requestedMappings',
-  'lastKnownPrices',
-] as const;
 const MANIFEST_KEYS = [
   'version',
   'companyId',
@@ -122,47 +115,45 @@ function isPricingTarget(value: unknown): value is PricingPreparationTarget {
   );
 }
 
-function isPricingManifest(
-  value: unknown,
-): value is PricingPreparationManifest {
-  return (
-    isRecord(value)
-    && hasOnlyKeys(value, MANIFEST_KEYS)
-    && value.version === 1
-    && isPositiveInteger(value.companyId)
-    && isNullablePositiveInteger(value.planId)
-    && isString(value.preparationRunId)
-    && isNonNegativeFiniteNumber(value.activatedAtMs)
-    && Array.isArray(value.targets)
-    && value.targets.every(isPricingTarget)
-  );
-}
-
 function isPreparedSnapshot(
   value: unknown,
 ): value is PreparedCustomerPricingSnapshot {
-  return (
-    isRecord(value)
-    && hasOnlyKeys(value, SNAPSHOT_KEYS)
-    && value.version === 1
-    && isString(value.snapshotId)
-    && value.snapshotId.length > 0
-    && isPositiveInteger(value.companyId)
-    && isPositiveInteger(value.partnerId)
-    && isPositiveInteger(value.resolvedPricelistId)
-    && isNonNegativeFiniteNumber(value.preparedAtMs)
-    && isNullablePositiveInteger(value.preparedPlanId)
-    && isString(value.preparationRunId)
-    && value.origin === 'odoo_server_full'
-    && isString(value.productFingerprint)
-    && Array.isArray(value.prices)
-    && value.prices.every((price) =>
-      Array.isArray(price)
-      && price.length === 2
-      && isPositiveInteger(price[0])
-      && isNonNegativeFiniteNumber(price[1])
-    )
-  );
+  if (
+    !isRecord(value)
+    || !hasOnlyKeys(value, SNAPSHOT_KEYS)
+    || value.version !== 1
+    || !isString(value.snapshotId)
+    || value.snapshotId.length === 0
+    || !isPositiveInteger(value.companyId)
+    || !isPositiveInteger(value.partnerId)
+    || !isPositiveInteger(value.resolvedPricelistId)
+    || !isNonNegativeFiniteNumber(value.preparedAtMs)
+    || !isNullablePositiveInteger(value.preparedPlanId)
+    || !isString(value.preparationRunId)
+    || value.origin !== 'odoo_server_full'
+    || !isString(value.productFingerprint)
+    || !Array.isArray(value.prices)
+  ) {
+    return false;
+  }
+
+  const productIds: number[] = [];
+  let previousProductId = 0;
+  for (const price of value.prices) {
+    if (
+      !Array.isArray(price)
+      || price.length !== 2
+      || !isPositiveInteger(price[0])
+      || !isNonNegativeFiniteNumber(price[1])
+      || price[0] <= previousProductId
+    ) {
+      return false;
+    }
+    productIds.push(price[0]);
+    previousProductId = price[0];
+  }
+
+  return value.productFingerprint === productIds.join(',');
 }
 
 function isRequestedMapping(
@@ -193,94 +184,154 @@ function isLastKnownPrice(
   );
 }
 
-function hasValidSnapshots(value: unknown): value is PricingSnapshotStateV1['snapshots'] {
-  return (
-    isRecord(value)
-    && Object.entries(value).every(([snapshotId, snapshot]) =>
-      isPreparedSnapshot(snapshot) && snapshot.snapshotId === snapshotId
-    )
-  );
+function sanitizeSnapshots(
+  value: unknown,
+): PricingSnapshotStateV1['snapshots'] {
+  const snapshots: Record<string, PreparedCustomerPricingSnapshot> = {};
+  if (!isRecord(value)) {
+    return snapshots;
+  }
+
+  for (const [snapshotId, snapshot] of Object.entries(value)) {
+    if (isPreparedSnapshot(snapshot) && snapshot.snapshotId === snapshotId) {
+      snapshots[snapshotId] = snapshot;
+    }
+  }
+  return snapshots;
 }
 
-function hasValidMappings(
+function sanitizeMappings(
   value: unknown,
-): value is PricingSnapshotStateV1['requestedMappings'] {
-  return (
-    isRecord(value)
-    && Object.entries(value).every(([mappingKey, mapping]) =>
+): PricingSnapshotStateV1['requestedMappings'] {
+  const mappings: Record<string, ResolvedPricelistMapping> = {};
+  if (!isRecord(value)) {
+    return mappings;
+  }
+
+  for (const [mappingKey, mapping] of Object.entries(value)) {
+    if (
       isRequestedMapping(mapping)
       && mappingKey === [
         mapping.companyId,
         mapping.partnerId,
         mapping.requestedPricelistId ?? 'null',
       ].join(':')
-    )
-  );
+    ) {
+      mappings[mappingKey] = mapping;
+    }
+  }
+  return mappings;
 }
 
-function hasValidLastKnownPrices(
+function sanitizeLastKnownPrices(
   value: unknown,
-): value is PricingSnapshotStateV1['lastKnownPrices'] {
+): PricingSnapshotStateV1['lastKnownPrices'] {
+  const ledger: Record<
+    string,
+    Readonly<Record<string, LastKnownCustomerProductPrice>>
+  > = {};
   if (!isRecord(value)) {
-    return false;
+    return ledger;
   }
 
-  return Object.entries(value).every(([canonicalKey, productPrices]) =>
-    /^[1-9]\d*:[1-9]\d*:[1-9]\d*$/.test(canonicalKey)
-    && isRecord(productPrices)
-    && Object.entries(productPrices).every(([productId, price]) =>
-      isLastKnownPrice(price) && String(price.productId) === productId
-    )
-  );
+  for (const [canonicalKey, productPrices] of Object.entries(value)) {
+    if (
+      !/^[1-9]\d*:[1-9]\d*:[1-9]\d*$/.test(canonicalKey)
+      || !isRecord(productPrices)
+    ) {
+      continue;
+    }
+
+    const validProductPrices: Record<
+      string,
+      LastKnownCustomerProductPrice
+    > = {};
+    for (const [productId, price] of Object.entries(productPrices)) {
+      if (isLastKnownPrice(price) && String(price.productId) === productId) {
+        validProductPrices[productId] = price;
+      }
+    }
+    if (Object.keys(validProductPrices).length > 0) {
+      ledger[canonicalKey] = validProductPrices;
+    }
+  }
+  return ledger;
 }
 
-function isPricingSnapshotStateV1(
+function sanitizeManifest(
   value: unknown,
-): value is PricingSnapshotStateV1 {
-  if (!isRecord(value) || !hasOnlyKeys(value, STATE_KEYS)) {
-    return false;
-  }
-
-  const activeManifest = value.activeManifest;
-  const snapshots = value.snapshots;
-  const requestedMappings = value.requestedMappings;
-  const lastKnownPrices = value.lastKnownPrices;
+  snapshots: PricingSnapshotStateV1['snapshots'],
+): PricingPreparationManifest | null {
   if (
-    value.version !== 1
-    || !(activeManifest === null || isPricingManifest(activeManifest))
-    || !hasValidSnapshots(snapshots)
-    || !hasValidMappings(requestedMappings)
-    || !hasValidLastKnownPrices(lastKnownPrices)
+    !isRecord(value)
+    || !hasOnlyKeys(value, MANIFEST_KEYS)
+    || value.version !== 1
+    || !isPositiveInteger(value.companyId)
+    || !isNullablePositiveInteger(value.planId)
+    || !isString(value.preparationRunId)
+    || !isNonNegativeFiniteNumber(value.activatedAtMs)
+    || !Array.isArray(value.targets)
   ) {
-    return false;
+    return null;
   }
 
-  if (!activeManifest) {
-    return true;
-  }
-
-  return activeManifest.targets.every((target) => {
-    if (target.status !== 'prepared' || !target.snapshotId) {
-      return true;
+  const targets: PricingPreparationTarget[] = [];
+  for (const target of value.targets) {
+    if (!isPricingTarget(target)) {
+      continue;
+    }
+    if (target.status === 'failed' || !target.snapshotId) {
+      targets.push(target);
+      continue;
     }
 
     const snapshot = snapshots[target.snapshotId];
-    return (
-      snapshot !== undefined
-      && snapshot.companyId === activeManifest.companyId
+    if (
+      snapshot
+      && snapshot.companyId === value.companyId
       && snapshot.partnerId === target.partnerId
       && snapshot.resolvedPricelistId === target.resolvedPricelistId
-      && snapshot.preparedPlanId === activeManifest.planId
-      && snapshot.preparationRunId === activeManifest.preparationRunId
-    );
-  });
+      && snapshot.preparedPlanId === value.planId
+      && snapshot.preparationRunId === value.preparationRunId
+    ) {
+      targets.push(target);
+      continue;
+    }
+
+    targets.push({
+      partnerId: target.partnerId,
+      requestedPricelistId: target.requestedPricelistId,
+      resolvedPricelistId: null,
+      snapshotId: null,
+      status: 'failed',
+    });
+  }
+
+  return {
+    version: 1,
+    companyId: value.companyId,
+    planId: value.planId,
+    preparationRunId: value.preparationRunId,
+    activatedAtMs: value.activatedAtMs,
+    targets,
+  };
 }
 
-function compactValidState(value: unknown): PricingSnapshotStateV1 | null {
-  if (!isPricingSnapshotStateV1(value)) {
+function sanitizeAndCompactState(
+  value: unknown,
+): PricingSnapshotStateV1 | null {
+  if (!isRecord(value) || value.version !== 1) {
     return null;
   }
-  return compactPricingSnapshotState(value);
+
+  const snapshots = sanitizeSnapshots(value.snapshots);
+  return compactPricingSnapshotState({
+    version: 1,
+    activeManifest: sanitizeManifest(value.activeManifest, snapshots),
+    snapshots,
+    requestedMappings: sanitizeMappings(value.requestedMappings),
+    lastKnownPrices: sanitizeLastKnownPrices(value.lastKnownPrices),
+  });
 }
 
 export class CustomerPricingSnapshotRepository {
@@ -300,7 +351,7 @@ export class CustomerPricingSnapshotRepository {
     return this.serialize(async () => {
       let hydrated = emptyPricingSnapshotState();
       try {
-        hydrated = compactValidState(await this.storage.load())
+        hydrated = sanitizeAndCompactState(await this.storage.load())
           ?? emptyPricingSnapshotState();
       } catch {
         hydrated = emptyPricingSnapshotState();
@@ -312,7 +363,7 @@ export class CustomerPricingSnapshotRepository {
 
   replace(next: PricingSnapshotStateV1): Promise<void> {
     return this.serialize(async () => {
-      const candidate = compactValidState(next);
+      const candidate = sanitizeAndCompactState(next);
       if (!candidate) {
         throw new TypeError('Invalid customer pricing snapshot state');
       }
@@ -328,7 +379,7 @@ export class CustomerPricingSnapshotRepository {
     ) => PricingSnapshotStateV1,
   ): Promise<PricingSnapshotStateV1> {
     return this.serialize(async () => {
-      const candidate = compactValidState(updater(this.publishedState));
+      const candidate = sanitizeAndCompactState(updater(this.publishedState));
       if (!candidate) {
         throw new TypeError('Invalid customer pricing snapshot state');
       }

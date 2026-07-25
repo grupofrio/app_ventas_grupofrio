@@ -6,6 +6,7 @@ import {
   activatePreparedPricingRun,
   emptyPricingSnapshotState,
   recordLastKnownServerPrices,
+  resolveCapturedCustomerPrice,
   type PricingSnapshotStateV1,
 } from '../src/services/customerPricingSnapshot.ts';
 import {
@@ -123,6 +124,15 @@ function assertDeeplyFrozen(state: PricingSnapshotStateV1): void {
   }
 }
 
+async function hydrateRawState(raw: unknown): Promise<PricingSnapshotStateV1> {
+  return createCustomerPricingSnapshotRepository({
+    load: async () => raw,
+    saveStrict: async () => {
+      throw new Error('hydrate must not write');
+    },
+  }).hydrate();
+}
+
 test('valid state round-trips through the injected durable adapter', async () => {
   let durable: unknown = null;
   const storage: PricingSnapshotStorage = {
@@ -190,6 +200,267 @@ test('corrupt, version-mismatched, and unreadable input hydrates as immutable em
     saveStrict: async () => {},
   });
   assert.deepEqual(await unreadable.hydrate(), emptyPricingSnapshotState());
+});
+
+test('a corrupt orphan snapshot does not erase valid active pricing', async () => {
+  const active = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'prepare-active',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  const activeSnapshotId = active.activeManifest!.targets[0].snapshotId!;
+  const raw = clone(active) as any;
+  raw.snapshots['corrupt-orphan'] = {
+    ...clone(raw.snapshots[activeSnapshotId]),
+    snapshotId: 'corrupt-orphan',
+    preparationRunId: 'orphan-run',
+    productFingerprint: '999',
+    prices: [[999, -1]],
+  };
+
+  const hydrated = await hydrateRawState(raw);
+  const resolved = resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 101,
+    publicPrice: 100,
+  });
+
+  assert.deepEqual(Object.keys(hydrated.snapshots), [activeSnapshotId]);
+  assert.equal(resolved.source, 'prepared_customer');
+  assert.equal(resolved.unitPrice, 81);
+  assertDeeplyFrozen(hydrated);
+});
+
+test('corrupt ledger products and mappings are dropped without erasing valid peers', async () => {
+  let state = recordPrice(emptyPricingSnapshotState(), {
+    runId: 'ledger-1',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  state = recordPrice(state, {
+    runId: 'ledger-2',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 102,
+    unitPrice: 82,
+    capturedAtMs: 2_000,
+  });
+  state = recordPrice(state, {
+    runId: 'ledger-3',
+    partnerId: 11,
+    requestedPricelistId: 8,
+    resolvedPricelistId: 18,
+    productId: 201,
+    unitPrice: 83,
+    capturedAtMs: 3_000,
+  });
+  const raw = clone(state) as any;
+  raw.lastKnownPrices['3:11:17']['101'].unitPrice = -1;
+  raw.requestedMappings['wrong-key'] = clone(
+    raw.requestedMappings['3:11:7'],
+  );
+
+  const hydrated = await hydrateRawState(raw);
+
+  assert.equal(hydrated.lastKnownPrices['3:11:17']['101'], undefined);
+  assert.equal(hydrated.lastKnownPrices['3:11:17']['102'].unitPrice, 82);
+  assert.equal(hydrated.lastKnownPrices['3:11:18']['201'].unitPrice, 83);
+  assert.deepEqual(
+    Object.keys(hydrated.requestedMappings).sort(),
+    ['3:11:7', '3:11:8'],
+  );
+  assert.equal(resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 102,
+    publicPrice: 100,
+  }).source, 'last_known_customer');
+  assert.equal(resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 8,
+    productId: 201,
+    publicPrice: 100,
+  }).source, 'last_known_customer');
+});
+
+test('a corrupt active snapshot downgrades only its target while valid targets remain prepared', async () => {
+  const active = activatePreparedPricingRun(emptyPricingSnapshotState(), {
+    companyId: 3,
+    planId: 71,
+    preparationRunId: 'prepare-two-targets',
+    activatedAtMs: 2_000,
+    targets: [
+      {
+        status: 'prepared',
+        partnerId: 11,
+        requestedPricelistId: 7,
+        snapshot: {
+          preparedAtMs: 1_000,
+          validation: {
+            ok: true,
+            resolvedPricelistId: 17,
+            productFingerprint: '101',
+            prices: [[101, 81]],
+          },
+        },
+      },
+      {
+        status: 'prepared',
+        partnerId: 12,
+        requestedPricelistId: 8,
+        snapshot: {
+          preparedAtMs: 1_500,
+          validation: {
+            ok: true,
+            resolvedPricelistId: 18,
+            productFingerprint: '102',
+            prices: [[102, 82]],
+          },
+        },
+      },
+    ],
+  });
+  const raw = clone(active) as any;
+  const corruptTarget = raw.activeManifest.targets[0];
+  const validTarget = raw.activeManifest.targets[1];
+  raw.snapshots[corruptTarget.snapshotId].partnerId = 999;
+
+  const hydrated = await hydrateRawState(raw);
+
+  assert.deepEqual(hydrated.activeManifest!.targets[0], {
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: null,
+    snapshotId: null,
+    status: 'failed',
+  });
+  assert.equal(hydrated.activeManifest!.targets[1].status, 'prepared');
+  assert.deepEqual(Object.keys(hydrated.snapshots), [validTarget.snapshotId]);
+  assert.equal(resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 101,
+    publicPrice: 100,
+  }).source, 'last_known_customer');
+  assert.equal(resolveCapturedCustomerPrice(hydrated, {
+    companyId: 3,
+    planId: 71,
+    partnerId: 12,
+    requestedPricelistId: 8,
+    productId: 102,
+    publicPrice: 100,
+  }).source, 'prepared_customer');
+});
+
+test('malformed manifest metadata is removed without erasing mappings or ledger', async () => {
+  const active = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'prepare-bad-manifest',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  const raw = clone(active) as any;
+  raw.activeManifest.companyId = 'invalid';
+
+  const hydrated = await hydrateRawState(raw);
+
+  assert.equal(hydrated.activeManifest, null);
+  assert.deepEqual(hydrated.snapshots, {});
+  assert.equal(Object.keys(hydrated.requestedMappings).length, 1);
+  assert.equal(hydrated.lastKnownPrices['3:11:17']['101'].unitPrice, 81);
+});
+
+test('fingerprint mismatch, duplicate IDs, and out-of-order tuples cannot publish prepared pricing', async () => {
+  const base = activatePreparedPricingRun(emptyPricingSnapshotState(), {
+    companyId: 3,
+    planId: 71,
+    preparationRunId: 'prepare-canonical',
+    activatedAtMs: 2_000,
+    targets: [{
+      status: 'prepared',
+      partnerId: 11,
+      requestedPricelistId: 7,
+      snapshot: {
+        preparedAtMs: 1_000,
+        validation: {
+          ok: true,
+          resolvedPricelistId: 17,
+          productFingerprint: '101,102',
+          prices: [[101, 81], [102, 82]],
+        },
+      },
+    }],
+  });
+  const corruptions: Array<{
+    name: string;
+    mutate: (snapshot: any) => void;
+  }> = [
+    {
+      name: 'fingerprint mismatch',
+      mutate: (snapshot) => {
+        snapshot.productFingerprint = '101,999';
+      },
+    },
+    {
+      name: 'duplicate product IDs',
+      mutate: (snapshot) => {
+        snapshot.productFingerprint = '101,101';
+        snapshot.prices = [[101, 81], [101, 82]];
+      },
+    },
+    {
+      name: 'out-of-order product IDs',
+      mutate: (snapshot) => {
+        snapshot.productFingerprint = '102,101';
+        snapshot.prices = [[102, 82], [101, 81]];
+      },
+    },
+  ];
+
+  for (const corruption of corruptions) {
+    const raw = clone(base) as any;
+    const snapshotId = raw.activeManifest.targets[0].snapshotId;
+    corruption.mutate(raw.snapshots[snapshotId]);
+
+    const hydrated = await hydrateRawState(raw);
+    const resolved = resolveCapturedCustomerPrice(hydrated, {
+      companyId: 3,
+      planId: 71,
+      partnerId: 11,
+      requestedPricelistId: 7,
+      productId: 101,
+      publicPrice: 100,
+    });
+
+    assert.deepEqual(hydrated.snapshots, {}, corruption.name);
+    assert.equal(
+      hydrated.activeManifest!.targets[0].status,
+      'failed',
+      corruption.name,
+    );
+    assert.notEqual(resolved.source, 'prepared_customer', corruption.name);
+  }
 });
 
 test('concurrent updates are serialized and each updater sees the latest published state', async () => {
@@ -293,6 +564,48 @@ test('failed strict save does not publish the candidate in memory', async () => 
 
   assert.strictEqual(repository.getState(), publishedBeforeFailure);
   assert.deepEqual(durable, publishedBeforeFailure);
+});
+
+test('the serialized queue continues from published state after a rejected save', async () => {
+  let rejectNextSave = true;
+  let saveCalls = 0;
+  const repository = createCustomerPricingSnapshotRepository({
+    load: async () => null,
+    saveStrict: async () => {
+      saveCalls += 1;
+      if (rejectNextSave) {
+        throw new Error('first write rejected');
+      }
+    },
+  });
+
+  await assert.rejects(repository.update((current) => recordPrice(current, {
+    runId: 'rejected-update',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  })), /first write rejected/);
+
+  rejectNextSave = false;
+  const recovered = await repository.update((current) => {
+    assert.equal(Object.keys(current.requestedMappings).length, 0);
+    return recordPrice(current, {
+      runId: 'accepted-update',
+      partnerId: 12,
+      requestedPricelistId: 8,
+      resolvedPricelistId: 18,
+      productId: 102,
+      unitPrice: 82,
+      capturedAtMs: 2_000,
+    });
+  });
+
+  assert.equal(saveCalls, 2);
+  assert.deepEqual(Object.keys(recovered.requestedMappings), ['3:12:8']);
+  assert.strictEqual(repository.getState(), recovered);
 });
 
 test('published and returned state is hardened against caller mutation', async () => {

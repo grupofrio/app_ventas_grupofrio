@@ -137,6 +137,16 @@ assert.match(
   /remoteOperationIds\.has\(/,
   'una venta local retenida debe ocultarse tan pronto aparezca su equivalente remoto',
 );
+assert.match(
+  hook,
+  /visibleRemoteEntries\s*=\s*useMemo\([\s\S]*mergeSalesListEntries\(\{[\s\S]*remoteOrders:\s*orders[\s\S]*localEntries:\s*\[\][\s\S]*localDay/,
+  'la retención debe consumir solo remotos proyectables para el día visible',
+);
+assert.match(
+  hook,
+  /remoteEntries:\s*visibleRemoteEntries/,
+  'el helper no debe purgar usando filas remotas crudas',
+);
 
 assert.match(
   hook,

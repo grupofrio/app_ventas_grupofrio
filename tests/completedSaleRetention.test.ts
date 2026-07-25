@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 import type { GFSalesOrder } from '../src/services/gfLogistics.ts';
 import type { SaleTicketSnapshot } from '../src/services/saleTicket.ts';
-import type { SalesListEntry } from '../src/services/salesListProjection.ts';
+import {
+  mergeSalesListEntries,
+  type SalesListEntry,
+} from '../src/services/salesListProjection.ts';
 import type { SyncQueueItem } from '../src/types/sync.ts';
 
 const servicePath = fileURLToPath(
@@ -87,6 +90,17 @@ function remoteOrder(
   };
 }
 
+function visibleRemoteEntries(
+  remoteOrders: GFSalesOrder[],
+  localDay = '2026-07-25',
+): SalesListEntry[] {
+  return mergeSalesListEntries({
+    remoteOrders,
+    localEntries: [],
+    localDay,
+  });
+}
+
 function ticket(
   saleId: string,
   overrides: Partial<SaleTicketSnapshot> = {},
@@ -115,7 +129,7 @@ test('retains the last local projection as updating across pending to done', () 
     previousLocalEntries: [previous],
     queue: [queueItem('sale-a')],
     tickets: new Map(),
-    remoteOrders: [],
+    remoteEntries: [],
   });
 
   assert.deepEqual([...retained.keys()], ['sale-a']);
@@ -137,7 +151,7 @@ test('keeps a completed projection when refresh failed or remote data is stale',
     previousLocalEntries: [],
     queue: [],
     tickets: new Map(),
-    remoteOrders: [remoteOrder('another-sale')],
+    remoteEntries: visibleRemoteEntries([remoteOrder('another-sale')]),
   });
 
   assert.deepEqual(retained.get('sale-a'), updating);
@@ -152,7 +166,7 @@ test('purges the completed projection when the normalized Odoo operation appears
     previousLocalEntries: [],
     queue: [queueItem('sale-a')],
     tickets: new Map(),
-    remoteOrders: [remoteOrder('  SALE-A  ')],
+    remoteEntries: visibleRemoteEntries([remoteOrder('  SALE-A  ')]),
   });
 
   assert.equal(retained.size, 0);
@@ -166,7 +180,7 @@ test('derives a valid done sale on mount from its persisted ticket', () => {
     tickets: new Map([
       [' sale-mounted ', ticket('sale-mounted')],
     ]),
-    remoteOrders: [],
+    remoteEntries: [],
   });
 
   assert.deepEqual(retained.get('sale-mounted'), {
@@ -193,7 +207,7 @@ test('does not create ghosts for unrelated, blank, or already remote queue items
       queueItem('sale-remote'),
     ],
     tickets: new Map(),
-    remoteOrders: [remoteOrder('sale-remote')],
+    remoteEntries: visibleRemoteEntries([remoteOrder('sale-remote')]),
   });
 
   assert.equal(retained.size, 0);
@@ -215,7 +229,7 @@ test('does not mutate queue, prior entries, tickets, or remote orders', () => {
     previousLocalEntries: previous,
     queue,
     tickets,
-    remoteOrders,
+    remoteEntries: visibleRemoteEntries(remoteOrders),
   });
 
   assert.deepEqual(queue, queueBefore);
@@ -223,4 +237,69 @@ test('does not mutate queue, prior entries, tickets, or remote orders', () => {
   assert.deepEqual([...tickets], ticketsBefore);
   assert.deepEqual(remoteOrders, remoteBefore);
   assert.equal(retainedInput.size, 0);
+});
+
+test('does not purge for a matching raw remote with invalid id or date', () => {
+  const retainedInput = new Map([
+    ['sale-a', localEntry('sale-a', { localStatus: 'updating' })],
+  ]);
+  const invalidRemoteOrders = [
+    remoteOrder('sale-a', { id: 0 }),
+    remoteOrder('sale-a', { date_order: 'not-a-date' }),
+  ];
+
+  assert.deepEqual(visibleRemoteEntries(invalidRemoteOrders), []);
+  const retained = reconcileCompletedSaleRetention({
+    retainedCompletedEntries: retainedInput,
+    previousLocalEntries: [],
+    queue: [],
+    tickets: new Map(),
+    remoteEntries: visibleRemoteEntries(invalidRemoteOrders),
+  });
+
+  assert.equal(retained.get('sale-a')?.localStatus, 'updating');
+});
+
+test('does not purge for a matching remote outside the requested day', () => {
+  const retained = reconcileCompletedSaleRetention({
+    retainedCompletedEntries: new Map([
+      ['sale-a', localEntry('sale-a', { localStatus: 'updating' })],
+    ]),
+    previousLocalEntries: [],
+    queue: [],
+    tickets: new Map(),
+    remoteEntries: visibleRemoteEntries([
+      remoteOrder('sale-a', {
+        date_order: '2026-07-24T10:31:00-06:00',
+      }),
+    ]),
+  });
+
+  assert.equal(retained.has('sale-a'), true);
+});
+
+test('ignores malformed raw remote rows before retention without throwing', () => {
+  const malformed = [
+    null,
+    {},
+    { id: 12, operation_id: 'sale-a', date_order: null },
+  ] as unknown as GFSalesOrder[];
+  let projected: SalesListEntry[] = [];
+
+  assert.doesNotThrow(() => {
+    projected = visibleRemoteEntries(malformed);
+  });
+  assert.deepEqual(projected, []);
+  assert.doesNotThrow(() => {
+    const retained = reconcileCompletedSaleRetention({
+      retainedCompletedEntries: new Map([
+        ['sale-a', localEntry('sale-a', { localStatus: 'updating' })],
+      ]),
+      previousLocalEntries: [],
+      queue: [],
+      tickets: new Map(),
+      remoteEntries: projected,
+    });
+    assert.equal(retained.has('sale-a'), true);
+  });
 });

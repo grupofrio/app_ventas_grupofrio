@@ -1,4 +1,3 @@
-import type { GFSalesOrder } from './gfLogistics.ts';
 import type { SaleTicketSnapshot } from './saleTicket.ts';
 import {
   normalizeOperationIdForComparison,
@@ -12,7 +11,7 @@ export interface CompletedSaleRetentionInput {
   previousLocalEntries: readonly SalesListEntry[];
   queue: readonly SyncQueueItem[];
   tickets: ReadonlyMap<string, SaleTicketSnapshot>;
-  remoteOrders: readonly GFSalesOrder[];
+  remoteEntries: readonly SalesListEntry[];
 }
 
 const ACTIVE_STATUSES = new Set([
@@ -83,8 +82,9 @@ export function reconcileCompletedSaleRetention(
   input: CompletedSaleRetentionInput,
 ): Map<string, SalesListEntry> {
   const remoteOperationIds = new Set<string>();
-  for (const order of input.remoteOrders) {
-    const operationId = normalizedOperationId(order.operation_id);
+  for (const entry of input.remoteEntries) {
+    if (entry.origin !== 'odoo') continue;
+    const operationId = normalizedOperationId(entry.operationId);
     if (operationId) remoteOperationIds.add(operationId);
   }
 

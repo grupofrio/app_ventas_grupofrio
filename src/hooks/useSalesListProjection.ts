@@ -197,6 +197,15 @@ export function useSalesListProjection(): SalesListProjectionResult {
     }
   }, [loadTodaySales, queue]);
 
+  const localDay = todayLocalISO();
+  const visibleRemoteEntries = useMemo(
+    () => mergeSalesListEntries({
+      remoteOrders: orders,
+      localEntries: [],
+      localDay,
+    }),
+    [localDay, orders],
+  );
   const activeLocalEntries = useMemo(
     () => queue
       .map((item) => projectLocalSale(item, tickets.get(item.id)))
@@ -209,9 +218,9 @@ export function useSalesListProjection(): SalesListProjectionResult {
       previousLocalEntries: previousLocalEntriesRef.current,
       queue,
       tickets,
-      remoteOrders: orders,
+      remoteEntries: visibleRemoteEntries,
     }),
-    [orders, queue, retainedCompletedEntries, tickets],
+    [queue, retainedCompletedEntries, tickets, visibleRemoteEntries],
   );
 
   useEffect(() => {
@@ -234,7 +243,6 @@ export function useSalesListProjection(): SalesListProjectionResult {
     ],
     [activeLocalEntries, projectedRetainedCompletedEntries],
   );
-  const localDay = todayLocalISO();
   const entries = useMemo(
     () => mergeSalesListEntries({
       remoteOrders: orders,

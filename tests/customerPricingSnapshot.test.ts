@@ -1,0 +1,561 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  activatePreparedPricingRun,
+  emptyPricingSnapshotState,
+  recordLastKnownServerPrices,
+  resolveCapturedCustomerPrice,
+  validateServerPriceSnapshot,
+  type PricingSnapshotStateV1,
+  type ValidatedServerPriceSnapshot,
+} from '../src/services/customerPricingSnapshot.ts';
+
+function validServerSnapshot(
+  prices: Array<[productId: number, unitPrice: number]>,
+  resolvedPricelistId = 81,
+): ValidatedServerPriceSnapshot {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId,
+    requestedProductIds: prices.map(([productId]) => productId),
+    rows: prices.map(([productId, unitPrice]) => ({ productId, unitPrice })),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error('Expected valid server price snapshot');
+  }
+  return result;
+}
+
+function activateSinglePreparedTarget(
+  current: PricingSnapshotStateV1,
+  {
+    preparationRunId,
+    preparedAtMs,
+    unitPrice,
+  }: {
+    preparationRunId: string;
+    preparedAtMs: number;
+    unitPrice: number;
+  },
+): PricingSnapshotStateV1 {
+  return activatePreparedPricingRun(current, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId,
+    activatedAtMs: preparedAtMs + 1,
+    targets: [{
+      status: 'prepared',
+      partnerId: 99,
+      requestedPricelistId: 104,
+      snapshot: {
+        preparedAtMs,
+        validation: validServerSnapshot([[10, unitPrice]]),
+      },
+    }],
+  });
+}
+
+test('rejects a response without exact requested product coverage', () => {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId: 81,
+    requestedProductIds: [10, 20],
+    rows: [{ productId: 10, unitPrice: 42 }],
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'incomplete_product_coverage',
+    missingProductIds: [20],
+  });
+});
+
+test('rejects a non-positive resolved pricelist', () => {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId: 0,
+    requestedProductIds: [10],
+    rows: [{ productId: 10, unitPrice: 42 }],
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'invalid_resolved_pricelist',
+  });
+});
+
+test('rejects negative and non-finite requested-product prices', () => {
+  for (const unitPrice of [-0.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const result = validateServerPriceSnapshot({
+      resolvedPricelistId: 81,
+      requestedProductIds: [10],
+      rows: [{ productId: 10, unitPrice }],
+    });
+
+    assert.deepEqual(result, {
+      ok: false,
+      reason: 'invalid_price',
+      productId: 10,
+    });
+  }
+});
+
+test('discards extra server rows before validating exact requested coverage', () => {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId: 81,
+    requestedProductIds: [20, 10],
+    rows: [
+      { productId: 99, unitPrice: Number.NEGATIVE_INFINITY },
+      { productId: 20, unitPrice: 84 },
+      { productId: 10, unitPrice: 0 },
+    ],
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    resolvedPricelistId: 81,
+    productFingerprint: '10,20',
+    prices: [[10, 0], [20, 84]],
+  });
+});
+
+test('deduplicates requested product IDs deterministically', () => {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId: 81,
+    requestedProductIds: [20, 10, 20, 10],
+    rows: [
+      { productId: 20, unitPrice: 84 },
+      { productId: 10, unitPrice: 42 },
+    ],
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    resolvedPricelistId: 81,
+    productFingerprint: '10,20',
+    prices: [[10, 42], [20, 84]],
+  });
+});
+
+test('rejects conflicting response rows for one requested product', () => {
+  const result = validateServerPriceSnapshot({
+    resolvedPricelistId: 81,
+    requestedProductIds: [10],
+    rows: [
+      { productId: 10, unitPrice: 42 },
+      { productId: 10, unitPrice: 43 },
+    ],
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'conflicting_product_rows',
+    productId: 10,
+  });
+});
+
+test('activates a new preparation run without overwriting prior snapshots', () => {
+  const previous = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-old',
+    preparedAtMs: 1_000,
+    unitPrice: 40,
+  });
+  const previousSnapshot = previous.snapshots['run-old:34:99:81'];
+
+  const next = activateSinglePreparedTarget(previous, {
+    preparationRunId: 'run-new',
+    preparedAtMs: 2_000,
+    unitPrice: 42,
+  });
+
+  assert.equal(next.activeManifest?.preparationRunId, 'run-new');
+  assert.equal(next.snapshots['run-old:34:99:81'], previousSnapshot);
+  assert.deepEqual(next.snapshots['run-new:34:99:81']?.prices, [[10, 42]]);
+  assert.equal(previous.activeManifest?.preparationRunId, 'run-old');
+  assert.equal(previous.snapshots['run-new:34:99:81'], undefined);
+});
+
+test('a failed target preserves its prior snapshots, mapping, and last-known ledger', () => {
+  const previous = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-old',
+    preparedAtMs: 1_000,
+    unitPrice: 40,
+  });
+
+  const next = activatePreparedPricingRun(previous, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-new',
+    activatedAtMs: 2_000,
+    targets: [{
+      status: 'failed',
+      partnerId: 99,
+      requestedPricelistId: 104,
+    }],
+  });
+
+  assert.deepEqual(next.snapshots, previous.snapshots);
+  assert.deepEqual(next.requestedMappings, previous.requestedMappings);
+  assert.deepEqual(next.lastKnownPrices, previous.lastKnownPrices);
+  assert.deepEqual(next.activeManifest?.targets, [{
+    partnerId: 99,
+    requestedPricelistId: 104,
+    resolvedPricelistId: null,
+    snapshotId: null,
+    status: 'failed',
+  }]);
+  assert.equal(
+    resolveCapturedCustomerPrice(next, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      productId: 10,
+      publicPrice: 100,
+    }).source,
+    'last_known_customer',
+  );
+});
+
+test('foreground last-known recording does not activate or replace prepared snapshots', () => {
+  const previous = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-prepared',
+    preparedAtMs: 1_000,
+    unitPrice: 40,
+  });
+  const validation = validServerSnapshot([[10, 44]], 82);
+
+  const next = recordLastKnownServerPrices(previous, {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 105,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-1',
+    validation,
+  });
+
+  assert.equal(next.activeManifest, previous.activeManifest);
+  assert.deepEqual(next.snapshots, previous.snapshots);
+  assert.deepEqual(next.lastKnownPrices['34:99:82']?.['10'], {
+    productId: 10,
+    unitPrice: 44,
+    capturedAtMs: 2_000,
+    preparationRunId: 'foreground-1',
+  });
+});
+
+test('an older prepared response cannot roll back a newer last-known ledger entry', () => {
+  const foreground = recordLastKnownServerPrices(emptyPricingSnapshotState(), {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-newer',
+    validation: validServerSnapshot([[10, 44]]),
+  });
+  const prepared = activateSinglePreparedTarget(foreground, {
+    preparationRunId: 'run-older',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+  const failedNext = activatePreparedPricingRun(prepared, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-failed',
+    activatedAtMs: 3_000,
+    targets: [{
+      status: 'failed',
+      partnerId: 99,
+      requestedPricelistId: 104,
+    }],
+  });
+
+  assert.deepEqual(prepared.lastKnownPrices['34:99:81']?.['10'], {
+    productId: 10,
+    unitPrice: 44,
+    capturedAtMs: 2_000,
+    preparationRunId: 'foreground-newer',
+  });
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(failedNext, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      productId: 10,
+      publicPrice: 100,
+    }),
+    {
+      unitPrice: 44,
+      source: 'last_known_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
+});
+
+test('canonicalizes the requested pricelist before prepared lookup', () => {
+  const state = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-prepared',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+
+  const result = resolveCapturedCustomerPrice(state, {
+    companyId: 34,
+    planId: 7,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    productId: 10,
+    publicPrice: 100,
+  });
+
+  assert.deepEqual(result, {
+    unitPrice: 42,
+    source: 'prepared_customer',
+    capturedAtMs: 1_000,
+    pricelistId: 81,
+  });
+});
+
+test('resolves prepared snapshot, exact canonical ledger, then public fallback', () => {
+  const prepared = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-prepared',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+  const sameCanonical = recordLastKnownServerPrices(prepared, {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-1',
+    validation: validServerSnapshot([[10, 44], [20, 55]]),
+  });
+  const otherCustomer = recordLastKnownServerPrices(sameCanonical, {
+    companyId: 34,
+    partnerId: 98,
+    requestedPricelistId: 104,
+    capturedAtMs: 3_000,
+    captureRunId: 'other-customer',
+    validation: validServerSnapshot([[30, 1]]),
+  });
+  const state = recordLastKnownServerPrices(otherCustomer, {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 105,
+    capturedAtMs: 3_000,
+    captureRunId: 'other-pricelist',
+    validation: validServerSnapshot([[30, 2]], 82),
+  });
+  const baseInput = {
+    companyId: 34,
+    planId: 7,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    publicPrice: 100,
+  };
+
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, { ...baseInput, productId: 10 }),
+    {
+      unitPrice: 42,
+      source: 'prepared_customer',
+      capturedAtMs: 1_000,
+      pricelistId: 81,
+    },
+  );
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, { ...baseInput, productId: 20 }),
+    {
+      unitPrice: 55,
+      source: 'last_known_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, { ...baseInput, productId: 30 }),
+    {
+      unitPrice: 100,
+      source: 'public_fallback',
+      capturedAtMs: null,
+      pricelistId: null,
+    },
+  );
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, {
+      ...baseInput,
+      planId: 8,
+      productId: 10,
+    }),
+    {
+      unitPrice: 44,
+      source: 'last_known_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
+});
+
+test('a null requested pricelist without its own mapping cannot access customer prices', () => {
+  const state = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-prepared',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+
+  const result = resolveCapturedCustomerPrice(state, {
+    companyId: 34,
+    planId: 7,
+    partnerId: 99,
+    requestedPricelistId: null,
+    productId: 10,
+    publicPrice: 100,
+  });
+
+  assert.deepEqual(result, {
+    unitPrice: 100,
+    source: 'public_fallback',
+    capturedAtMs: null,
+    pricelistId: null,
+  });
+});
+
+test('two requested pricelists can share one active canonical snapshot', () => {
+  const state = activatePreparedPricingRun(emptyPricingSnapshotState(), {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-shared',
+    activatedAtMs: 1_001,
+    targets: [
+      {
+        status: 'prepared',
+        partnerId: 99,
+        requestedPricelistId: 104,
+        snapshot: {
+          preparedAtMs: 1_000,
+          validation: validServerSnapshot([[10, 42]]),
+        },
+      },
+      {
+        status: 'prepared',
+        partnerId: 99,
+        requestedPricelistId: 105,
+        snapshot: {
+          preparedAtMs: 900,
+          validation: validServerSnapshot([[10, 42]]),
+        },
+      },
+    ],
+  });
+
+  assert.equal(Object.keys(state.snapshots).length, 1);
+  assert.equal(
+    state.activeManifest?.targets[0]?.snapshotId,
+    state.activeManifest?.targets[1]?.snapshotId,
+  );
+
+  for (const requestedPricelistId of [104, 105]) {
+    assert.deepEqual(
+      resolveCapturedCustomerPrice(state, {
+        companyId: 34,
+        planId: 7,
+        partnerId: 99,
+        requestedPricelistId,
+        productId: 10,
+        publicPrice: 100,
+      }),
+      {
+        unitPrice: 42,
+        source: 'prepared_customer',
+        capturedAtMs: 900,
+        pricelistId: 81,
+      },
+    );
+  }
+});
+
+test('rejects conflicting candidates for one canonical snapshot atomically', () => {
+  const previous = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-previous',
+    preparedAtMs: 500,
+    unitPrice: 40,
+  });
+
+  assert.throws(
+    () => activatePreparedPricingRun(previous, {
+      companyId: 34,
+      planId: 7,
+      preparationRunId: 'run-conflict',
+      activatedAtMs: 1_001,
+      targets: [
+        {
+          status: 'prepared',
+          partnerId: 99,
+          requestedPricelistId: 104,
+          snapshot: {
+            preparedAtMs: 1_000,
+            validation: validServerSnapshot([[10, 42]]),
+          },
+        },
+        {
+          status: 'prepared',
+          partnerId: 99,
+          requestedPricelistId: 105,
+          snapshot: {
+            preparedAtMs: 1_000,
+            validation: validServerSnapshot([[10, 43]]),
+          },
+        },
+      ],
+    }),
+    /Conflicting pricing snapshot candidates/,
+  );
+  assert.equal(previous.activeManifest?.preparationRunId, 'run-previous');
+  assert.equal(Object.keys(previous.snapshots).length, 1);
+});
+
+test('an older snapshot indexed by a requested key cannot override the active canonical snapshot', () => {
+  const active = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-active',
+    preparedAtMs: 2_000,
+    unitPrice: 42,
+  });
+  const state: PricingSnapshotStateV1 = {
+    ...active,
+    snapshots: {
+      ...active.snapshots,
+      'run-old:34:99:104': {
+        version: 1,
+        snapshotId: 'run-old:34:99:104',
+        companyId: 34,
+        partnerId: 99,
+        resolvedPricelistId: 104,
+        preparedAtMs: 1_000,
+        preparedPlanId: 7,
+        preparationRunId: 'run-old',
+        origin: 'odoo_server_full',
+        productFingerprint: '10',
+        prices: [[10, 1]],
+      },
+    },
+  };
+
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      productId: 10,
+      publicPrice: 100,
+    }),
+    {
+      unitPrice: 42,
+      source: 'prepared_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
+});

@@ -183,6 +183,44 @@ test('persists last-known snapshots by exact context and reads them on a later d
   }), null);
 });
 
+test('sanitizes real Odoo char false and extra fields before persistence and load', async () => {
+  const storage = new MemoryStorage();
+  const repository = createOfflineCatalogRepository(storage);
+  const runtimeSnapshot = snapshot({
+    products: [{
+      ...product(7),
+      default_code: false,
+      active: true,
+      type: 'product',
+      confidential_server_field: 'must-not-persist',
+    }] as never,
+  });
+  const context = buildOfflineCatalogContext(runtimeSnapshot);
+
+  await repository.saveLastKnownCatalogStrict(runtimeSnapshot);
+
+  const state = storage.values.get(
+    STORAGE_KEYS.LAST_KNOWN_CATALOG,
+  ) as {
+    records: Record<string, LastKnownCatalogSnapshot>;
+  };
+  const persistedProduct = state.records[
+    buildOfflineCatalogContextIdentity(context)
+  ]!.products[0] as unknown as Record<string, unknown>;
+  assert.equal('default_code' in persistedProduct, false);
+  assert.equal('active' in persistedProduct, false);
+  assert.equal('type' in persistedProduct, false);
+  assert.equal('confidential_server_field' in persistedProduct, false);
+
+  const loadedProduct = (
+    await repository.loadLastKnownCatalog(context)
+  )!.products[0] as unknown as Record<string, unknown>;
+  assert.equal(loadedProduct.id, 7);
+  assert.equal(loadedProduct.name, 'Producto 7');
+  assert.equal('default_code' in loadedProduct, false);
+  assert.equal('confidential_server_field' in loadedProduct, false);
+});
+
 test('retains multiple contexts in one base key without overwriting them', async () => {
   const storage = new MemoryStorage();
   const repository = createOfflineCatalogRepository(storage);

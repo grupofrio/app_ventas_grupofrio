@@ -109,23 +109,6 @@ const RECENT_PRODUCT_KEYS = [
   'weight',
   'lastSeenAtMs',
 ] as const;
-const TRUCK_PRODUCT_KEYS = [
-  'id',
-  'name',
-  'default_code',
-  'list_price',
-  'qty_available',
-  'sale_ok',
-  'product_tmpl_id',
-  'weight',
-  'categ_id',
-  'image_128',
-  '_totalKg',
-  'qty_reserved',
-  'qty_display',
-  '_isGlobalFallback',
-] as const;
-
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -170,10 +153,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === 'string';
-}
-
 function isMany2one(value: unknown): value is [number, string] | false {
   return value === false
     || (
@@ -199,13 +178,16 @@ function isInventorySource(
     || value === 'global_legacy';
 }
 
-function isTruckProduct(value: unknown): value is TruckProduct {
+function sanitizeTruckProduct(value: unknown): TruckProduct | null {
   if (
     !isRecord(value)
-    || !hasOnlyKeys(value, TRUCK_PRODUCT_KEYS)
     || !positiveSafeInteger(value.id)
     || !isNonEmptyString(value.name)
-    || !isOptionalString(value.default_code)
+    || (
+      value.default_code !== undefined
+      && value.default_code !== false
+      && typeof value.default_code !== 'string'
+    )
     || !nonNegativeFiniteNumber(value.list_price)
     || !nonNegativeFiniteNumber(value.qty_available)
     || typeof value.sale_ok !== 'boolean'
@@ -225,9 +207,37 @@ function isTruckProduct(value: unknown): value is TruckProduct {
     || !nonNegativeFiniteNumber(value.qty_display)
     || typeof value._isGlobalFallback !== 'boolean'
   ) {
-    return false;
+    return null;
   }
-  return true;
+
+  const defaultCode = typeof value.default_code === 'string'
+    ? value.default_code.trim()
+    : '';
+
+  return {
+    id: value.id,
+    name: value.name.trim(),
+    ...(defaultCode.length > 0 ? { default_code: defaultCode } : {}),
+    list_price: value.list_price,
+    qty_available: value.qty_available,
+    sale_ok: value.sale_ok,
+    product_tmpl_id: value.product_tmpl_id === false
+      ? false
+      : [...value.product_tmpl_id],
+    ...(value.weight === undefined ? {} : { weight: value.weight }),
+    ...(value.categ_id === undefined
+      ? {}
+      : {
+          categ_id: value.categ_id === false
+            ? false
+            : [...value.categ_id],
+        }),
+    ...(value.image_128 === undefined ? {} : { image_128: value.image_128 }),
+    _totalKg: value._totalKg,
+    qty_reserved: value.qty_reserved,
+    qty_display: value.qty_display,
+    _isGlobalFallback: value._isGlobalFallback,
+  };
 }
 
 function isRecentProductSnapshot(
@@ -246,22 +256,6 @@ function isRecentProductSnapshot(
     && nonNegativeFiniteNumber(value.weight)
     && nonNegativeSafeTimestamp(value.lastSeenAtMs)
   );
-}
-
-function cloneTruckProduct(product: TruckProduct): TruckProduct {
-  return {
-    ...product,
-    product_tmpl_id: product.product_tmpl_id === false
-      ? false
-      : [...product.product_tmpl_id],
-    ...(product.categ_id === undefined
-      ? {}
-      : {
-          categ_id: product.categ_id === false
-            ? false
-            : [...product.categ_id],
-        }),
-  };
 }
 
 function parseLastKnownCatalogSnapshot(
@@ -283,15 +277,18 @@ function parseLastKnownCatalogSnapshot(
     )
     || !Array.isArray(value.products)
     || value.products.length === 0
-    || !value.products.every(isTruckProduct)
   ) {
     return null;
   }
 
+  const products: TruckProduct[] = [];
   const ids = new Set<number>();
-  for (const product of value.products) {
+  for (const candidate of value.products) {
+    const product = sanitizeTruckProduct(candidate);
+    if (!product) return null;
     if (ids.has(product.id)) return null;
     ids.add(product.id);
+    products.push(product);
   }
 
   return {
@@ -303,7 +300,7 @@ function parseLastKnownCatalogSnapshot(
     fetchedAtMs: value.fetchedAtMs,
     inventorySource: value.inventorySource,
     hasStockData: value.hasStockData,
-    products: value.products.map(cloneTruckProduct),
+    products,
   };
 }
 

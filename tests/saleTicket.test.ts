@@ -5,7 +5,9 @@ import {
   buildSaleTicketSnapshotFromOrder,
   buildSaleTicketHtml,
   buildSaleTicketSnapshot,
+  getSaleTicketFolioPresentation,
   getSaleTicketStorageKey,
+  withSaleTicketOdooFolio,
 } from '../src/services/saleTicket.ts';
 
 test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () => {
@@ -29,6 +31,57 @@ test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () =
   assert.equal(snapshot.subtotal, 115);
   assert.equal(snapshot.total, 115);
   assert.equal(snapshot.totalKg, 13);
+});
+
+test('buildSaleTicketSnapshot presents a pending Odoo folio with the local reference', () => {
+  const snapshot = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-1',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  assert.equal(snapshot.odooFolio, null);
+  assert.deepEqual(getSaleTicketFolioPresentation(snapshot), {
+    odooFolio: 'Pendiente por sincronizar',
+    localReference: 'mobile-op-1',
+  });
+});
+
+test('withSaleTicketOdooFolio stores a normalized official folio without changing the local identity', () => {
+  const pending = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-1',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  assert.equal(pending.odooFolio, null);
+
+  const synchronized = withSaleTicketOdooFolio(pending, '  S00042  ');
+
+  assert.equal(synchronized.saleId, 'mobile-op-1');
+  assert.equal(synchronized.odooFolio, 'S00042');
+  assert.deepEqual(getSaleTicketFolioPresentation(synchronized), {
+    odooFolio: 'S00042',
+    localReference: null,
+  });
+});
+
+test('withSaleTicketOdooFolio leaves a pending snapshot unchanged for a blank folio', () => {
+  const pending = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-1',
+    customerName: 'Abarrotes Centro',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  assert.strictEqual(withSaleTicketOdooFolio(pending, '   '), pending);
 });
 
 test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
@@ -135,12 +188,29 @@ test('buildSaleTicketSnapshotFromOrder creates printable fallback from sales lis
   });
 
   assert.equal(snapshot.saleId, 'sale_abc');
+  assert.equal(snapshot.odooFolio, 'S00042');
   assert.equal(snapshot.customerName, 'Cliente Ruta');
   assert.equal(snapshot.paymentLabel, 'No especificado');
   assert.equal(snapshot.lines.length, 1);
   assert.equal(snapshot.lines[0].productName, 'Venta S00042');
   assert.equal(snapshot.lines[0].lineTotal, 250);
   assert.equal(snapshot.totalKg, 18);
+});
+
+test('buildSaleTicketSnapshotFromOrder keeps the local operation id when the Odoo name is blank', () => {
+  const snapshot = buildSaleTicketSnapshotFromOrder({
+    id: 42,
+    name: '   ',
+    operation_id: 'sale_abc',
+    partner_name: 'Cliente Ruta',
+    amount_total: 250,
+    kg_total: 18,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+  });
+
+  assert.equal(snapshot.saleId, 'sale_abc');
+  assert.equal(snapshot.odooFolio, null);
 });
 
 test('buildSaleTicketSnapshotFromOrder uses real order lines when available', () => {

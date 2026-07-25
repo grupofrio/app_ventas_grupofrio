@@ -21,6 +21,7 @@ export interface SaleTicketSourceLine {
 
 export interface BuildSaleTicketSnapshotInput {
   saleId: string;
+  odooFolio?: string | null;
   customerName: string;
   sellerName?: string;
   paymentMethod: SaleTicketPaymentMethod;
@@ -65,6 +66,7 @@ export interface SaleTicketLine {
 
 export interface SaleTicketSnapshot {
   saleId: string;
+  odooFolio: string | null;
   customerName: string;
   sellerName: string;
   paymentMethod: SaleTicketPaymentMethod;
@@ -77,6 +79,7 @@ export interface SaleTicketSnapshot {
 }
 
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
+export const ODOO_FOLIO_PENDING_LABEL = 'Pendiente por sincronizar';
 export const SALE_TICKET_LEGAL_NAME = SALE_TICKET_BRANDING.legalName;
 export const SALE_TICKET_RFC = SALE_TICKET_BRANDING.rfcLabel.replace(/^RFC:\s*/, '');
 export const SALE_TICKET_CREDIT_NOTE =
@@ -84,6 +87,28 @@ export const SALE_TICKET_CREDIT_NOTE =
 
 export function getSaleTicketStorageKey(saleId: string): string {
   return `sale-ticket:${saleId}`;
+}
+
+export function normalizeOdooFolio(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+export function withSaleTicketOdooFolio(
+  snapshot: SaleTicketSnapshot,
+  value: unknown,
+): SaleTicketSnapshot {
+  const odooFolio = normalizeOdooFolio(value);
+  return odooFolio === null ? snapshot : { ...snapshot, odooFolio };
+}
+
+export function getSaleTicketFolioPresentation(snapshot: SaleTicketSnapshot): {
+  odooFolio: string;
+  localReference: string | null;
+} {
+  const odooFolio = normalizeOdooFolio(snapshot.odooFolio);
+  return odooFolio === null
+    ? { odooFolio: ODOO_FOLIO_PENDING_LABEL, localReference: snapshot.saleId }
+    : { odooFolio, localReference: null };
 }
 
 export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): SaleTicketSnapshot {
@@ -100,6 +125,7 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
 
   return {
     saleId: input.saleId,
+    odooFolio: normalizeOdooFolio(input.odooFolio),
     customerName: input.customerName,
     sellerName: normalizeSellerName(input.sellerName),
     paymentMethod: input.paymentMethod,
@@ -129,6 +155,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
     const fallbackUnitWeight = totalQty > 0 ? order.kg_total / totalQty : 0;
     const snapshot = buildSaleTicketSnapshot({
       saleId,
+      odooFolio: order.name,
       customerName,
       sellerName,
       paymentMethod,
@@ -160,6 +187,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
 
   return buildSaleTicketSnapshot({
     saleId,
+    odooFolio: order.name,
     customerName,
     sellerName,
     paymentMethod,

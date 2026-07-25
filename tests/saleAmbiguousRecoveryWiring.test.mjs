@@ -443,7 +443,7 @@ const pricelistPhase = tryCatchContaining(
 assert.match(pricelistPhase.catchBody, /safeUnknownErrorMessage\(\s*error,/);
 assert.match(
   pricelistPhase.catchBody,
-  /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);/,
+  /releaseSaleInputMutationLock\(\);\s*unlockSaleConfirm\(\);/,
 );
 
 const offrouteClosePhase = tryCatchContaining(

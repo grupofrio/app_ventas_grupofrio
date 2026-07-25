@@ -21,7 +21,7 @@ import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
-import { useVisitStore } from '../../src/stores/useVisitStore';
+import { useVisitStore, type SaleLineItem } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -362,6 +362,9 @@ function SaleScreenInner() {
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
+  const saleInputsLocked = saleSubmitting
+    || saleConfirmed
+    || saleConfirmationSingleFlight.isActive;
   const quantityIssues = findSaleQuantityIssues(saleLines);
   const implicitAnalytics = resolveImplicitSaleAnalytics({
     employeeAnalyticPlazaId,
@@ -413,7 +416,28 @@ function SaleScreenInner() {
     hasSaleOrderRecoveryEvidence,
   ]);
 
+  function saleInputsAreLockedNow(): boolean {
+    return saleConfirmationSingleFlight.isActive
+      || useVisitStore.getState().saleConfirmed;
+  }
+
+  function releaseSaleInputMutationLock() {
+    setSaleSubmitting(false);
+    saleConfirmationSingleFlight.release();
+  }
+
+  function handleOpenProductPicker() {
+    if (saleInputsAreLockedNow()) return;
+    setPickerVisible(true);
+  }
+
+  function handleAddSaleLine(line: SaleLineItem) {
+    if (saleInputsAreLockedNow()) return;
+    useVisitStore.getState().addSaleLine(line);
+  }
+
   function setSaleQtyFromText(productId: number, qtyText: string) {
+    if (saleInputsAreLockedNow()) return;
     const digits = qtyText.replace(/\D/g, '');
     updateSaleQty(
       productId,
@@ -422,8 +446,20 @@ function SaleScreenInner() {
     );
   }
 
+  function changeSaleQty(productId: number, qty: number) {
+    if (saleInputsAreLockedNow()) return;
+    updateSaleQty(productId, qty, { enforceStock: false });
+  }
+
+  function handleSetSalePayment(method: 'cash' | 'credit') {
+    if (saleInputsAreLockedNow()) return;
+    setSalePayment(method);
+  }
+
   async function handleAddSalePhoto() {
+    if (saleInputsAreLockedNow()) return;
     const photo = await takePhoto();
+    if (saleInputsAreLockedNow()) return;
     if (photo) {
       useVisitStore.getState().setSalePhoto(photo.localUri);
     } else {
@@ -450,6 +486,10 @@ function SaleScreenInner() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
     if (saleSubmitting) return;
     if (!stop) return;
+    if (useVisitStore.getState().saleConfirmed) return;
+    if (!saleConfirmationSingleFlight.tryAcquire()) return;
+    setSaleSubmitting(true);
+    setPickerVisible(false);
 
     const confirmationContext = readLiveSaleConfirmationContext(stop.id);
     const confirmationInput = readLiveSaleSubmissionInput();
@@ -458,6 +498,7 @@ function SaleScreenInner() {
       (confirmationIsOnline !== true && confirmationIsOnline !== false)
       || !isSameSaleConfirmationContext(confirmationContext, confirmationContext)
     ) {
+      releaseSaleInputMutationLock();
       Alert.alert(
         'Contexto actualizado',
         'La sesión, ruta o conexión cambió. Revisa los datos de la venta y vuelve a confirmar.',
@@ -472,6 +513,7 @@ function SaleScreenInner() {
 
     if (!canStartSale) {
       const pending = routeLoadState.nextPendingLoad;
+      releaseSaleInputMutationLock();
       Alert.alert(
         pending?.isRefill ? 'Recarga pendiente' : 'Carga pendiente',
         pending
@@ -493,6 +535,7 @@ function SaleScreenInner() {
           !inventoryRefreshApplicable
           || !isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)
         ) {
+          releaseSaleInputMutationLock();
           Alert.alert(
             'Contexto actualizado',
             'La sesión, ruta o conexión cambió mientras validábamos inventario. Vuelve a confirmar.',
@@ -506,6 +549,7 @@ function SaleScreenInner() {
         });
       }
       if (!liveStockEnforcement.allowConfirm) {
+        releaseSaleInputMutationLock();
         Alert.alert(
           'Inventario pendiente',
           confirmationIsOnline === true
@@ -516,6 +560,7 @@ function SaleScreenInner() {
       }
     }
     if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)) {
+      releaseSaleInputMutationLock();
       Alert.alert(
         'Contexto actualizado',
         'La sesión, ruta, conexión o inventario cambió. Revisa la venta y vuelve a confirmar.',
@@ -525,6 +570,7 @@ function SaleScreenInner() {
 
     const quantityIssues = findSaleQuantityIssues(confirmationInput.saleLines);
     if (quantityIssues.length > 0) {
+      releaseSaleInputMutationLock();
       Alert.alert(
         'Cantidad inválida',
         quantityIssues.map((issue) => `${issue.name}: cantidad inválida`).join('\n'),
@@ -532,14 +578,15 @@ function SaleScreenInner() {
       return;
     }
 
-    // P0-1 (frontend-safe): revalidar contra stock FRESCO al confirmar (el tope
-    // del carrito usa el stock capturado al agregar, que pudo quedar obsoleto).
+    // P0-1 (frontend-safe): revalidar contra stock FRESCO al confirmar. El stock
+    // capturado al agregar es sólo referencial y puede haber quedado obsoleto.
     // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
     // localmente ni reemplaza la validación backend.
     const freshIssues = liveStockEnforcement.enforceFreshStock
       ? findFreshStockIssues(confirmationInput.saleLines, useProductStore.getState().products)
       : [];
     if (freshIssues.length > 0) {
+      releaseSaleInputMutationLock();
       Alert.alert(
         'Stock insuficiente',
         freshIssues.map((i) =>
@@ -561,21 +608,30 @@ function SaleScreenInner() {
       if (!confirmationInput.salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       if (!hasWarehouse) missing.push('almacén del empleado');
+      releaseSaleInputMutationLock();
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
       return;
     }
 
-    if (!stop) return;
+    if (!stop) {
+      releaseSaleInputMutationLock();
+      return;
+    }
     if (stop._entityType === 'lead' && !getLeadPartnerId(stop)) {
+      releaseSaleInputMutationLock();
       Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
       return;
     }
     const confirmedPaymentMethod = confirmationInput.salePaymentMethod;
-    if (!confirmedPaymentMethod) return;
+    if (!confirmedPaymentMethod) {
+      releaseSaleInputMutationLock();
+      return;
+    }
 
-    if (useVisitStore.getState().saleConfirmed) return;
-    if (!saleConfirmationSingleFlight.tryAcquire()) return;
-    setSaleSubmitting(true);
+    if (useVisitStore.getState().saleConfirmed) {
+      releaseSaleInputMutationLock();
+      return;
+    }
 
     // V1.2: Lock to prevent duplicate
     const operationId = lockSaleConfirm();
@@ -612,8 +668,7 @@ function SaleScreenInner() {
             : null;
       }
     } catch (error) {
-      setSaleSubmitting(false);
-      saleConfirmationSingleFlight.release();
+      releaseSaleInputMutationLock();
       unlockSaleConfirm();
       const message = safeUnknownErrorMessage(
         error,
@@ -623,8 +678,7 @@ function SaleScreenInner() {
       return;
     }
     if (!isLiveSaleSubmissionContextApplicable(confirmationContext, confirmationInput)) {
-      setSaleSubmitting(false);
-      saleConfirmationSingleFlight.release();
+      releaseSaleInputMutationLock();
       unlockSaleConfirm();
       Alert.alert(
         'Contexto actualizado',
@@ -742,8 +796,7 @@ function SaleScreenInner() {
         );
         return;
       }
-      setSaleSubmitting(false);
-      saleConfirmationSingleFlight.release();
+      releaseSaleInputMutationLock();
       Alert.alert(
         'Contexto actualizado',
         'La sesión, ruta o conexión cambió antes de enviar el pedido. Revisa la venta y vuelve a confirmar.',
@@ -858,8 +911,7 @@ function SaleScreenInner() {
           );
           return;
         }
-        setSaleSubmitting(false);
-        saleConfirmationSingleFlight.release();
+        releaseSaleInputMutationLock();
         // insufficient_stock: el backend rechazó por stock. Refrescamos el
         // inventario para mostrar el available_qty REAL y dejamos el carrito
         // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
@@ -1093,12 +1145,9 @@ function SaleScreenInner() {
               </View>
               <View style={styles.qtyControls}>
                 <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateSaleQty(
-                    line.productId,
-                    line.qty - 1,
-                    { enforceStock: false },
-                  )}
+                  style={[styles.qtyBtn, saleInputsLocked && styles.inputLocked]}
+                  onPress={() => changeSaleQty(line.productId, line.qty - 1)}
+                  disabled={saleInputsLocked}
                 >
                   <Text style={styles.qtyBtnText}>−</Text>
                 </TouchableOpacity>
@@ -1111,14 +1160,12 @@ function SaleScreenInner() {
                   inputMode="numeric"
                   selectTextOnFocus
                   maxLength={4}
+                  editable={!saleInputsLocked}
                 />
                 <TouchableOpacity
-                  style={styles.qtyBtn}
-                  onPress={() => updateSaleQty(
-                    line.productId,
-                    line.qty + 1,
-                    { enforceStock: false },
-                  )}
+                  style={[styles.qtyBtn, saleInputsLocked && styles.inputLocked]}
+                  onPress={() => changeSaleQty(line.productId, line.qty + 1)}
+                  disabled={saleInputsLocked}
                 >
                   <Text style={styles.qtyBtnText}>+</Text>
                 </TouchableOpacity>
@@ -1144,8 +1191,8 @@ function SaleScreenInner() {
           variant="secondary"
           small
           fullWidth
-          onPress={() => setPickerVisible(true)}
-          disabled={!onlineInventoryReady || (!!productError && products.length === 0 && recentProductCount === 0)}
+          onPress={handleOpenProductPicker}
+          disabled={saleInputsLocked || !onlineInventoryReady || (!!productError && products.length === 0 && recentProductCount === 0)}
           style={{ marginVertical: 10 }}
         />
         {inventoryAuthorityRefreshing && (
@@ -1169,12 +1216,13 @@ function SaleScreenInner() {
           </View>
         )}
         <ProductPicker
-          visible={pickerVisible}
+          visible={pickerVisible && !saleInputsLocked}
           onClose={() => setPickerVisible(false)}
           existingProductIds={saleLines.map((l) => l.productId)}
           partnerId={salePartnerId}
           pricelistId={stop._pricelistId}
           stockPolicy="offline_sale"
+          onAddLine={handleAddSaleLine}
         />
 
         {/* Totals card */}
@@ -1210,13 +1258,15 @@ function SaleScreenInner() {
           <Button
             label="💵 Efectivo"
             variant={salePaymentMethod === 'cash' ? 'primary' : 'secondary'}
-            onPress={() => setSalePayment('cash')}
+            onPress={() => handleSetSalePayment('cash')}
+            disabled={saleInputsLocked}
             style={{ flex: 1 }}
           />
           <Button
             label="💳 Crédito"
             variant={salePaymentMethod === 'credit' ? 'primary' : 'secondary'}
-            onPress={() => setSalePayment('credit')}
+            onPress={() => handleSetSalePayment('credit')}
+            disabled={saleInputsLocked}
             style={{ flex: 1 }}
           />
         </View>
@@ -1239,14 +1289,19 @@ function SaleScreenInner() {
             <Text style={{ fontSize: 12, color: colors.success, fontWeight: '600' }}>
               {salePhotoUris.length} {salePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
-            <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddSalePhoto}>
+            <TouchableOpacity
+              style={[styles.addPhotoBtn, saleInputsLocked && styles.inputLocked]}
+              onPress={handleAddSalePhoto}
+              disabled={saleInputsLocked}
+            >
               <Text style={styles.addPhotoText}>Agregar otra foto</Text>
             </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
-            style={styles.photoReq}
+            style={[styles.photoReq, saleInputsLocked && styles.inputLocked]}
             onPress={handleAddSalePhoto}
+            disabled={saleInputsLocked}
           >
             <Text style={{ fontSize: 32 }}>📸</Text>
             <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
@@ -1312,8 +1367,8 @@ function SaleScreenInner() {
           })}
           onPress={handleConfirm}
           fullWidth
-          disabled={saleConfirmed || !onlineInventoryReady}
-          loading={false}
+          disabled={saleInputsLocked || !onlineInventoryReady}
+          loading={saleSubmitting}
           style={{ marginTop: saleConfirmed ? 0 : 14 }}
         />
 
@@ -1386,6 +1441,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   qtyBtnText: { fontSize: 16, color: colors.text },
+  inputLocked: { opacity: 0.5 },
   qtyValue: {
     fontFamily: fonts.monoBold,
     fontSize: 15, fontWeight: '700', color: colors.text,

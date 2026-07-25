@@ -307,6 +307,18 @@ assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhot
   'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
 
 const confirmBody = extractBracedBlockAfter(sale, 'async function handleConfirm()');
+const synchronousInputLockIdx = confirmBody.indexOf(
+  'if (!saleConfirmationSingleFlight.tryAcquire()) return;',
+);
+const confirmationInputCaptureIdx = confirmBody.indexOf(
+  'const confirmationInput = readLiveSaleSubmissionInput();',
+);
+assert(
+  synchronousInputLockIdx >= 0
+    && synchronousInputLockIdx < confirmationInputCaptureIdx
+    && synchronousInputLockIdx < confirmBody.indexOf('await '),
+  'handleConfirm debe tomar el lock síncrono antes del snapshot y del primer await',
+);
 assert.match(
   confirmBody,
   /const confirmationContext = readLiveSaleConfirmationContext\(stop\.id\);[\s\S]*?const confirmationInput = readLiveSaleSubmissionInput\(\);[\s\S]*?const confirmationIsOnline = confirmationContext\.isOnline;/,
@@ -371,7 +383,7 @@ assert(
 const preLockGuard = confirmBody.slice(guardAfterPricingIdx, lockPersistIdx);
 assert.match(
   preLockGuard,
-  /setSaleSubmitting\(false\)[\s\S]*?saleConfirmationSingleFlight\.release\(\)[\s\S]*?unlockSaleConfirm\(\)[\s\S]*?return;/,
+  /releaseSaleInputMutationLock\(\)[\s\S]*?unlockSaleConfirm\(\)[\s\S]*?return;/,
   'si cae autoridad durante pricing debe abortar y liberar sólo el lock aún no durable',
 );
 assert.doesNotMatch(
@@ -420,6 +432,59 @@ assert.match(
   /photoUris:\s*\[\.\.\.confirmationInput\.salePhotoUris\][\s\S]*?recordRecentProducts\(confirmationInput\.saleLines\.map/,
   'recovery y recientes deben reutilizar el snapshot inmutable',
 );
+assert.match(
+  sale,
+  /const saleInputsLocked\s*=\s*saleSubmitting\s*\|\|\s*saleConfirmed\s*\|\|\s*saleConfirmationSingleFlight\.isActive/,
+  'la UI debe reflejar el mismo lock síncrono que usan los handlers',
+);
+assert.match(
+  sale,
+  /function saleInputsAreLockedNow\(\)[\s\S]*?saleConfirmationSingleFlight\.isActive[\s\S]*?useVisitStore\.getState\(\)\.saleConfirmed/,
+  'cada mutador debe consultar el ref vivo y el estado durable, no sólo React state',
+);
+assert.match(
+  sale,
+  /function handleOpenProductPicker\(\)[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?setPickerVisible\(true\)/,
+  'abrir el picker debe fallar cerrado durante submit',
+);
+assert.match(
+  sale,
+  /function handleAddSaleLine\(line:\s*SaleLineItem\)[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?useVisitStore\.getState\(\)\.addSaleLine\(line\)/,
+  'el sink del picker debe releer el lock en el mismo tick antes de mutar',
+);
+assert.match(
+  sale,
+  /function setSaleQtyFromText[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?function changeSaleQty[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;/,
+  'texto y botones de cantidad deben tener guard síncrono',
+);
+assert.match(
+  sale,
+  /function handleSetSalePayment[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?setSalePayment\(method\)/,
+  'el pago debe tener guard síncrono',
+);
+assert.match(
+  sale,
+  /async function handleAddSalePhoto\(\)[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?await takePhoto\(\);[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;/,
+  'la foto debe revalidar el lock tanto antes como después del await de cámara',
+);
+assert.match(sale, /onAddLine=\{handleAddSaleLine\}/, 'ProductPicker no debe escribir directo al store');
+assert.match(sale, /visible=\{pickerVisible\s*&&\s*!saleInputsLocked\}/);
+assert.match(sale, /editable=\{!saleInputsLocked\}/, 'cantidad debe verse bloqueada durante submit');
+assert((sale.match(/disabled=\{saleInputsLocked\}/g) ?? []).length >= 5,
+  'qty, pago y foto deben quedar visualmente deshabilitados durante submit');
+assert.match(
+  sale,
+  /disabled=\{saleInputsLocked\s*\|\|\s*!onlineInventoryReady/,
+  'agregar producto o confirmar debe bloquearse visualmente durante submit',
+);
+
+const successStateIdx = confirmBody.indexOf('const markedReadyToContinue = await markSaleReadyToContinue(');
+assert(successStateIdx > 0);
+assert.doesNotMatch(
+  confirmBody.slice(successStateIdx),
+  /saleConfirmationSingleFlight\.release\(\)|releaseSaleInputMutationLock\(\)/,
+  'éxito remoto y navegación deben conservar congelados los inputs',
+);
 
 assert.match(
   sale,
@@ -433,8 +498,8 @@ assert.match(
 );
 assert.match(
   sale,
-  /disabled=\{saleConfirmed \|\| !onlineInventoryReady\}/,
-  'Confirmar debe bloquearse online mientras falta autoridad',
+  /disabled=\{saleInputsLocked \|\| !onlineInventoryReady\}/,
+  'Confirmar debe bloquearse durante submit y mientras falta autoridad online',
 );
 
 const offlineRecoveryIdx = sale.indexOf('await persistAmbiguousSaleRecovery({');

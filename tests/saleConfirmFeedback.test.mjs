@@ -21,8 +21,8 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /disabled=\{saleConfirmed \|\| !onlineInventoryReady\}/,
-    'Confirmar Pedido debe conservar el bloqueo doble tap y sumar el guard de autoridad online',
+    /disabled=\{saleInputsLocked \|\| !onlineInventoryReady\}/,
+    'Confirmar Pedido debe conservar el lock síncrono y sumar el guard de autoridad online',
   );
   assert.match(
     saleScreen,
@@ -39,23 +39,30 @@ function main() {
     /React\.useRef[^\n]*SaleConfirmationSingleFlight|React\.useRef<[^>]*SaleConfirmationSingleFlight/,
     'La pantalla debe conservar una sola instancia single-flight por montaje',
   );
-  const validationIndex = saleScreen.indexOf('if (!confirmedPaymentMethod) return;');
-  const freshConfirmedIndex = saleScreen.indexOf('useVisitStore.getState().saleConfirmed', validationIndex);
-  const acquireIndex = saleScreen.indexOf('saleConfirmationSingleFlight.tryAcquire()', validationIndex);
-  const submittingIndex = saleScreen.indexOf('setSaleSubmitting(true)', validationIndex);
+  const confirmStart = saleScreen.indexOf('async function handleConfirm()');
+  const freshConfirmedIndex = saleScreen.indexOf('useVisitStore.getState().saleConfirmed', confirmStart);
+  const acquireIndex = saleScreen.indexOf('saleConfirmationSingleFlight.tryAcquire()', confirmStart);
+  const submittingIndex = saleScreen.indexOf('setSaleSubmitting(true)', acquireIndex);
+  const captureIndex = saleScreen.indexOf('const confirmationInput = readLiveSaleSubmissionInput()', acquireIndex);
+  const validationIndex = saleScreen.indexOf('if (!confirmedPaymentMethod)', captureIndex);
   const lockIndex = saleScreen.indexOf('lockSaleConfirm()', validationIndex);
   assert(
-    validationIndex >= 0
-      && freshConfirmedIndex > validationIndex
+    freshConfirmedIndex > confirmStart
       && acquireIndex > freshConfirmedIndex
       && submittingIndex > acquireIndex
-      && lockIndex > submittingIndex,
-    'El guard atomico usa estado fresco despues de validar y antes de submitting/lock',
+      && captureIndex > submittingIndex
+      && validationIndex > captureIndex
+      && lockIndex > validationIndex,
+    'El guard atomico congela inputs antes del snapshot y conserva el lock durable después de validar',
   );
   const unlockCount = (saleScreen.match(/\bunlockSaleConfirm\(\)/g) ?? []).length;
   const releaseCount = (saleScreen.match(/\bsaleConfirmationSingleFlight\.release\(\)/g) ?? []).length;
   assert.equal(unlockCount, 2, 'solo fallos previos a la barrera durable usan el unlock tolerante');
-  assert.equal(releaseCount, 4, 'los abortos recuperables liberan el single-flight');
+  assert.equal(releaseCount, 1, 'el single-flight sólo se libera mediante el helper centralizado');
+  assert(
+    (saleScreen.match(/\breleaseSaleInputMutationLock\(\)/g) ?? []).length >= 14,
+    'todos los abortos recuperables deben usar el helper centralizado',
+  );
   const durableBarrierIndex = saleScreen.indexOf(
     'await persistSaleConfirmationLock(operationId, recoveryIntent)',
   );
@@ -66,7 +73,7 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);|unlockSaleConfirm\(\);\s*saleConfirmationSingleFlight\.release\(\);/,
+    /releaseSaleInputMutationLock\(\);\s*unlockSaleConfirm\(\);/,
     'release y unlock deben permanecer juntos',
   );
   assert.match(

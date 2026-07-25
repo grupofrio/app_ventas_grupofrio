@@ -5,6 +5,7 @@ import {
   createContextSingleFlight,
   describeInventoryAuthority,
   isProductLoadInvocationCurrent,
+  isProductRefreshEntryCurrent,
 } from '../src/services/productInventoryFreshness.ts';
 
 test('marks fresh online scoped loads for the expected warehouse as authoritative', () => {
@@ -153,16 +154,19 @@ test('a context change supersedes the old refresh without letting its cleanup cl
   assert.deepEqual(await second, { ok: true, source: 'stock_quant' });
 });
 
-test('reset supersedes pending work and active sync throws or rejections clean up for retry', async () => {
-  const gate = deferred<RefreshResult>();
+test('same-turn invalidation cancels scheduled work before it starts and releases for retry', async () => {
+  let taskStarts = 0;
   const coordinator = createContextSingleFlight<RefreshResult>(() => ({
     ok: false,
     reason: 'superseded',
   }));
-  const pending = coordinator.run('ctx', () => gate.promise);
+  const pending = coordinator.run('ctx', async () => {
+    taskStarts += 1;
+    return { ok: true, source: 'truck_stock' };
+  });
   coordinator.invalidate();
-  gate.reject(new Error('old network failure'));
   assert.deepEqual(await pending, { ok: false, reason: 'superseded' });
+  assert.equal(taskStarts, 0, 'invalidated work must not start its transport');
 
   await assert.rejects(
     coordinator.run('ctx', () => { throw new Error('sync failure'); }),
@@ -176,6 +180,59 @@ test('reset supersedes pending work and active sync throws or rejections clean u
     await coordinator.run('ctx', async () => ({ ok: true, source: 'truck_stock' })),
     { ok: true, source: 'truck_stock' },
   );
+});
+
+test('same-turn direct load or hydration cancels authoritative transport at catalog preflight', async () => {
+  let catalogGeneration = 20;
+  let transportStarts = 0;
+  const contextIdentity = 'employee:1|warehouse:8';
+  const entry = {
+    generation: catalogGeneration,
+    contextIdentity,
+  };
+  const coordinator = createContextSingleFlight<RefreshResult>(() => ({
+    ok: false,
+    reason: 'superseded',
+  }));
+  const pending = coordinator.run(contextIdentity, async () => {
+    if (!isProductRefreshEntryCurrent({
+      entry,
+      currentGeneration: catalogGeneration,
+      currentContextIdentity: contextIdentity,
+    })) {
+      return { ok: false, reason: 'superseded' };
+    }
+    transportStarts += 1;
+    return { ok: true, source: 'truck_stock' };
+  });
+
+  // hydrateOfflineCatalog/loadProducts advance this synchronously before their
+  // first await, while the authoritative task is still only scheduled.
+  catalogGeneration += 1;
+  assert.deepEqual(await pending, { ok: false, reason: 'superseded' });
+  assert.equal(transportStarts, 0);
+
+  const nextEntry = { generation: catalogGeneration, contextIdentity };
+  assert.deepEqual(await coordinator.run(contextIdentity, async () => {
+    if (!isProductRefreshEntryCurrent({
+      entry: nextEntry,
+      currentGeneration: catalogGeneration,
+      currentContextIdentity: contextIdentity,
+    })) {
+      return { ok: false, reason: 'superseded' };
+    }
+    transportStarts += 1;
+    return { ok: true, source: 'stock_quant' };
+  }), { ok: true, source: 'stock_quant' });
+  assert.equal(transportStarts, 1, 'a legitimate next run must not remain stuck');
+});
+
+test('catalog preflight accepts the initial zero generation before any load has run', () => {
+  assert.equal(isProductRefreshEntryCurrent({
+    entry: { generation: 0, contextIdentity: 'employee:1|warehouse:8' },
+    currentGeneration: 0,
+    currentContextIdentity: 'employee:1|warehouse:8',
+  }), true);
 });
 
 test('an exact product-load invocation is superseded by a direct same-context load', () => {

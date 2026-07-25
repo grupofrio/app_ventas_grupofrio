@@ -55,6 +55,21 @@ assert.match(
   /authoritativeProductRefreshes\.run\(/,
   'las cargas autoritativas deben pasar por single-flight según contexto',
 );
+const capturedEntryGeneration = authoritativeAction.indexOf(
+  'const authoritativeEntryGeneration = catalogGeneration',
+);
+const scheduledAuthoritativeRun = authoritativeAction.indexOf(
+  'authoritativeProductRefreshes.run(',
+);
+const entryPreflight = authoritativeAction.indexOf('isProductRefreshEntryCurrent(');
+const innerTransport = authoritativeAction.indexOf('get().loadProducts(warehouseId,');
+assert(
+  capturedEntryGeneration >= 0
+    && scheduledAuthoritativeRun > capturedEntryGeneration
+    && entryPreflight > scheduledAuthoritativeRun
+    && innerTransport > entryPreflight,
+  'epoch/contexto deben capturarse antes de programar y validarse antes del transporte',
+);
 assert.match(
   authoritativeAction,
   /let loadInvocation[\s\S]*get\(\)\.loadProducts\(warehouseId,[\s\S]*isProductLoadInvocationCurrent\(/,

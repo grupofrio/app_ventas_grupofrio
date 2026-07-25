@@ -49,7 +49,9 @@ import {
   createContextSingleFlight,
   describeInventoryAuthority,
   isProductLoadInvocationCurrent,
+  isProductRefreshEntryCurrent,
   type ProductLoadInvocation,
+  type ProductRefreshEntry,
 } from '../services/productInventoryFreshness';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
@@ -646,8 +648,28 @@ export const useProductStore = create<ProductState>((set, get) => ({
       });
     }
     const contextIdentity = buildOfflineCatalogContextIdentity(context);
+    const authoritativeEntryGeneration = catalogGeneration;
+    const authoritativeEntry = {
+      generation: authoritativeEntryGeneration,
+      contextIdentity,
+    } satisfies ProductRefreshEntry;
 
     return authoritativeProductRefreshes.run(contextIdentity, async () => {
+      const preflightContext = currentOfflineCatalogContext(warehouseId);
+      if (!isProductRefreshEntryCurrent({
+        entry: authoritativeEntry,
+        currentGeneration: catalogGeneration,
+        currentContextIdentity: preflightContext
+          ? buildOfflineCatalogContextIdentity(preflightContext)
+          : null,
+      })) {
+        return {
+          ok: false,
+          authoritative: false,
+          reason: 'unknown',
+          source: 'superseded',
+        };
+      }
       let loadInvocation: ProductLoadInvocation | null = null;
       try {
         await get().loadProducts(warehouseId, (invocation) => {

@@ -9,15 +9,40 @@ export interface InventoryAuthorityInput {
   fromCache: boolean;
 }
 
-export interface ProductLoadInvocation {
+export interface ProductRefreshEntry {
   readonly generation: number;
   readonly contextIdentity: string;
 }
+
+export type ProductLoadInvocation = ProductRefreshEntry;
 
 export interface ProductLoadInvocationCheck {
   invocation: ProductLoadInvocation | null;
   currentGeneration: number;
   currentContextIdentity: string | null;
+}
+
+export interface ProductRefreshEntryCheck {
+  entry: ProductRefreshEntry | null;
+  currentGeneration: number;
+  currentContextIdentity: string | null;
+}
+
+/** Checks an epoch/context snapshot captured before async work is scheduled. */
+export function isProductRefreshEntryCurrent(
+  input: ProductRefreshEntryCheck,
+): boolean {
+  const entry = input?.entry;
+  return Boolean(
+    entry
+    && Number.isSafeInteger(entry.generation)
+    && entry.generation >= 0
+    && Number.isSafeInteger(input.currentGeneration)
+    && input.currentGeneration === entry.generation
+    && typeof entry.contextIdentity === 'string'
+    && entry.contextIdentity.length > 0
+    && input.currentContextIdentity === entry.contextIdentity,
+  );
 }
 
 /**
@@ -29,17 +54,12 @@ export interface ProductLoadInvocationCheck {
 export function isProductLoadInvocationCurrent(
   input: ProductLoadInvocationCheck,
 ): boolean {
-  const invocation = input?.invocation;
-  return Boolean(
-    invocation
-    && Number.isSafeInteger(invocation.generation)
-    && invocation.generation > 0
-    && Number.isSafeInteger(input.currentGeneration)
-    && input.currentGeneration === invocation.generation
-    && typeof invocation.contextIdentity === 'string'
-    && invocation.contextIdentity.length > 0
-    && input.currentContextIdentity === invocation.contextIdentity,
-  );
+  if (!input?.invocation || input.invocation.generation <= 0) return false;
+  return isProductRefreshEntryCurrent({
+    entry: input.invocation,
+    currentGeneration: input.currentGeneration,
+    currentContextIdentity: input.currentContextIdentity,
+  });
 }
 
 export interface ContextSingleFlight<Result> {
@@ -82,6 +102,9 @@ export function createContextSingleFlight<Result>(
         // Publish `entry` before invoking code that may throw synchronously.
         await Promise.resolve();
         try {
+          if (generation !== operationGeneration || active !== entry) {
+            return createSupersededResult();
+          }
           const result = await task();
           return generation === operationGeneration && active === entry
             ? result

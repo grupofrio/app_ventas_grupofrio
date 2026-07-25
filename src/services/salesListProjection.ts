@@ -22,6 +22,19 @@ export interface SalesListEntry {
   remoteOrder?: GFSalesOrder;
 }
 
+export interface MergeSalesListInput {
+  remoteOrders: GFSalesOrder[];
+  localEntries: SalesListEntry[];
+  localDay: string;
+}
+
+export interface LocalSalesSummary {
+  count: number;
+  knownAmountTotal: number;
+  unknownAmountCount: number;
+  needsAttentionCount: number;
+}
+
 const FALLBACK_CUSTOMER_NAME = 'Cliente sin nombre';
 const MAX_DISPLAY_ERROR_LENGTH = 200;
 const STOCK_ERROR_COPY =
@@ -48,6 +61,9 @@ const NETWORK_ERROR_PATTERNS = [
 ];
 const EXPLICIT_ZONE_ISO_DATETIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+const LOCAL_DATETIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/;
+const LOCAL_DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -91,6 +107,18 @@ function isLeapYear(year: number): boolean {
 function daysInMonth(year: number, month: number): number {
   if (month === 2) return isLeapYear(year) ? 29 : 28;
   return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function isValidCalendarDate(
+  year: number,
+  month: number,
+  day: number,
+): boolean {
+  return year >= 1
+    && month >= 1
+    && month <= 12
+    && day >= 1
+    && day <= daysInMonth(year, month);
 }
 
 function ticketCreatedAtMs(ticket: SaleTicketSnapshot | null | undefined): number | null {
@@ -189,6 +217,10 @@ function projectStatus(status: SyncItemStatus): LocalSaleStatus | null {
   }
 }
 
+export function normalizeOperationIdForComparison(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export function projectLocalSale(
   queueItem: SyncQueueItem,
   ticket: SaleTicketSnapshot | null | undefined,
@@ -233,5 +265,221 @@ export function projectLocalSale(
     createdAtMs,
     localStatus,
     errorMessage,
+  };
+}
+
+function validRemoteOrderId(value: unknown): number | null {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value > 0
+    ? value
+    : null;
+}
+
+function remoteDateOrderMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  const localMatch = LOCAL_DATETIME_PATTERN.exec(normalized);
+  if (localMatch) {
+    const year = Number(localMatch[1]);
+    const month = Number(localMatch[2]);
+    const day = Number(localMatch[3]);
+    const hour = Number(localMatch[4]);
+    const minute = Number(localMatch[5]);
+    const second = Number(localMatch[6]);
+    const milliseconds = Number(
+      (localMatch[7] ?? '').slice(0, 3).padEnd(3, '0'),
+    );
+    if (
+      !isValidCalendarDate(year, month, day)
+      || hour > 23
+      || minute > 59
+      || second > 59
+    ) {
+      return null;
+    }
+
+    const parsed = new Date(0);
+    parsed.setHours(0, 0, 0, 0);
+    parsed.setFullYear(year, month - 1, day);
+    parsed.setHours(hour, minute, second, milliseconds);
+    if (
+      parsed.getFullYear() !== year
+      || parsed.getMonth() !== month - 1
+      || parsed.getDate() !== day
+      || parsed.getHours() !== hour
+      || parsed.getMinutes() !== minute
+      || parsed.getSeconds() !== second
+    ) {
+      return null;
+    }
+    return parsed.getTime();
+  }
+
+  const zonedMatch = EXPLICIT_ZONE_ISO_DATETIME_PATTERN.exec(normalized);
+  if (!zonedMatch) return null;
+
+  const year = Number(zonedMatch[1]);
+  const month = Number(zonedMatch[2]);
+  const day = Number(zonedMatch[3]);
+  const hour = Number(zonedMatch[4]);
+  const minute = Number(zonedMatch[5]);
+  const second = Number(zonedMatch[6]);
+  if (
+    !isValidCalendarDate(year, month, day)
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    return null;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function projectRemoteSale(order: GFSalesOrder): SalesListEntry | null {
+  const orderId = validRemoteOrderId(order.id);
+  const createdAtMs = remoteDateOrderMs(order.date_order);
+  if (orderId === null || createdAtMs === null) return null;
+
+  const operationId = typeof order.operation_id === 'string'
+    ? order.operation_id.trim()
+    : '';
+  return {
+    key: `odoo:${orderId}`,
+    operationId,
+    origin: 'odoo',
+    customerName:
+      normalizeDisplayString(order.partner_name)
+      ?? FALLBACK_CUSTOMER_NAME,
+    amountTotal: nonNegativeFiniteNumber(order.amount_total),
+    kgTotal: nonNegativeFiniteNumber(order.kg_total),
+    createdAtMs,
+    remoteOrder: order,
+  };
+}
+
+function validLocalDay(value: string): boolean {
+  const match = LOCAL_DAY_PATTERN.exec(value);
+  if (!match) return false;
+  return isValidCalendarDate(
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+  );
+}
+
+function localDayForTimestamp(value: number): string | null {
+  if (!Number.isFinite(value)) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${String(year).padStart(4, '0')}-${month}-${day}`;
+}
+
+function compareSalesListEntries(
+  left: SalesListEntry,
+  right: SalesListEntry,
+): number {
+  const dateOrder = right.createdAtMs - left.createdAtMs;
+  if (dateOrder !== 0) return dateOrder;
+  if (left.key < right.key) return -1;
+  if (left.key > right.key) return 1;
+  return 0;
+}
+
+export function mergeSalesListEntries(
+  input: MergeSalesListInput,
+): SalesListEntry[] {
+  if (!validLocalDay(input.localDay)) return [];
+
+  const remoteByKey = new Map<string, SalesListEntry>();
+  for (const order of input.remoteOrders) {
+    const entry = projectRemoteSale(order);
+    if (
+      entry === null
+      || localDayForTimestamp(entry.createdAtMs) !== input.localDay
+      || remoteByKey.has(entry.key)
+    ) {
+      continue;
+    }
+    remoteByKey.set(entry.key, entry);
+  }
+
+  const remoteOperationIds = new Set<string>();
+  for (const entry of remoteByKey.values()) {
+    const normalized = normalizeOperationIdForComparison(entry.operationId);
+    if (normalized) remoteOperationIds.add(normalized);
+  }
+
+  const mergedByKey = new Map<string, SalesListEntry>(remoteByKey);
+  for (const entry of input.localEntries) {
+    if (
+      entry.origin !== 'local'
+      || localDayForTimestamp(entry.createdAtMs) !== input.localDay
+    ) {
+      continue;
+    }
+    const normalized = normalizeOperationIdForComparison(entry.operationId);
+    if (normalized && remoteOperationIds.has(normalized)) continue;
+    if (!mergedByKey.has(entry.key)) mergedByKey.set(entry.key, entry);
+  }
+
+  return [...mergedByKey.values()].sort(compareSalesListEntries);
+}
+
+const AMOUNT_BEARING_LOCAL_STATUSES = new Set<LocalSaleStatus>([
+  'pending',
+  'syncing',
+  'retrying',
+  'updating',
+]);
+
+function roundedCurrencyCents(value: unknown): number | null {
+  const amount = nonNegativeFiniteNumber(value);
+  if (amount === null) return null;
+  const cents = Math.round((amount + Number.EPSILON) * 100);
+  return Number.isFinite(cents) ? cents : null;
+}
+
+export function summarizeLocalSales(
+  entries: SalesListEntry[],
+): LocalSalesSummary {
+  let count = 0;
+  let knownAmountCents = 0;
+  let unknownAmountCount = 0;
+  let needsAttentionCount = 0;
+
+  for (const entry of entries) {
+    if (entry.origin !== 'local') continue;
+    count += 1;
+
+    if (entry.localStatus === 'needs_attention') {
+      needsAttentionCount += 1;
+      unknownAmountCount += 1;
+      continue;
+    }
+
+    const cents = entry.localStatus
+      && AMOUNT_BEARING_LOCAL_STATUSES.has(entry.localStatus)
+      ? roundedCurrencyCents(entry.amountTotal)
+      : null;
+    if (cents === null) {
+      unknownAmountCount += 1;
+      continue;
+    }
+    knownAmountCents += cents;
+  }
+
+  return {
+    count,
+    knownAmountTotal: knownAmountCents / 100,
+    unknownAmountCount,
+    needsAttentionCount,
   };
 }

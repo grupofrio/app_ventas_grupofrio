@@ -1,4 +1,4 @@
-# Folio de Odoo en tickets de venta
+# Folio de Odoo y vendedor en tickets de venta
 
 **Fecha:** 2026-07-24  
 **Estado:** Aprobado por el usuario; pendiente de revisión de especificación
@@ -13,6 +13,10 @@ pero no debe presentarse como si fuera el folio definitivo de Odoo.
 La ausencia temporal del folio de Odoo no bloqueará la impresión. Tanto la
 MP210 como el PDF deben seguir disponibles durante una venta offline o mientras
 la sincronización está pendiente.
+
+Al reabrir un ticket desde la lista de Ventas, el vendedor debe provenir de la
+venta autoritativa de Odoo. No se sustituirá silenciosamente con el empleado que
+está conectado en ese momento.
 
 ## Comportamiento visible
 
@@ -72,7 +76,7 @@ La persistencia será monotónica:
 Esto evita que una recuperación offline antigua vuelva a degradar un ticket ya
 sincronizado.
 
-## Fuente autoritativa y contrato de creación
+## Fuente autoritativa y contrato de creación del folio
 
 El backend actual ya incluye en la respuesta de
 `POST /gf/logistics/api/employee/sales/create`:
@@ -89,12 +93,40 @@ El backend actual ya incluye en la respuesta de
 }
 ```
 
-No se requiere cambio backend. El frontend dejará de convertir el resultado a
-un booleano y conservará el resultado validado. `data.name` deberá ser una
-cadena no vacía para que una respuesta de creación se considere completa.
+El endpoint de creación no requiere cambio backend. El frontend dejará de
+convertir el resultado a un booleano y conservará el resultado validado.
+`data.name` deberá ser una cadena no vacía para que una respuesta de creación se
+considere completa.
 
 La misma regla se aplica a respuestas idempotentes con `duplicate: true`,
 porque el serializador backend devuelve el mismo `order.name`.
+
+## Vendedor autoritativo al reabrir desde Ventas
+
+El problema actual no está en la impresión inmediata: el snapshot creado en el
+teléfono ya guarda el nombre del vendedor autenticado. El defecto aparece al
+abrir un ticket desde Ventas. El frontend espera `employee_name`, pero
+`sale.order._serialize_kold_sales_order()` no lo incluye y el ticket cae en
+`Vendedor no especificado`.
+
+El backend agregará `employee_name` a cada fila de
+`POST /gf/logistics/api/employee/sales/list`. La resolución será:
+
+1. `sale.order.x_kold_employee_id`;
+2. `sale.order.employee_id`, si el campo existe;
+3. `sale.order.gf_route_plan_id.salesperson_employee_id`, o el plan ligado a la
+   parada si el campo directo no está disponible;
+4. el chofer del mismo plan;
+5. cadena vacía solamente si ninguna fuente existe.
+
+El orden privilegia el empleado capturado en la venta y usa la asignación de
+ruta solo para registros históricos incompletos. El frontend normaliza la
+cadena vacía al fallback existente `Vendedor no especificado`; nunca usa al
+usuario actualmente conectado para atribuir una venta histórica.
+
+La respuesta de creación de venta no necesita ampliar su contrato con el
+vendedor: la impresión inmediata conserva el nombre capturado en el snapshot
+local. El cambio backend es aditivo y se limita al listado.
 
 ## Flujo online
 
@@ -136,12 +168,13 @@ local sí permanece reintentable.
 La lista diaria ya recibe `order.name`. Al abrir un pedido:
 
 - si existe snapshot local, se conservan sus líneas y datos de impresión, pero
-  se promueve o actualiza `odooFolio` con la referencia de Odoo;
+  se promueve o actualiza `odooFolio` con la referencia de Odoo y se reemplaza
+  `sellerName` cuando `employee_name` sea no vacío;
 - si no existe snapshot local, se construye uno desde la fila autoritativa;
 - el guardado se realiza antes de navegar a la pantalla del ticket.
 
 Esto corrige tickets antiguos que todavía contienen solamente la referencia
-local.
+local y tickets reconstruidos que hoy muestran `Vendedor no especificado`.
 
 Una pantalla de ticket que ya está abierta no se suscribirá en vivo a cambios
 de la cola. La promoción será visible al volver a abrir el ticket o al abrirlo
@@ -175,6 +208,8 @@ contenido sin anteponer `#`.
 - El cambio no modifica idempotencia, creación de ventas, stock, pagos ni
   conciliación.
 - No se crea un endpoint nuevo ni se consulta Odoo al momento de imprimir.
+- El campo `employee_name` del listado es informativo y no permite al cliente
+  seleccionar o suplantar al vendedor.
 
 ## Pruebas
 
@@ -190,8 +225,13 @@ La implementación seguirá TDD y cubrirá:
 8. renderizado Kotlin de `FOLIO ODOO` y `REFERENCIA LOCAL`;
 9. vista previa equivalente y botones de impresión siempre disponibles;
 10. reapertura desde Ventas que actualiza un snapshot existente;
-11. regresión completa de JavaScript, TypeScript y pruebas Android del módulo
-    térmico.
+11. serialización backend de `employee_name` desde cada nivel de la jerarquía,
+    priorizando `x_kold_employee_id`;
+12. normalización frontend del vendedor recibido al reconstruir el ticket;
+13. cobertura explícita de snapshot ausente durante promoción y del snapshot
+    que permanece visible mientras la pantalla ya está abierta;
+14. regresión completa de JavaScript, TypeScript, pruebas Odoo y pruebas Android
+    del módulo térmico.
 
 ## Fuera de alcance
 
@@ -200,3 +240,4 @@ La implementación seguirá TDD y cubrirá:
 - Bloquear impresión o PDF por falta de conexión.
 - Consultar un endpoint adicional al abrir cada ticket.
 - Alterar el contenido fiscal, precios, productos o forma de pago del ticket.
+- Reasignar el vendedor de una venta o inferirlo desde el usuario móvil actual.

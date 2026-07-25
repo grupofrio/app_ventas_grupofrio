@@ -6,6 +6,7 @@ const REPO_ROOT = process.cwd();
 
 function main() {
   const gfLogistics = readFileSync(resolve(REPO_ROOT, 'src/services/gfLogistics.ts'), 'utf8');
+  const salesScreen = readFileSync(resolve(REPO_ROOT, 'app/(tabs)/sales.tsx'), 'utf8');
 
   assert.match(
     gfLogistics,
@@ -46,6 +47,21 @@ function main() {
     gfLogistics,
     /employee_name:\s*typeof order\.employee_name === 'string'/,
     'normalizeSalesList debe conservar employee_name para imprimir vendedor en el ticket',
+  );
+  assert.match(
+    salesScreen,
+    /buildSaleTicketSnapshotFromOrder\(order\)/,
+    'Ventas debe convertir las lineas definitivas de /sales/list en el ticket remoto',
+  );
+  assert.match(
+    salesScreen,
+    /await saveAuthoritativeSaleTicketSnapshot\(ticket\)/,
+    'Ventas debe guardar las lineas remotas con autoridad Odoo antes de imprimir',
+  );
+  assert.doesNotMatch(
+    salesScreen,
+    /CustomerPricingSnapshot|customerPricingSnapshot|CUSTOMER_PRICING_SNAPSHOTS/,
+    'Abrir una venta remota no debe inferir ni escribir snapshots de precios de cliente',
   );
 
   console.log('sales list lines wiring tests: ok');

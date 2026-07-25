@@ -2,10 +2,13 @@ import { create } from 'zustand';
 import {
   fetchSalesList,
   fetchSalesSummary,
-  GFSalesListResult,
   GFSalesOrder,
   GFSalesSummary,
 } from '../services/gfLogistics';
+import {
+  createSalesLoadCoordinator,
+  type SalesLoadOptions,
+} from '../services/salesRefreshPolicy';
 
 const EMPTY_SUMMARY: GFSalesSummary = {
   date: '',
@@ -28,50 +31,34 @@ interface SalesState {
   isLoading: boolean;
   error: string | null;
   lastLoadedAt: number | null;
-  loadTodaySales: () => Promise<void>;
+  loadTodaySales: (options?: SalesLoadOptions) => Promise<void>;
   reset: () => void;
 }
 
-export const useSalesStore = create<SalesState>((set, get) => ({
-  summary: EMPTY_SUMMARY,
-  orders: [],
-  count: 0,
-  isLoading: false,
-  error: null,
-  lastLoadedAt: null,
+export const useSalesStore = create<SalesState>((set, get) => {
+  const loadTodaySales = createSalesLoadCoordinator<GFSalesSummary, GFSalesOrder>({
+    fetchSummary: fetchSalesSummary,
+    fetchList: fetchSalesList,
+    getState: get,
+    setState: (patch) => set(patch),
+  });
 
-  loadTodaySales: async () => {
-    if (get().isLoading) return;
-    set({ isLoading: true, error: null });
-
-    try {
-      const [summary, list]: [GFSalesSummary, GFSalesListResult] = await Promise.all([
-        fetchSalesSummary(),
-        fetchSalesList(),
-      ]);
-
-      set({
-        summary,
-        orders: list.orders,
-        count: list.count,
-        isLoading: false,
-        error: null,
-        lastLoadedAt: Date.now(),
-      });
-    } catch (error) {
-      set({
-        isLoading: false,
-        error: error instanceof Error ? error.message : 'No se pudieron cargar las ventas.',
-      });
-    }
-  },
-
-  reset: () => set({
+  return {
     summary: EMPTY_SUMMARY,
     orders: [],
     count: 0,
     isLoading: false,
     error: null,
     lastLoadedAt: null,
-  }),
-}));
+    loadTodaySales,
+
+    reset: () => set({
+      summary: EMPTY_SUMMARY,
+      orders: [],
+      count: 0,
+      isLoading: false,
+      error: null,
+      lastLoadedAt: null,
+    }),
+  };
+});

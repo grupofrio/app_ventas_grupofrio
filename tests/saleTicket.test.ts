@@ -31,6 +31,108 @@ test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () =
   assert.equal(snapshot.totalKg, 13);
 });
 
+test('buildSaleTicketSnapshot preserves optional captured price provenance without changing money', () => {
+  const withoutMetadata = buildSaleTicketSnapshot({
+    saleId: 'sale_price_metadata',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [
+      { productId: 10, productName: 'Bolsa 5kg', qty: 2, price: 42.5, weight: 5 },
+      { productId: 20, productName: 'Hielo 3kg', qty: 1, price: 30, weight: 3 },
+    ],
+  });
+  const withMetadata = buildSaleTicketSnapshot({
+    saleId: 'sale_price_metadata',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [
+      {
+        productId: 10,
+        productName: 'Bolsa 5kg',
+        qty: 2,
+        price: 42.5,
+        weight: 5,
+        priceSource: 'prepared_customer',
+        priceCapturedAtMs: 1_753_350_000_000,
+        pricelistId: 81,
+      },
+      {
+        productId: 20,
+        productName: 'Hielo 3kg',
+        qty: 1,
+        price: 30,
+        weight: 3,
+        priceSource: 'public_fallback',
+        priceCapturedAtMs: null,
+        pricelistId: null,
+      },
+    ],
+  });
+  const roundTrip = JSON.parse(JSON.stringify(withMetadata));
+
+  assert.equal(withMetadata.origin, 'local');
+  assert.deepEqual(roundTrip.lines[0], {
+    productId: 10,
+    productName: 'Bolsa 5kg',
+    qty: 2,
+    unitPrice: 42.5,
+    lineTotal: 85,
+    weight: 5,
+    priceSource: 'prepared_customer',
+    priceCapturedAtMs: 1_753_350_000_000,
+    pricelistId: 81,
+  });
+  assert.equal(roundTrip.lines[1].priceSource, 'public_fallback');
+  assert.equal(roundTrip.lines[1].priceCapturedAtMs, null);
+  assert.equal(roundTrip.lines[1].pricelistId, null);
+  assert.deepEqual(
+    {
+      subtotal: withMetadata.subtotal,
+      total: withMetadata.total,
+      totalKg: withMetadata.totalKg,
+      lineTotals: withMetadata.lines.map((line) => line.lineTotal),
+      unitPrices: withMetadata.lines.map((line) => line.unitPrice),
+    },
+    {
+      subtotal: withoutMetadata.subtotal,
+      total: withoutMetadata.total,
+      totalKg: withoutMetadata.totalKg,
+      lineTotals: withoutMetadata.lines.map((line) => line.lineTotal),
+      unitPrices: withoutMetadata.lines.map((line) => line.unitPrice),
+    },
+  );
+  assert.equal(buildSaleTicketHtml(withMetadata), buildSaleTicketHtml(withoutMetadata));
+});
+
+test('legacy ticket snapshots without origin or price metadata still render normally', () => {
+  const legacySnapshot = {
+    saleId: 'sale_legacy',
+    customerName: 'Cliente Legacy',
+    sellerName: 'Vendedor',
+    paymentMethod: 'cash' as const,
+    paymentLabel: 'Efectivo',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [{
+      productId: 10,
+      productName: 'Bolsa 5kg',
+      qty: 2,
+      unitPrice: 42.5,
+      lineTotal: 85,
+      weight: 5,
+    }],
+    subtotal: 85,
+    total: 85,
+    totalKg: 10,
+  };
+
+  assert.doesNotThrow(() => buildSaleTicketHtml(legacySnapshot));
+  assert.match(buildSaleTicketHtml(legacySnapshot), /\$85\.00/);
+});
+
 test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
   const snapshot = buildSaleTicketSnapshot({
     saleId: 'sale_<abc>',
@@ -174,6 +276,7 @@ test('buildSaleTicketSnapshotFromOrder uses real order lines when available', ()
   });
 
   assert.equal(snapshot.lines.length, 2);
+  assert.equal(snapshot.origin, 'odoo');
   assert.equal(snapshot.lines[0].productName, 'Bolsa 5kg');
   assert.equal(snapshot.lines[0].qty, 2);
   assert.equal(snapshot.lines[0].lineTotal, 80);

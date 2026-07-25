@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -16,7 +16,7 @@ import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
 import { buildSaleTicketSnapshotFromOrder } from '../../src/services/saleTicket';
-import { loadSaleTicketSnapshot, saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+import { saveAuthoritativeSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
 export default function SalesScreen() {
   const router = useRouter();
@@ -39,13 +39,29 @@ export default function SalesScreen() {
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
   async function openTicketForOrder(order: GFSalesOrder) {
-    const ticket = buildSaleTicketSnapshotFromOrder(order);
-    const ticketId = ticket.saleId;
-    const existingTicket = await loadSaleTicketSnapshot(ticketId);
-    if (!existingTicket) {
-      await saveSaleTicketSnapshot(ticket);
+    const normalizedOperationId = order.operation_id.trim();
+    if (!normalizedOperationId) {
+      Alert.alert(
+        'Ticket no disponible',
+        'Esta venta no tiene un identificador de operación válido para abrir su comprobante.',
+      );
+      return;
     }
-    router.push(`/print/${ticketId}` as never);
+
+    const ticket = {
+      ...buildSaleTicketSnapshotFromOrder(order),
+      saleId: normalizedOperationId,
+    };
+    const ticketId = ticket.saleId;
+    try {
+      await saveAuthoritativeSaleTicketSnapshot(ticket);
+      router.push(`/print/${ticketId}` as never);
+    } catch {
+      Alert.alert(
+        'Ticket no disponible',
+        'No pudimos guardar el comprobante actualizado. Intenta abrirlo nuevamente.',
+      );
+    }
   }
 
   return (

@@ -10,12 +10,20 @@ import {
 export { SALE_TICKET_DEFAULT_SELLER } from './saleTicketFormatting.ts';
 
 export type SaleTicketPaymentMethod = 'cash' | 'credit' | 'transfer' | 'unknown';
+export type SaleTicketOrigin = 'local' | 'odoo';
+export type SaleTicketPriceSource =
+  | 'prepared_customer'
+  | 'last_known_customer'
+  | 'public_fallback';
 
 export interface SaleTicketSourceLine {
   productId: number;
   productName: string;
   qty: number;
   price: number;
+  priceSource?: SaleTicketPriceSource;
+  priceCapturedAtMs?: number | null;
+  pricelistId?: number | null;
   weight: number;
 }
 
@@ -60,11 +68,15 @@ export interface SaleTicketLine {
   qty: number;
   unitPrice: number;
   lineTotal: number;
+  priceSource?: SaleTicketPriceSource;
+  priceCapturedAtMs?: number | null;
+  pricelistId?: number | null;
   weight: number;
 }
 
 export interface SaleTicketSnapshot {
   saleId: string;
+  origin?: SaleTicketOrigin;
   customerName: string;
   sellerName: string;
   paymentMethod: SaleTicketPaymentMethod;
@@ -86,6 +98,14 @@ export function getSaleTicketStorageKey(saleId: string): string {
   return `sale-ticket:${saleId}`;
 }
 
+export function shouldReplaceTicketSnapshot(input: {
+  existingOrigin?: SaleTicketOrigin;
+  incomingOrigin: SaleTicketOrigin;
+}): boolean {
+  const existingOrigin = input.existingOrigin ?? 'local';
+  return input.incomingOrigin === 'odoo' || existingOrigin !== 'odoo';
+}
+
 export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): SaleTicketSnapshot {
   const lines = input.lines.map((line) => ({
     productId: line.productId,
@@ -93,6 +113,11 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
     qty: line.qty,
     unitPrice: line.price,
     lineTotal: line.qty * line.price,
+    ...(line.priceSource === undefined ? {} : { priceSource: line.priceSource }),
+    ...(line.priceCapturedAtMs === undefined
+      ? {}
+      : { priceCapturedAtMs: line.priceCapturedAtMs }),
+    ...(line.pricelistId === undefined ? {} : { pricelistId: line.pricelistId }),
     weight: line.weight,
   }));
   const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
@@ -100,6 +125,7 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
 
   return {
     saleId: input.saleId,
+    origin: 'local',
     customerName: input.customerName,
     sellerName: normalizeSellerName(input.sellerName),
     paymentMethod: input.paymentMethod,
@@ -154,25 +180,29 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
 
     return {
       ...snapshot,
+      origin: 'odoo',
       totalKg: order.kg_total || snapshot.totalKg,
     };
   }
 
-  return buildSaleTicketSnapshot({
-    saleId,
-    customerName,
-    sellerName,
-    paymentMethod,
-    paymentLabel,
-    createdAt,
-    lines: [{
-      productId: order.id,
-      productName: `Venta ${orderName}`,
-      qty: 1,
-      price: order.amount_total,
-      weight: order.kg_total,
-    }],
-  });
+  return {
+    ...buildSaleTicketSnapshot({
+      saleId,
+      customerName,
+      sellerName,
+      paymentMethod,
+      paymentLabel,
+      createdAt,
+      lines: [{
+        productId: order.id,
+        productName: `Venta ${orderName}`,
+        qty: 1,
+        price: order.amount_total,
+        weight: order.kg_total,
+      }],
+    }),
+    origin: 'odoo',
+  };
 }
 
 export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {

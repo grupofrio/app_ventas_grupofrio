@@ -17,6 +17,39 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function validOptionalOrigin(
+  value: unknown,
+): value is SaleTicketSnapshot['origin'] | undefined {
+  return value === undefined || value === 'local' || value === 'odoo';
+}
+
+function validOptionalPriceSource(
+  value: unknown,
+): value is SaleTicketSnapshot['lines'][number]['priceSource'] | undefined {
+  return (
+    value === undefined
+    || value === 'prepared_customer'
+    || value === 'last_known_customer'
+    || value === 'public_fallback'
+  );
+}
+
+function validOptionalCapturedAt(value: unknown): value is number | null | undefined {
+  return (
+    value === undefined
+    || value === null
+    || (finiteNumber(value) && value >= 0)
+  );
+}
+
+function validOptionalPricelistId(value: unknown): value is number | null | undefined {
+  return (
+    value === undefined
+    || value === null
+    || (typeof value === 'number' && Number.isInteger(value) && value > 0)
+  );
+}
+
 function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketSnapshot | null {
   if (!isRecord(value)) return null;
   if (
@@ -30,6 +63,7 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
     || !finiteNumber(value.subtotal)
     || !finiteNumber(value.total)
     || !finiteNumber(value.totalKg)
+    || !validOptionalOrigin(value.origin)
   ) {
     return null;
   }
@@ -43,6 +77,9 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
       || !finiteNumber(candidate.unitPrice)
       || !finiteNumber(candidate.lineTotal)
       || !finiteNumber(candidate.weight)
+      || !validOptionalPriceSource(candidate.priceSource)
+      || !validOptionalCapturedAt(candidate.priceCapturedAtMs)
+      || !validOptionalPricelistId(candidate.pricelistId)
     ) {
       return null;
     }
@@ -52,6 +89,15 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
       qty: candidate.qty,
       unitPrice: candidate.unitPrice,
       lineTotal: candidate.lineTotal,
+      ...(candidate.priceSource === undefined
+        ? {}
+        : { priceSource: candidate.priceSource }),
+      ...(candidate.priceCapturedAtMs === undefined
+        ? {}
+        : { priceCapturedAtMs: candidate.priceCapturedAtMs }),
+      ...(candidate.pricelistId === undefined
+        ? {}
+        : { pricelistId: candidate.pricelistId }),
       weight: candidate.weight,
     };
   });
@@ -59,6 +105,7 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
 
   return {
     saleId: value.saleId,
+    ...(value.origin === undefined ? {} : { origin: value.origin }),
     customerName: value.customerName,
     sellerName: value.sellerName,
     paymentMethod: value.paymentMethod as SaleTicketSnapshot['paymentMethod'],

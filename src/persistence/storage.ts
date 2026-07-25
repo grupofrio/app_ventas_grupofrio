@@ -57,6 +57,12 @@ export async function storeSaveStrict<T>(key: string, data: T): Promise<void> {
   await AsyncStorage.setItem(`${PREFIX}${key}`, serialized);
 }
 
+export async function storeLoadStrict<T>(key: string): Promise<T | null> {
+  const raw = await AsyncStorage.getItem(`${PREFIX}${key}`);
+  if (raw === null) return null;
+  return JSON.parse(raw) as T;
+}
+
 export async function storeRemoveStrict(key: string): Promise<void> {
   await AsyncStorage.removeItem(`${PREFIX}${key}`);
 }

@@ -6,6 +6,7 @@ const REPO_ROOT = process.cwd();
 
 function main() {
   const saleScreen = readFileSync(resolve(REPO_ROOT, 'app/sale/[stopId].tsx'), 'utf8');
+  const salesScreen = readFileSync(resolve(REPO_ROOT, 'app/(tabs)/sales.tsx'), 'utf8');
   const printScreen = readFileSync(resolve(REPO_ROOT, 'app/print/[orderId].tsx'), 'utf8');
   const saleTicketService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicket.ts'), 'utf8');
   const saleTicketBrandingService = readFileSync(
@@ -13,6 +14,10 @@ function main() {
     'utf8',
   );
   const saleTicketPdfService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicketPdf.ts'), 'utf8');
+  const customerPricingRepository = readFileSync(
+    resolve(REPO_ROOT, 'src/services/customerPricingSnapshotRepository.ts'),
+    'utf8',
+  );
 
   assert.match(
     saleScreen,
@@ -88,6 +93,36 @@ function main() {
     printScreen,
     /KOLD FIELD/,
     'La vista previa del ticket ya no debe mostrar la marca anterior',
+  );
+  const remoteOpenStart = salesScreen.indexOf('async function openTicketForOrder');
+  const remoteOpenEnd = salesScreen.indexOf('\n  return (', remoteOpenStart);
+  const remoteOpenBody = salesScreen.slice(remoteOpenStart, remoteOpenEnd);
+  const authoritativeSaveIndex = remoteOpenBody.indexOf('await saveAuthoritativeSaleTicketSnapshot');
+  const printNavigationIndex = remoteOpenBody.indexOf('router.push(`/print/${ticketId}`');
+  assert(remoteOpenStart >= 0, 'Ventas debe conservar el handler de apertura remota');
+  assert(
+    authoritativeSaveIndex >= 0 && authoritativeSaveIndex < printNavigationIndex,
+    'Ventas debe persistir el ticket Odoo autoritativo antes de navegar al PDF',
+  );
+  assert.match(
+    remoteOpenBody,
+    /buildSaleTicketSnapshotFromOrder\(order\)/,
+    'Ventas debe construir el ticket remoto desde las lineas definitivas de /sales/list',
+  );
+  assert.match(
+    remoteOpenBody,
+    /operation_id\.trim\(\)/,
+    'Ventas debe usar el operation_id remoto normalizado y no un folio inventado',
+  );
+  assert.doesNotMatch(
+    salesScreen,
+    /customerPricingSnapshot|CUSTOMER_PRICING_SNAPSHOTS|replaceCustomerPricing|updateCustomerPricing/,
+    'Abrir tickets desde /sales/list no debe mutar snapshots ni el ledger de precios',
+  );
+  assert.doesNotMatch(
+    customerPricingRepository,
+    /sale-ticket:/,
+    'El repositorio de pricing debe permanecer aislado de las llaves de tickets',
   );
 
   console.log('sale ticket wiring tests: ok');

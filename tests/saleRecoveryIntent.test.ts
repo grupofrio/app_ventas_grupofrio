@@ -50,6 +50,114 @@ test('creates and restores a versioned RN-free sale recovery intent', () => {
   assert.deepEqual(restoreSaleRecoveryIntent(roundTrip), intent);
 });
 
+test('ticket origin and captured price provenance survive recovery JSON rehydration', () => {
+  const base = validIntent();
+  const withMetadata: SaleRecoveryIntentV1 = {
+    ...base,
+    ticketSnapshot: {
+      ...base.ticketSnapshot,
+      origin: 'local',
+      lines: [{
+        ...base.ticketSnapshot.lines[0],
+        priceSource: 'last_known_customer',
+        priceCapturedAtMs: 1_753_350_000_000,
+        pricelistId: 81,
+      }],
+    },
+  };
+
+  const restored = restoreSaleRecoveryIntent(
+    JSON.parse(JSON.stringify(withMetadata)),
+  );
+
+  assert.deepEqual(restored, withMetadata);
+});
+
+test('legacy recovery tickets without origin or price provenance remain valid', () => {
+  const restored = restoreSaleRecoveryIntent(
+    JSON.parse(JSON.stringify(validIntent())),
+  );
+
+  assert.deepEqual(restored, validIntent());
+  assert.equal(restored?.ticketSnapshot.origin, undefined);
+  assert.equal(restored?.ticketSnapshot.lines[0].priceSource, undefined);
+});
+
+test('rejects invalid present ticket origin and captured price provenance', () => {
+  const base = validIntent();
+  const invalidSnapshots = [
+    { ...base.ticketSnapshot, origin: 'server' },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], priceSource: 'guessed' }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], priceCapturedAtMs: -1 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{
+        ...base.ticketSnapshot.lines[0],
+        priceCapturedAtMs: Number.POSITIVE_INFINITY,
+      }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], pricelistId: 0 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], pricelistId: -1 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], pricelistId: 1.5 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{
+        ...base.ticketSnapshot.lines[0],
+        pricelistId: Number.POSITIVE_INFINITY,
+      }],
+    },
+  ];
+
+  for (const snapshot of invalidSnapshots) {
+    assert.equal(
+      restoreSaleRecoveryIntent({ ...base, ticketSnapshot: snapshot }),
+      null,
+    );
+  }
+});
+
+test('accepts null or nonnegative captured timestamps and null or positive pricelists', () => {
+  const base = validIntent();
+
+  for (const metadata of [
+    {
+      priceSource: 'prepared_customer' as const,
+      priceCapturedAtMs: null,
+      pricelistId: null,
+    },
+    {
+      priceSource: 'public_fallback' as const,
+      priceCapturedAtMs: 0,
+      pricelistId: 81,
+    },
+  ]) {
+    const candidate: SaleRecoveryIntentV1 = {
+      ...base,
+      ticketSnapshot: {
+        ...base.ticketSnapshot,
+        origin: 'local',
+        lines: [{ ...base.ticketSnapshot.lines[0], ...metadata }],
+      },
+    };
+    assert.deepEqual(restoreSaleRecoveryIntent(candidate), candidate);
+  }
+});
+
 test('rejects intents whose operation id does not match payload and ticket', () => {
   const base = validIntent();
 

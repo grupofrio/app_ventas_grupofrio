@@ -23,7 +23,6 @@ type PricingRequest = (
 type PricingOptions = {
   companyId?: number | null;
   fallbackPricelistId?: number | null;
-  requestServerPricing?: PricingRequest;
 };
 
 type ParseServerCustomerPricingSnapshot = (
@@ -108,32 +107,42 @@ function compileFunctions(
   return module.exports;
 }
 
-const pricingRuntime = compileFunctions(
+const purePricingRuntime = compileFunctions(
   [
     'parseServerCustomerPricingSnapshot',
-    'fetchServerSidePrices',
-    'fetchServerCustomerPricingSnapshot',
     'deriveCustomerPriceOverrides',
   ],
   {
     validateServerPriceSnapshot,
-    shouldTryServerPricingEndpoint: () => true,
-    postRest: async () => {
-      throw new Error('Unexpected production request in focused test');
-    },
-    GF_BASE: 'gf/logistics/api/employee',
-    DEFAULT_READ_TIMEOUT_MS: 10_000,
-    markServerPricingEndpointAvailable: () => undefined,
-    disableServerPricingEndpointIfMissing: () => false,
   },
   ['deriveCustomerPriceOverrides'],
 );
 const parseServerCustomerPricingSnapshot =
-  pricingRuntime.parseServerCustomerPricingSnapshot as ParseServerCustomerPricingSnapshot;
-const fetchServerCustomerPricingSnapshot =
-  pricingRuntime.fetchServerCustomerPricingSnapshot as FetchServerCustomerPricingSnapshot;
+  purePricingRuntime.parseServerCustomerPricingSnapshot as ParseServerCustomerPricingSnapshot;
 const deriveCustomerPriceOverrides =
-  pricingRuntime.deriveCustomerPriceOverrides as DeriveCustomerPriceOverrides;
+  purePricingRuntime.deriveCustomerPriceOverrides as DeriveCustomerPriceOverrides;
+
+function loadFetch(
+  postRest: PricingRequest,
+): FetchServerCustomerPricingSnapshot {
+  const runtime = compileFunctions(
+    [
+      'parseServerCustomerPricingSnapshot',
+      'fetchServerSidePrices',
+      'fetchServerCustomerPricingSnapshot',
+    ],
+    {
+      validateServerPriceSnapshot,
+      shouldTryServerPricingEndpoint: () => true,
+      postRest,
+      GF_BASE: 'gf/logistics/api/employee',
+      DEFAULT_READ_TIMEOUT_MS: 10_000,
+      markServerPricingEndpointAvailable: () => undefined,
+      disableServerPricingEndpointIfMissing: () => false,
+    },
+  );
+  return runtime.fetchServerCustomerPricingSnapshot as FetchServerCustomerPricingSnapshot;
+}
 
 test('parses a complete response and retains a server price equal to public price', () => {
   const result = parseServerCustomerPricingSnapshot({
@@ -230,7 +239,7 @@ test('fetches the strict full snapshot with existing endpoint transport conventi
     payload: Record<string, unknown>;
     options: { timeoutMs?: number };
   }> = [];
-  const requestServerPricing: PricingRequest = async (url, payload, options) => {
+  const fetchServerCustomerPricingSnapshot = loadFetch(async (url, payload, options) => {
     calls.push({ url, payload, options });
     return {
       data: {
@@ -243,7 +252,7 @@ test('fetches the strict full snapshot with existing endpoint transport conventi
         ],
       },
     };
-  };
+  });
 
   const result = await fetchServerCustomerPricingSnapshot(
     99,
@@ -254,7 +263,6 @@ test('fetches the strict full snapshot with existing endpoint transport conventi
     {
       companyId: 34,
       fallbackPricelistId: 104,
-      requestServerPricing,
     },
   );
 
@@ -270,20 +278,37 @@ test('fetches the strict full snapshot with existing endpoint transport conventi
   }]);
 });
 
+test('uses only postRest as the production server-pricing request boundary', () => {
+  const fetchBody = extractFunctionSource(PRICELIST_SOURCE, 'fetchServerSidePrices');
+
+  assert.doesNotMatch(PRICELIST_SOURCE, /ServerPricingRequest|requestServerPricing/);
+  assert.match(
+    fetchBody,
+    /await postRest<any>\(\s*`\$\{GF_BASE\}\/pricing\/by_partner`,\s*payload,\s*\{\s*timeoutMs:\s*DEFAULT_READ_TIMEOUT_MS,\s*\}/,
+  );
+});
+
 test('surfaces API errors and invalid full responses without client-side fallback', async () => {
   const sentinel = new Error('Odoo pricing unavailable');
   let requestCount = 0;
+  const fetchServerCustomerPricingSnapshot = loadFetch(async () => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      throw sentinel;
+    }
+    return {
+      data: {
+        pricelist_id: 81,
+        prices: [],
+      },
+    };
+  });
 
   await assert.rejects(
     fetchServerCustomerPricingSnapshot(
       99,
       [{ id: 10, list_price: 100 }],
-      {
-        requestServerPricing: async () => {
-          requestCount += 1;
-          throw sentinel;
-        },
-      },
+      {},
     ),
     (error) => error === sentinel,
   );
@@ -292,17 +317,7 @@ test('surfaces API errors and invalid full responses without client-side fallbac
     fetchServerCustomerPricingSnapshot(
       99,
       [{ id: 10, list_price: 100 }],
-      {
-        requestServerPricing: async () => {
-          requestCount += 1;
-          return {
-            data: {
-              pricelist_id: 81,
-              prices: [],
-            },
-          };
-        },
-      },
+      {},
     ),
     /incomplete_product_coverage/,
   );
@@ -312,21 +327,35 @@ test('surfaces API errors and invalid full responses without client-side fallbac
 
 test('rejects invalid partner and product inputs before requesting prices', async () => {
   let requestCount = 0;
-  const options: PricingOptions = {
-    requestServerPricing: async () => {
-      requestCount += 1;
-      return {};
-    },
-  };
+  const fetchServerCustomerPricingSnapshot = loadFetch(async () => {
+    requestCount += 1;
+    return {};
+  });
+  const options: PricingOptions = {};
 
   await assert.rejects(
     fetchServerCustomerPricingSnapshot(0, [{ id: 10, list_price: 100 }], options),
     /invalid_partner/,
   );
-  await assert.rejects(
-    fetchServerCustomerPricingSnapshot(99, [{ id: Number.NaN, list_price: 100 }], options),
-    /invalid_requested_product/,
-  );
+  const invalidProducts: Array<Record<string, unknown>> = [
+    { list_price: 100 },
+    { id: undefined, list_price: 100 },
+    { id: null, list_price: 100 },
+    { id: Number.NaN, list_price: 100 },
+    { id: 0, list_price: 100 },
+    { id: -1, list_price: 100 },
+    { id: 1.5, list_price: 100 },
+  ];
+  for (const product of invalidProducts) {
+    await assert.rejects(
+      fetchServerCustomerPricingSnapshot(
+        99,
+        [product as PricingProduct],
+        options,
+      ),
+      /invalid_requested_product/,
+    );
+  }
   await assert.rejects(
     fetchServerCustomerPricingSnapshot(99, [], options),
     /empty_product_set/,

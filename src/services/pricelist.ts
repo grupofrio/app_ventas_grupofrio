@@ -124,16 +124,9 @@ export interface PricingProduct {
   standard_price?: number;
 }
 
-export type ServerPricingRequest = (
-  url: string,
-  data: Record<string, unknown>,
-  options: { timeoutMs?: number },
-) => Promise<unknown>;
-
 export interface PricingOptions {
   companyId?: number | null;
   fallbackPricelistId?: number | null;
-  requestServerPricing?: ServerPricingRequest;
 }
 
 const GF_BASE = 'gf/logistics/api/employee';
@@ -492,10 +485,11 @@ async function fetchServerSidePrices(
   }
 
   const productIds = products.map((product) => product?.id);
-  const invalidProductId = productIds.find(
+  const invalidProductIndex = productIds.findIndex(
     (productId) => !Number.isInteger(productId) || productId <= 0,
   );
-  if (invalidProductId !== undefined) {
+  if (invalidProductIndex >= 0) {
+    const invalidProductId = productIds[invalidProductIndex];
     throw new Error(
       `[pricelist] invalid_requested_product product_id=${String(invalidProductId)}`,
     );
@@ -518,13 +512,9 @@ async function fetchServerSidePrices(
     payload.pricelist_id = explicitPricelistId;
   }
 
-  const result = options?.requestServerPricing
-    ? await options.requestServerPricing(`${GF_BASE}/pricing/by_partner`, payload, {
-      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
-    })
-    : await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
-      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
-    });
+  const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
+    timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+  });
 
   return parseServerCustomerPricingSnapshot(result, productIds);
 }

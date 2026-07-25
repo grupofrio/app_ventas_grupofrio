@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   decideSaleStockEnforcement,
   isApplicableAuthoritativeSaleInventory,
+  isApplicableSaleSubmissionContext,
   isSameSaleConfirmationContext,
   shouldEnforceFreshSaleStock,
   type SaleConfirmationContext,
@@ -21,6 +22,10 @@ const confirmationContext: SaleConfirmationContext = {
   partnerId: 44,
   pricelistId: 5,
   offrouteVisitId: null,
+  activeVisitPhase: 'checked_in',
+  activeVisitStopId: 33,
+  activeVisitCurrentStopId: 33,
+  activeVisitPartnerId: 44,
 };
 
 test('offline sale policy allows referential confirmation without enforcing captured stock', () => {
@@ -166,6 +171,29 @@ test('rejects session, warehouse, route, and stop identity changes', () => {
   }
 });
 
+test('rejects a cleared, switched, or ended active visit while the route stop remains', () => {
+  for (const changed of [
+    {
+      activeVisitStopId: null,
+      activeVisitCurrentStopId: null,
+      activeVisitPartnerId: null,
+    },
+    { activeVisitCurrentStopId: null },
+    { activeVisitPartnerId: 45 },
+    {
+      activeVisitStopId: 34,
+      activeVisitCurrentStopId: 34,
+      activeVisitPartnerId: 45,
+    },
+    { activeVisitPhase: 'checked_out' },
+  ]) {
+    assert.equal(isSameSaleConfirmationContext(
+      confirmationContext,
+      { ...confirmationContext, ...changed } as SaleConfirmationContext,
+    ), false);
+  }
+});
+
 test('accepts only an authoritative refresh applicable to the captured context', () => {
   assert.equal(isApplicableAuthoritativeSaleInventory({
     expectedContext: confirmationContext,
@@ -251,5 +279,53 @@ test('validates pre-existing authoritative inventory without fabricating a load 
       loadedWarehouseId: 8,
       inventorySource: 'stock_quant',
     },
+  }), false);
+});
+
+test('revalidates fresh online authority after awaited submission boundaries', () => {
+  const applicableInput = {
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: {
+      inventoryFreshness: 'authoritative' as const,
+      loadedWarehouseId: 8,
+      inventorySource: 'truck_stock',
+    },
+  };
+  assert.equal(isApplicableSaleSubmissionContext(applicableInput), true);
+
+  for (const inventory of [
+    { ...applicableInput.inventory, inventoryFreshness: 'cached' as const },
+    { ...applicableInput.inventory, loadedWarehouseId: 9 },
+    { ...applicableInput.inventory, inventorySource: 'global_legacy' },
+  ]) {
+    assert.equal(isApplicableSaleSubmissionContext({
+      ...applicableInput,
+      inventory,
+    }), false);
+  }
+});
+
+test('offline submission ignores inventory authority only while its live context is unchanged', () => {
+  const offlineContext = { ...confirmationContext, isOnline: false };
+  const cachedInventory = {
+    inventoryFreshness: 'cached' as const,
+    loadedWarehouseId: null,
+    inventorySource: 'global_legacy',
+  };
+  assert.equal(isApplicableSaleSubmissionContext({
+    expectedContext: offlineContext,
+    currentContext: { ...offlineContext },
+    inventory: cachedInventory,
+  }), true);
+  assert.equal(isApplicableSaleSubmissionContext({
+    expectedContext: offlineContext,
+    currentContext: { ...offlineContext, activeVisitCurrentStopId: null },
+    inventory: cachedInventory,
+  }), false);
+  assert.equal(isApplicableSaleSubmissionContext({
+    expectedContext: offlineContext,
+    currentContext: { ...offlineContext, isOnline: true },
+    inventory: cachedInventory,
   }), false);
 });

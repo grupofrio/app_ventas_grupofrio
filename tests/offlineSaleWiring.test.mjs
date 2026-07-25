@@ -96,8 +96,14 @@ assert(
 );
 assert(
   sale.includes('isApplicableAuthoritativeSaleInventory')
+    && sale.includes('isApplicableSaleSubmissionContext')
     && sale.includes('isSameSaleConfirmationContext'),
   'venta debe ligar refresh y confirmación al contexto exacto',
+);
+assert.match(
+  sale,
+  /const activeVisitStop = visit\.currentStop;[\s\S]*?activeVisitStopId:\s*visit\.currentStopId[\s\S]*?activeVisitCurrentStopId:\s*activeVisitStop\?\.id\s*\?\?\s*null[\s\S]*?activeVisitPartnerId/,
+  'el contexto vivo debe incluir currentStopId y currentStop de la visita activa',
 );
 assert.match(
   sale,
@@ -317,7 +323,7 @@ assert(
 );
 assert.match(
   confirmBody,
-  /await refreshInventoryAuthority\(confirmationContext\);[\s\S]*?isSaleConfirmationContextCurrent\(confirmationContext\)[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement/,
+  /await refreshInventoryAuthority\(confirmationContext\);[\s\S]*?isLiveSaleSubmissionContextApplicable\(confirmationContext\)[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement/,
   'después del refresh debe releer conectividad y autoridad vivas antes de continuar',
 );
 assert.match(
@@ -339,11 +345,11 @@ const pricingAwaitIdx = confirmBody.indexOf('await getPartnerPricelistId(');
 const lockPersistIdx = confirmBody.indexOf('await persistSaleConfirmationLock(');
 const branchIdx = confirmBody.indexOf('if (confirmationIsOnline === false)');
 const guardAfterPricingIdx = confirmBody.indexOf(
-  'if (!isSaleConfirmationContextCurrent(confirmationContext))',
+  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext))',
   pricingAwaitIdx,
 );
 const guardAfterLockIdx = confirmBody.indexOf(
-  'if (!isSaleConfirmationContextCurrent(confirmationContext))',
+  'if (!isLiveSaleSubmissionContextApplicable(confirmationContext))',
   lockPersistIdx,
 );
 assert(
@@ -351,6 +357,17 @@ assert(
     && guardAfterPricingIdx > pricingAwaitIdx
     && lockPersistIdx > guardAfterPricingIdx,
   'un cambio durante pricing debe abortar antes de persistir el lock',
+);
+const preLockGuard = confirmBody.slice(guardAfterPricingIdx, lockPersistIdx);
+assert.match(
+  preLockGuard,
+  /setSaleSubmitting\(false\)[\s\S]*?saleConfirmationSingleFlight\.release\(\)[\s\S]*?unlockSaleConfirm\(\)[\s\S]*?return;/,
+  'si cae autoridad durante pricing debe abortar y liberar sólo el lock aún no durable',
+);
+assert.doesNotMatch(
+  preLockGuard,
+  /persistAmbiguousSaleRecovery|createSale\(|recordRecentProducts/,
+  'un fallo de autoridad durante pricing no debe enviar, encolar ni registrar recientes',
 );
 assert(
   guardAfterLockIdx > lockPersistIdx
@@ -367,6 +384,11 @@ assert.match(
   postLockGuard,
   /if \(!cleared\)[\s\S]*?setSaleRecoveryPersistenceFailed\(true\)[\s\S]*?return;/,
   'si el cleanup durable falla debe conservar el recovery bloqueado y no enviar ni encolar',
+);
+assert.doesNotMatch(
+  postLockGuard,
+  /persistAmbiguousSaleRecovery|createSale\(|recordRecentProducts/,
+  'un fallo de autoridad tras el lock no debe enviar, encolar ni registrar recientes',
 );
 
 assert.match(

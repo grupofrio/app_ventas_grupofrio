@@ -26,6 +26,10 @@ export interface SaleConfirmationContext {
   partnerId: number | null;
   pricelistId: number | null;
   offrouteVisitId: number | null;
+  activeVisitPhase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
+  activeVisitStopId: number | null;
+  activeVisitCurrentStopId: number | null;
+  activeVisitPartnerId: number | null;
 }
 
 export interface SaleInventoryAuthorityState {
@@ -117,6 +121,10 @@ function isValidStopId(value: unknown): value is number {
     && value !== 0;
 }
 
+function isActiveSaleVisitPhase(value: unknown): value is 'checked_in' | 'selling' {
+  return value === 'checked_in' || value === 'selling';
+}
+
 function isValidSaleConfirmationContext(
   value: unknown,
 ): value is SaleConfirmationContext {
@@ -132,7 +140,14 @@ function isValidSaleConfirmationContext(
     && isValidStopId(context.stopId)
     && isPositiveSafeInteger(context.partnerId)
     && isNullablePositiveSafeInteger(context.pricelistId)
-    && isNullablePositiveSafeInteger(context.offrouteVisitId);
+    && isNullablePositiveSafeInteger(context.offrouteVisitId)
+    && isActiveSaleVisitPhase(context.activeVisitPhase)
+    && isValidStopId(context.activeVisitStopId)
+    && isValidStopId(context.activeVisitCurrentStopId)
+    && isPositiveSafeInteger(context.activeVisitPartnerId)
+    && context.stopId === context.activeVisitStopId
+    && context.activeVisitStopId === context.activeVisitCurrentStopId
+    && context.partnerId === context.activeVisitPartnerId;
 }
 
 export function isSameSaleConfirmationContext(
@@ -154,7 +169,11 @@ export function isSameSaleConfirmationContext(
     && expected.stopId === current.stopId
     && expected.partnerId === current.partnerId
     && expected.pricelistId === current.pricelistId
-    && expected.offrouteVisitId === current.offrouteVisitId;
+    && expected.offrouteVisitId === current.offrouteVisitId
+    && expected.activeVisitPhase === current.activeVisitPhase
+    && expected.activeVisitStopId === current.activeVisitStopId
+    && expected.activeVisitCurrentStopId === current.activeVisitCurrentStopId
+    && expected.activeVisitPartnerId === current.activeVisitPartnerId;
 }
 
 export function isApplicableAuthoritativeSaleInventory(input: {
@@ -190,4 +209,21 @@ export function isApplicableAuthoritativeSaleInventory(input: {
     && result.authoritative === true
     && result.warehouseId === input.expectedContext.warehouseId
     && result.source === inventory.inventorySource;
+}
+
+export function isApplicableSaleSubmissionContext(input: {
+  expectedContext: SaleConfirmationContext;
+  currentContext: SaleConfirmationContext;
+  inventory: SaleInventoryAuthorityState;
+}): boolean {
+  if (!input || typeof input !== 'object') return false;
+  if (!isSameSaleConfirmationContext(
+    input.expectedContext,
+    input.currentContext,
+  )) {
+    return false;
+  }
+  if (input.expectedContext.isOnline === false) return true;
+  if (input.expectedContext.isOnline !== true) return false;
+  return isApplicableAuthoritativeSaleInventory(input);
 }

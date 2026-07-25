@@ -35,6 +35,7 @@ import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import {
   decideSaleStockEnforcement,
   isApplicableAuthoritativeSaleInventory,
+  isApplicableSaleSubmissionContext,
   isSameSaleConfirmationContext,
   type SaleConfirmationContext,
 } from '../../src/services/saleStockEnforcement';
@@ -78,6 +79,7 @@ function readLiveSaleConfirmationContext(stopId: number): SaleConfirmationContex
   const route = useRouteStore.getState();
   const visit = useVisitStore.getState();
   const currentStop = route.stops.find((candidate) => candidate.id === stopId);
+  const activeVisitStop = visit.currentStop;
   const planId = route.plan?.plan_id;
   const partnerId = currentStop
     ? getLeadPartnerId(currentStop) ?? currentStop.customer_id
@@ -86,6 +88,9 @@ function readLiveSaleConfirmationContext(stopId: number): SaleConfirmationContex
     && typeof currentStop._pricelistId === 'number'
     && currentStop._pricelistId > 0
     ? currentStop._pricelistId
+    : null;
+  const activeVisitPartnerId = activeVisitStop
+    ? getLeadPartnerId(activeVisitStop) ?? activeVisitStop.customer_id
     : null;
 
   return {
@@ -102,6 +107,10 @@ function readLiveSaleConfirmationContext(stopId: number): SaleConfirmationContex
     offrouteVisitId: currentStop
       ? visit.offrouteVisitId ?? currentStop._offrouteVisitId ?? null
       : null,
+    activeVisitPhase: visit.phase,
+    activeVisitStopId: visit.currentStopId,
+    activeVisitCurrentStopId: activeVisitStop?.id ?? null,
+    activeVisitPartnerId,
   };
 }
 
@@ -121,6 +130,16 @@ function readLiveSaleInventoryAuthority() {
     loadedWarehouseId: productState.loadedWarehouseId,
     inventorySource: productState.inventorySource,
   };
+}
+
+function isLiveSaleSubmissionContextApplicable(
+  expectedContext: SaleConfirmationContext,
+): boolean {
+  return isApplicableSaleSubmissionContext({
+    expectedContext,
+    currentContext: readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
+    inventory: readLiveSaleInventoryAuthority(),
+  });
 }
 
 function SaleScreenInner() {
@@ -205,14 +224,7 @@ function SaleScreenInner() {
     });
     if (!liveBeforeRefresh.shouldRefresh) {
       const applicable = liveBeforeRefresh.allowConfirm
-        && (
-          expectedContext.isOnline === false
-          || isApplicableAuthoritativeSaleInventory({
-            expectedContext,
-            currentContext: readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
-            inventory: readLiveSaleInventoryAuthority(),
-          })
-        );
+        && isLiveSaleSubmissionContextApplicable(expectedContext);
       if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
         setInventoryAuthorityRefreshing(false);
         setInventoryAuthorityRefreshFailed(expectedContext.isOnline === true && !applicable);
@@ -459,7 +471,7 @@ function SaleScreenInner() {
         const inventoryRefreshApplicable = await refreshInventoryAuthority(confirmationContext);
         if (
           !inventoryRefreshApplicable
-          || !isSaleConfirmationContextCurrent(confirmationContext)
+          || !isLiveSaleSubmissionContextApplicable(confirmationContext)
         ) {
           Alert.alert(
             'Contexto actualizado',
@@ -483,17 +495,7 @@ function SaleScreenInner() {
         return;
       }
     }
-    if (
-      !isSaleConfirmationContextCurrent(confirmationContext)
-      || (
-        confirmationIsOnline === true
-        && !isApplicableAuthoritativeSaleInventory({
-          expectedContext: confirmationContext,
-          currentContext: readLiveSaleConfirmationContext(confirmationStopId),
-          inventory: readLiveSaleInventoryAuthority(),
-        })
-      )
-    ) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
       Alert.alert(
         'Contexto actualizado',
         'La sesión, ruta, conexión o inventario cambió. Revisa la venta y vuelve a confirmar.',
@@ -603,7 +605,7 @@ function SaleScreenInner() {
       Alert.alert('Venta rechazada', message);
       return;
     }
-    if (!isSaleConfirmationContextCurrent(confirmationContext)) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
       setSaleSubmitting(false);
       saleConfirmationSingleFlight.release();
       unlockSaleConfirm();
@@ -691,7 +693,7 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!isSaleConfirmationContextCurrent(confirmationContext)) {
+    if (!isLiveSaleSubmissionContextApplicable(confirmationContext)) {
       try {
         const cleared = await clearSaleConfirmationLock(operationId);
         if (!cleared) {

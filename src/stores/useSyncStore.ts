@@ -59,7 +59,10 @@ import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { shouldRetrySyncItemError } from '../services/syncRetryDecision';
+import {
+  classifySyncFailure,
+  describeSyncFailureForUser,
+} from '../services/syncErrorClassification';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
@@ -213,7 +216,12 @@ interface SyncState {
   releaseProcessingHolds: (ids: string[]) => void;
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
-  markDead: (id: string, message: string, retries?: number) => void;
+  markDead: (
+    id: string,
+    message: string,
+    retries?: number,
+    errorCode?: string | null,
+  ) => Promise<void>;
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
@@ -390,7 +398,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   markDone: (id) => {
     const newQueue = get().queue.map((i) =>
-      i.id === id ? { ...i, status: 'done' as SyncItemStatus } : i
+      i.id === id
+        ? {
+            ...i,
+            status: 'done' as SyncItemStatus,
+            error_message: null,
+            error_code: null,
+            next_retry_at: null,
+          }
+        : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
     schedulePersist();
@@ -409,6 +425,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             ...i,
             status: 'error' as SyncItemStatus,
             error_message: message,
+            error_code: null,
             retries: newRetries,
             next_retry_at: Date.now() + backoffMs,
           }
@@ -423,29 +440,34 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     });
   },
 
-  markDead: (id, message, retries) => {
-    const afterParent = get().queue.map((i) =>
-      i.id === id
-        ? {
-            ...i,
-            status: 'dead' as SyncItemStatus,
-            error_message: message,
-            retries: retries ?? i.retries,
-            next_retry_at: null,
-          }
-        : i
-    );
-    // BLD-20260617-DEAD-CASCADE: un padre muerto arrastra a sus dependientes
-    // directos vivos (p.ej. la foto de la venta) a `dead`, para que no queden
-    // `pending` eternos bloqueando cashclose/route-close sin escape. clearDead
-    // luego los limpia junto al padre; un retry de la venta los rearma.
-    const newQueue = cascadeDeadToDependents(afterParent, id);
-    set({ queue: newQueue, ...computeCounts(newQueue) });
-    schedulePersist();
+  markDead: async (id, message, retries, errorCode) => {
+    const beforeQueue = get().queue;
+    // The protected discriminator and terminal status are one strict durable
+    // transition. transformAndPersist writes first and only then publishes, so
+    // UI/cleanup can never observe an unpersisted insufficient_stock `dead`.
+    await queuePersistence.transformAndPersist((queue) => {
+      const afterParent = queue.map((i) =>
+        i.id === id
+          ? {
+              ...i,
+              status: 'dead' as SyncItemStatus,
+              error_message: message,
+              error_code: errorCode ?? null,
+              retries: retries ?? i.retries,
+              next_retry_at: null,
+            }
+          : i
+      );
+      // BLD-20260617-DEAD-CASCADE: a dead parent also terminates live direct
+      // dependents. The parent transition above already includes error_code.
+      return cascadeDeadToDependents(afterParent, id);
+    });
 
-    const cascaded = newQueue.filter(
-      (i, idx) => i.status === 'dead' && afterParent[idx].status !== 'dead',
-    ).length;
+    const newQueue = get().queue;
+    const cascaded = newQueue.filter((i) => {
+      const previous = beforeQueue.find((candidate) => candidate.id === i.id);
+      return i.id !== id && i.status === 'dead' && previous?.status !== 'dead';
+    }).length;
     logError('sync', 'item_dead', { id, message });
     if (cascaded > 0) {
       logInfo('sync', 'dead_cascade', { parent: id, dependents: cascaded });
@@ -512,6 +534,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         priority: item.priority ?? (SYNC_PRIORITY_MAP[item.type] || 3),
         // V2: ensure next_retry_at exists
         next_retry_at: item.next_retry_at ?? null,
+        // Durable business discriminator added after V2. Legacy entries omit it.
+        error_code: item.error_code ?? null,
       }));
       set({ queue: restored, ...computeCounts(restored) });
       logInfo('sync', 'rehydrate', {
@@ -934,6 +958,31 @@ function deferLegacyEvents(
 //  - 'dependency_wait' → esperando una dependencia; no es fallo real.
 type ProcessItemOutcome = 'handled' | 'failed' | 'deferred' | 'dependency_wait';
 
+const SYNC_TERMINAL_STATE_DEFERRED_MESSAGE =
+  'sync terminal state persistence deferred (storage)';
+
+function applySyncTerminalStateDeferral(
+  queue: SyncQueueItem[],
+  item: Pick<SyncQueueItem, 'id' | 'type'>,
+  retryAt: number,
+): SyncQueueItem[] {
+  if (item.type === 'sale_order') {
+    return applySaleDefinitiveClearDeferral(queue, item.id, retryAt);
+  }
+  return queue.map((candidate) => (
+    candidate.id === item.id && candidate.type === item.type
+      ? {
+          ...candidate,
+          status: 'error' as SyncItemStatus,
+          error_message: SYNC_TERMINAL_STATE_DEFERRED_MESSAGE,
+          error_code: null,
+          retries: 0,
+          next_retry_at: retryAt,
+        }
+      : candidate
+  ));
+}
+
 async function processOneItem(
   item: SyncQueueItem,
   get: () => SyncState,
@@ -1018,36 +1067,58 @@ async function processOneItemUnheld(
       return 'deferred';
     }
 
-    const msg = error instanceof Error ? error.message : 'Sync error';
+    const classification = classifySyncFailure(item, error);
+    const rawMessage = error instanceof Error ? error.message : 'Sync error';
+    const msg = classification.errorCode === 'insufficient_stock'
+      ? describeSyncFailureForUser(error, classification)
+      : rawMessage;
     const newRetries = item.retries + 1;
-    const shouldRetry = shouldRetrySyncItemError(item.type, error);
+    const shouldRetry = classification.retryAutomatically;
 
-    if (!shouldRetry) {
-      const definitiveGate = await gateSaleDefinitiveFailure({
-        item,
-        clearMatchingVisit: (operationId) =>
-          useVisitStore.getState().clearSaleConfirmationLock(operationId),
-      });
-      if (definitiveGate === 'deferred') {
+    if (!shouldRetry || newRetries >= MAX_RETRIES) {
+      try {
+        await get().markDead(item.id, msg, newRetries, classification.errorCode);
+      } catch (persistenceError: unknown) {
         const backoffMs = calculateBackoff(0);
         const retryAt = Date.now() + backoffMs;
-        const deferredQueue = applySaleDefinitiveClearDeferral(
+        const deferredQueue = applySyncTerminalStateDeferral(
           get().queue,
-          item.id,
+          item,
           retryAt,
         );
         set({ queue: deferredQueue, ...computeCounts(deferredQueue) });
         schedulePersist();
-        logWarn('sync', 'sale_definitive_clear_deferred', {
+        logWarn('sync', 'sync_terminal_state_deferred', {
           id: item.id,
           delay_ms: backoffMs,
         });
         return 'deferred';
       }
-    }
 
-    if (!shouldRetry || newRetries >= MAX_RETRIES) {
-      get().markDead(item.id, msg, newRetries);
+      if (!shouldRetry) {
+        const definitiveGate = await gateSaleDefinitiveFailure({
+          item,
+          clearMatchingVisit: (operationId) =>
+            useVisitStore.getState().clearSaleConfirmationLock(operationId),
+        });
+        if (definitiveGate === 'deferred') {
+          const backoffMs = calculateBackoff(0);
+          const retryAt = Date.now() + backoffMs;
+          const deferredQueue = applySaleDefinitiveClearDeferral(
+            get().queue,
+            item.id,
+            retryAt,
+          );
+          set({ queue: deferredQueue, ...computeCounts(deferredQueue) });
+          schedulePersist();
+          logWarn('sync', 'sale_definitive_clear_deferred', {
+            id: item.id,
+            delay_ms: backoffMs,
+          });
+          return 'deferred';
+        }
+      }
+
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {
         id: item.id,
@@ -1101,7 +1172,7 @@ async function processGpsBatch(
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : 'GPS sync error';
           for (const item of dispatchChunk) {
-            handleGpsItemError(item, errMsg, get, set);
+            await handleGpsItemError(item, errMsg, get, set);
             chunkFailed++;
           }
         }
@@ -1142,15 +1213,23 @@ async function tryGpsBatchCreate(items: SyncQueueItem[]): Promise<boolean> {
   return true;
 }
 
-function handleGpsItemError(
+async function handleGpsItemError(
   item: SyncQueueItem,
   message: string,
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
-): void {
+): Promise<void> {
   const newRetries = item.retries + 1;
   if (newRetries >= MAX_RETRIES) {
-    get().markDead(item.id, message);
+    try {
+      await get().markDead(item.id, message);
+    } catch {
+      const retryAt = Date.now() + calculateBackoff(0);
+      const deferredQueue = applySyncTerminalStateDeferral(get().queue, item, retryAt);
+      set({ queue: deferredQueue, ...computeCounts(deferredQueue) });
+      schedulePersist();
+      logWarn('sync', 'sync_terminal_state_deferred', { id: item.id });
+    }
     // GPS has no rollback — it's fire-and-forget telemetry
   } else {
     get().markError(item.id, message);

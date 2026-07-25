@@ -69,6 +69,8 @@ export interface SyncQueueItem {
   created_at: number; // timestamp ms
   retries: number;
   error_message: string | null;
+  /** Stable backend/business discriminator. Missing on legacy queue snapshots. */
+  error_code?: string | null;
 
   /** V2: processing priority (1=business, 2=media, 3=telemetry). */
   priority: SyncPriority;

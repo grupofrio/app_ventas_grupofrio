@@ -7,6 +7,12 @@ const syncStore = readFileSync(
   'utf8',
 );
 
+assert.match(
+  syncStore,
+  /import\s*\{[\s\S]*?classifySyncFailure[\s\S]*?describeSyncFailureForUser[\s\S]*?\}\s*from\s*['"]\.\.\/services\/syncErrorClassification['"]/,
+  'sync usa un solo clasificador estructurado y copy seguro',
+);
+
 const completionImport = syncStore.match(
   /import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/services\/syncItemCompletion['"]/,
 );
@@ -50,7 +56,7 @@ const catchStart = processor.indexOf('} catch (error: unknown) {');
 assert(catchStart >= 0, 'se localiza el catch del procesador individual');
 const catchBody = processor.slice(catchStart);
 const markerBranchIndex = catchBody.indexOf('if (isSaleTerminalMarkerPersistenceError(error)) {');
-const classifierIndex = catchBody.indexOf('shouldRetrySyncItemError(item.type, error)');
+const classifierIndex = catchBody.indexOf('classifySyncFailure(item, error)');
 const deadIndex = catchBody.indexOf('get().markDead(');
 const rollbackIndex = catchBody.indexOf('rollbackFailedOperation(item)');
 assert(markerBranchIndex >= 0, 'el catch separa el fallo local del marker');
@@ -80,6 +86,33 @@ assert.doesNotMatch(
   'el fallo local no consume la política empresarial ni mata dependientes',
 );
 assert.match(markerBranch, /return\s+['"]deferred['"]/);
+
+const businessFailureBranch = catchBody.slice(classifierIndex);
+assert.equal(
+  (businessFailureBranch.match(/classifySyncFailure\(item, error\)/g) ?? []).length,
+  1,
+  'cada fallo se clasifica exactamente una vez',
+);
+assert.match(
+  businessFailureBranch,
+  /await\s+get\(\)\.markDead\(\s*item\.id,\s*msg,\s*newRetries,\s*classification\.errorCode,?\s*\)/,
+  'el estado dead recibe el código durable del mismo resultado de clasificación',
+);
+assert.match(
+  businessFailureBranch,
+  /catch\s*\([^)]*\)\s*\{[\s\S]*?applySyncTerminalStateDeferral[\s\S]*?return ['"]deferred['"]/,
+  'un fallo de persistencia terminal conserva la operación en la ruta deferred',
+);
+assert.match(
+  syncStore,
+  /function\s+applySyncTerminalStateDeferral\([\s\S]*?item\.type\s*===\s*['"]sale_order['"][\s\S]*?applySaleDefinitiveClearDeferral[\s\S]*?status:\s*['"]error['"][\s\S]*?retries:\s*0[\s\S]*?next_retry_at:\s*retryAt/,
+  'la misma ruta conserva retry seguro tanto para ventas como para otros tipos',
+);
+assert.match(
+  syncStore,
+  /async function handleGpsItemError\([\s\S]*?try\s*\{[\s\S]*?await get\(\)\.markDead[\s\S]*?catch\s*\{[\s\S]*?applySyncTerminalStateDeferral/,
+  'GPS tampoco queda syncing si falla la persistencia strict de dead',
+);
 assert.match(
   syncStore,
   /if\s*\(outcome\s*===\s*['"]deferred['"]\)\s*hadDeferredStorageFailure\s*=\s*true/,

@@ -14,7 +14,7 @@ type StoredSaleTicketSnapshot =
   Omit<SaleTicketSnapshot, 'odooFolio' | 'sellerName'>
   & {
     odooFolio?: unknown;
-    sellerName?: string;
+    sellerName?: unknown;
   };
 
 export interface SaleTicketStorageAdapter {
@@ -56,7 +56,9 @@ export function normalizeStoredSaleTicketSnapshot(
   return {
     ...snapshot,
     odooFolio: normalizeOdooFolio(snapshot.odooFolio),
-    sellerName: normalizeSellerName(snapshot.sellerName),
+    sellerName: normalizeSellerName(
+      typeof snapshot.sellerName === 'string' ? snapshot.sellerName : undefined,
+    ),
   };
 }
 

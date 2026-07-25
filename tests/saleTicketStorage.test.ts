@@ -56,6 +56,21 @@ test('normalizes a legacy stored ticket without an Odoo folio and applies the se
   );
 });
 
+test('normalizes a parsed ticket with a non-string seller to the fallback without throwing', () => {
+  const corruptedSnapshot = {
+    ...snapshot(),
+    sellerName: 42,
+  } as unknown as Parameters<
+    typeof saleTicketStorage.normalizeStoredSaleTicketSnapshot
+  >[0];
+  let normalized: SaleTicketSnapshot | undefined;
+
+  assert.doesNotThrow(() => {
+    normalized = saleTicketStorage.normalizeStoredSaleTicketSnapshot(corruptedSnapshot);
+  });
+  assert.equal(normalized?.sellerName, SALE_TICKET_DEFAULT_SELLER);
+});
+
 test('merging never erases an official folio and permits a later official folio update', () => {
   const current = snapshot({ odooFolio: 'S00041', total: 100 });
   const pendingUpdate = snapshot({ odooFolio: null, total: 125 });

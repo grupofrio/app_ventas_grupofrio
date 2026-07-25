@@ -173,12 +173,13 @@ test('purges the completed projection when the normalized Odoo operation appears
 });
 
 test('derives a valid done sale on mount from its persisted ticket', () => {
+  const mountedTicket = ticket('sale-mounted');
   const retained = reconcileCompletedSaleRetention({
     retainedCompletedEntries: new Map(),
     previousLocalEntries: [],
     queue: [queueItem(' sale-mounted ')],
     tickets: new Map([
-      [' sale-mounted ', ticket('sale-mounted')],
+      [' sale-mounted ', mountedTicket],
     ]),
     remoteEntries: [],
   });
@@ -193,6 +194,7 @@ test('derives a valid done sale on mount from its persisted ticket', () => {
     createdAtMs: Date.parse('2026-07-25T16:45:00.000Z'),
     localStatus: 'updating',
     errorMessage: null,
+    ticketSnapshot: mountedTicket,
   });
 });
 

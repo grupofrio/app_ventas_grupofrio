@@ -4,17 +4,29 @@
  */
 
 import React, { useCallback } from 'react';
-import { Alert, View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import {
+  Alert,
+  View,
+  Text,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
+import { Badge } from '../../src/components/ui/Badge';
 import { KPICard } from '../../src/components/ui/KPICard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useSalesStore } from '../../src/stores/useSalesStore';
+import { useSalesListProjection } from '../../src/hooks/useSalesListProjection';
 import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
+import type { SalesListEntry } from '../../src/services/salesListProjection';
+import { getSaleStatusCopy } from '../../src/services/localSaleStatusCopy';
 import {
   buildSaleTicketSnapshotFromOrder,
   createSaleTicketOpenGuard,
@@ -25,7 +37,9 @@ export default function SalesScreen() {
   const router = useRouter();
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const summary = useSalesStore((s) => s.summary);
-  const orders = useSalesStore((s) => s.orders);
+  const isLoading = useSalesStore((s) => s.isLoading);
+  const error = useSalesStore((s) => s.error);
+  const { entries, localSummary, ticketsLoading } = useSalesListProjection();
   const ticketOpenGuardRef = React.useRef(createSaleTicketOpenGuard());
 
   useFocusEffect(
@@ -58,8 +72,8 @@ export default function SalesScreen() {
           ...buildSaleTicketSnapshotFromOrder(order),
           saleId: normalizedOperationId,
         };
-        const ticketId = ticket.saleId;
         await saveAuthoritativeSaleTicketSnapshot(ticket);
+        const ticketId = encodeURIComponent(ticket.saleId);
         router.push(`/print/${ticketId}` as never);
       });
     } catch {
@@ -69,6 +83,43 @@ export default function SalesScreen() {
       );
     }
   }
+
+  async function openTicketForEntry(entry: SalesListEntry) {
+    if (entry.origin === 'local') {
+      if (!entry.ticketSnapshot) {
+        Alert.alert(
+          'Ticket no disponible',
+          'El comprobante de esta venta aún no está disponible en el dispositivo.',
+        );
+        return;
+      }
+      const normalizedOperationId = entry.ticketSnapshot.saleId.trim();
+      if (!normalizedOperationId) {
+        Alert.alert(
+          'Ticket no disponible',
+          'Esta venta no tiene un identificador válido para abrir su comprobante.',
+        );
+        return;
+      }
+      const ticketId = encodeURIComponent(normalizedOperationId);
+      router.push(`/print/${ticketId}` as never);
+      return;
+    }
+
+    if (entry.remoteOrder) {
+      await openTicketForOrder(entry.remoteOrder);
+      return;
+    }
+
+    Alert.alert(
+      'Ticket no disponible',
+      'No encontramos la información necesaria para abrir este comprobante.',
+    );
+  }
+
+  const refreshOfficialSales = useCallback(() => {
+    void loadTodaySales({ force: true });
+  }, [loadTodaySales]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -80,7 +131,17 @@ export default function SalesScreen() {
         }}
       />
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        refreshControl={(
+          <RefreshControl
+            refreshing={isLoading}
+            onRefresh={refreshOfficialSales}
+            tintColor={colors.primary}
+          />
+        )}
+      >
         {/* Action buttons */}
         <View style={styles.actionRow}>
           <Button label="💰 Corte y Liquidacion" variant="primary" small
@@ -105,34 +166,117 @@ export default function SalesScreen() {
         </View>
         <Text style={styles.progressText}>{progressPct}% de meta diaria</Text>
 
+        {localSummary.count > 0 ? (
+          <View style={styles.pendingCard}>
+            <View style={styles.pendingHeader}>
+              <Text style={styles.pendingTitle}>VENTAS PENDIENTES</Text>
+              <Badge label={`${localSummary.count}`} variant="yellow" />
+            </View>
+            <Text style={styles.pendingAmount}>
+              {localSummary.unknownAmountCount > 0 ? 'Monto conocido' : 'Monto pendiente'}:{' '}
+              {formatCurrency(localSummary.knownAmountTotal)}
+            </Text>
+            {localSummary.unknownAmountCount > 0 ? (
+              <Text style={styles.pendingMeta}>
+                {localSummary.unknownAmountCount} con monto por confirmar
+              </Text>
+            ) : null}
+            {localSummary.needsAttentionCount > 0 ? (
+              <Text style={styles.attentionText}>
+                {localSummary.needsAttentionCount} requieren atención
+              </Text>
+            ) : null}
+            <Text style={styles.pendingHint}>
+              No se suman a VENDIDO hasta que Odoo las confirme.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Orders list */}
         <Text style={styles.sectionTitle}>PEDIDOS</Text>
-        {todayOrders === 0 ? (
+        {ticketsLoading ? (
+          <Text style={styles.loadingHint}>Preparando comprobantes…</Text>
+        ) : null}
+        {error ? (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorTitle}>No se pudo actualizar Odoo</Text>
+            <Text style={styles.errorText}>
+              Las ventas guardadas en este dispositivo siguen disponibles.
+            </Text>
+          </View>
+        ) : null}
+        {entries.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={typography.dim}>Sin pedidos registrados hoy</Text>
+            <Text style={typography.dim}>
+              {isLoading ? 'Actualizando ventas…' : 'Sin pedidos registrados hoy'}
+            </Text>
             <Text style={[typography.dimSmall, { marginTop: 4 }]}>
               Las ventas aparecen aqui al confirmar pedidos
             </Text>
           </View>
         ) : (
           <View style={styles.list}>
-            {orders.map((order) => (
-              <TouchableOpacity
-                key={order.id}
-                style={styles.orderCard}
-                onPress={() => void openTicketForOrder(order)}
-                activeOpacity={0.82}
-              >
-                <View style={styles.orderRow}>
-                  <Text style={styles.orderName}>{order.name}</Text>
-                  <Text style={styles.orderAmount}>{formatCurrency(order.amount_total)}</Text>
-                </View>
-                <Text style={styles.orderMeta}>
-                  {order.partner_name} · {order.kg_total.toFixed(0)} kg
-                </Text>
-                <Text style={styles.orderHint}>Toca para abrir PDF</Text>
-              </TouchableOpacity>
-            ))}
+            {entries.map((entry) => {
+              const status = getSaleStatusCopy(
+                entry.origin === 'odoo'
+                  ? 'synced'
+                  : entry.localStatus ?? 'unknown',
+              );
+              const ticketUnavailable =
+                entry.origin === 'local' && !entry.ticketSnapshot;
+              return (
+                <TouchableOpacity
+                  key={entry.key}
+                  style={[
+                    styles.orderCard,
+                    ticketUnavailable ? styles.orderCardDisabled : null,
+                  ]}
+                  onPress={() => void openTicketForEntry(entry)}
+                  disabled={entry.origin === 'local' && !entry.ticketSnapshot}
+                  activeOpacity={0.82}
+                >
+                  <View style={styles.orderRow}>
+                    <Text style={styles.orderName}>
+                      {entry.remoteOrder?.name || 'Venta local'}
+                    </Text>
+                    <Text style={[
+                      styles.orderAmount,
+                      entry.amountTotal === null ? styles.orderAmountPending : null,
+                    ]}>
+                      {entry.amountTotal === null
+                        ? 'Monto pendiente'
+                        : formatCurrency(entry.amountTotal)}
+                    </Text>
+                  </View>
+                  <Text style={styles.orderMeta}>
+                    {entry.customerName} · {entry.kgTotal === null
+                      ? 'Peso por confirmar'
+                      : `${entry.kgTotal.toFixed(0)} kg`}
+                  </Text>
+                  <View style={styles.badgeRow}>
+                    <Badge
+                      label={entry.origin === 'local' ? 'Local' : 'Odoo'}
+                      variant={entry.origin === 'local' ? 'yellow' : 'green'}
+                    />
+                    <Badge label={status.label} variant={status.tone} />
+                  </View>
+                  <Text style={styles.statusDetail}>{status.detail}</Text>
+                  {entry.errorMessage ? (
+                    <Text style={styles.entryError}>
+                      {entry.errorMessage.slice(0, 200)}
+                    </Text>
+                  ) : null}
+                  <Text style={[
+                    styles.orderHint,
+                    ticketUnavailable ? styles.orderHintDisabled : null,
+                  ]}>
+                    {ticketUnavailable
+                      ? 'Ticket no disponible'
+                      : 'Toca para abrir PDF'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -153,6 +297,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   progressText: { fontSize: 10, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
+  pendingCard: {
+    backgroundColor: colors.warningAlpha08,
+    borderColor: colors.warningAlpha12,
+    borderWidth: 1,
+    borderRadius: radii.card,
+    padding: 14,
+    marginBottom: 4,
+  },
+  pendingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pendingTitle: {
+    color: colors.warning,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.7,
+  },
+  pendingAmount: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  pendingMeta: { color: colors.textDim, fontSize: 11, marginTop: 3 },
+  attentionText: { color: colors.error, fontSize: 11, fontWeight: '700', marginTop: 3 },
+  pendingHint: { color: colors.textDim, fontSize: 10, marginTop: 7 },
   sectionTitle: {
     fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
     letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
@@ -161,11 +334,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card, borderRadius: radii.card, padding: 20, alignItems: 'center',
   },
   list: { gap: 8 },
+  loadingHint: { color: colors.textDim, fontSize: 11, marginBottom: 8 },
+  errorCard: {
+    backgroundColor: colors.errorAlpha08,
+    borderRadius: radii.card,
+    padding: 12,
+    marginBottom: 8,
+  },
+  errorTitle: { color: colors.error, fontSize: 12, fontWeight: '700' },
+  errorText: { color: colors.textDim, fontSize: 11, marginTop: 3 },
   orderCard: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
     padding: 14,
   },
+  orderCardDisabled: { opacity: 0.72 },
   orderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -189,10 +372,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textDim,
   },
+  orderAmountPending: {
+    color: colors.warning,
+    fontSize: 12,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  statusDetail: { color: colors.textDim, fontSize: 10, marginTop: 5 },
+  entryError: { color: colors.error, fontSize: 10, marginTop: 4 },
   orderHint: {
     marginTop: 8,
     fontSize: 11,
     color: colors.primary,
     fontWeight: '700',
   },
+  orderHintDisabled: { color: colors.textDim },
 });

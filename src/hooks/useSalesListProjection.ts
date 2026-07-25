@@ -93,6 +93,7 @@ function sameProjectedEntry(
     && left.createdAtMs === right.createdAtMs
     && left.localStatus === right.localStatus
     && left.errorMessage === right.errorMessage
+    && left.ticketSnapshot === right.ticketSnapshot
     && left.remoteOrder === right.remoteOrder;
 }
 

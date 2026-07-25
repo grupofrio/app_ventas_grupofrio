@@ -117,6 +117,7 @@ test('projects a pending sale from its preferred ticket fields', () => {
   assert.equal(entry.kgTotal, 23);
   assert.equal(entry.createdAtMs, Date.parse('2026-07-25T15:30:00.000Z'));
   assert.equal(entry.errorMessage, null);
+  assert.strictEqual(entry.ticketSnapshot, ticket);
 });
 
 test('ignores every field from a ticket that belongs to another sale', () => {
@@ -142,6 +143,7 @@ test('ignores every field from a ticket that belongs to another sale', () => {
   assert.equal(entry.amountTotal, 72);
   assert.equal(entry.kgTotal, 6);
   assert.equal(entry.createdAtMs, queueItem.created_at);
+  assert.equal(entry.ticketSnapshot, undefined);
 });
 
 test('accepts a matching ticket identity after trimming both operation IDs', () => {
@@ -156,6 +158,28 @@ test('accepts a matching ticket identity after trimming both operation IDs', () 
   assert.equal(entry.amountTotal, 115);
   assert.equal(entry.kgTotal, 23);
   assert.equal(entry.createdAtMs, Date.parse('2026-07-25T15:30:00.000Z'));
+  assert.strictEqual(entry.ticketSnapshot?.saleId, '\t sale-local-1 \n');
+});
+
+test('does not expose a structurally invalid matching ticket to the UI', () => {
+  const queueItem = makeQueueItem({
+    payload: {
+      _clientCustomerName: 'Fallback seguro',
+      _clientTotal: 31,
+      lines: [{ qty: 2, weight: 4 }],
+    },
+  });
+  const invalidTicket = {
+    ...makeTicket(),
+    lines: [{ productName: 'Hielo', qty: -1 }],
+  } as unknown as SaleTicketSnapshot;
+
+  const entry = projectLocalSale(queueItem, invalidTicket);
+
+  assert.ok(entry);
+  assert.equal(entry.customerName, 'Fallback seguro');
+  assert.equal(entry.amountTotal, 31);
+  assert.equal(entry.ticketSnapshot, undefined);
 });
 
 test('accepts ticket datetimes with an explicit numeric timezone offset', () => {

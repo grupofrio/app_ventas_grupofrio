@@ -1,5 +1,8 @@
 import type { GFSalesOrder } from './gfLogistics.ts';
-import type { SaleTicketSnapshot } from './saleTicket.ts';
+import {
+  parseSaleTicketSnapshot,
+  type SaleTicketSnapshot,
+} from './saleTicket.ts';
 import type { SyncQueueItem, SyncItemStatus } from '../types/sync.ts';
 
 export type LocalSaleStatus =
@@ -19,6 +22,7 @@ export interface SalesListEntry {
   createdAtMs: number;
   localStatus?: LocalSaleStatus;
   errorMessage?: string | null;
+  ticketSnapshot?: SaleTicketSnapshot;
   remoteOrder?: GFSalesOrder;
 }
 
@@ -167,7 +171,13 @@ function matchingTicket(
   operationId: string,
 ): SaleTicketSnapshot | null {
   if (typeof ticket?.saleId !== 'string') return null;
-  return ticket.saleId.trim() === operationId ? ticket : null;
+  if (ticket.saleId.trim() !== operationId) return null;
+  const canonicalCandidate = ticket.saleId === operationId
+    ? ticket
+    : { ...ticket, saleId: operationId };
+  return parseSaleTicketSnapshot(canonicalCandidate, operationId)
+    ? ticket
+    : null;
 }
 
 function lineKilograms(line: Record<string, unknown>): number | null {
@@ -265,6 +275,7 @@ export function projectLocalSale(
     createdAtMs,
     localStatus,
     errorMessage,
+    ...(eligibleTicket ? { ticketSnapshot: eligibleTicket } : {}),
   };
 }
 

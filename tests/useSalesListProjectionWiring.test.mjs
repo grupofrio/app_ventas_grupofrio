@@ -123,6 +123,11 @@ assert.match(
   'el hook debe conservar la última proyección local después de que salga de la cola activa',
 );
 assert.match(
+  hook,
+  /left\.ticketSnapshot\s*===\s*right\.ticketSnapshot/,
+  'la igualdad de retención debe detectar cuando un ticket local se carga o cambia',
+);
+assert.match(
   retention,
   /normalizeOperationIdForComparison\(/,
   'la retención debe reconciliar ids con las mismas reglas de trim y case que la lista',

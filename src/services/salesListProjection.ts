@@ -395,6 +395,93 @@ function compareSalesListEntries(
   return 0;
 }
 
+function compareStableStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function canonicalString(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  return typeof value === 'string'
+    ? `string:${value}`
+    : 'invalid-string';
+}
+
+function canonicalNumber(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'invalid-number';
+  }
+  return Object.is(value, -0) ? 'number:-0' : `number:${String(value)}`;
+}
+
+function canonicalRemoteLine(value: unknown): string[] {
+  if (!isRecord(value)) return ['invalid-line'];
+  return [
+    canonicalNumber(value.product_id),
+    canonicalString(value.product_name),
+    canonicalNumber(value.quantity),
+    canonicalNumber(value.price_unit),
+    canonicalNumber(value.price_subtotal),
+    canonicalNumber(value.kg_total),
+  ];
+}
+
+function canonicalRemoteOrder(value: unknown): unknown[] {
+  if (!isRecord(value)) return ['missing-remote-order'];
+  const lines = Array.isArray(value.lines)
+    ? value.lines.map(canonicalRemoteLine)
+    : [['invalid-lines']];
+  return [
+    canonicalNumber(value.id),
+    canonicalString(value.name),
+    canonicalNumber(value.partner_id),
+    canonicalString(value.partner_name),
+    canonicalNumber(value.amount_total),
+    canonicalNumber(value.amount_untaxed),
+    canonicalNumber(value.amount_tax),
+    canonicalNumber(value.kg_total),
+    canonicalString(value.state),
+    canonicalString(value.date_order),
+    canonicalString(value.confirmation_date),
+    canonicalNumber(value.stop_id),
+    canonicalString(value.operation_id),
+    canonicalString(value.payment_method),
+    canonicalString(value.payment_method_label),
+    canonicalString(value.employee_name),
+    lines,
+  ];
+}
+
+function canonicalProjectedRemoteCandidate(entry: SalesListEntry): string {
+  return JSON.stringify([
+    canonicalString(entry.key),
+    canonicalString(entry.operationId),
+    canonicalString(entry.origin),
+    canonicalString(entry.customerName),
+    canonicalNumber(entry.amountTotal),
+    canonicalNumber(entry.kgTotal),
+    canonicalNumber(entry.createdAtMs),
+    canonicalString(entry.localStatus),
+    canonicalString(entry.errorMessage),
+    canonicalRemoteOrder(entry.remoteOrder),
+  ]);
+}
+
+function compareProjectedRemoteCandidates(
+  left: SalesListEntry,
+  right: SalesListEntry,
+): number {
+  return compareSalesListEntries(left, right)
+    || compareStableStrings(
+      canonicalProjectedRemoteCandidate(left),
+      canonicalProjectedRemoteCandidate(right),
+    );
+}
+
 export function mergeSalesListEntries(
   input: MergeSalesListInput,
 ): SalesListEntry[] {
@@ -410,7 +497,7 @@ export function mergeSalesListEntries(
       continue;
     }
     const existing = remoteByKey.get(entry.key);
-    if (!existing || compareSalesListEntries(entry, existing) < 0) {
+    if (!existing || compareProjectedRemoteCandidates(entry, existing) < 0) {
       remoteByKey.set(entry.key, entry);
     }
   }
@@ -424,7 +511,7 @@ export function mergeSalesListEntries(
       continue;
     }
     const existing = remoteByOperationId.get(normalized);
-    if (!existing || compareSalesListEntries(entry, existing) < 0) {
+    if (!existing || compareProjectedRemoteCandidates(entry, existing) < 0) {
       remoteByOperationId.set(normalized, entry);
     }
   }

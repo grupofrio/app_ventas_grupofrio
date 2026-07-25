@@ -536,6 +536,113 @@ test('deduplicates repeated remote responses with the same real order ID', () =>
   assert.equal(merged[0].key, 'odoo:101');
 });
 
+test('selects the same complete visible entry for divergent same-key remote rows in either order', () => {
+  const dateOrder = '2026-07-24T12:00:00.000-06:00';
+  const zetaOrder = remoteWithOperation('Z-sale-original', {
+    id: 303,
+    partner_name: 'Cliente Zeta',
+    amount_total: 90,
+    kg_total: 9,
+    date_order: dateOrder,
+  });
+  const alphaOrder = remoteWithOperation('A-sale-original', {
+    id: 303,
+    partner_name: 'Cliente Alfa',
+    amount_total: 10,
+    kg_total: 1,
+    date_order: dateOrder,
+  });
+
+  const visibleEntry = (remoteOrders: GFSalesOrder[]) => {
+    const [entry] = mergeSalesListEntries({
+      remoteOrders,
+      localEntries: [],
+      localDay: '2026-07-24',
+    });
+    return {
+      key: entry.key,
+      operationId: entry.operationId,
+      origin: entry.origin,
+      customerName: entry.customerName,
+      amountTotal: entry.amountTotal,
+      kgTotal: entry.kgTotal,
+      createdAtMs: entry.createdAtMs,
+      localStatus: entry.localStatus ?? null,
+      errorMessage: entry.errorMessage ?? null,
+    };
+  };
+
+  const zetaFirst = visibleEntry([zetaOrder, alphaOrder]);
+  const alphaFirst = visibleEntry([alphaOrder, zetaOrder]);
+
+  assert.deepEqual(zetaFirst, alphaFirst);
+  assert.equal(zetaFirst.operationId, 'A-sale-original');
+  assert.equal(zetaFirst.customerName, 'Cliente Alfa');
+  assert.equal(zetaFirst.amountTotal, 10);
+  assert.equal(zetaFirst.kgTotal, 1);
+});
+
+test('selects the same authoritative ticket data when same-key card fields tie', () => {
+  const sharedFields: Partial<GFSalesOrder> = {
+    id: 304,
+    partner_name: 'Cliente compartido',
+    amount_total: 50,
+    kg_total: 5,
+    date_order: '2026-07-24T12:00:00.000-06:00',
+  };
+  const zetaTicket = remoteWithOperation('same-operation', {
+    ...sharedFields,
+    name: 'SO-ZETA',
+    amount_untaxed: 45,
+    amount_tax: 5,
+    confirmation_date: '2026-07-24T12:02:00.000-06:00',
+    payment_method: 'transfer',
+    payment_method_label: 'Transferencia Zeta',
+    employee_name: 'Vendedor Zeta',
+    lines: [{
+      product_id: 9,
+      product_name: 'Producto Zeta',
+      quantity: 1,
+      price_unit: 50,
+      price_subtotal: 50,
+      kg_total: 5,
+    }],
+  });
+  const alphaTicket = remoteWithOperation('same-operation', {
+    ...sharedFields,
+    name: 'SO-ALFA',
+    amount_untaxed: 40,
+    amount_tax: 10,
+    confirmation_date: '2026-07-24T12:01:00.000-06:00',
+    payment_method: 'cash',
+    payment_method_label: 'Efectivo Alfa',
+    employee_name: 'Vendedor Alfa',
+    lines: [{
+      product_id: 1,
+      product_name: 'Producto Alfa',
+      quantity: 2,
+      price_unit: 25,
+      price_subtotal: 50,
+      kg_total: 5,
+    }],
+  });
+
+  const mergedEntry = (remoteOrders: GFSalesOrder[]) => (
+    mergeSalesListEntries({
+      remoteOrders,
+      localEntries: [],
+      localDay: '2026-07-24',
+    })[0]
+  );
+  const zetaFirst = mergedEntry([zetaTicket, alphaTicket]);
+  const alphaFirst = mergedEntry([alphaTicket, zetaTicket]);
+
+  assert.deepEqual(zetaFirst, alphaFirst);
+  assert.equal(zetaFirst.remoteOrder?.name, 'SO-ALFA');
+  assert.equal(zetaFirst.remoteOrder?.employee_name, 'Vendedor Alfa');
+  assert.equal(zetaFirst.remoteOrder?.lines[0]?.product_name, 'Producto Alfa');
+});
+
 test('deduplicates equivalent nonblank remote operation IDs deterministically', () => {
   const lowerKeyOrder = remoteWithOperation('ABC', {
     id: 101,

@@ -110,7 +110,7 @@ const lockBarrierPhase = tryCatchContaining(
   sale,
   'await persistSaleConfirmationLock(',
 );
-const offlineSaleIndex = sale.indexOf('if (!isOnline) {');
+const offlineSaleIndex = sale.indexOf('if (confirmationIsOnline === false) {');
 const payloadIndex = sale.indexOf('const payload = {');
 assert(payloadIndex >= 0 && payloadIndex < lockBarrierPhase.tryStart);
 assert(
@@ -293,7 +293,7 @@ assert.doesNotMatch(definitive.body, /unlockSaleConfirm\(\)/);
 assert.match(definitive.body, /sale_definitive_clear_persist_failed/);
 assert.match(definitive.body, /getInsufficientStockDetail\(error\)/);
 assert.match(definitive.body, /describeInsufficientStock\(insufficient\)/);
-assert.match(definitive.body, /void loadProducts\(warehouseId\)/);
+assert.match(definitive.body, /void loadProducts\(confirmationWarehouseId\)/);
 assert.match(definitive.body, /Alert\.alert\(\s*['"]Venta rechazada['"]/);
 assert.match(definitive.body, /return;/);
 
@@ -376,7 +376,7 @@ assert.match(
   ambiguousSuccess,
   /No pudimos confirmar la respuesta del servidor\. El pedido quedó pendiente de verificación y se reintentará con el mismo identificador\./,
 );
-assert.match(ambiguousSuccess, /shouldSkipStopCheckout\(stop\.id\)/);
+assert.match(ambiguousSuccess, /shouldSkipStopCheckout\(confirmationStopId\)/);
 assert.match(ambiguousSuccess, /setAfterSaleAction\(['"]route['"]\)/);
 assert.match(ambiguousSuccess, /setAfterSaleAction\(['"]checkout['"]\)/);
 assert.match(ambiguousSuccess, /return;/);
@@ -427,7 +427,7 @@ assert.match(postConfirmation.catchBody, /safeUnknownErrorMessage\(\s*error,/);
 assert.doesNotMatch(postConfirmation.catchBody, /unlockSaleConfirm|enqueue\(\s*['"]sale_order['"]/);
 assert.match(
   sale.slice(postConfirmation.catchEnd + 1),
-  /shouldSkipStopCheckout\(stop\.id\)[\s\S]*?setAfterSaleAction/,
+  /shouldSkipStopCheckout\(confirmationStopId\)[\s\S]*?setAfterSaleAction/,
   'un fallo post-confirmacion no debe impedir continuar a checkout/ruta',
 );
 assert.doesNotMatch(
@@ -438,7 +438,7 @@ assert.doesNotMatch(
 
 const pricelistPhase = tryCatchContaining(
   sale,
-  'await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });',
+  'await getPartnerPricelistId(confirmationPartnerId, { companyId: effectiveCompanyId });',
 );
 assert.match(pricelistPhase.catchBody, /safeUnknownErrorMessage\(\s*error,/);
 assert.match(

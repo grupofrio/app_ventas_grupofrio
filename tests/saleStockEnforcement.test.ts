@@ -3,8 +3,25 @@ import test from 'node:test';
 
 import {
   decideSaleStockEnforcement,
+  isApplicableAuthoritativeSaleInventory,
+  isSameSaleConfirmationContext,
   shouldEnforceFreshSaleStock,
+  type SaleConfirmationContext,
 } from '../src/services/saleStockEnforcement.ts';
+
+const confirmationContext: SaleConfirmationContext = {
+  isAuthenticated: true,
+  isOnline: true,
+  employeeId: 7,
+  companyId: 2,
+  warehouseId: 8,
+  mobileLocationId: 18,
+  planId: 91,
+  stopId: 33,
+  partnerId: 44,
+  pricelistId: 5,
+  offrouteVisitId: null,
+};
 
 test('offline sale policy allows referential confirmation without enforcing captured stock', () => {
   const decision = decideSaleStockEnforcement({
@@ -105,4 +122,134 @@ test('malformed policy and freshness values fail closed at runtime', () => {
     shouldRefresh: true,
     enforceFreshStock: false,
   });
+});
+
+test('keeps one exact confirmation identity across matching live reads', () => {
+  assert.equal(isSameSaleConfirmationContext(
+    confirmationContext,
+    { ...confirmationContext },
+  ), true);
+});
+
+test('rejects connectivity changes in either direction during confirmation', () => {
+  assert.equal(isSameSaleConfirmationContext(
+    confirmationContext,
+    { ...confirmationContext, isOnline: false },
+  ), false);
+  assert.equal(isSameSaleConfirmationContext(
+    { ...confirmationContext, isOnline: false },
+    confirmationContext,
+  ), false);
+  assert.equal(isSameSaleConfirmationContext(
+    confirmationContext,
+    { ...confirmationContext, isOnline: null },
+  ), false);
+});
+
+test('rejects session, warehouse, route, and stop identity changes', () => {
+  for (const changed of [
+    { employeeId: 9 },
+    { companyId: 3 },
+    { warehouseId: 9 },
+    { mobileLocationId: 19 },
+    { planId: 92 },
+    { stopId: 34 },
+    { partnerId: 45 },
+    { pricelistId: 6 },
+    { offrouteVisitId: 88 },
+    { isAuthenticated: false },
+  ]) {
+    assert.equal(isSameSaleConfirmationContext(
+      confirmationContext,
+      { ...confirmationContext, ...changed },
+    ), false);
+  }
+});
+
+test('accepts only an authoritative refresh applicable to the captured context', () => {
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: {
+      inventoryFreshness: 'authoritative',
+      loadedWarehouseId: 8,
+      inventorySource: 'truck_stock',
+    },
+    loadResult: {
+      ok: true,
+      authoritative: true,
+      warehouseId: 8,
+      source: 'truck_stock',
+    },
+  }), true);
+});
+
+test('rejects another context authoritative result and mismatched authority evidence', () => {
+  const validInventory = {
+    inventoryFreshness: 'authoritative' as const,
+    loadedWarehouseId: 8,
+    inventorySource: 'truck_stock' as const,
+  };
+  const validResult = {
+    ok: true as const,
+    authoritative: true as const,
+    warehouseId: 8,
+    source: 'truck_stock' as const,
+  };
+
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext, warehouseId: 9 },
+    inventory: {
+      ...validInventory,
+      loadedWarehouseId: 9,
+    },
+    loadResult: {
+      ...validResult,
+      warehouseId: 9,
+    },
+  }), false);
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: { ...validInventory, loadedWarehouseId: 9 },
+    loadResult: validResult,
+  }), false);
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: { ...validInventory, inventorySource: 'stock_quant' },
+    loadResult: validResult,
+  }), false);
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: validInventory,
+    loadResult: {
+      ok: false,
+      authoritative: false,
+      reason: 'network_error',
+    },
+  }), false);
+});
+
+test('validates pre-existing authoritative inventory without fabricating a load result', () => {
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: confirmationContext,
+    currentContext: { ...confirmationContext },
+    inventory: {
+      inventoryFreshness: 'authoritative',
+      loadedWarehouseId: 8,
+      inventorySource: 'stock_quant',
+    },
+  }), true);
+  assert.equal(isApplicableAuthoritativeSaleInventory({
+    expectedContext: { ...confirmationContext, isOnline: false },
+    currentContext: { ...confirmationContext, isOnline: false },
+    inventory: {
+      inventoryFreshness: 'authoritative',
+      loadedWarehouseId: 8,
+      inventorySource: 'stock_quant',
+    },
+  }), false);
 });

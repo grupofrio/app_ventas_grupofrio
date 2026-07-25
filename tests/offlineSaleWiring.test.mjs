@@ -38,7 +38,7 @@ assert(
 );
 assert.match(
   sale,
-  /const pricelistDecision = decideSalePricelist\(\{[\s\S]*?isOnline,[\s\S]*?stopPricelistId,[\s\S]*?cachedPricelistId,[\s\S]*?\}\);/,
+  /const pricelistDecision = decideSalePricelist\(\{[\s\S]*?isOnline:\s*confirmationIsOnline,[\s\S]*?stopPricelistId,[\s\S]*?cachedPricelistId,[\s\S]*?\}\);/,
   'venta debe decidir con conectividad, tarifa de parada y cache local',
 );
 const resolverGuardBody = extractBracedBlockAfter(
@@ -94,6 +94,11 @@ assert(
   sale.includes("from '../../src/services/saleStockEnforcement'"),
   'venta debe importar la decisión pura de enforcement de inventario',
 );
+assert(
+  sale.includes('isApplicableAuthoritativeSaleInventory')
+    && sale.includes('isSameSaleConfirmationContext'),
+  'venta debe ligar refresh y confirmación al contexto exacto',
+);
 assert.match(
   sale,
   /const saleStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline,[\s\S]*?policy:\s*'offline_sale',[\s\S]*?inventoryFreshness,[\s\S]*?\}\);/,
@@ -106,7 +111,12 @@ assert.match(
 );
 assert.match(
   sale,
-  /const refreshInventoryAuthority = React\.useCallback\([\s\S]*?loadProductsAuthoritative\(warehouseId\)[\s\S]*?React\.useEffect\(\(\) => \{[\s\S]*?saleStockEnforcement\.shouldRefresh[\s\S]*?refreshInventoryAuthority\(\)/,
+  /const refreshInventoryAuthority = React\.useCallback\([\s\S]*?expectedContext:[\s\S]*?const inventoryLoadResult = await loadProductsAuthoritative\(expectedContext\.warehouseId\)[\s\S]*?isApplicableAuthoritativeSaleInventory\(\{[\s\S]*?loadResult:\s*inventoryLoadResult/,
+  'el refresh debe conservar y validar el resultado autoritativo contra su contexto capturado',
+);
+assert.match(
+  sale,
+  /React\.useEffect\(\(\) => \{[\s\S]*?saleStockEnforcement\.shouldRefresh[\s\S]*?readLiveSaleConfirmationContext\([\s\S]*?refreshInventoryAuthority\(refreshContext\)/,
   'volver online con inventario no autoritativo debe disparar refresh coalescido',
 );
 assert.match(
@@ -273,7 +283,7 @@ assert(sale.includes('await createSale('), 'venta online usa createSale directo'
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
 assert.match(
   sale,
-  /if \(!isOnline\) \{[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?operationId:\s*recoveryIntent\.operationId/,
+  /if \(confirmationIsOnline === false\) \{[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?operationId:\s*recoveryIntent\.operationId/,
   'offline debe materializar durablemente el intent con el mismo operationId',
 );
 assert.doesNotMatch(
@@ -283,7 +293,7 @@ assert.doesNotMatch(
 );
 assert(sale.includes('persistAmbiguousSaleRecovery'), 'venta debe usar el lote durable compartido para pedido y evidencia');
 assert(!sale.includes('salePhotoUris[0]'), 'venta debe encolar todas las fotos capturadas, no solo la primera');
-const offlineIdx = sale.indexOf('if (!isOnline) {');
+const offlineIdx = sale.indexOf('if (confirmationIsOnline === false) {');
 const createIdx = sale.indexOf('await createSale(');
 assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
   'la rama offline (enqueue) va antes del createSale online');
@@ -291,6 +301,11 @@ assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhot
   'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
 
 const confirmBody = extractBracedBlockAfter(sale, 'async function handleConfirm()');
+assert.match(
+  confirmBody,
+  /const confirmationContext = readLiveSaleConfirmationContext\(stop\.id\);[\s\S]*?const confirmationIsOnline = confirmationContext\.isOnline;/,
+  'handleConfirm debe capturar conectividad, sesión, almacén y parada una sola vez al inicio',
+);
 const authorityGuardIdx = confirmBody.indexOf('if (!liveStockEnforcement.allowConfirm)');
 const capturedStockGuardIdx = confirmBody.indexOf('if (!liveHasStock)');
 const freshStockGuardIdx = confirmBody.indexOf('findFreshStockIssues(');
@@ -302,13 +317,56 @@ assert(
 );
 assert.match(
   confirmBody,
-  /await refreshInventoryAuthority\(\);[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline:\s*useSyncStore\.getState\(\)\.isOnline,[\s\S]*?inventoryFreshness:\s*useProductStore\.getState\(\)\.inventoryFreshness/,
+  /await refreshInventoryAuthority\(confirmationContext\);[\s\S]*?isSaleConfirmationContextCurrent\(confirmationContext\)[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement/,
   'después del refresh debe releer conectividad y autoridad vivas antes de continuar',
 );
 assert.match(
   confirmBody,
   /getStockIssues\(\{\s*enforceStock:\s*liveStockEnforcement\.enforceFreshStock,?\s*\}\)/,
   'la validación capturada debe usar la política viva y conservar cantidades positivas offline',
+);
+assert.match(
+  confirmBody,
+  /decideSalePricelist\(\{[\s\S]*?isOnline:\s*confirmationIsOnline,/,
+  'la tarifa debe usar la conectividad capturada y validada',
+);
+assert.match(
+  confirmBody,
+  /if \(confirmationIsOnline === false\) \{/,
+  'la rama durable offline debe usar la misma conectividad capturada que la tarifa',
+);
+const pricingAwaitIdx = confirmBody.indexOf('await getPartnerPricelistId(');
+const lockPersistIdx = confirmBody.indexOf('await persistSaleConfirmationLock(');
+const branchIdx = confirmBody.indexOf('if (confirmationIsOnline === false)');
+const guardAfterPricingIdx = confirmBody.indexOf(
+  'if (!isSaleConfirmationContextCurrent(confirmationContext))',
+  pricingAwaitIdx,
+);
+const guardAfterLockIdx = confirmBody.indexOf(
+  'if (!isSaleConfirmationContextCurrent(confirmationContext))',
+  lockPersistIdx,
+);
+assert(
+  pricingAwaitIdx >= 0
+    && guardAfterPricingIdx > pricingAwaitIdx
+    && lockPersistIdx > guardAfterPricingIdx,
+  'un cambio durante pricing debe abortar antes de persistir el lock',
+);
+assert(
+  guardAfterLockIdx > lockPersistIdx
+    && branchIdx > guardAfterLockIdx,
+  'el contexto debe revalidarse inmediatamente antes de elegir queue o createSale',
+);
+const postLockGuard = confirmBody.slice(guardAfterLockIdx, branchIdx);
+assert.match(
+  postLockGuard,
+  /await clearSaleConfirmationLock\(operationId\)/,
+  'un cambio después del lock durable debe limpiarlo estrictamente antes de permitir reintento',
+);
+assert.match(
+  postLockGuard,
+  /if \(!cleared\)[\s\S]*?setSaleRecoveryPersistenceFailed\(true\)[\s\S]*?return;/,
+  'si el cleanup durable falla debe conservar el recovery bloqueado y no enviar ni encolar',
 );
 
 assert.match(

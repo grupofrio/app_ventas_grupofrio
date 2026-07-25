@@ -32,7 +32,13 @@ import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
-import { decideSaleStockEnforcement } from '../../src/services/saleStockEnforcement';
+import {
+  decideSaleStockEnforcement,
+  isApplicableAuthoritativeSaleInventory,
+  isSameSaleConfirmationContext,
+  type SaleConfirmationContext,
+} from '../../src/services/saleStockEnforcement';
+import type { InventoryLoadResult } from '../../src/services/legacyRefreshRunner';
 import { getInsufficientStockDetail, describeInsufficientStock } from '../../src/services/insufficientStock';
 import { insufficientStockActionHint } from '../../src/services/secondaryFlowCopy';
 import {
@@ -67,6 +73,56 @@ import {
   shouldResumeAfterSale,
 } from '../../src/services/saleConfirmationFlow';
 
+function readLiveSaleConfirmationContext(stopId: number): SaleConfirmationContext {
+  const auth = useAuthStore.getState();
+  const route = useRouteStore.getState();
+  const visit = useVisitStore.getState();
+  const currentStop = route.stops.find((candidate) => candidate.id === stopId);
+  const planId = route.plan?.plan_id;
+  const partnerId = currentStop
+    ? getLeadPartnerId(currentStop) ?? currentStop.customer_id
+    : null;
+  const pricelistId = currentStop
+    && typeof currentStop._pricelistId === 'number'
+    && currentStop._pricelistId > 0
+    ? currentStop._pricelistId
+    : null;
+
+  return {
+    isAuthenticated: auth.isAuthenticated,
+    isOnline: useSyncStore.getState().isOnline,
+    employeeId: auth.employeeId,
+    companyId: auth.companyId,
+    warehouseId: auth.warehouseId,
+    mobileLocationId: auth.mobileLocationId,
+    planId: typeof planId === 'number' && planId > 0 ? planId : null,
+    stopId: currentStop?.id ?? null,
+    partnerId,
+    pricelistId,
+    offrouteVisitId: currentStop
+      ? visit.offrouteVisitId ?? currentStop._offrouteVisitId ?? null
+      : null,
+  };
+}
+
+function isSaleConfirmationContextCurrent(
+  expectedContext: SaleConfirmationContext,
+): boolean {
+  return isSameSaleConfirmationContext(
+    expectedContext,
+    readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
+  );
+}
+
+function readLiveSaleInventoryAuthority() {
+  const productState = useProductStore.getState();
+  return {
+    inventoryFreshness: productState.inventoryFreshness,
+    loadedWarehouseId: productState.loadedWarehouseId,
+    inventorySource: productState.inventorySource,
+  };
+}
+
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
@@ -75,7 +131,6 @@ function SaleScreenInner() {
   const removeStop = useRouteStore((s) => s.removeStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const stop = stops.find((s) => s.id === Number(stopId));
-  const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const employeeName = useAuthStore((s) => s.employeeName);
   const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
@@ -108,8 +163,6 @@ function SaleScreenInner() {
   const saleTotal = useVisitStore((s) => s.saleTotal);
   const saleTotalKg = useVisitStore((s) => s.saleTotalKg);
   const resetVisit = useVisitStore((s) => s.resetVisit);
-  const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
-
   const isOnline = useSyncStore((s) => s.isOnline);
   const enqueue = useSyncStore((s) => s.enqueue);
   const persistQueue = useSyncStore((s) => s.persistQueue);
@@ -141,21 +194,36 @@ function SaleScreenInner() {
   const onlineInventoryReady = saleStockEnforcement.allowConfirm
     && (isOnline === false || (!isLoadingProducts && !inventoryAuthorityRefreshing));
 
-  const refreshInventoryAuthority = React.useCallback(async (): Promise<boolean> => {
+  const refreshInventoryAuthority = React.useCallback(async (
+    expectedContext: SaleConfirmationContext,
+  ): Promise<boolean> => {
     const refreshGeneration = ++inventoryAuthorityRefreshGenerationRef.current;
     const liveBeforeRefresh = decideSaleStockEnforcement({
-      isOnline: useSyncStore.getState().isOnline,
+      isOnline: expectedContext.isOnline,
       policy: 'offline_sale',
       inventoryFreshness: useProductStore.getState().inventoryFreshness,
     });
     if (!liveBeforeRefresh.shouldRefresh) {
+      const applicable = liveBeforeRefresh.allowConfirm
+        && (
+          expectedContext.isOnline === false
+          || isApplicableAuthoritativeSaleInventory({
+            expectedContext,
+            currentContext: readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
+            inventory: readLiveSaleInventoryAuthority(),
+          })
+        );
       if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
         setInventoryAuthorityRefreshing(false);
-        setInventoryAuthorityRefreshFailed(false);
+        setInventoryAuthorityRefreshFailed(expectedContext.isOnline === true && !applicable);
       }
-      return liveBeforeRefresh.allowConfirm;
+      return applicable;
     }
-    if (typeof warehouseId !== 'number' || warehouseId <= 0) {
+    if (
+      typeof expectedContext.warehouseId !== 'number'
+      || expectedContext.warehouseId <= 0
+      || !isSaleConfirmationContextCurrent(expectedContext)
+    ) {
       if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
         setInventoryAuthorityRefreshing(false);
         setInventoryAuthorityRefreshFailed(true);
@@ -165,30 +233,33 @@ function SaleScreenInner() {
 
     setInventoryAuthorityRefreshing(true);
     setInventoryAuthorityRefreshFailed(false);
-    try {
-      await loadProductsAuthoritative(warehouseId);
-    } catch (error) {
-      logWarn('inventory', 'sale_authoritative_refresh_failed', {
-        message: safeUnknownErrorMessage(
-          error,
-          'Error desconocido al actualizar inventario.',
-        ),
+    const inventoryLoadResult = await loadProductsAuthoritative(expectedContext.warehouseId)
+      .catch((error): InventoryLoadResult => {
+        logWarn('inventory', 'sale_authoritative_refresh_failed', {
+          message: safeUnknownErrorMessage(
+            error,
+            'Error desconocido al actualizar inventario.',
+          ),
+        });
+        return {
+          ok: false,
+          authoritative: false,
+          reason: 'unknown',
+        };
       });
-    }
 
-    const liveAfterRefresh = decideSaleStockEnforcement({
-      isOnline: useSyncStore.getState().isOnline,
-      policy: 'offline_sale',
-      inventoryFreshness: useProductStore.getState().inventoryFreshness,
+    const applicable = isApplicableAuthoritativeSaleInventory({
+      expectedContext,
+      currentContext: readLiveSaleConfirmationContext(expectedContext.stopId ?? 0),
+      inventory: readLiveSaleInventoryAuthority(),
+      loadResult: inventoryLoadResult,
     });
     if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
       setInventoryAuthorityRefreshing(false);
-      setInventoryAuthorityRefreshFailed(
-        useSyncStore.getState().isOnline === true && !liveAfterRefresh.allowConfirm,
-      );
+      setInventoryAuthorityRefreshFailed(expectedContext.isOnline === true && !applicable);
     }
-    return liveAfterRefresh.allowConfirm;
-  }, [loadProductsAuthoritative, warehouseId]);
+    return applicable;
+  }, [loadProductsAuthoritative]);
 
   React.useEffect(() => {
     if (!saleStockEnforcement.shouldRefresh) {
@@ -197,11 +268,12 @@ function SaleScreenInner() {
       setInventoryAuthorityRefreshFailed(false);
       return;
     }
-    void refreshInventoryAuthority();
+    const refreshContext = readLiveSaleConfirmationContext(stop?.id ?? 0);
+    void refreshInventoryAuthority(refreshContext);
     return () => {
       inventoryAuthorityRefreshGenerationRef.current += 1;
     };
-  }, [refreshInventoryAuthority, saleStockEnforcement.shouldRefresh]);
+  }, [refreshInventoryAuthority, saleStockEnforcement.shouldRefresh, stop?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -346,6 +418,25 @@ function SaleScreenInner() {
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
     if (saleSubmitting) return;
+    if (!stop) return;
+
+    const confirmationContext = readLiveSaleConfirmationContext(stop.id);
+    const confirmationIsOnline = confirmationContext.isOnline;
+    if (
+      (confirmationIsOnline !== true && confirmationIsOnline !== false)
+      || !isSameSaleConfirmationContext(confirmationContext, confirmationContext)
+    ) {
+      Alert.alert(
+        'Contexto actualizado',
+        'La sesión, ruta o conexión cambió. Revisa los datos de la venta y vuelve a confirmar.',
+      );
+      return;
+    }
+    const confirmationPartnerId = confirmationContext.partnerId as number;
+    const confirmationWarehouseId = confirmationContext.warehouseId as number;
+    const confirmationCompanyId = confirmationContext.companyId as number;
+    const confirmationStopId = confirmationContext.stopId as number;
+    const confirmationOffrouteVisitId = confirmationContext.offrouteVisitId;
 
     if (!canStartSale) {
       const pending = routeLoadState.nextPendingLoad;
@@ -359,15 +450,25 @@ function SaleScreenInner() {
     }
 
     let liveStockEnforcement = decideSaleStockEnforcement({
-      isOnline: useSyncStore.getState().isOnline,
+      isOnline: confirmationIsOnline,
       policy: 'offline_sale',
       inventoryFreshness: useProductStore.getState().inventoryFreshness,
     });
     if (!liveStockEnforcement.allowConfirm) {
       if (liveStockEnforcement.shouldRefresh) {
-        await refreshInventoryAuthority();
+        const inventoryRefreshApplicable = await refreshInventoryAuthority(confirmationContext);
+        if (
+          !inventoryRefreshApplicable
+          || !isSaleConfirmationContextCurrent(confirmationContext)
+        ) {
+          Alert.alert(
+            'Contexto actualizado',
+            'La sesión, ruta o conexión cambió mientras validábamos inventario. Vuelve a confirmar.',
+          );
+          return;
+        }
         liveStockEnforcement = decideSaleStockEnforcement({
-          isOnline: useSyncStore.getState().isOnline,
+          isOnline: confirmationIsOnline,
           policy: 'offline_sale',
           inventoryFreshness: useProductStore.getState().inventoryFreshness,
         });
@@ -375,12 +476,29 @@ function SaleScreenInner() {
       if (!liveStockEnforcement.allowConfirm) {
         Alert.alert(
           'Inventario pendiente',
-          useSyncStore.getState().isOnline === true
+          confirmationIsOnline === true
             ? 'No pudimos validar el inventario actual. Revisa tu conexión y toca Reintentar inventario.'
             : 'Estamos verificando la conexión antes de aplicar la política de inventario.',
         );
         return;
       }
+    }
+    if (
+      !isSaleConfirmationContextCurrent(confirmationContext)
+      || (
+        confirmationIsOnline === true
+        && !isApplicableAuthoritativeSaleInventory({
+          expectedContext: confirmationContext,
+          currentContext: readLiveSaleConfirmationContext(confirmationStopId),
+          inventory: readLiveSaleInventoryAuthority(),
+        })
+      )
+    ) {
+      Alert.alert(
+        'Contexto actualizado',
+        'La sesión, ruta, conexión o inventario cambió. Revisa la venta y vuelve a confirmar.',
+      );
+      return;
     }
 
     const liveStockIssues = useVisitStore.getState().getStockIssues({
@@ -444,31 +562,29 @@ function SaleScreenInner() {
     const operationId = lockSaleConfirm();
 
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
-    const isOffRoute = stop.id < 0;
-    const saleOffrouteVisitId = offrouteVisitId ?? stop._offrouteVisitId ?? null;
-    const effectiveCompanyId = getEffectiveSalesCompanyId(companyId);
+    const isOffRoute = confirmationStopId < 0;
+    const saleOffrouteVisitId = confirmationOffrouteVisitId;
+    const effectiveCompanyId = getEffectiveSalesCompanyId(confirmationCompanyId);
     // Only send a pricelist_id when we have one confirmed from the partner's own
     // data (source: partner_field or get_records). Company fallback
     // is cached as null to prevent "Empresas incompatibles" when the partner
     // belongs to a different Odoo company — Odoo assigns its default server-side.
-    const stopPricelistId = typeof stop._pricelistId === 'number' && stop._pricelistId > 0
-      ? stop._pricelistId
-      : null;
+    const stopPricelistId = confirmationContext.pricelistId;
     const cachedPricelistId = peekResolvedPartnerPricelistId(
-      salePartnerId,
+      confirmationPartnerId,
       { companyId: effectiveCompanyId },
     );
     const pricelistDecision = decideSalePricelist({
-      isOnline,
+      isOnline: confirmationIsOnline,
       stopPricelistId,
       cachedPricelistId,
     });
     let pricelistId = pricelistDecision.pricelistId;
     try {
       if (pricelistDecision.shouldResolvePartnerPricelist) {
-        await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+        await getPartnerPricelistId(confirmationPartnerId, { companyId: effectiveCompanyId });
         const resolvedPricelistId = peekResolvedPartnerPricelistId(
-          salePartnerId,
+          confirmationPartnerId,
           { companyId: effectiveCompanyId },
         );
         pricelistId =
@@ -487,13 +603,23 @@ function SaleScreenInner() {
       Alert.alert('Venta rechazada', message);
       return;
     }
+    if (!isSaleConfirmationContextCurrent(confirmationContext)) {
+      setSaleSubmitting(false);
+      saleConfirmationSingleFlight.release();
+      unlockSaleConfirm();
+      Alert.alert(
+        'Contexto actualizado',
+        'La sesión, ruta o conexión cambió mientras resolvíamos precios. Revisa la venta y vuelve a confirmar.',
+      );
+      return;
+    }
 
     // Create sale order payload with idempotency key
     const payload = {
-      partner_id: salePartnerId,
-      stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
+      partner_id: confirmationPartnerId,
+      stop_id: isOffRoute ? null : confirmationStopId, // Don't send negative virtual IDs to backend
       offroute_visit_id: isOffRoute ? saleOffrouteVisitId : null,
-      warehouse_id: warehouseId ?? null,
+      warehouse_id: confirmationWarehouseId,
       _operationId: operationId,
       pricelist_id: pricelistId ?? null,
       analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
@@ -523,13 +649,13 @@ function SaleScreenInner() {
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
       },
-      stopId: stop.id,
+      stopId: confirmationStopId,
       ticketSnapshot,
       photoUris: [...salePhotoUris],
     });
 
     logInfo('general', 'sale_confirm_payload', {
-      partner_id: salePartnerId,
+      partner_id: confirmationPartnerId,
       stop_id: payload.stop_id,
       offroute_visit_id: payload.offroute_visit_id,
       warehouse_id: payload.warehouse_id,
@@ -539,7 +665,7 @@ function SaleScreenInner() {
       employee_analytic_plaza_id: employeeAnalyticPlazaId,
       employee_analytic_plaza_name: employeeAnalyticPlazaName,
       line_count: payload.lines.length,
-      company_id: companyId,
+      company_id: confirmationCompanyId,
       effective_company_id: effectiveCompanyId,
     });
 
@@ -565,13 +691,44 @@ function SaleScreenInner() {
       return;
     }
 
+    if (!isSaleConfirmationContextCurrent(confirmationContext)) {
+      try {
+        const cleared = await clearSaleConfirmationLock(operationId);
+        if (!cleared) {
+          throw new Error('The changed sale context no longer matches the active visit');
+        }
+      } catch (clearError) {
+        setSaleRecoveryPersistenceFailed(true);
+        setSaleSubmitting(false);
+        logError('sync', 'sale_context_change_clear_persist_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            clearError,
+            'Error desconocido al limpiar el bloqueo tras cambiar el contexto.',
+          ),
+        });
+        Alert.alert(
+          'No cierres la aplicación',
+          'Cambió el contexto de la venta y no pudimos guardar de forma segura el desbloqueo. La operación permanece bloqueada para evitar duplicados.',
+        );
+        return;
+      }
+      setSaleSubmitting(false);
+      saleConfirmationSingleFlight.release();
+      Alert.alert(
+        'Contexto actualizado',
+        'La sesión, ruta o conexión cambió antes de enviar el pedido. Revisa la venta y vuelve a confirmar.',
+      );
+      return;
+    }
+
     // Pedido offline pendiente (S1): sin señal, NO bloqueamos — encolamos el
     // pedido como `sale_order` (+ foto) para enviarlo a Odoo al reconectar. NO
     // se marca como venta confirmada ni se crea pago/stock definitivo: el
     // dispatcher de la cola ejecuta createSale (que confirma+cobra en Odoo) solo
     // cuando hay conexión. Idempotente por _operationId. cashclose/route-close
     // ya bloquean el cierre/liquidación mientras haya pendientes en la cola.
-    if (!isOnline) {
+    if (confirmationIsOnline === false) {
       try {
         await persistAmbiguousSaleRecovery({
           operationId: recoveryIntent.operationId,
@@ -619,8 +776,8 @@ function SaleScreenInner() {
         'Pedido guardado',
         'Pedido pendiente de envío. Se enviará a Odoo cuando haya conexión; no queda confirmado hasta entonces.',
       );
-      if (shouldSkipStopCheckout(stop.id)) {
-        updateStopState(stop.id, 'done');
+      if (shouldSkipStopCheckout(confirmationStopId)) {
+        updateStopState(confirmationStopId, 'done');
         setAfterSaleAction('route');
       } else {
         setAfterSaleAction('checkout');
@@ -669,7 +826,7 @@ function SaleScreenInner() {
         // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
         const insufficient = getInsufficientStockDetail(error);
         if (insufficient) {
-          if (warehouseId) void loadProducts(warehouseId);
+          void loadProducts(confirmationWarehouseId);
           Alert.alert(
             'Stock insuficiente (servidor)',
             `${describeInsufficientStock(insufficient)}\n\n${insufficientStockActionHint()}`,
@@ -759,8 +916,8 @@ function SaleScreenInner() {
         'Pedido pendiente de verificación',
         'No pudimos confirmar la respuesta del servidor. El pedido quedó pendiente de verificación y se reintentará con el mismo identificador.',
       );
-      if (shouldSkipStopCheckout(stop.id)) {
-        updateStopState(stop.id, 'done');
+      if (shouldSkipStopCheckout(confirmationStopId)) {
+        updateStopState(confirmationStopId, 'done');
         setAfterSaleAction('route');
       } else {
         setAfterSaleAction('checkout');
@@ -795,7 +952,7 @@ function SaleScreenInner() {
 
     try {
       enqueueVisitPhotos({
-        stopId: stop.id,
+        stopId: confirmationStopId,
         photoUris: salePhotoUris,
         enqueue,
         imageType: 'sale',
@@ -818,15 +975,13 @@ function SaleScreenInner() {
     }
 
     setSaleSubmitting(false);
-    if (warehouseId) {
-      void loadProducts(warehouseId);
-    }
+    void loadProducts(confirmationWarehouseId);
 
-    if (shouldSkipStopCheckout(stop.id)) {
-      if (offrouteVisitId) {
+    if (shouldSkipStopCheckout(confirmationStopId)) {
+      if (confirmationOffrouteVisitId) {
         try {
           await closeOffrouteVisit({
-            visit_id: offrouteVisitId,
+            visit_id: confirmationOffrouteVisitId,
             result_status: 'sale' as const,
             latitude: latitude || 0,
             longitude: longitude || 0,
@@ -839,7 +994,7 @@ function SaleScreenInner() {
           Alert.alert('Cierre pendiente en Odoo', message);
         }
       }
-      updateStopState(stop.id, 'done');
+      updateStopState(confirmationStopId, 'done');
       setAfterSaleAction('route');
       return;
     }
@@ -957,7 +1112,10 @@ function SaleScreenInner() {
               variant="secondary"
               small
               fullWidth
-              onPress={() => { void refreshInventoryAuthority(); }}
+              onPress={() => {
+                const refreshContext = readLiveSaleConfirmationContext(stop.id);
+                void refreshInventoryAuthority(refreshContext);
+              }}
             />
           </View>
         )}

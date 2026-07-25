@@ -54,8 +54,16 @@ function main() {
   );
   const unlockCount = (saleScreen.match(/\bunlockSaleConfirm\(\)/g) ?? []).length;
   const releaseCount = (saleScreen.match(/\bsaleConfirmationSingleFlight\.release\(\)/g) ?? []).length;
-  assert.equal(unlockCount, 1, 'solo un fallo previo al envío usa el unlock tolerante');
-  assert.equal(releaseCount, 2, 'preparación y rechazo definitivo liberan el single-flight');
+  assert.equal(unlockCount, 2, 'solo fallos previos a la barrera durable usan el unlock tolerante');
+  assert.equal(releaseCount, 4, 'los abortos recuperables liberan el single-flight');
+  const durableBarrierIndex = saleScreen.indexOf(
+    'await persistSaleConfirmationLock(operationId, recoveryIntent)',
+  );
+  assert.equal(
+    saleScreen.indexOf('unlockSaleConfirm()', durableBarrierIndex),
+    -1,
+    'después de persistir el lock no debe usarse el unlock tolerante',
+  );
   assert.match(
     saleScreen,
     /saleConfirmationSingleFlight\.release\(\);\s*unlockSaleConfirm\(\);|unlockSaleConfirm\(\);\s*saleConfirmationSingleFlight\.release\(\);/,
@@ -93,7 +101,7 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /const saleOffrouteVisitId = offrouteVisitId \?\? stop\._offrouteVisitId \?\? null;[\s\S]*?offroute_visit_id:\s*isOffRoute\s*\?\s*saleOffrouteVisitId\s*:\s*null/,
+    /const saleOffrouteVisitId = confirmationOffrouteVisitId;[\s\S]*?offroute_visit_id:\s*isOffRoute\s*\?\s*saleOffrouteVisitId\s*:\s*null/,
     'La venta de visita especial debe mandar offroute_visit_id para que el corte incluya sus salidas',
   );
   assert.doesNotMatch(

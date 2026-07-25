@@ -8,7 +8,7 @@ const source = readFileSync(resolve(process.cwd(), 'app/sale/[stopId].tsx'), 'ut
 test('sale confirmation persists a complete intent before enqueue or createSale', () => {
   const intentIndex = source.indexOf('const recoveryIntent = createSaleRecoveryIntent(');
   const barrierIndex = source.indexOf('await persistSaleConfirmationLock(operationId, recoveryIntent)');
-  const offlineIndex = source.indexOf('if (!isOnline)');
+  const offlineIndex = source.indexOf('if (confirmationIsOnline === false)');
   const createIndex = source.indexOf('await createSale(');
 
   assert(intentIndex >= 0);

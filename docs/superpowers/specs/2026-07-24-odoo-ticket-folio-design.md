@@ -124,6 +124,13 @@ seguro: Odoo encuentra la venta mediante `operation_id`, responde
 Así no se crean pedidos duplicados ni se marca la sincronización como completa
 dejando silenciosamente un ticket desactualizado.
 
+Si el snapshot ya no existe, la ausencia confirmada no bloqueará para siempre
+una venta que Odoo ya confirmó: se registra el diagnóstico y el elemento puede
+marcarse como sincronizado. Al abrir posteriormente el pedido desde la lista de
+Ventas, la app reconstruirá el ticket con los datos autoritativos. Esta excepción
+aplica solo a un resultado de carga `null`; un error real de lectura o escritura
+local sí permanece reintentable.
+
 ## Reapertura desde la lista de ventas
 
 La lista diaria ya recibe `order.name`. Al abrir un pedido:
@@ -135,6 +142,12 @@ La lista diaria ya recibe `order.name`. Al abrir un pedido:
 
 Esto corrige tickets antiguos que todavía contienen solamente la referencia
 local.
+
+Una pantalla de ticket que ya está abierta no se suscribirá en vivo a cambios
+de la cola. La promoción será visible al volver a abrir el ticket o al abrirlo
+desde Ventas. Esta decisión evita introducir sondeo o un bus de eventos solo
+para actualizar dos renglones; la impresión abierta sigue disponible con su
+referencia local durante ese intervalo.
 
 ## Renderizado compartido
 

@@ -1,4 +1,7 @@
-import type { SaleTicketSnapshot } from './saleTicket.ts';
+import {
+  normalizeOdooFolio,
+  type SaleTicketSnapshot,
+} from './saleTicket.ts';
 
 export interface SaleRecoveryIntentV1 {
   version: 1;
@@ -21,6 +24,11 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
   if (!isRecord(value)) return null;
   if (
     value.saleId !== operationId
+    || (
+      value.odooFolio !== undefined
+      && value.odooFolio !== null
+      && typeof value.odooFolio !== 'string'
+    )
     || typeof value.customerName !== 'string'
     || typeof value.sellerName !== 'string'
     || !['cash', 'credit', 'transfer', 'unknown'].includes(String(value.paymentMethod))
@@ -59,6 +67,7 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
 
   return {
     saleId: value.saleId,
+    odooFolio: normalizeOdooFolio(value.odooFolio),
     customerName: value.customerName,
     sellerName: value.sellerName,
     paymentMethod: value.paymentMethod as SaleTicketSnapshot['paymentMethod'],

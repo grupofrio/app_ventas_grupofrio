@@ -9,6 +9,7 @@ import {
 
 const ticketSnapshot = {
   saleId: 'sale-op-1',
+  odooFolio: null,
   customerName: 'Abarrotes Lupita',
   sellerName: 'Vendedor',
   paymentMethod: 'cash' as const,
@@ -48,6 +49,57 @@ test('creates and restores a versioned RN-free sale recovery intent', () => {
   const roundTrip = JSON.parse(JSON.stringify(intent));
 
   assert.deepEqual(restoreSaleRecoveryIntent(roundTrip), intent);
+  assert.equal(intent.ticketSnapshot.odooFolio, null);
+});
+
+test('restores the deliberate legacy ticket fixture with a pending Odoo folio', () => {
+  const legacyTicketSnapshot = {
+    saleId: 'sale-op-1',
+    customerName: 'Abarrotes Lupita',
+    sellerName: 'Vendedor',
+    paymentMethod: 'cash',
+    paymentLabel: 'Efectivo',
+    createdAt: '2026-07-21T10:00:00.000Z',
+    lines: [{
+      productId: 7,
+      productName: 'Hielo',
+      qty: 2,
+      unitPrice: 50,
+      lineTotal: 100,
+      weight: 5,
+    }],
+    subtotal: 100,
+    total: 100,
+    totalKg: 10,
+  };
+
+  const restored = restoreSaleRecoveryIntent({
+    ...validIntent(),
+    ticketSnapshot: legacyTicketSnapshot,
+  });
+
+  assert.ok(restored);
+  assert.equal(restored.ticketSnapshot.odooFolio, null);
+});
+
+test('normalizes a persisted official Odoo folio and rejects invalid folio types', () => {
+  const official = restoreSaleRecoveryIntent({
+    ...validIntent(),
+    ticketSnapshot: {
+      ...ticketSnapshot,
+      odooFolio: '  S00042  ',
+    },
+  });
+
+  assert.ok(official);
+  assert.equal(official.ticketSnapshot.odooFolio, 'S00042');
+  assert.equal(restoreSaleRecoveryIntent({
+    ...validIntent(),
+    ticketSnapshot: {
+      ...ticketSnapshot,
+      odooFolio: 42,
+    },
+  }), null);
 });
 
 test('rejects intents whose operation id does not match payload and ticket', () => {

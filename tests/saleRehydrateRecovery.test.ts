@@ -20,6 +20,7 @@ const intent: SaleRecoveryIntentV1 = {
   photoUris: ['file://sale-1.jpg', 'file://sale-2.jpg'],
   ticketSnapshot: {
     saleId: 'sale-op-crash',
+    odooFolio: null,
     customerName: 'Abarrotes Lupita',
     sellerName: 'Vendedor',
     paymentMethod: 'cash',

@@ -168,6 +168,7 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
     photoUris: ['file://sale.jpg'],
     ticketSnapshot: {
       saleId: 'sale-op-recoverable',
+      odooFolio: null,
       customerName: 'Cliente',
       sellerName: 'Vendedor',
       paymentMethod: 'cash',

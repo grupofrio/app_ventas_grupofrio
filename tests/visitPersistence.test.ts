@@ -116,7 +116,7 @@ function testPendingConfirmationNeverPersistsWithoutMatchingIntent(module: Visit
   assert.equal(lockOnly.saleRecoveryIntent, null);
 
   const ticketSnapshot = {
-    saleId: 'sale-op-1', customerName: 'Cliente', sellerName: 'Vendedor',
+    saleId: 'sale-op-1', odooFolio: null, customerName: 'Cliente', sellerName: 'Vendedor',
     paymentMethod: 'cash', paymentLabel: 'Efectivo', createdAt: '2026-07-21T10:00:00.000Z',
     lines: [], subtotal: 100, total: 100, totalKg: 10,
   };

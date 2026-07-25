@@ -9,6 +9,7 @@ class ThermalTicketDocumentRecord : Record {
   @Field var schemaVersion: Int? = null
   @Field var branding: ThermalTicketBrandingRecord? = null
   @Field var folio: String? = null
+  @Field var localReference: String? = null
   @Field var formattedDate: String? = null
   @Field var customerName: String? = null
   @Field var sellerName: String? = null
@@ -49,6 +50,7 @@ data class ThermalTicket(
   val totalKg: String,
   val total: String,
   val creditNote: String?,
+  val localReference: String? = null,
   /** Internal-only diagnostic seam; never exposed by the Expo Record or sale DTO. */
   internal val diagnosticCalibrationText16: String? = null,
 )
@@ -85,6 +87,7 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   val budget = DisplayTextBudget()
   preflightBranding(safeBranding, budget)
   budget.required(folio, "folio", MAX_SHORT_TEXT_CHARS)
+  budget.optional(localReference, "localReference", MAX_SHORT_TEXT_CHARS)
   budget.required(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS)
   budget.required(customerName, "customerName", MAX_TEXT_CHARS)
   budget.required(sellerName, "sellerName", MAX_TEXT_CHARS)
@@ -101,6 +104,7 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
     schemaVersion = safeSchemaVersion,
     branding = safeBranding.toRawDomain(),
     folio = requiredRawText(folio, "folio"),
+    localReference = localReference,
     formattedDate = requiredRawText(formattedDate, "formattedDate"),
     customerName = requiredRawText(customerName, "customerName"),
     sellerName = requiredRawText(sellerName, "sellerName"),
@@ -336,6 +340,7 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
   budget.required(branding.title, "branding.title", MAX_TEXT_CHARS)
   budget.required(branding.footer, "branding.footer", MAX_LONG_TEXT_CHARS)
   budget.required(folio, "folio", MAX_SHORT_TEXT_CHARS)
+  budget.optional(localReference, "localReference", MAX_SHORT_TEXT_CHARS)
   budget.required(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS)
   budget.required(customerName, "customerName", MAX_TEXT_CHARS)
   budget.required(sellerName, "sellerName", MAX_TEXT_CHARS)
@@ -401,6 +406,11 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
       footer = requiredDisplayText(branding.footer, "branding.footer", MAX_LONG_TEXT_CHARS),
     ),
     folio = requiredDisplayText(folio, "folio", MAX_SHORT_TEXT_CHARS),
+    localReference = optionalDisplayText(
+      localReference,
+      "localReference",
+      MAX_SHORT_TEXT_CHARS,
+    ),
     formattedDate = requiredDisplayText(formattedDate, "formattedDate", MAX_SHORT_TEXT_CHARS),
     customerName = requiredDisplayText(customerName, "customerName", MAX_TEXT_CHARS),
     sellerName = requiredDisplayText(sellerName, "sellerName", MAX_TEXT_CHARS),

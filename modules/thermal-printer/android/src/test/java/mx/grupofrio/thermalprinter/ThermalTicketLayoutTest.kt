@@ -52,6 +52,37 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
+  fun `official ticket labels the Odoo folio and omits local reference`() {
+    val text = subject.layout(ticket(folio = "S00042", localReference = null))
+      .commands.filterIsInstance<DrawCommand.Text>().map { it.text }
+
+    assertTrue(text.windowed(2).contains(listOf("Folio Odoo:", "S00042")))
+    assertFalse(text.contains("Folio:"))
+    assertFalse(text.contains("Referencia local:"))
+  }
+
+  @Test
+  fun `pending ticket prints Odoo status then normalized local reference`() {
+    val text = subject.layout(
+      ticket(
+        folio = "Pendiente por sincronizar",
+        localReference = " \u200Bmobile-op-1\r\n ",
+      ),
+    ).commands.filterIsInstance<DrawCommand.Text>().map { it.text }
+
+    assertTrue(
+      text.windowed(4).contains(
+        listOf(
+          "Folio Odoo:",
+          "Pendiente por sincronizar",
+          "Referencia local:",
+          "mobile-op-1",
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun `wrap uses words first and characters only for a word too wide`() {
     val style = TextStyle(sizePx = 20, lineHeightPx = 26)
 
@@ -364,11 +395,30 @@ class ThermalTicketLayoutTest {
   fun `aggregate display budget accepts exact UTF-16 boundary and rejects one unit over`() {
     val exactBoundary = aggregateBoundaryTicket(quantityLength = 8_180)
     val oneUnitOver = aggregateBoundaryTicket(quantityLength = 8_181)
+    val oneOptionalUnitOver = exactBoundary.copy(localReference = "R")
 
     assertEquals(32_768, exactBoundary.normalizedForLayout().aggregateDisplayLength())
     assertEquals(
       "invalid_ticket",
       assertThrows(ThermalPrinterException::class.java) { oneUnitOver.normalizedForLayout() }.code,
+    )
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) {
+        oneOptionalUnitOver.normalizedForLayout()
+      }.code,
+    )
+  }
+
+  @Test
+  fun `record aggregate display budget includes optional local reference`() {
+    val exactBoundary = aggregateBoundaryRecord()
+    val oneOptionalUnitOver = aggregateBoundaryRecord().apply { localReference = "R" }
+
+    assertEquals(32_768, exactBoundary.toDomain().aggregateDisplayLength())
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { oneOptionalUnitOver.toDomain() }.code,
     )
   }
 
@@ -476,6 +526,53 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
+  fun `separator-only local reference disappears at record and direct-domain boundaries`() {
+    listOf(" \r\n\t ", " \u200B\u202E$LANGUAGE_TAG ").forEach { separatorsOnly ->
+      val record = validRecord().apply { localReference = separatorsOnly }
+      val directDomain = ticket(localReference = separatorsOnly)
+
+      assertEquals(null, record.toDomain().localReference)
+      assertEquals(null, directDomain.normalizedForLayout().localReference)
+    }
+  }
+
+  @Test
+  fun `overlong local reference is invalid at record and direct-domain boundaries`() {
+    val overlong = "R".repeat(257)
+    val record = validRecord().apply { localReference = overlong }
+    val directDomain = ticket(localReference = overlong)
+
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { record.toDomain() }.code,
+    )
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) {
+        directDomain.normalizedForLayout()
+      }.code,
+    )
+  }
+
+  @Test
+  fun `isolated surrogate local reference is invalid at record and direct-domain boundaries`() {
+    val unsafe = "mobile-\uD83E-op-1"
+    val record = validRecord().apply { localReference = unsafe }
+    val directDomain = ticket(localReference = unsafe)
+
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) { record.toDomain() }.code,
+    )
+    assertEquals(
+      "invalid_ticket",
+      assertThrows(ThermalPrinterException::class.java) {
+        directDomain.normalizedForLayout()
+      }.code,
+    )
+  }
+
+  @Test
   fun `logo version rejects unsafe whitespace controls and BMP or supplementary format code points`() {
     val unsafeIdentifiers = listOf(
       "\u0000",
@@ -569,7 +666,7 @@ class ThermalTicketLayoutTest {
     subtotal,
     totalKg,
     total,
-  ) + listOfNotNull(creditNote) + lines.flatMap { line ->
+  ) + listOfNotNull(localReference, creditNote) + lines.flatMap { line ->
     listOf(line.productName, line.quantityAndUnitPrice, line.lineTotal)
   }
 
@@ -597,7 +694,31 @@ class ThermalTicketLayoutTest {
     totalKg = "K",
     total = "T",
     creditNote = null,
+    localReference = null,
   )
+
+  private fun aggregateBoundaryRecord(): ThermalTicketDocumentRecord = validRecord().apply {
+    branding!!.apply {
+      legalName = "L"
+      rfcLabel = "R"
+      title = "T"
+      footer = "F".repeat(16_384)
+    }
+    folio = "F"
+    formattedDate = "D"
+    customerName = "C"
+    sellerName = "S"
+    paymentLabel = "P"
+    lines!!.single().apply {
+      productName = "N".repeat(8_192)
+      quantityAndUnitPrice = "Q".repeat(8_180)
+      lineTotal = "A"
+    }
+    subtotal = "S"
+    totalKg = "K"
+    total = "T"
+    localReference = null
+  }
 
   private fun assertCanonicalDisplayText(value: String) {
     assertFalse("Display text must be trimmed: '$value'", value.startsWith(' ') || value.endsWith(' '))
@@ -658,6 +779,8 @@ class ThermalTicketLayoutTest {
   }
 
   private fun ticket(
+    folio: String = "VENTA-42",
+    localReference: String? = null,
     customerName: String = "Cliente Uno",
     sellerName: String = "Vendedor Uno",
     paymentLabel: String = "Efectivo",
@@ -670,7 +793,7 @@ class ThermalTicketLayoutTest {
   ): ThermalTicket = ThermalTicket(
     schemaVersion = 1,
     branding = branding,
-    folio = "VENTA-42",
+    folio = folio,
     formattedDate = "21/07/2026 10:30",
     customerName = customerName,
     sellerName = sellerName,
@@ -680,6 +803,7 @@ class ThermalTicketLayoutTest {
     totalKg = "2 kg",
     total = total,
     creditNote = creditNote,
+    localReference = localReference,
   )
 
   private fun branding(rfcLabel: String = "RFC: AAA010101AAA") = TicketBranding(

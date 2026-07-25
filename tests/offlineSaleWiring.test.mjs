@@ -88,6 +88,33 @@ assert.match(
   'cada producto debe pasar por la decisión pura de precio',
 );
 
+// Catálogo offline 3/3: conectividad y autoridad de inventario son entradas
+// separadas. Online nunca cae al bypass por tener caché viejo.
+assert(
+  sale.includes("from '../../src/services/saleStockEnforcement'"),
+  'venta debe importar la decisión pura de enforcement de inventario',
+);
+assert.match(
+  sale,
+  /const saleStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline,[\s\S]*?policy:\s*'offline_sale',[\s\S]*?inventoryFreshness,[\s\S]*?\}\);/,
+  'la pantalla debe decidir con conectividad real, política opt-in y autoridad separadas',
+);
+assert.match(
+  sale,
+  /const onlineInventoryReady = [^;]*saleStockEnforcement\.allowConfirm[^;]*;/,
+  'debe derivar una sola bandera de readiness online desde la decisión pura',
+);
+assert.match(
+  sale,
+  /const refreshInventoryAuthority = React\.useCallback\([\s\S]*?loadProductsAuthoritative\(warehouseId\)[\s\S]*?React\.useEffect\(\(\) => \{[\s\S]*?saleStockEnforcement\.shouldRefresh[\s\S]*?refreshInventoryAuthority\(\)/,
+  'volver online con inventario no autoritativo debe disparar refresh coalescido',
+);
+assert.match(
+  sale,
+  /useFocusEffect\([\s\S]*?shouldRefreshProductsOnFocus\([\s\S]*?\) && isOnline\)[\s\S]*?loadProductsAuthoritative\(warehouseId!\)/,
+  'el refresh por foco debe compartir la API autoritativa coalescida y no duplicar transporte',
+);
+
 // La línea congela precio y procedencia; los snapshots legacy siguen siendo válidos.
 assert.match(visitStore, /priceSource\?:\s*'prepared_customer'\s*\|\s*'last_known_customer'\s*\|\s*'public_fallback'/);
 assert.match(visitStore, /priceCapturedAtMs\?:\s*number\s*\|\s*null/);
@@ -262,6 +289,63 @@ assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
   'la rama offline (enqueue) va antes del createSale online');
 assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhotos/.test(sale),
   'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
+
+const confirmBody = extractBracedBlockAfter(sale, 'async function handleConfirm()');
+const authorityGuardIdx = confirmBody.indexOf('if (!liveStockEnforcement.allowConfirm)');
+const capturedStockGuardIdx = confirmBody.indexOf('if (!liveHasStock)');
+const freshStockGuardIdx = confirmBody.indexOf('findFreshStockIssues(');
+assert(
+  authorityGuardIdx >= 0
+    && capturedStockGuardIdx > authorityGuardIdx
+    && freshStockGuardIdx > authorityGuardIdx,
+  'handleConfirm debe resolver autoridad antes de cualquier alerta de stock insuficiente',
+);
+assert.match(
+  confirmBody,
+  /await refreshInventoryAuthority\(\);[\s\S]*?liveStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline:\s*useSyncStore\.getState\(\)\.isOnline,[\s\S]*?inventoryFreshness:\s*useProductStore\.getState\(\)\.inventoryFreshness/,
+  'después del refresh debe releer conectividad y autoridad vivas antes de continuar',
+);
+assert.match(
+  confirmBody,
+  /getStockIssues\(\{\s*enforceStock:\s*liveStockEnforcement\.enforceFreshStock,?\s*\}\)/,
+  'la validación capturada debe usar la política viva y conservar cantidades positivas offline',
+);
+
+assert.match(
+  sale,
+  /disabled=\{[^}]*!onlineInventoryReady[^}]*\}/,
+  'Agregar producto debe bloquearse online hasta tener inventario autoritativo',
+);
+assert.match(
+  sale,
+  /label=\{inventoryAuthorityRefreshing \? 'Actualizando inventario' : saleConfirmButtonLabel\(/,
+  'Confirmar debe mostrar el estado de actualización de inventario',
+);
+assert.match(
+  sale,
+  /disabled=\{saleConfirmed \|\| !onlineInventoryReady\}/,
+  'Confirmar debe bloquearse online mientras falta autoridad',
+);
+
+const offlineRecoveryIdx = sale.indexOf('await persistAmbiguousSaleRecovery({');
+const recentRecordIdx = sale.indexOf('await recordRecentProducts(saleLines);', offlineRecoveryIdx);
+const offlineTicketIdx = sale.indexOf('await saveSaleTicketSnapshot(', offlineRecoveryIdx);
+assert(
+  offlineRecoveryIdx >= 0
+    && recentRecordIdx > offlineRecoveryIdx
+    && offlineTicketIdx > recentRecordIdx,
+  'productos recientes deben registrarse sólo después de persistir durablemente intent y cola',
+);
+assert.match(
+  sale.slice(offlineRecoveryIdx, offlineTicketIdx),
+  /try \{[\s\S]*?await recordRecentProducts\(saleLines\);[\s\S]*?\} catch \(recentError\) \{[\s\S]*?logWarn\(/,
+  'fallar al guardar productos recientes debe ser best-effort y no revertir la venta',
+);
+assert.doesNotMatch(
+  sale.slice(offlineRecoveryIdx, offlineTicketIdx),
+  /recordRecentProducts\([^)]*price/,
+  'la pantalla no debe reutilizar precios de cliente al registrar productos recientes',
+);
 // No se confirma offline como venta: el rótulo se deriva del estado de sync.
 assert(sale.includes('saleConfirmButtonLabel') && sale.includes('getSaleSyncState'),
   'la etiqueta del botón refleja pendiente/enviado/error, no "confirmado" offline');
@@ -289,8 +373,12 @@ assert(sale.includes('describeSaleOfflineUx'), 'venta debe avisar offline antes 
 assert(sale.includes('saleOffline.showBanner') && sale.includes('AlertBanner'),
   'debe mostrar banner offline en la pantalla de venta');
 assert(sale.includes('saleOffline.buttonHint'), 'debe mostrar hint offline bajo el botón');
-// El botón NO se deshabilita por offline (solo por saleConfirmed).
-assert(/disabled=\{saleConfirmed\}/.test(sale),
-  'el boton Confirmar no debe deshabilitarse por offline (solo por saleConfirmed)');
+// El readiness mantiene habilitada la venta explícitamente offline, pero
+// bloquea la transición online sin autoridad.
+assert.match(
+  sale,
+  /const onlineInventoryReady = saleStockEnforcement\.allowConfirm[\s\S]*?isOnline === false/,
+  'el botón debe conservar la venta offline habilitada por la decisión explícita',
+);
 
 console.log('offline sale wiring tests: ok');

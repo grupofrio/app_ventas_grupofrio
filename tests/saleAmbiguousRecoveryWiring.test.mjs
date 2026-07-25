@@ -180,7 +180,27 @@ assert.match(
   /shouldResumeAfterSale\(\{[\s\S]*?saleReadyToContinue,[\s\S]*?hasQueuedSaleOrderEvidence:/,
   'la decision de reanudacion recibe el marker durable y la evidencia de cola',
 );
-const resumeEffect = blockAfter(sale, 'React.useEffect(() =>');
+const resumeDecisionIndex = sale.indexOf('if (shouldResumeAfterSale({');
+assert.notEqual(resumeDecisionIndex, -1, 'debe existir la decisión de reanudación');
+const resumeEffectMarkerIndex = sale.lastIndexOf(
+  'React.useEffect(() =>',
+  resumeDecisionIndex,
+);
+assert.notEqual(
+  resumeEffectMarkerIndex,
+  -1,
+  'la decisión de reanudación debe vivir en un efecto',
+);
+const resumeEffect = blockAfter(
+  sale,
+  'React.useEffect(() =>',
+  resumeEffectMarkerIndex,
+);
+assert(
+  resumeEffect.openBraceIndex < resumeDecisionIndex
+    && resumeDecisionIndex < resumeEffect.closeBraceIndex,
+  'el efecto localizado debe contener shouldResumeAfterSale',
+);
 const resumeEffectEnd = sale.indexOf(']);', resumeEffect.closeBraceIndex);
 assert.notEqual(resumeEffectEnd, -1, 'el efecto de reanudacion debe cerrar sus dependencias');
 const resumeEffectDependencies = sale.slice(resumeEffect.closeBraceIndex + 1, resumeEffectEnd);

@@ -32,6 +32,7 @@ import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
+import { decideSaleStockEnforcement } from '../../src/services/saleStockEnforcement';
 import { getInsufficientStockDetail, describeInsufficientStock } from '../../src/services/insufficientStock';
 import { insufficientStockActionHint } from '../../src/services/secondaryFlowCopy';
 import {
@@ -41,7 +42,7 @@ import {
 } from '../../src/services/pricelist';
 import { decideSalePricelist } from '../../src/services/salePricelistDecision';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
-import { logError, logInfo } from '../../src/utils/logger';
+import { logError, logInfo, logWarn } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 import {
@@ -83,6 +84,8 @@ function SaleScreenInner() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
+  const recordRecentProducts = useProductStore((s) => s.recordRecentProducts);
   const inventoryFreshness = useProductStore((s) => s.inventoryFreshness);
   const recentProductCount = useProductStore((s) => s.recentProducts.length);
   // BLD-20260424-LOOP: pasamos productCount y lastSync al guard del
@@ -120,6 +123,9 @@ function SaleScreenInner() {
   const [lastSaleTicketId, setLastSaleTicketId] = React.useState<string | null>(null);
   const [afterSaleAction, setAfterSaleAction] = React.useState<'checkout' | 'route' | null>(null);
   const [saleSubmitting, setSaleSubmitting] = React.useState(false);
+  const [inventoryAuthorityRefreshing, setInventoryAuthorityRefreshing] = React.useState(false);
+  const [inventoryAuthorityRefreshFailed, setInventoryAuthorityRefreshFailed] = React.useState(false);
+  const inventoryAuthorityRefreshGenerationRef = React.useRef(0);
   const saleConfirmationSingleFlightRef = React.useRef<
     ReturnType<typeof createSaleConfirmationSingleFlight> | null
   >(null);
@@ -127,6 +133,75 @@ function SaleScreenInner() {
     saleConfirmationSingleFlightRef.current = createSaleConfirmationSingleFlight();
   }
   const saleConfirmationSingleFlight = saleConfirmationSingleFlightRef.current;
+  const saleStockEnforcement = decideSaleStockEnforcement({
+    isOnline,
+    policy: 'offline_sale',
+    inventoryFreshness,
+  });
+  const onlineInventoryReady = saleStockEnforcement.allowConfirm
+    && (isOnline === false || (!isLoadingProducts && !inventoryAuthorityRefreshing));
+
+  const refreshInventoryAuthority = React.useCallback(async (): Promise<boolean> => {
+    const refreshGeneration = ++inventoryAuthorityRefreshGenerationRef.current;
+    const liveBeforeRefresh = decideSaleStockEnforcement({
+      isOnline: useSyncStore.getState().isOnline,
+      policy: 'offline_sale',
+      inventoryFreshness: useProductStore.getState().inventoryFreshness,
+    });
+    if (!liveBeforeRefresh.shouldRefresh) {
+      if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
+        setInventoryAuthorityRefreshing(false);
+        setInventoryAuthorityRefreshFailed(false);
+      }
+      return liveBeforeRefresh.allowConfirm;
+    }
+    if (typeof warehouseId !== 'number' || warehouseId <= 0) {
+      if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
+        setInventoryAuthorityRefreshing(false);
+        setInventoryAuthorityRefreshFailed(true);
+      }
+      return false;
+    }
+
+    setInventoryAuthorityRefreshing(true);
+    setInventoryAuthorityRefreshFailed(false);
+    try {
+      await loadProductsAuthoritative(warehouseId);
+    } catch (error) {
+      logWarn('inventory', 'sale_authoritative_refresh_failed', {
+        message: safeUnknownErrorMessage(
+          error,
+          'Error desconocido al actualizar inventario.',
+        ),
+      });
+    }
+
+    const liveAfterRefresh = decideSaleStockEnforcement({
+      isOnline: useSyncStore.getState().isOnline,
+      policy: 'offline_sale',
+      inventoryFreshness: useProductStore.getState().inventoryFreshness,
+    });
+    if (refreshGeneration === inventoryAuthorityRefreshGenerationRef.current) {
+      setInventoryAuthorityRefreshing(false);
+      setInventoryAuthorityRefreshFailed(
+        useSyncStore.getState().isOnline === true && !liveAfterRefresh.allowConfirm,
+      );
+    }
+    return liveAfterRefresh.allowConfirm;
+  }, [loadProductsAuthoritative, warehouseId]);
+
+  React.useEffect(() => {
+    if (!saleStockEnforcement.shouldRefresh) {
+      inventoryAuthorityRefreshGenerationRef.current += 1;
+      setInventoryAuthorityRefreshing(false);
+      setInventoryAuthorityRefreshFailed(false);
+      return;
+    }
+    void refreshInventoryAuthority();
+    return () => {
+      inventoryAuthorityRefreshGenerationRef.current += 1;
+    };
+  }, [refreshInventoryAuthority, saleStockEnforcement.shouldRefresh]);
 
   useFocusEffect(
     useCallback(() => {
@@ -135,10 +210,19 @@ function SaleScreenInner() {
         isLoadingProducts,
         productCount,
         productsLastSync,
-      )) {
-        void loadProducts(warehouseId!);
+      ) && isOnline) {
+        // The connectivity-authority effect may request the same refresh in
+        // this render. The store coalesces both calls by exact catalog context.
+        void loadProductsAuthoritative(warehouseId!);
       }
-    }, [warehouseId, isLoadingProducts, productCount, productsLastSync, loadProducts])
+    }, [
+      warehouseId,
+      isLoadingProducts,
+      productCount,
+      productsLastSync,
+      isOnline,
+      loadProductsAuthoritative,
+    ])
   );
 
   if (!stop) {
@@ -173,7 +257,7 @@ function SaleScreenInner() {
   const setSaleRecoveryPersistenceFailed = useVisitStore(
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
-  const enforceCapturedStock = isOnline && inventoryFreshness === 'authoritative';
+  const enforceCapturedStock = saleStockEnforcement.enforceFreshStock;
   const stockIssues = getStockIssues({ enforceStock: enforceCapturedStock });
   const hasStock = !hasStockIssues({ enforceStock: enforceCapturedStock });
   const implicitAnalytics = resolveImplicitSaleAnalytics({
@@ -183,9 +267,6 @@ function SaleScreenInner() {
   const hasWarehouse = typeof warehouseId === 'number' && warehouseId > 0;
   const routeLoadState = buildRouteLoadAcceptanceState(plan);
   const canStartSale = canStartSaleWithRouteLoad(plan);
-  const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
-                     && hasAnalyticSelection && hasWarehouse
-                     && hasStock && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
   // Aviso offline + estado del pedido. Con pedido offline pendiente (S1), el
   // pedido se encola como sale_order y su estado se rastrea por saleOperationId.
@@ -277,10 +358,39 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!hasStock) {
+    let liveStockEnforcement = decideSaleStockEnforcement({
+      isOnline: useSyncStore.getState().isOnline,
+      policy: 'offline_sale',
+      inventoryFreshness: useProductStore.getState().inventoryFreshness,
+    });
+    if (!liveStockEnforcement.allowConfirm) {
+      if (liveStockEnforcement.shouldRefresh) {
+        await refreshInventoryAuthority();
+        liveStockEnforcement = decideSaleStockEnforcement({
+          isOnline: useSyncStore.getState().isOnline,
+          policy: 'offline_sale',
+          inventoryFreshness: useProductStore.getState().inventoryFreshness,
+        });
+      }
+      if (!liveStockEnforcement.allowConfirm) {
+        Alert.alert(
+          'Inventario pendiente',
+          useSyncStore.getState().isOnline === true
+            ? 'No pudimos validar el inventario actual. Revisa tu conexión y toca Reintentar inventario.'
+            : 'Estamos verificando la conexión antes de aplicar la política de inventario.',
+        );
+        return;
+      }
+    }
+
+    const liveStockIssues = useVisitStore.getState().getStockIssues({
+      enforceStock: liveStockEnforcement.enforceFreshStock,
+    });
+    const liveHasStock = liveStockIssues.length === 0;
+    if (!liveHasStock) {
       Alert.alert(
         'Stock insuficiente',
-        stockIssues.map((i) =>
+        liveStockIssues.map((i) =>
           `${i.name}: pides ${i.requested}, disponible ${i.available}`
         ).join('\n'),
       );
@@ -291,7 +401,7 @@ function SaleScreenInner() {
     // del carrito usa el stock capturado al agregar, que pudo quedar obsoleto).
     // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
     // localmente ni reemplaza la validación backend.
-    const freshIssues = enforceCapturedStock
+    const freshIssues = liveStockEnforcement.enforceFreshStock
       ? findFreshStockIssues(saleLines, useProductStore.getState().products)
       : [];
     if (freshIssues.length > 0) {
@@ -306,7 +416,8 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!canConfirm) {
+    if (!(saleLines.length > 0 && salePhotoTaken && salePaymentMethod
+      && hasAnalyticSelection && hasWarehouse)) {
       const missing = [];
       if (saleLines.length === 0) missing.push('productos');
       if (!salePhotoTaken) missing.push('foto de entrega');
@@ -489,6 +600,17 @@ function SaleScreenInner() {
         );
         return;
       }
+      try {
+        await recordRecentProducts(saleLines);
+      } catch (recentError) {
+        logWarn('inventory', 'offline_sale_recent_products_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            recentError,
+            'Error desconocido al registrar productos recientes.',
+          ),
+        });
+      }
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
       await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
       setLastSaleTicketId(operationId);
@@ -589,6 +711,18 @@ function SaleScreenInner() {
           'No pudimos guardar de forma segura el pedido. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente.',
         );
         return;
+      }
+
+      try {
+        await recordRecentProducts(saleLines);
+      } catch (recentError) {
+        logWarn('inventory', 'ambiguous_sale_recent_products_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            recentError,
+            'Error desconocido al registrar productos recientes.',
+          ),
+        });
       }
 
       void processQueue().catch((processError) => logError(
@@ -807,9 +941,26 @@ function SaleScreenInner() {
           small
           fullWidth
           onPress={() => setPickerVisible(true)}
-          disabled={isLoadingProducts || (!!productError && products.length === 0 && recentProductCount === 0)}
+          disabled={!onlineInventoryReady || (!!productError && products.length === 0 && recentProductCount === 0)}
           style={{ marginVertical: 10 }}
         />
+        {inventoryAuthorityRefreshing && (
+          <Text style={styles.validationHint}>Actualizando inventario</Text>
+        )}
+        {inventoryAuthorityRefreshFailed && isOnline && !saleStockEnforcement.allowConfirm && (
+          <View style={styles.inventoryRefreshWarning}>
+            <Text style={styles.validationHint}>
+              No pudimos validar el inventario actual. Revisa tu conexión para continuar online.
+            </Text>
+            <Button
+              label="Reintentar inventario"
+              variant="secondary"
+              small
+              fullWidth
+              onPress={() => { void refreshInventoryAuthority(); }}
+            />
+          </View>
+        )}
         <ProductPicker
           visible={pickerVisible}
           onClose={() => setPickerVisible(false)}
@@ -945,7 +1096,7 @@ function SaleScreenInner() {
             error (pedido offline) · guardar pendiente (offline pre-confirm) ·
             confirmado (venta online directa) · confirmar. */}
         <Button
-          label={saleConfirmButtonLabel({
+          label={inventoryAuthorityRefreshing ? 'Actualizando inventario' : saleConfirmButtonLabel({
             saleSyncStatus: saleSync.status,
             isOnline,
             saleConfirmed,
@@ -954,7 +1105,7 @@ function SaleScreenInner() {
           })}
           onPress={handleConfirm}
           fullWidth
-          disabled={saleConfirmed}
+          disabled={saleConfirmed || !onlineInventoryReady}
           loading={false}
           style={{ marginTop: saleConfirmed ? 0 : 14 }}
         />
@@ -1100,6 +1251,10 @@ const styles = StyleSheet.create({
   },
   validationHint: {
     fontSize: 11, color: colors.warning, textAlign: 'center', marginTop: 8,
+  },
+  inventoryRefreshWarning: {
+    gap: 8,
+    marginBottom: 8,
   },
   postSaleActions: {
     gap: 8,

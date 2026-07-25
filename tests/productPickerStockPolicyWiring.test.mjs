@@ -6,6 +6,10 @@ const root = process.cwd();
 const picker = readFileSync(resolve(root, 'src/components/domain/ProductPicker.tsx'), 'utf8');
 const visitStore = readFileSync(resolve(root, 'src/stores/useVisitStore.ts'), 'utf8');
 const sale = readFileSync(resolve(root, 'app/sale/[stopId].tsx'), 'utf8');
+const saleStockEnforcement = readFileSync(
+  resolve(root, 'src/services/saleStockEnforcement.ts'),
+  'utf8',
+);
 const presale = readFileSync(resolve(root, 'app/presale.tsx'), 'utf8');
 const consignment = readFileSync(resolve(root, 'app/consignment/[stopId].tsx'), 'utf8');
 
@@ -42,7 +46,21 @@ assert.match(visitStore, /getStockIssues:\s*\(options\?:\s*\{\s*enforceStock\?:\
 assert.match(visitStore, /options\?\.enforceStock\s*!==\s*false/);
 
 assert.match(sale, /const inventoryFreshness = useProductStore\(\(s\) => s\.inventoryFreshness\)/);
-assert.match(sale, /const enforceCapturedStock\s*=\s*isOnline\s*&&\s*inventoryFreshness\s*===\s*'authoritative'/);
+assert.match(
+  sale,
+  /const saleStockEnforcement = decideSaleStockEnforcement\(\{[\s\S]*?isOnline,[\s\S]*?policy:\s*'offline_sale',[\s\S]*?inventoryFreshness,[\s\S]*?\}\)/,
+  'venta debe decidir conectividad y autoridad mediante el helper puro',
+);
+assert.match(
+  sale,
+  /const enforceCapturedStock\s*=\s*saleStockEnforcement\.enforceFreshStock/,
+  'la pantalla debe consumir el resultado del helper sin duplicar la fórmula',
+);
+assert.match(
+  saleStockEnforcement,
+  /if \(input\.policy === 'strict'\)[\s\S]*?allowConfirm:\s*true,[\s\S]*?shouldRefresh:\s*false,[\s\S]*?enforceFreshStock:\s*true/,
+  'la política estricta debe conservar su validación de stock existente',
+);
 assert.match(sale, /stockPolicy="offline_sale"/);
 assert.match(sale, /updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*enforceCapturedStock\s*\},?\s*\)/);
 assert.match(sale, /hasStockIssues\(\{\s*enforceStock:\s*enforceCapturedStock\s*\}\)/);

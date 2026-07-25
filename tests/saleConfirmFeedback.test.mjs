@@ -21,8 +21,8 @@ function main() {
   );
   assert.match(
     saleScreen,
-    /disabled=\{saleConfirmed\}/,
-    'Confirmar Pedido solo debe deshabilitarse despues de guardar para evitar doble tap',
+    /disabled=\{saleConfirmed \|\| !onlineInventoryReady\}/,
+    'Confirmar Pedido debe conservar el bloqueo doble tap y sumar el guard de autoridad online',
   );
   assert.match(
     saleScreen,

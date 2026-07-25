@@ -95,6 +95,16 @@ assert.equal(
 );
 assert.match(
   businessFailureBranch,
+  /const\s+msg\s*=\s*describeSyncFailureForUser\(error, classification\)/,
+  'todo fallo persiste y registra copy seguro derivado del clasificador',
+);
+assert.doesNotMatch(
+  businessFailureBranch,
+  /rawMessage|error\s+instanceof\s+Error\s*\?\s*error\.message|\bString\s*\(\s*error\s*\)/,
+  'la rama de negocio nunca vuelve a persistir o loguear el error técnico raw',
+);
+assert.match(
+  businessFailureBranch,
   /await\s+get\(\)\.markDead\(\s*item\.id,\s*msg,\s*newRetries,\s*classification\.errorCode,?\s*\)/,
   'el estado dead recibe el código durable del mismo resultado de clasificación',
 );

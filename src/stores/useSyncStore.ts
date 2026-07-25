@@ -1068,10 +1068,7 @@ async function processOneItemUnheld(
     }
 
     const classification = classifySyncFailure(item, error);
-    const rawMessage = error instanceof Error ? error.message : 'Sync error';
-    const msg = classification.errorCode === 'insufficient_stock'
-      ? describeSyncFailureForUser(error, classification)
-      : rawMessage;
+    const msg = describeSyncFailureForUser(error, classification);
     const newRetries = item.retries + 1;
     const shouldRetry = classification.retryAutomatically;
 

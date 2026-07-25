@@ -75,6 +75,7 @@ export function classifySyncFailure(
       || (metadata.httpStatus !== undefined
         && metadata.httpStatus >= 500
         && metadata.httpStatus <= 599)
+      || isRetryableSyncErrorMessage(metadata.message)
       || (saleOutcome.kind === 'ambiguous_result'
         && ((directCode !== null && directCode !== 'insufficient_stock')
           || (errorName !== null && errorName !== 'error')));

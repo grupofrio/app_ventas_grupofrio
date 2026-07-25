@@ -55,6 +55,8 @@ test('keeps ambiguous sale and network failures automatically retryable', () => 
       responseReceived: false,
       code: 'insufficient_stock',
     }),
+    new Error('Network request failed: stock insuficiente para completar la venta'),
+    new Error('Timeout al enviar: stock insuficiente'),
   ]) {
     assert.deepEqual(classifySyncFailure(sale, error), {
       retryAutomatically: true,
@@ -120,4 +122,29 @@ test('builds bounded human-readable stock detail without exposing the raw error'
   assert.match(message, /pediste 4, disponible 1/);
   assert.doesNotMatch(message, /Bearer|super-secret|odoo\.internal/i);
   assert(message.length <= 500);
+});
+
+test('never exposes raw validation or network diagnostics in the persisted user message', () => {
+  const validation = Object.assign(
+    new Error('Authorization: Bearer validation-secret https://odoo.internal/trace'),
+    { httpStatus: 422, responseReceived: true, code: 'validation_error' },
+  );
+  const network = new Error(
+    'Network request failed Authorization: Bearer network-secret https://odoo.internal/trace',
+  );
+
+  const validationMessage = describeSyncFailureForUser(
+    validation,
+    classifySyncFailure(sale, validation),
+  );
+  const networkMessage = describeSyncFailureForUser(
+    network,
+    classifySyncFailure(sale, network),
+  );
+
+  assert.equal(validationMessage, 'La operación fue rechazada y requiere atención.');
+  assert.equal(networkMessage, 'No se pudo sincronizar. Se reintentará automáticamente.');
+  for (const message of [validationMessage, networkMessage]) {
+    assert.doesNotMatch(message, /Bearer|secret|odoo\.internal|https?:\/\//i);
+  }
 });

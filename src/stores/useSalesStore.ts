@@ -52,13 +52,16 @@ export const useSalesStore = create<SalesState>((set, get) => {
     lastLoadedAt: null,
     loadTodaySales,
 
-    reset: () => set({
-      summary: EMPTY_SUMMARY,
-      orders: [],
-      count: 0,
-      isLoading: false,
-      error: null,
-      lastLoadedAt: null,
-    }),
+    reset: () => {
+      loadTodaySales.invalidate();
+      set({
+        summary: EMPTY_SUMMARY,
+        orders: [],
+        count: 0,
+        isLoading: false,
+        error: null,
+        lastLoadedAt: null,
+      });
+    },
   };
 });

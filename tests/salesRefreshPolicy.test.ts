@@ -219,6 +219,56 @@ test('coalesces every call made during an active sales request', async () => {
   assert.equal(listCalls, 1, 'force no debe programar una segunda carga');
 });
 
+test('publishes the active promise before loading state can reenter', async () => {
+  const summary = deferred<TestSummary>();
+  const list = deferred<{ count: number; orders: TestOrder[] }>();
+  let summaryCalls = 0;
+  let listCalls = 0;
+  let didReenter = false;
+  let reentrantPromise: Promise<void> | undefined;
+  let state: TestSalesState = {
+    summary: { total: 1 },
+    orders: [],
+    count: 0,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: null,
+  };
+  let load!: ReturnType<typeof createSalesLoadCoordinator<TestSummary, TestOrder>>;
+
+  load = createSalesLoadCoordinator({
+    fetchSummary: () => {
+      summaryCalls += 1;
+      return summary.promise;
+    },
+    fetchList: () => {
+      listCalls += 1;
+      return list.promise;
+    },
+    getState: () => state,
+    setState: (patch) => {
+      state = { ...state, ...patch };
+      if (patch.isLoading === true && !didReenter) {
+        didReenter = true;
+        reentrantPromise = load({ force: true });
+      }
+    },
+  });
+
+  const first = load();
+
+  assert.strictEqual(reentrantPromise, first);
+  for (let turn = 0; turn < 20 && summaryCalls === 0; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(summaryCalls, 1);
+  assert.equal(listCalls, 1);
+
+  summary.resolve({ total: 2 });
+  list.resolve({ count: 1, orders: [{ id: 2 }] });
+  await first;
+});
+
 test('preserves prior sales data when loading fails', async () => {
   const priorSummary = { total: 25 };
   const priorOrders = [{ id: 7 }];
@@ -302,6 +352,142 @@ test('keeps the load coalesced until both requests settle after one fails', asyn
   list.resolve({ count: 0, orders: [] });
   await first;
   assert.equal(state.error, 'summary failed');
+});
+
+test('invalidates an old generation before a reset and isolates the next load', async () => {
+  const summaries = [
+    deferred<TestSummary>(),
+    deferred<TestSummary>(),
+  ];
+  const lists = [
+    deferred<{ count: number; orders: TestOrder[] }>(),
+    deferred<{ count: number; orders: TestOrder[] }>(),
+  ];
+  let summaryCalls = 0;
+  let listCalls = 0;
+  let state: TestSalesState = {
+    summary: { total: 10 },
+    orders: [{ id: 1 }],
+    count: 1,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: 100,
+  };
+
+  const load = createSalesLoadCoordinator({
+    fetchSummary: () => summaries[summaryCalls++].promise,
+    fetchList: () => lists[listCalls++].promise,
+    getState: () => state,
+    setState: (patch) => {
+      state = { ...state, ...patch };
+    },
+    now: () => 300,
+  });
+
+  const oldRequest = load();
+  for (let turn = 0; turn < 20 && summaryCalls < 1; turn += 1) {
+    await Promise.resolve();
+  }
+
+  load.invalidate();
+  state = {
+    summary: { total: 0 },
+    orders: [],
+    count: 0,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: null,
+  };
+
+  const newRequest = load({ force: true });
+  assert.notStrictEqual(newRequest, oldRequest);
+  for (let turn = 0; turn < 20 && summaryCalls < 2; turn += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(summaryCalls, 2);
+  assert.equal(listCalls, 2);
+
+  const stateWhileNewRequestIsActive = state;
+  summaries[0].resolve({ total: 999 });
+  lists[0].resolve({ count: 1, orders: [{ id: 999 }] });
+  await oldRequest;
+  assert.strictEqual(state, stateWhileNewRequestIsActive);
+  assert.strictEqual(load(), newRequest);
+
+  summaries[1].resolve({ total: 20 });
+  lists[1].resolve({ count: 1, orders: [{ id: 2 }] });
+  await newRequest;
+  assert.deepEqual(state, {
+    summary: { total: 20 },
+    orders: [{ id: 2 }],
+    count: 1,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: 300,
+  });
+});
+
+test('a stale failure cannot publish an error or clear the new active request', async () => {
+  const summaries = [
+    deferred<TestSummary>(),
+    deferred<TestSummary>(),
+  ];
+  const lists = [
+    deferred<{ count: number; orders: TestOrder[] }>(),
+    deferred<{ count: number; orders: TestOrder[] }>(),
+  ];
+  let summaryCalls = 0;
+  let listCalls = 0;
+  let state: TestSalesState = {
+    summary: { total: 0 },
+    orders: [],
+    count: 0,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: null,
+  };
+
+  const load = createSalesLoadCoordinator({
+    fetchSummary: () => summaries[summaryCalls++].promise,
+    fetchList: () => lists[listCalls++].promise,
+    getState: () => state,
+    setState: (patch) => {
+      state = { ...state, ...patch };
+    },
+    now: () => 400,
+  });
+
+  const oldRequest = load();
+  for (let turn = 0; turn < 20 && summaryCalls < 1; turn += 1) {
+    await Promise.resolve();
+  }
+  load.invalidate();
+  state = {
+    summary: { total: 0 },
+    orders: [],
+    count: 0,
+    isLoading: false,
+    error: null,
+    lastLoadedAt: null,
+  };
+
+  const newRequest = load();
+  for (let turn = 0; turn < 20 && summaryCalls < 2; turn += 1) {
+    await Promise.resolve();
+  }
+  const stateWhileNewRequestIsActive = state;
+
+  summaries[0].reject(new Error('stale failure'));
+  lists[0].resolve({ count: 0, orders: [] });
+  await oldRequest;
+  assert.strictEqual(state, stateWhileNewRequestIsActive);
+  assert.strictEqual(load({ force: true }), newRequest);
+
+  summaries[1].resolve({ total: 40 });
+  lists[1].resolve({ count: 1, orders: [{ id: 4 }] });
+  await newRequest;
+  assert.equal(state.error, null);
+  assert.equal(state.summary.total, 40);
 });
 
 test('force only bypasses an idle cache skip', async () => {

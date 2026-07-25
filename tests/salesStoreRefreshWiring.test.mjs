@@ -32,5 +32,10 @@ assert.doesNotMatch(
   /if\s*\(get\(\)\.isLoading\)\s*return/,
   'el store no debe devolver undefined durante una carga activa',
 );
+assert.match(
+  store,
+  /reset:\s*\(\)\s*=>\s*\{[\s\S]*?loadTodaySales\.invalidate\(\);[\s\S]*?set\(\{/,
+  'reset debe invalidar la carga anterior antes de publicar el estado inicial',
+);
 
 console.log('sales store refresh wiring tests: ok');

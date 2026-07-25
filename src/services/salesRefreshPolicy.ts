@@ -25,6 +25,11 @@ export interface SalesLoadCoordinatorDependencies<TSummary, TOrder> {
   shouldSkip?: (state: SalesLoadState<TSummary, TOrder>) => boolean;
 }
 
+export interface SalesLoadCoordinator {
+  (options?: SalesLoadOptions): Promise<void>;
+  invalidate: () => void;
+}
+
 type QueueStatus = 'pending' | 'syncing' | 'done' | 'error' | 'dead';
 
 interface QueueCandidate {
@@ -119,25 +124,75 @@ function salesLoadErrorMessage(error: unknown): string {
 
 export function createSalesLoadCoordinator<TSummary, TOrder>(
   dependencies: SalesLoadCoordinatorDependencies<TSummary, TOrder>,
-): (options?: SalesLoadOptions) => Promise<void> {
-  let activeRequest: Promise<void> | null = null;
+): SalesLoadCoordinator {
+  interface ActiveRequest {
+    promise: Promise<void>;
+    resolve: () => void;
+    generation: number;
+  }
 
-  return (options) => {
-    if (activeRequest) return activeRequest;
+  let activeRequest: ActiveRequest | null = null;
+  let generation = 0;
 
-    const currentState = dependencies.getState();
-    if (!options?.force && dependencies.shouldSkip?.(currentState)) {
-      return Promise.resolve();
+  const load = ((options?: SalesLoadOptions) => {
+    if (activeRequest) return activeRequest.promise;
+
+    let resolveRequest!: () => void;
+    const requestPromise = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const request: ActiveRequest = {
+      promise: requestPromise,
+      resolve: resolveRequest,
+      generation,
+    };
+    activeRequest = request;
+
+    const isCurrent = () => (
+      request.generation === generation
+      && activeRequest === request
+    );
+    const finish = () => {
+      if (activeRequest === request) {
+        activeRequest = null;
+      }
+      request.resolve();
+    };
+
+    try {
+      const currentState = dependencies.getState();
+      if (!options?.force && dependencies.shouldSkip?.(currentState)) {
+        finish();
+        return requestPromise;
+      }
+
+      dependencies.setState({ isLoading: true, error: null });
+      if (!isCurrent()) {
+        finish();
+        return requestPromise;
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        try {
+          dependencies.setState({
+            isLoading: false,
+            error: salesLoadErrorMessage(error),
+          });
+        } catch {
+          // The state sink itself failed; still release the single-flight gate.
+        }
+      }
+      finish();
+      return requestPromise;
     }
 
-    dependencies.setState({ isLoading: true, error: null });
-
-    const request = Promise.resolve()
+    const run = Promise.resolve()
       .then(() => Promise.allSettled([
         Promise.resolve().then(dependencies.fetchSummary),
         Promise.resolve().then(dependencies.fetchList),
       ]))
       .then(([summaryResult, listResult]) => {
+        if (!isCurrent()) return;
         if (summaryResult.status === 'rejected') {
           throw summaryResult.reason;
         }
@@ -155,18 +210,21 @@ export function createSalesLoadCoordinator<TSummary, TOrder>(
         });
       })
       .catch((error: unknown) => {
+        if (!isCurrent()) return;
         dependencies.setState({
           isLoading: false,
           error: salesLoadErrorMessage(error),
         });
-      })
-      .finally(() => {
-        if (activeRequest === request) {
-          activeRequest = null;
-        }
       });
 
-    activeRequest = request;
-    return request;
+    void run.then(finish, finish);
+    return requestPromise;
+  }) as SalesLoadCoordinator;
+
+  load.invalidate = () => {
+    generation += 1;
+    activeRequest = null;
   };
+
+  return load;
 }

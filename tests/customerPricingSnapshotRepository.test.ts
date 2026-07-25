@@ -6,6 +6,7 @@ import {
   activatePreparedPricingRun,
   emptyPricingSnapshotState,
   recordLastKnownServerPrices,
+  replacePreparedPricingRun,
   resolveCapturedCustomerPrice,
   type PricingSnapshotStateV1,
 } from '../src/services/customerPricingSnapshot.ts';
@@ -846,6 +847,105 @@ test('publication compacts unreferenced snapshots but preserves active state and
   assert.deepEqual(Object.keys(persisted!.snapshots), [activeSnapshotId]);
   assert.equal(Object.keys(persisted!.requestedMappings).length, 2);
   assert.equal(Object.keys(persisted!.lastKnownPrices).length, 2);
+});
+
+test('strict writes and tolerant hydration share mixed-run pointer identity rules', async () => {
+  const initial = activatePreparedPricingRun(emptyPricingSnapshotState(), {
+    companyId: 3,
+    planId: 71,
+    preparationRunId: 'prepare-initial',
+    activatedAtMs: 1_100,
+    targets: [
+      {
+        status: 'prepared',
+        partnerId: 11,
+        requestedPricelistId: 7,
+        snapshot: {
+          preparedAtMs: 1_000,
+          validation: {
+            ok: true,
+            resolvedPricelistId: 17,
+            productFingerprint: '101',
+            prices: [[101, 81]],
+          },
+        },
+      },
+      {
+        status: 'failed',
+        partnerId: 12,
+        requestedPricelistId: 8,
+      },
+    ],
+  });
+  const replacement = replacePreparedPricingRun(initial, {
+    companyId: 3,
+    planId: 71,
+    preparationRunId: 'prepare-retry',
+    activatedAtMs: 2_100,
+    targets: [{
+      status: 'prepared',
+      partnerId: 12,
+      requestedPricelistId: 8,
+      snapshot: {
+        preparedAtMs: 2_000,
+        validation: {
+          ok: true,
+          resolvedPricelistId: 18,
+          productFingerprint: '102',
+          prices: [[102, 82]],
+        },
+      },
+    }],
+  });
+  let durable: unknown = null;
+  const repository = createCustomerPricingSnapshotRepository({
+    load: async () => clone(durable),
+    saveStrict: async (state) => {
+      durable = clone(state);
+    },
+  });
+
+  await repository.replace(replacement);
+  assert.deepEqual(
+    Object.keys(repository.getState().snapshots).sort(),
+    ['prepare-initial:3:11:17', 'prepare-retry:3:12:18'],
+  );
+  assert.equal(resolveCapturedCustomerPrice(repository.getState(), {
+    companyId: 3,
+    planId: 71,
+    partnerId: 11,
+    requestedPricelistId: 7,
+    productId: 101,
+    publicPrice: 100,
+  }).source, 'prepared_customer');
+  assert.equal(resolveCapturedCustomerPrice(repository.getState(), {
+    companyId: 3,
+    planId: 71,
+    partnerId: 12,
+    requestedPricelistId: 8,
+    productId: 102,
+    publicPrice: 100,
+  }).source, 'prepared_customer');
+
+  const corrupt = clone(replacement) as any;
+  const oldTarget = corrupt.activeManifest.targets[0];
+  const oldSnapshot = corrupt.snapshots[oldTarget.snapshotId];
+  const forgedSnapshotId = 'forged-run:3:11:17';
+  corrupt.snapshots[forgedSnapshotId] = {
+    ...oldSnapshot,
+    snapshotId: forgedSnapshotId,
+  };
+  oldTarget.snapshotId = forgedSnapshotId;
+
+  await assert.rejects(repository.replace(corrupt), /Invalid customer pricing/);
+
+  const hydrated = await hydrateRawState(corrupt);
+  assert.equal(hydrated.activeManifest!.targets[0].status, 'failed');
+  assert.equal(hydrated.activeManifest!.targets[1].status, 'prepared');
+  assert.deepEqual(
+    Object.keys(hydrated.snapshots),
+    ['prepare-retry:3:12:18'],
+  );
 });
 
 test('boot hydrates durable pricing snapshots before catalog and legacy price caches', () => {

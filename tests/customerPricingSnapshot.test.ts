@@ -6,6 +6,7 @@ import {
   compactPricingSnapshotState,
   emptyPricingSnapshotState,
   recordLastKnownServerPrices,
+  replacePreparedPricingRun,
   resolveCapturedCustomerPrice,
   validateServerPriceSnapshot,
   type PricingSnapshotStateV1,
@@ -733,5 +734,119 @@ test('an older snapshot indexed by a requested key cannot override the active ca
       capturedAtMs: 2_000,
       pricelistId: 81,
     },
+  );
+});
+
+test('a mixed-run replacement manifest resolves only its exact valid snapshot pointers', () => {
+  const initial = activatePreparedPricingRun(emptyPricingSnapshotState(), {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-initial',
+    activatedAtMs: 1_100,
+    targets: [
+      {
+        status: 'prepared',
+        partnerId: 99,
+        requestedPricelistId: 81,
+        snapshot: {
+          preparedAtMs: 1_000,
+          validation: validServerSnapshot([[10, 42]], 81),
+        },
+      },
+      {
+        status: 'failed',
+        partnerId: 99,
+        requestedPricelistId: 90,
+      },
+    ],
+  });
+  const replacement = replacePreparedPricingRun(initial, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-retry',
+    activatedAtMs: 2_100,
+    targets: [{
+      status: 'prepared',
+      partnerId: 99,
+      requestedPricelistId: 90,
+      snapshot: {
+        preparedAtMs: 2_000,
+        validation: validServerSnapshot([[10, 55]], 90),
+      },
+    }],
+  });
+
+  assert.deepEqual(
+    replacement.activeManifest?.targets.map((target) => target.snapshotId),
+    ['run-initial:34:99:81', 'run-retry:34:99:90'],
+  );
+  assert.equal(
+    resolveCapturedCustomerPrice(replacement, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 81,
+      productId: 10,
+      publicPrice: 100,
+    }).source,
+    'prepared_customer',
+  );
+  assert.equal(
+    resolveCapturedCustomerPrice(replacement, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 90,
+      productId: 10,
+      publicPrice: 100,
+    }).source,
+    'prepared_customer',
+  );
+
+  const pointedTarget = replacement.activeManifest!.targets[0]!;
+  const pointedSnapshot = replacement.snapshots[pointedTarget.snapshotId!]!;
+  const forgedSnapshotId = 'forged-run:34:99:81';
+  const identityInconsistent: PricingSnapshotStateV1 = {
+    ...replacement,
+    activeManifest: {
+      ...replacement.activeManifest!,
+      targets: [
+        {
+          ...pointedTarget,
+          snapshotId: forgedSnapshotId,
+        },
+        replacement.activeManifest!.targets[1]!,
+      ],
+    },
+    snapshots: {
+      ...replacement.snapshots,
+      [forgedSnapshotId]: {
+        ...pointedSnapshot,
+        snapshotId: forgedSnapshotId,
+      },
+    },
+  };
+
+  assert.notEqual(
+    resolveCapturedCustomerPrice(identityInconsistent, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 81,
+      productId: 10,
+      publicPrice: 100,
+    }).source,
+    'prepared_customer',
+  );
+  assert.equal(
+    resolveCapturedCustomerPrice(identityInconsistent, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 90,
+      productId: 10,
+      publicPrice: 100,
+    }).source,
+    'prepared_customer',
   );
 });

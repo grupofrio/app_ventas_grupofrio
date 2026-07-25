@@ -5,14 +5,11 @@
  * need to operate offline:
  *   1. plan + stops (useRouteStore.loadPlan)
  *   2. truck inventory (useProductStore.loadProducts)
- *   3. customer-specific prices (preloadRouteCustomerPrices, PR #14)
+ *   3. complete server prices for each customer/requested-list combination
  *
- * Reuses existing services — no new endpoints. Reuses preload concurrency
- * limits and in-flight dedupe added in PR #14, so a manual prepare on top
- * of the auto-preload is still safe (in-flight HIT, no dup RPCs).
- *
- * Failures are captured PER-PARTNER so a single bad client doesn't abort
- * the whole preparation. Vendor sees a "Pendientes: N" + "Reintentar" UI.
+ * Pricing targets settle independently with bounded concurrency, then one
+ * durable manifest is activated atomically. Failures retain the exact
+ * requested pricelist so retry never fetches or replaces a successful pair.
  */
 
 import { create } from 'zustand';
@@ -20,19 +17,26 @@ import { useAuthStore } from './useAuthStore';
 import { useRouteStore } from './useRouteStore';
 import { useProductStore } from './useProductStore';
 import { useSyncStore } from './useSyncStore';
-import {
-  computeCustomerPrices,
-  peekCachedCustomerPrices,
-} from '../services/pricelist';
+import { fetchServerCustomerPricingSnapshot } from '../services/pricelist';
 import {
   buildCustomerNameMap,
-  dedupePartnerIds,
-  PreparationFailure,
+  prepareRoutePricingTargets,
+  type PreparationFailure,
 } from '../services/routePreparationLogic';
-import { schedulePersistPriceCache } from '../services/offlineCache';
+import { buildRoutePricingTargets } from '../services/routePricingTargets';
+import {
+  replacePreparedPricingRun,
+} from '../services/customerPricingSnapshot';
+import {
+  updateCustomerPricingSnapshotState,
+} from '../services/customerPricingSnapshotRepository';
 import { logInfo, logWarn } from '../utils/logger';
 
-const PREPARE_CONCURRENCY = 4; // matches preloadRouteCustomerPrices for parity
+const PREPARE_CONCURRENCY = 4;
+
+function createPreparationRunId(kind: 'prepare' | 'retry'): string {
+  return `route-pricing-${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 interface RoutePreparationState {
   isPreparing: boolean;
@@ -132,9 +136,20 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
 
       // ── Step 3: preload customer prices ──────────────────────────────────
       set({ currentStep: 'Precargando precios' });
-      const partnerIds = dedupePartnerIds(stops);
+      if (
+        typeof auth.companyId !== 'number'
+        || !Number.isInteger(auth.companyId)
+        || auth.companyId <= 0
+      ) {
+        throw new Error('Compañía no disponible para preparar precios.');
+      }
+
+      const targets = buildRoutePricingTargets(stops);
+      const productFingerprint = [...new Set(
+        products.map((product) => product.id),
+      )].sort((left, right) => left - right).join(',');
       const nameMap = buildCustomerNameMap(stops);
-      const total = partnerIds.length;
+      const total = targets.length;
       set({
         customersTotal: total,
         progressTotal: total,
@@ -143,76 +158,39 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
         pricesPrepared: 0,
       });
 
-      const failures: PreparationFailure[] = [];
-      let prepared = 0;
-      let pricesCount = 0;
-
-      // Bounded-concurrency worker pool — same shape as
-      // preloadRouteCustomerPrices in pricelist.ts. We don't just call that
-      // helper because we need per-partner failure granularity for the UI.
-      let cursor = 0;
-      async function worker(): Promise<void> {
-        while (cursor < partnerIds.length) {
-          const idx = cursor++;
-          const partnerId = partnerIds[idx];
-
-          // Skip cached — preload (or another worker) already populated it.
-          const cached = peekCachedCustomerPrices(partnerId, products, {
+      const settled = await prepareRoutePricingTargets({
+        targets,
+        companyId: auth.companyId,
+        planId: plan.plan_id ?? null,
+        preparationRunId: createPreparationRunId('prepare'),
+        concurrency: PREPARE_CONCURRENCY,
+        expectedProductFingerprint: productFingerprint,
+        fetchTarget: (target) =>
+          fetchServerCustomerPricingSnapshot(target.partnerId, products, {
             companyId: auth.companyId,
-          });
-          if (cached) {
-            prepared += 1;
-            pricesCount += cached.size;
-            set({
-              customersPrepared: prepared,
-              pricesPrepared: pricesCount,
-              progressDone: prepared,
-            });
-            continue;
-          }
-
-          try {
-            const map = await computeCustomerPrices(partnerId, products, {
-              companyId: auth.companyId,
-            });
-            prepared += 1;
-            pricesCount += map.size;
-            set({
-              customersPrepared: prepared,
-              pricesPrepared: pricesCount,
-              progressDone: prepared,
-            });
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : 'Error desconocido';
-            failures.push({
-              partnerId,
-              customerName: nameMap.get(partnerId),
-              reason,
-            });
-            // Still advance progressDone so the bar reaches 100%; the
-            // failure card will surface the count separately.
-            set({
-              progressDone: prepared + failures.length,
-              failures: [...failures],
-            });
-            logWarn('general', 'route_prep_partner_failed', { partnerId, reason });
-          }
-        }
+            fallbackPricelistId: target.requestedPricelistId,
+          }),
+        updateState: updateCustomerPricingSnapshotState,
+      });
+      const failures = settled.failures.map((failure) => ({
+        ...failure,
+        customerName: nameMap.get(failure.partnerId),
+      }));
+      for (const failure of failures) {
+        logWarn('general', 'route_prep_target_failed', {
+          partnerId: failure.partnerId,
+          requestedPricelistId: failure.requestedPricelistId,
+          reason: failure.reason,
+        });
       }
-
-      const workerCount = Math.min(PREPARE_CONCURRENCY, partnerIds.length || 1);
-      const workers: Promise<void>[] = [];
-      for (let i = 0; i < workerCount; i++) workers.push(worker());
-      await Promise.all(workers);
-
-      // Perf Fase 2B: persistir el caché de precios precargado para que
-      // sobreviva un reinicio en ruta (lectura offline en el ProductPicker).
-      schedulePersistPriceCache();
 
       set({
         isPreparing: false,
         currentStep: null,
-        preparedAt: Date.now(),
+        progressDone: total,
+        customersPrepared: settled.preparedCount,
+        pricesPrepared: settled.pricesPrepared,
+        preparedAt: settled.activationInput.activatedAtMs,
         preparedPlanId: plan.plan_id ?? null,
         failures,
         lastError: null,
@@ -220,10 +198,10 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
 
       logInfo('general', 'route_prep_completed', {
         plan_id: plan.plan_id,
-        customers: total,
-        prepared,
+        pricing_targets: total,
+        prepared: settled.preparedCount,
         failures: failures.length,
-        prices: pricesCount,
+        prices: settled.pricesPrepared,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
@@ -237,7 +215,11 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
   },
 
   retryFailures: async () => {
-    const { failures, isPreparing } = get();
+    const {
+      failures,
+      isPreparing,
+      preparedPlanId,
+    } = get();
     if (isPreparing || failures.length === 0) return;
 
     const auth = useAuthStore.getState();
@@ -246,40 +228,78 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       set({ lastError: 'Sin productos cargados. Reintenta desde CEDIS.' });
       return;
     }
+    if (
+      typeof auth.companyId !== 'number'
+      || !Number.isInteger(auth.companyId)
+      || auth.companyId <= 0
+    ) {
+      set({ lastError: 'Compañía no disponible para reintentar precios.' });
+      return;
+    }
 
     set({ isPreparing: true, currentStep: 'Reintentando pendientes', lastError: null });
 
-    const stillFailed: PreparationFailure[] = [];
-    let recovered = 0;
+    try {
+      const targets = failures.map((failure) => ({
+        partnerId: failure.partnerId,
+        requestedPricelistId: failure.requestedPricelistId,
+      }));
+      const productFingerprint = [...new Set(
+        products.map((product) => product.id),
+      )].sort((left, right) => left - right).join(',');
+      const settled = await prepareRoutePricingTargets({
+        targets,
+        companyId: auth.companyId,
+        planId: preparedPlanId,
+        preparationRunId: createPreparationRunId('retry'),
+        concurrency: PREPARE_CONCURRENCY,
+        expectedProductFingerprint: productFingerprint,
+        fetchTarget: (target) =>
+          fetchServerCustomerPricingSnapshot(target.partnerId, products, {
+            companyId: auth.companyId,
+            fallbackPricelistId: target.requestedPricelistId,
+          }),
+        activateRun: replacePreparedPricingRun,
+        updateState: updateCustomerPricingSnapshotState,
+      });
+      const customerNames = new Map(
+        failures.map((failure) => [
+          failure.partnerId,
+          failure.customerName,
+        ]),
+      );
+      const stillFailed: PreparationFailure[] = settled.failures.map(
+        (failure) => ({
+          ...failure,
+          customerName: customerNames.get(failure.partnerId),
+        }),
+      );
 
-    for (const failure of failures) {
-      try {
-        const map = await computeCustomerPrices(failure.partnerId, products, {
-          companyId: auth.companyId,
-        });
-        recovered += 1;
-        const newPrices = map.size;
-        set((prev) => ({
-          customersPrepared: prev.customersPrepared + 1,
-          pricesPrepared: prev.pricesPrepared + newPrices,
-        }));
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : 'Error desconocido';
-        stillFailed.push({ ...failure, reason });
-      }
+      set((previous) => ({
+        isPreparing: false,
+        currentStep: null,
+        progressDone: previous.progressTotal,
+        customersPrepared:
+          previous.customersPrepared + settled.preparedCount,
+        pricesPrepared:
+          previous.pricesPrepared + settled.pricesPrepared,
+        failures: stillFailed,
+        preparedAt: settled.activationInput.activatedAtMs,
+      }));
+
+      logInfo('general', 'route_prep_retry_done', {
+        recovered: settled.preparedCount,
+        still_failed: stillFailed.length,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      set({
+        isPreparing: false,
+        currentStep: null,
+        lastError: message,
+      });
+      logWarn('general', 'route_prep_retry_fatal', { message });
     }
-
-    // Perf Fase 2B: persistir lo recuperado en el reintento.
-    schedulePersistPriceCache();
-
-    set({
-      isPreparing: false,
-      currentStep: null,
-      failures: stillFailed,
-      preparedAt: Date.now(),
-    });
-
-    logInfo('general', 'route_prep_retry_done', { recovered, still_failed: stillFailed.length });
   },
 
   resetPreparation: () => {

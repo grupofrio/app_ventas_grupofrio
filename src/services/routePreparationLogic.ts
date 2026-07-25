@@ -6,8 +6,20 @@
  * route, product and pricelist services.
  */
 
+import {
+  activatePreparedPricingRun,
+  type ActivatePreparedPricingRunInput,
+  type ActivatePreparedPricingTargetInput,
+  type PricingSnapshotStateV1,
+  type ValidatedServerPriceSnapshot,
+} from './customerPricingSnapshot.ts';
+import type {
+  RoutePricingTarget,
+} from './routePricingTargets.ts';
+
 export interface PreparationFailure {
   partnerId: number;
+  requestedPricelistId: number | null;
   customerName?: string;
   reason: string;
 }
@@ -15,6 +27,207 @@ export interface PreparationFailure {
 export interface PartnerLike {
   customer_id?: number | null;
   customer_name?: string | null;
+}
+
+const MAX_ROUTE_PRICING_CONCURRENCY = 4;
+const INVALID_PRICING_RESPONSE_REASON =
+  'Respuesta de precios incompleta o inválida';
+
+export interface SettleRoutePricingTargetsInput {
+  readonly targets: readonly RoutePricingTarget[];
+  readonly companyId: number;
+  readonly planId: number | null;
+  readonly preparationRunId: string;
+  readonly concurrency?: number;
+  readonly expectedProductFingerprint?: string;
+  readonly nowMs?: () => number;
+  readonly fetchTarget: (target: RoutePricingTarget) => Promise<unknown>;
+}
+
+export interface SettledRoutePricingPreparation {
+  readonly activationInput: ActivatePreparedPricingRunInput;
+  readonly failures: readonly PreparationFailure[];
+  readonly preparedCount: number;
+  readonly pricesPrepared: number;
+}
+
+type ActivatePricingRun = (
+  current: PricingSnapshotStateV1,
+  input: ActivatePreparedPricingRunInput,
+) => PricingSnapshotStateV1;
+
+export interface PrepareRoutePricingTargetsInput
+  extends SettleRoutePricingTargetsInput {
+  readonly updateState: (
+    updater: (current: PricingSnapshotStateV1) => PricingSnapshotStateV1,
+  ) => Promise<PricingSnapshotStateV1>;
+  readonly activateRun?: ActivatePricingRun;
+}
+
+function isCompleteValidatedPricingSnapshot(
+  value: unknown,
+  expectedProductFingerprint?: string,
+): value is ValidatedServerPriceSnapshot {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || (value as { ok?: unknown }).ok !== true
+  ) {
+    return false;
+  }
+
+  const candidate = value as {
+    resolvedPricelistId?: unknown;
+    productFingerprint?: unknown;
+    prices?: unknown;
+  };
+  if (
+    typeof candidate.resolvedPricelistId !== 'number'
+    || !Number.isInteger(candidate.resolvedPricelistId)
+    || candidate.resolvedPricelistId <= 0
+    || typeof candidate.productFingerprint !== 'string'
+    || !Array.isArray(candidate.prices)
+  ) {
+    return false;
+  }
+
+  const productIds: number[] = [];
+  let previousProductId = 0;
+  for (const price of candidate.prices) {
+    if (
+      !Array.isArray(price)
+      || price.length !== 2
+      || typeof price[0] !== 'number'
+      || !Number.isInteger(price[0])
+      || price[0] <= previousProductId
+      || typeof price[1] !== 'number'
+      || !Number.isFinite(price[1])
+      || price[1] < 0
+    ) {
+      return false;
+    }
+    productIds.push(price[0]);
+    previousProductId = price[0];
+  }
+
+  return (
+    candidate.productFingerprint === productIds.join(',')
+    && (
+      expectedProductFingerprint === undefined
+      || candidate.productFingerprint === expectedProductFingerprint
+    )
+  );
+}
+
+function failureReason(error: unknown): string {
+  return error instanceof Error ? error.message : 'Error desconocido';
+}
+
+export async function settleRoutePricingTargets(
+  input: SettleRoutePricingTargetsInput,
+): Promise<SettledRoutePricingPreparation> {
+  const nowMs = input.nowMs ?? Date.now;
+  const settledTargets: Array<
+    ActivatePreparedPricingTargetInput | undefined
+  > = new Array(input.targets.length);
+  const failures: Array<PreparationFailure | undefined> = new Array(
+    input.targets.length,
+  );
+  let cursor = 0;
+
+  async function worker(): Promise<void> {
+    while (cursor < input.targets.length) {
+      const index = cursor;
+      cursor += 1;
+      const target = input.targets[index]!;
+
+      try {
+        const validation = await input.fetchTarget(target);
+        if (
+          !isCompleteValidatedPricingSnapshot(
+            validation,
+            input.expectedProductFingerprint,
+          )
+        ) {
+          failures[index] = {
+            ...target,
+            reason: INVALID_PRICING_RESPONSE_REASON,
+          };
+          settledTargets[index] = {
+            ...target,
+            status: 'failed',
+          };
+          continue;
+        }
+
+        settledTargets[index] = {
+          ...target,
+          status: 'prepared',
+          snapshot: {
+            preparedAtMs: nowMs(),
+            validation,
+          },
+        };
+      } catch (error) {
+        failures[index] = {
+          ...target,
+          reason: failureReason(error),
+        };
+        settledTargets[index] = {
+          ...target,
+          status: 'failed',
+        };
+      }
+    }
+  }
+
+  const requestedConcurrency = Number.isInteger(input.concurrency)
+    ? input.concurrency!
+    : MAX_ROUTE_PRICING_CONCURRENCY;
+  const workerCount = Math.min(
+    MAX_ROUTE_PRICING_CONCURRENCY,
+    Math.max(1, requestedConcurrency),
+    Math.max(1, input.targets.length),
+  );
+  await Promise.all(
+    Array.from({ length: workerCount }, () => worker()),
+  );
+
+  const targets = settledTargets.map((target) => target!);
+  return {
+    activationInput: {
+      companyId: input.companyId,
+      planId: input.planId,
+      preparationRunId: input.preparationRunId,
+      activatedAtMs: nowMs(),
+      targets,
+    },
+    failures: failures.filter(
+      (failure): failure is PreparationFailure => failure !== undefined,
+    ),
+    preparedCount: targets.filter((target) => target.status === 'prepared')
+      .length,
+    pricesPrepared: targets.reduce(
+      (total, target) =>
+        total + (
+          target.status === 'prepared'
+            ? target.snapshot.validation.prices.length
+            : 0
+        ),
+      0,
+    ),
+  };
+}
+
+export async function prepareRoutePricingTargets(
+  input: PrepareRoutePricingTargetsInput,
+): Promise<SettledRoutePricingPreparation> {
+  const settled = await settleRoutePricingTargets(input);
+  const activateRun = input.activateRun ?? activatePreparedPricingRun;
+  await input.updateState((current) =>
+    activateRun(current, settled.activationInput)
+  );
+  return settled;
 }
 
 /**

@@ -194,6 +194,47 @@ function snapshotIdFor(
   return `${preparationRunId}:${companyId}:${partnerId}:${resolvedPricelistId}`;
 }
 
+export function isPreparedPricingSnapshotPointerValid(
+  manifest: PricingPreparationManifest,
+  target: PricingPreparationTarget,
+  snapshot: PreparedCustomerPricingSnapshot | undefined,
+  mapping: ResolvedPricelistMapping | undefined,
+): snapshot is PreparedCustomerPricingSnapshot {
+  if (
+    target.status !== 'prepared'
+    || !isPositiveInteger(target.partnerId)
+    || !isPositiveInteger(target.resolvedPricelistId ?? 0)
+    || typeof target.snapshotId !== 'string'
+    || target.snapshotId.length === 0
+    || !snapshot
+    || !mapping
+  ) {
+    return false;
+  }
+
+  return (
+    snapshot.version === 1
+    && snapshot.origin === 'odoo_server_full'
+    && snapshot.snapshotId === target.snapshotId
+    && snapshot.snapshotId === snapshotIdFor(
+      snapshot.preparationRunId,
+      snapshot.companyId,
+      snapshot.partnerId,
+      snapshot.resolvedPricelistId,
+    )
+    && snapshot.companyId === manifest.companyId
+    && snapshot.partnerId === target.partnerId
+    && snapshot.resolvedPricelistId === target.resolvedPricelistId
+    && snapshot.preparedPlanId === manifest.planId
+    && Number.isFinite(snapshot.preparedAtMs)
+    && snapshot.preparedAtMs >= 0
+    && mapping.companyId === manifest.companyId
+    && mapping.partnerId === target.partnerId
+    && mapping.requestedPricelistId === target.requestedPricelistId
+    && mapping.resolvedPricelistId === target.resolvedPricelistId
+  );
+}
+
 function hasSamePricePayload(
   left: PreparedCustomerPricingSnapshot,
   right: PreparedCustomerPricingSnapshot,
@@ -541,6 +582,77 @@ export function activatePreparedPricingRun(
   });
 }
 
+function preparationTargetKey(
+  partnerId: number,
+  requestedPricelistId: number | null,
+): string {
+  return `${partnerId}:${requestedPricelistId ?? 'null'}`;
+}
+
+export function replacePreparedPricingRun(
+  current: PricingSnapshotStateV1,
+  input: ActivatePreparedPricingRunInput,
+): PricingSnapshotStateV1 {
+  const activeManifest = current.activeManifest;
+  if (
+    !activeManifest
+    || activeManifest.companyId !== input.companyId
+    || activeManifest.planId !== input.planId
+  ) {
+    throw new Error('Cannot replace a different pricing preparation manifest');
+  }
+
+  const retryKeys = new Set<string>();
+  for (const target of input.targets) {
+    const key = preparationTargetKey(
+      target.partnerId,
+      target.requestedPricelistId,
+    );
+    if (retryKeys.has(key)) {
+      throw new Error(`Duplicate pricing retry target: ${key}`);
+    }
+    const previousTarget = activeManifest.targets.find(
+      (candidate) =>
+        preparationTargetKey(
+          candidate.partnerId,
+          candidate.requestedPricelistId,
+        ) === key,
+    );
+    if (!previousTarget || previousTarget.status !== 'failed') {
+      throw new Error(`Pricing retry target is not failed: ${key}`);
+    }
+    retryKeys.add(key);
+  }
+
+  const retried = activatePreparedPricingRun(current, input);
+  const retriedTargets = new Map(
+    retried.activeManifest!.targets.map((target) => [
+      preparationTargetKey(
+        target.partnerId,
+        target.requestedPricelistId,
+      ),
+      target,
+    ]),
+  );
+  const replacementTargets = activeManifest.targets.map((target) =>
+    retriedTargets.get(
+      preparationTargetKey(target.partnerId, target.requestedPricelistId),
+    ) ?? target
+  );
+
+  return compactPricingSnapshotState({
+    ...retried,
+    activeManifest: {
+      version: 1,
+      companyId: input.companyId,
+      planId: input.planId,
+      preparationRunId: input.preparationRunId,
+      activatedAtMs: input.activatedAtMs,
+      targets: replacementTargets,
+    },
+  });
+}
+
 export function recordLastKnownServerPrices(
   current: PricingSnapshotStateV1,
   input: RecordLastKnownServerPricesInput,
@@ -656,17 +768,13 @@ export function resolveCapturedCustomerPrice(
       : undefined;
 
     if (
-      snapshot
-      && snapshot.version === 1
-      && snapshot.origin === 'odoo_server_full'
-      && snapshot.snapshotId === preparedTarget?.snapshotId
-      && snapshot.companyId === input.companyId
-      && snapshot.partnerId === input.partnerId
-      && snapshot.resolvedPricelistId === canonicalPricelistId
-      && snapshot.preparedPlanId === input.planId
-      && snapshot.preparationRunId === manifest.preparationRunId
-      && Number.isFinite(snapshot.preparedAtMs)
-      && snapshot.preparedAtMs >= 0
+      preparedTarget
+      && isPreparedPricingSnapshotPointerValid(
+        manifest,
+        preparedTarget,
+        snapshot,
+        mapping,
+      )
     ) {
       const preparedPrice = snapshot.prices.find(
         ([productId]) => productId === input.productId,

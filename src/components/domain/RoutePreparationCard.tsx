@@ -3,12 +3,11 @@
  *
  * Four states (see useRoutePreparationStore):
  *   A. No preparada    → invite to prepare with WiFi at CEDIS
- *   B. Preparando      → progress + currentStep + X/Y clientes
+ *   B. Preparando      → progress + currentStep + X/Y customer/list targets
  *   C. Preparada       → time + counts + (optional) retry pendientes
  *   D. Sin conexión    → soft hint, does NOT block
  *
- * Reuses the in-flight dedupe + concurrency limit from PR #14, so it is
- * safe to mount alongside the auto-preload effect in Home.
+ * Route pricing is activated only after every customer/list target settles.
  */
 
 import React from 'react';
@@ -45,7 +44,7 @@ export function RoutePreparationCard() {
   // ── State A — preparing ────────────────────────────────────────────────
   if (isPreparing) {
     const subtitle = customersTotal > 0
-      ? `${customersPrepared}/${customersTotal} clientes`
+      ? `${customersPrepared}/${customersTotal} combinaciones cliente/lista`
       : currentStep || 'Preparando…';
     return (
       <View style={[styles.card, styles.cardPreparing]}>
@@ -83,12 +82,13 @@ export function RoutePreparationCard() {
           <Text style={styles.staleWarn}>⚠️ Datos viejos: actualiza la ruta para asegurar precios y stock al día.</Text>
         )}
         <Text style={styles.metric}>
-          Clientes: {customersPrepared}/{customersTotal} · Precios precargados: {pricesPrepared}
+          Combinaciones cliente/lista: {customersPrepared}/{customersTotal}
+          {' · '}Precios preparados: {pricesPrepared}
         </Text>
         {hasFailures && (
           <>
             <Text style={[styles.metric, { color: '#EF4444' }]}>
-              Pendientes: {failures.length}
+              Combinaciones pendientes: {failures.length}
             </Text>
             <TouchableOpacity
               style={styles.btn}
@@ -116,7 +116,7 @@ export function RoutePreparationCard() {
       </View>
       <Text style={styles.body}>
         Prepara la ruta en el CEDIS con WiFi antes de salir. Se cargarán clientes,
-        productos y precios para operar offline.
+        productos y precios por combinación cliente/lista para operar offline.
       </Text>
       {lastError && (
         <Text style={styles.errorMsg} numberOfLines={3}>{lastError}</Text>

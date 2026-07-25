@@ -6,6 +6,7 @@ import {
 import {
   compactPricingSnapshotState,
   emptyPricingSnapshotState,
+  isPreparedPricingSnapshotPointerValid,
   type LastKnownCustomerProductPrice,
   type PreparedCustomerPricingSnapshot,
   type PricingPreparationManifest,
@@ -137,6 +138,7 @@ function isPreparedSnapshot(
     || !isNonNegativeFiniteNumber(value.preparedAtMs)
     || !isNullablePositiveInteger(value.preparedPlanId)
     || !isString(value.preparationRunId)
+    || value.preparationRunId.length === 0
     || value.origin !== 'odoo_server_full'
     || !isString(value.productFingerprint)
     || !Array.isArray(value.prices)
@@ -160,7 +162,15 @@ function isPreparedSnapshot(
     previousProductId = price[0];
   }
 
-  return value.productFingerprint === productIds.join(',');
+  return (
+    value.productFingerprint === productIds.join(',')
+    && value.snapshotId === [
+      value.preparationRunId,
+      value.companyId,
+      value.partnerId,
+      value.resolvedPricelistId,
+    ].join(':')
+  );
 }
 
 function isRequestedMapping(
@@ -268,6 +278,7 @@ function sanitizeLastKnownPrices(
 function sanitizeManifest(
   value: unknown,
   snapshots: PricingSnapshotStateV1['snapshots'],
+  requestedMappings: PricingSnapshotStateV1['requestedMappings'],
 ): PricingPreparationManifest | null {
   if (
     !isRecord(value)
@@ -293,13 +304,18 @@ function sanitizeManifest(
     }
 
     const snapshot = snapshots[target.snapshotId];
+    const mapping = requestedMappings[[
+      value.companyId,
+      target.partnerId,
+      target.requestedPricelistId ?? 'null',
+    ].join(':')];
     if (
-      snapshot
-      && snapshot.companyId === value.companyId
-      && snapshot.partnerId === target.partnerId
-      && snapshot.resolvedPricelistId === target.resolvedPricelistId
-      && snapshot.preparedPlanId === value.planId
-      && snapshot.preparationRunId === value.preparationRunId
+      isPreparedPricingSnapshotPointerValid(
+        value as unknown as PricingPreparationManifest,
+        target,
+        snapshot,
+        mapping,
+      )
     ) {
       targets.push(target);
       continue;
@@ -369,6 +385,7 @@ function hasStrictLastKnownPrices(
 function isStrictManifest(
   value: unknown,
   snapshots: PricingSnapshotStateV1['snapshots'],
+  requestedMappings: PricingSnapshotStateV1['requestedMappings'],
 ): value is PricingPreparationManifest {
   if (
     !isRecord(value)
@@ -389,14 +406,18 @@ function isStrictManifest(
       return true;
     }
 
-    const snapshot = snapshots[target.snapshotId];
+    const mapping = requestedMappings[[
+      value.companyId,
+      target.partnerId,
+      target.requestedPricelistId ?? 'null',
+    ].join(':')];
     return (
-      snapshot !== undefined
-      && snapshot.companyId === value.companyId
-      && snapshot.partnerId === target.partnerId
-      && snapshot.resolvedPricelistId === target.resolvedPricelistId
-      && snapshot.preparedPlanId === value.planId
-      && snapshot.preparationRunId === value.preparationRunId
+      isPreparedPricingSnapshotPointerValid(
+        value as unknown as PricingPreparationManifest,
+        target,
+        snapshots[target.snapshotId],
+        mapping,
+      )
     );
   });
 }
@@ -417,7 +438,7 @@ function isStrictPricingSnapshotState(
     && hasStrictLastKnownPrices(value.lastKnownPrices)
     && (
       activeManifest === null
-      || isStrictManifest(activeManifest, snapshots)
+      || isStrictManifest(activeManifest, snapshots, value.requestedMappings)
     )
   );
 }
@@ -430,11 +451,16 @@ function sanitizeAndCompactState(
   }
 
   const snapshots = sanitizeSnapshots(value.snapshots);
+  const requestedMappings = sanitizeMappings(value.requestedMappings);
   return compactPricingSnapshotState({
     version: 1,
-    activeManifest: sanitizeManifest(value.activeManifest, snapshots),
+    activeManifest: sanitizeManifest(
+      value.activeManifest,
+      snapshots,
+      requestedMappings,
+    ),
     snapshots,
-    requestedMappings: sanitizeMappings(value.requestedMappings),
+    requestedMappings,
     lastKnownPrices: sanitizeLastKnownPrices(value.lastKnownPrices),
   });
 }

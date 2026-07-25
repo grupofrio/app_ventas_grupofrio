@@ -60,6 +60,30 @@ test('success and PDF states use sent copy and disable both output actions durin
   assert.match(screenSource, /buildThermalTicketDocument\(ticket/);
 });
 
+test('preview uses the shared Odoo folio presentation without gating either output', () => {
+  assert.match(screenSource, /getSaleTicketFolioPresentation\(ticket\)/);
+  assert.match(screenSource, />Folio Odoo<\/Text>/);
+  assert.match(screenSource, /\{folioPresentation\??\.odooFolio\}/);
+  assert.match(screenSource, />Referencia local<\/Text>/);
+  assert.match(screenSource, /\{folioPresentation\??\.localReference\}/);
+  assert.doesNotMatch(screenSource, />Pedido<\/Text>/);
+  assert.doesNotMatch(screenSource, />#\{ticket\.saleId\}<\/Text>/);
+
+  const mp210Button = screenSource.match(
+    /<Button\s+label="Imprimir en MP210"([\s\S]*?)\/>/,
+  )?.[1] ?? '';
+  const pdfButton = screenSource.match(
+    /<Button\s+label="Abrir PDF"([\s\S]*?)\/>/,
+  )?.[1] ?? '';
+  assert.match(
+    mp210Button,
+    /disabled=\{isPrintJobActive \|\| isOpening \|\| isSelectionLoading\}/,
+  );
+  assert.match(pdfButton, /disabled=\{isPrintJobActive\}/);
+  assert.doesNotMatch(mp210Button, /odooFolio|folioPresentation|localReference/);
+  assert.doesNotMatch(pdfButton, /odooFolio|folioPresentation|localReference/);
+});
+
 test('access failures keep PDF useful and permanent denial offers Android settings', () => {
   for (const status of [
     'permission_denied',

@@ -9,6 +9,7 @@ export interface ThermalTicketDocument {
     footer: string;
   };
   folio: string;
+  localReference?: string;
   formattedDate: string;
   customerName: string;
   sellerName: string;

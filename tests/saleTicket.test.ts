@@ -110,6 +110,7 @@ test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
   assert.match(html, /Cliente &amp; Socios &lt;test&gt;/);
   assert.match(html, /Vendedor &amp; Uno &lt;test&gt;/);
   assert.match(html, /Bolsa &lt;5kg&gt; &amp; hielo/);
+  assert.match(html, /sale_&lt;abc&gt;/);
   assert.match(html, /Cr[eé]dito/);
   assert.match(html, /Pagar[eé]/);
   assert.match(html, /SOLUCIONES EN PRODUCCION GLACIEM/);
@@ -119,6 +120,43 @@ test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {
   assert.doesNotMatch(html, /Cuajimalpa/i);
   assert.match(html, /\$85\.00/);
   assert.doesNotMatch(html, /Cliente & Socios <test>/);
+});
+
+test('buildSaleTicketHtml shows only the official Odoo folio after synchronization', () => {
+  const snapshot = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-1',
+    odooFolio: 'S00042',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  const html = buildSaleTicketHtml(snapshot);
+
+  assert.match(html, /<span>Folio Odoo<\/span><span>S00042<\/span>/);
+  assert.doesNotMatch(html, /Referencia local/);
+  assert.doesNotMatch(html, /mobile-op-1/);
+});
+
+test('buildSaleTicketHtml identifies a pending Odoo folio with its local reference', () => {
+  const snapshot = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-1',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  const html = buildSaleTicketHtml(snapshot);
+
+  assert.match(
+    html,
+    /<span>Folio Odoo<\/span><span>Pendiente por sincronizar<\/span>/,
+  );
+  assert.match(html, /<span>Referencia local<\/span><span>mobile-op-1<\/span>/);
 });
 
 test('buildSaleTicketHtml omits credit promissory note for cash tickets', () => {

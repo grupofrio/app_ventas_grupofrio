@@ -31,10 +31,24 @@ function buildSnapshot(
   });
 }
 
-test('buildThermalTicketDocument uses the exact sale id as its folio', () => {
-  const snapshot = buildSnapshot('cash', { saleId: 'op:123/á-raw' });
+test('buildThermalTicketDocument uses the official Odoo folio without a local reference', () => {
+  const snapshot = buildSnapshot('cash', {
+    saleId: 'mobile-op-1',
+    odooFolio: 'S00042',
+  });
+  const document = buildThermalTicketDocument(snapshot);
 
-  assert.equal(buildThermalTicketDocument(snapshot).folio, snapshot.saleId);
+  assert.equal(document.folio, 'S00042');
+  assert.equal(document.localReference, undefined);
+  assert.equal(Object.hasOwn(document, 'localReference'), false);
+});
+
+test('buildThermalTicketDocument marks a pending Odoo folio and includes its local reference', () => {
+  const snapshot = buildSnapshot('cash', { saleId: 'mobile-op-1' });
+  const document = buildThermalTicketDocument(snapshot);
+
+  assert.equal(document.folio, 'Pendiente por sincronizar');
+  assert.equal(document.localReference, 'mobile-op-1');
 });
 
 test('buildThermalTicketDocument carries canonical branding without duplicating fiscal identity', () => {

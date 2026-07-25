@@ -219,6 +219,7 @@ export function mergeSaleTicketFromOrder(
 }
 
 export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
+  const folioPresentation = getSaleTicketFolioPresentation(snapshot);
   const rows = snapshot.lines.map((line) => `
     <tr>
       <td class="item">
@@ -329,7 +330,10 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     <div class="muted">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
   </div>
   <div class="divider"></div>
-  <div class="row"><span>Folio</span><span>${escapeHtml(snapshot.saleId)}</span></div>
+  <div class="row"><span>Folio Odoo</span><span>${escapeHtml(folioPresentation.odooFolio)}</span></div>
+  ${folioPresentation.localReference === null
+    ? ''
+    : `<div class="row"><span>Referencia local</span><span>${escapeHtml(folioPresentation.localReference)}</span></div>`}
   <div class="row"><span>Fecha</span><span>${escapeHtml(formatTicketDate(snapshot.createdAt))}</span></div>
   <div>Cliente:</div>
   <div><strong>${escapeHtml(snapshot.customerName)}</strong></div>

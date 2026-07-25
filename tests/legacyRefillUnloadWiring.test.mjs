@@ -163,8 +163,12 @@ assert(/await AsyncStorage\.getItem\(`\$\{PREFIX\}\$\{key\}`\)/.test(strictLoadB
   'storeLoadStrict espera directamente la lectura de AsyncStorage');
 assert(/if \(raw === null\) return null;/.test(strictLoadBlock[0]),
   'storeLoadStrict devuelve null solo para ausencia confirmada');
-assert(/return JSON\.parse\(raw\) as T;/.test(strictLoadBlock[0]),
-  'storeLoadStrict parsea directamente el JSON persistido');
+assert(/const parsed = JSON\.parse\(raw\) as unknown;/.test(strictLoadBlock[0]),
+  'storeLoadStrict parsea el JSON persistido sin asumir que tiene el tipo solicitado');
+assert(/if \(parsed === null\) \{[\s\S]*?throw new Error/.test(strictLoadBlock[0]),
+  'storeLoadStrict rechaza un payload presente que parsea a null');
+assert(/return parsed as T;/.test(strictLoadBlock[0]),
+  'storeLoadStrict devuelve solo un payload presente no nulo');
 assert(!/catch/.test(strictLoadBlock[0]),
   'storeLoadStrict no absorbe errores de lectura ni de parseo');
 

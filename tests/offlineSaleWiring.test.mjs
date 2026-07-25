@@ -86,6 +86,48 @@ const offlineIdx = sale.indexOf('if (!isOnline) {');
 const createIdx = sale.indexOf('await createSale(');
 assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
   'la rama offline (enqueue) va antes del createSale online');
+const offlineBranch = extractBracedBlockAfter(sale, 'if (!isOnline)');
+const offlineTicketSaveIndex = offlineBranch.indexOf(
+  'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
+);
+assert(offlineTicketSaveIndex >= 0, 'offline intenta guardar el comprobante del intent durable');
+const offlineTicketTryIndex = offlineBranch.lastIndexOf('try {', offlineTicketSaveIndex);
+const offlineTicketCatchIndex = offlineBranch.indexOf('catch (ticketError)', offlineTicketSaveIndex);
+assert(
+  offlineTicketTryIndex >= 0 && offlineTicketTryIndex < offlineTicketSaveIndex,
+  'el guardado estricto del ticket offline queda dentro de su propio try',
+);
+assert(
+  offlineTicketCatchIndex > offlineTicketSaveIndex,
+  'el guardado estricto del ticket offline tiene un catch explícito',
+);
+const offlineTicketCatch = extractBracedBlockAfter(offlineBranch, 'catch (ticketError)');
+assert.match(
+  offlineTicketCatch,
+  /setSaleRecoveryPersistenceFailed\(true\)[\s\S]*?setSaleSubmitting\(false\)/,
+  'fallar el ticket conserva el bloqueo durable antes de terminar submitting',
+);
+assert.match(
+  offlineTicketCatch,
+  /logError\(\s*['"]sync['"],\s*['"]offline_sale_ticket_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+  'el fallo del ticket offline queda registrado con operation_id y mensaje seguro',
+);
+assert.match(
+  offlineTicketCatch,
+  /safeUnknownErrorMessage\(\s*ticketError,/,
+  'el log del ticket offline sanitiza errores unknown',
+);
+assert.match(
+  offlineTicketCatch,
+  /Alert\.alert\([\s\S]*?Pedido guardado[\s\S]*?cola[\s\S]*?comprobante local/,
+  'el aviso confirma que la cola se preservó aunque el comprobante local no esté disponible',
+);
+assert.match(offlineTicketCatch, /return;/);
+assert.doesNotMatch(
+  offlineTicketCatch,
+  /unlockSaleConfirm|saleConfirmationSingleFlight\.release|setLastSaleTicketId|setAfterSaleAction|updateStopState|markSaleReadyToContinue|clearSaleConfirmationLock/,
+  'fallar el ticket no desbloquea ni marca éxito de ruta/checkout',
+);
 assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhotos/.test(sale),
   'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
 // No se confirma offline como venta: el rótulo se deriva del estado de sync.

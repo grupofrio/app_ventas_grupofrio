@@ -60,7 +60,11 @@ export async function storeSaveStrict<T>(key: string, data: T): Promise<void> {
 export async function storeLoadStrict<T>(key: string): Promise<T | null> {
   const raw = await AsyncStorage.getItem(`${PREFIX}${key}`);
   if (raw === null) return null;
-  return JSON.parse(raw) as T;
+  const parsed = JSON.parse(raw) as unknown;
+  if (parsed === null) {
+    throw new Error(`[storage] strict load rejected persisted null for ${key}`);
+  }
+  return parsed as T;
 }
 
 export async function storeRemoveStrict(key: string): Promise<void> {

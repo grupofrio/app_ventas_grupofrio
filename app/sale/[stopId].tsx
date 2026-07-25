@@ -481,8 +481,25 @@ function SaleScreenInner() {
         return;
       }
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
-      await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
-      setLastSaleTicketId(operationId);
+      try {
+        await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
+        setLastSaleTicketId(operationId);
+      } catch (ticketError) {
+        setSaleRecoveryPersistenceFailed(true);
+        setSaleSubmitting(false);
+        logError('sync', 'offline_sale_ticket_persist_failed', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(
+            ticketError,
+            'Error desconocido al guardar el comprobante sin conexión.',
+          ),
+        });
+        Alert.alert(
+          'Pedido guardado sin comprobante',
+          'El pedido quedó guardado en la cola y se enviará al reconectar, pero el comprobante local no está disponible. Mantén esta pantalla abierta para reintentar la recuperación.',
+        );
+        return;
+      }
       setSaleSubmitting(false);
       Alert.alert(
         'Pedido guardado',

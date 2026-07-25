@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storeLoadStrict } from '../src/persistence/storage.ts';
 import type { SaleTicketSnapshot } from '../src/services/saleTicket.ts';
 import { SALE_TICKET_DEFAULT_SELLER } from '../src/services/saleTicket.ts';
 import * as saleTicketStorage from '../src/services/saleTicketStorage.ts';
@@ -22,6 +24,26 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+async function withRawStoredValue<T>(
+  raw: string | null,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const storage = AsyncStorage as unknown as {
+    getItem?: (key: string) => Promise<string | null>;
+  };
+  const originalGetItem = storage.getItem;
+  storage.getItem = async () => raw;
+  try {
+    return await operation();
+  } finally {
+    if (originalGetItem) {
+      storage.getItem = originalGetItem;
+    } else {
+      delete storage.getItem;
+    }
+  }
+}
+
 function snapshot(
   overrides: Partial<SaleTicketSnapshot> = {},
 ): SaleTicketSnapshot {
@@ -40,6 +62,18 @@ function snapshot(
     ...overrides,
   };
 }
+
+test('strict load distinguishes an absent key from a present JSON null payload', async () => {
+  assert.equal(
+    await withRawStoredValue(null, () => storeLoadStrict('sale-ticket:absent')),
+    null,
+  );
+
+  await assert.rejects(
+    withRawStoredValue('null', () => storeLoadStrict('sale-ticket:corrupt-null')),
+    /persisted null/i,
+  );
+});
 
 test('normalizes a legacy stored ticket without an Odoo folio and applies the seller fallback', () => {
   const { odooFolio: _omitted, ...legacySnapshot } = snapshot({
@@ -138,6 +172,18 @@ test('promotion reports missing only after a successful strict read finds no tic
     'missing',
   );
   assert.equal(saveCalled, false);
+});
+
+test('promotion rejects a present JSON null ticket instead of reporting it missing', async () => {
+  await assert.rejects(
+    withRawStoredValue('null', () => (
+      saleTicketStorage.promoteStoredSaleTicketOdooFolio(
+        'sale-corrupt-null',
+        'S00042',
+      )
+    )),
+    /persisted null/i,
+  );
 });
 
 test('promotion rejects strict read and write failures', async () => {

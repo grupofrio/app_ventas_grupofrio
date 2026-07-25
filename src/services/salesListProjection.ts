@@ -23,6 +23,31 @@ export interface SalesListEntry {
 }
 
 const FALLBACK_CUSTOMER_NAME = 'Cliente sin nombre';
+const MAX_DISPLAY_ERROR_LENGTH = 200;
+const STOCK_ERROR_COPY =
+  'Odoo rechazó la venta por stock insuficiente. Revisa las existencias en Sincronización.';
+const NETWORK_ERROR_COPY =
+  'No se pudo enviar la venta por un problema de conexión. Revisa el estado en Sincronización.';
+const GENERIC_ERROR_COPY =
+  'No se pudo sincronizar la venta. Revisa la operación en Sincronización.';
+
+const STOCK_ERROR_PATTERN =
+  /insufficient[_ -]?stock|stock insuficiente/i;
+const NETWORK_ERROR_PATTERNS = [
+  /\bnetwork (?:request failed|error)\b/i,
+  /\bfailed to fetch\b/i,
+  /\bload failed\b/i,
+  /\binternet connection appears to be offline\b/i,
+  /\bsin conexi[oó]n\b/i,
+  /\boffline\b/i,
+  /\btime(?:d\s*out|out)\b/i,
+  /\b(?:etimedout|econnreset|econnrefused|enotfound|ehostunreach|enetunreach)\b/i,
+  /\bconnection (?:was )?(?:lost|failed|reset|refused|closed)\b/i,
+  /^http 5\d\d\b/i,
+  /\b(?:bad gateway|service unavailable|gateway timeout)\b/i,
+];
+const EXPLICIT_ZONE_ISO_DATETIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -37,6 +62,16 @@ function normalizeDisplayString(value: unknown): string | null {
   return normalized || null;
 }
 
+function mapSaleQueueErrorForDisplay(value: unknown): string {
+  const rawMessage = typeof value === 'string' ? value : '';
+  const copy = STOCK_ERROR_PATTERN.test(rawMessage)
+    ? STOCK_ERROR_COPY
+    : NETWORK_ERROR_PATTERNS.some((pattern) => pattern.test(rawMessage))
+      ? NETWORK_ERROR_COPY
+      : GENERIC_ERROR_COPY;
+  return copy.slice(0, MAX_DISPLAY_ERROR_LENGTH);
+}
+
 function nonNegativeFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
@@ -49,16 +84,62 @@ function positiveFiniteNumber(value: unknown): number | null {
     : null;
 }
 
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
 function ticketCreatedAtMs(ticket: SaleTicketSnapshot | null | undefined): number | null {
   if (typeof ticket?.createdAt !== 'string' || ticket.createdAt.trim().length === 0) {
     return null;
   }
-  const parsed = Date.parse(ticket.createdAt);
+  const normalized = ticket.createdAt.trim();
+  const match = EXPLICIT_ZONE_ISO_DATETIME_PATTERN.exec(normalized);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const zone = match[7];
+  const normalizedZone = zone === 'Z' ? '' : zone.slice(1).replace(':', '');
+  const offsetHour = normalizedZone ? Number(normalizedZone.slice(0, 2)) : 0;
+  const offsetMinute = normalizedZone ? Number(normalizedZone.slice(2, 4)) : 0;
+  if (
+    year < 1
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > daysInMonth(year, month)
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || offsetHour > 23
+    || offsetMinute > 59
+  ) {
+    return null;
+  }
+
+  const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function queueCreatedAtMs(value: unknown): number {
   return nonNegativeFiniteNumber(value) ?? 0;
+}
+
+function matchingTicket(
+  ticket: SaleTicketSnapshot | null | undefined,
+  operationId: string,
+): SaleTicketSnapshot | null {
+  if (typeof ticket?.saleId !== 'string') return null;
+  return ticket.saleId.trim() === operationId ? ticket : null;
 }
 
 function lineKilograms(line: Record<string, unknown>): number | null {
@@ -103,6 +184,8 @@ function projectStatus(status: SyncItemStatus): LocalSaleStatus | null {
       return 'needs_attention';
     case 'done':
       return null;
+    default:
+      return null;
   }
 }
 
@@ -121,19 +204,24 @@ export function projectLocalSale(
   if (localStatus === null) return null;
 
   const payload = isRecord(queueItem.payload) ? queueItem.payload : {};
+  const eligibleTicket = matchingTicket(ticket, operationId);
   const customerName =
-    normalizeDisplayString(ticket?.customerName)
+    normalizeDisplayString(eligibleTicket?.customerName)
     ?? normalizeDisplayString(payload._clientCustomerName)
     ?? FALLBACK_CUSTOMER_NAME;
   const amountTotal =
-    nonNegativeFiniteNumber(ticket?.total)
+    nonNegativeFiniteNumber(eligibleTicket?.total)
     ?? nonNegativeFiniteNumber(payload._clientTotal);
   const kgTotal =
-    nonNegativeFiniteNumber(ticket?.totalKg)
+    nonNegativeFiniteNumber(eligibleTicket?.totalKg)
     ?? payloadKilograms(payload);
   const createdAtMs =
-    ticketCreatedAtMs(ticket)
+    ticketCreatedAtMs(eligibleTicket)
     ?? queueCreatedAtMs(queueItem.created_at);
+  const errorMessage =
+    localStatus === 'retrying' || localStatus === 'needs_attention'
+      ? mapSaleQueueErrorForDisplay(queueItem.error_message)
+      : null;
 
   return {
     key: `local:${operationId}`,
@@ -144,6 +232,6 @@ export function projectLocalSale(
     kgTotal,
     createdAtMs,
     localStatus,
-    errorMessage: normalizeDisplayString(queueItem.error_message),
+    errorMessage,
   };
 }

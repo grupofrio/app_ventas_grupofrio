@@ -65,6 +65,97 @@ test('projects a pending sale from its preferred ticket fields', () => {
   assert.equal(entry.errorMessage, null);
 });
 
+test('ignores every field from a ticket that belongs to another sale', () => {
+  const queueItem = makeQueueItem({
+    payload: {
+      _clientCustomerName: 'Cliente correcto',
+      _clientTotal: 72,
+      lines: [{ quantity: 2, weight: 3 }],
+    },
+  });
+  const mismatchedTicket = makeTicket({
+    saleId: 'another-sale',
+    customerName: 'Cliente de otra venta',
+    total: 999,
+    totalKg: 88,
+    createdAt: '2026-07-26T18:00:00.000Z',
+  });
+
+  const entry = projectLocalSale(queueItem, mismatchedTicket);
+
+  assert.ok(entry);
+  assert.equal(entry.customerName, 'Cliente correcto');
+  assert.equal(entry.amountTotal, 72);
+  assert.equal(entry.kgTotal, 6);
+  assert.equal(entry.createdAtMs, queueItem.created_at);
+});
+
+test('accepts a matching ticket identity after trimming both operation IDs', () => {
+  const entry = projectLocalSale(
+    makeQueueItem({ id: '  sale-local-1  ' }),
+    makeTicket({ saleId: '\t sale-local-1 \n' }),
+  );
+
+  assert.ok(entry);
+  assert.equal(entry.operationId, 'sale-local-1');
+  assert.equal(entry.customerName, 'Abarrotes Centro');
+  assert.equal(entry.amountTotal, 115);
+  assert.equal(entry.kgTotal, 23);
+  assert.equal(entry.createdAtMs, Date.parse('2026-07-25T15:30:00.000Z'));
+});
+
+test('accepts ticket datetimes with an explicit numeric timezone offset', () => {
+  const createdAt = '2026-07-24T23:45:00.250-06:00';
+  const entry = projectLocalSale(
+    makeQueueItem(),
+    makeTicket({ createdAt }),
+  );
+
+  assert.equal(entry?.createdAtMs, Date.parse(createdAt));
+});
+
+test('rejects timezone-less, date-only, and impossible ticket dates', () => {
+  const queueCreatedAt = Date.parse('2026-07-25T06:15:00.000Z');
+  const unsafeTicketDates = [
+    // In Mexico this looks like the previous local day and Date.parse applies
+    // the device timezone, making ordering depend on runtime configuration.
+    '2026-07-24T23:45:00',
+    '2026-07-24',
+    '2026-02-30T10:00:00Z',
+  ];
+
+  for (const createdAt of unsafeTicketDates) {
+    const entry = projectLocalSale(
+      makeQueueItem({ created_at: queueCreatedAt }),
+      makeTicket({ createdAt }),
+    );
+    assert.equal(entry?.createdAtMs, queueCreatedAt, createdAt);
+  }
+});
+
+test('ignores tickets with blank or invalid runtime identities', () => {
+  const queueItem = makeQueueItem({
+    payload: {
+      _clientCustomerName: 'Fallback seguro',
+      _clientTotal: 31,
+      lines: [{ qty: 2, weight: 4 }],
+    },
+  });
+  const invalidTickets = [
+    makeTicket({ saleId: '   ' }),
+    makeTicket({ saleId: null as unknown as string }),
+  ];
+
+  for (const ticket of invalidTickets) {
+    const entry = projectLocalSale(queueItem, ticket);
+    assert.ok(entry);
+    assert.equal(entry.customerName, 'Fallback seguro');
+    assert.equal(entry.amountTotal, 31);
+    assert.equal(entry.kgTotal, 8);
+    assert.equal(entry.createdAtMs, queueItem.created_at);
+  }
+});
+
 test('maps syncing sales to syncing', () => {
   const entry = projectLocalSale(
     makeQueueItem({ status: 'syncing' }),
@@ -74,33 +165,95 @@ test('maps syncing sales to syncing', () => {
   assert.equal(entry?.localStatus, 'syncing');
 });
 
-test('maps retryable errors to retrying and sanitizes their latest message', () => {
+test('maps retryable network errors to safe actionable copy without mutating diagnostics', () => {
+  const rawMessage =
+    'Network Error POST https://odoo.example/api Authorization: Bearer secret-token';
+  const queueItem = makeQueueItem({
+    status: 'error',
+    retries: 1,
+    next_retry_at: Date.now() + 30_000,
+    error_message: rawMessage,
+  });
   const entry = projectLocalSale(
-    makeQueueItem({
-      status: 'error',
-      retries: 1,
-      next_retry_at: Date.now() + 30_000,
-      error_message: ' \n  Sin   conexión\u0000 temporal \t ',
-    }),
+    queueItem,
     null,
   );
 
   assert.equal(entry?.localStatus, 'retrying');
-  assert.equal(entry?.errorMessage, 'Sin conexión temporal');
+  assert.equal(
+    entry?.errorMessage,
+    'No se pudo enviar la venta por un problema de conexión. Revisa el estado en Sincronización.',
+  );
+  assert.equal(queueItem.error_message, rawMessage);
 });
 
-test('maps dead terminal sales to needs_attention and keeps stock rejection context', () => {
+test('maps dead stock rejection to safe business copy', () => {
   const entry = projectLocalSale(
     makeQueueItem({
       status: 'dead',
       retries: 3,
-      error_message: '  Stock insuficiente para Hielo 5 kg.  ',
+      error_message:
+        'insufficient_stock for Hielo 5 kg at https://odoo.example Authorization: Bearer secret',
     }),
     null,
   );
 
   assert.equal(entry?.localStatus, 'needs_attention');
-  assert.equal(entry?.errorMessage, 'Stock insuficiente para Hielo 5 kg.');
+  assert.equal(
+    entry?.errorMessage,
+    'Odoo rechazó la venta por stock insuficiente. Revisa las existencias en Sincronización.',
+  );
+});
+
+test('redacts unknown technical errors behind stable generic copy', () => {
+  const rawMessage = [
+    'Request failed POST https://odoo.example/gf/logistics/api/employee/sales/create',
+    'Authorization: Bearer ey-secret',
+    'X-API-Key=api-secret password=hunter2',
+    'Error: internal detail',
+    '    at postRest (/app/src/services/api.ts:443:17)',
+  ].join('\n');
+
+  const mapped = projectLocalSale(
+    makeQueueItem({ status: 'dead', error_message: rawMessage }),
+    null,
+  )?.errorMessage;
+
+  assert.equal(
+    mapped,
+    'No se pudo sincronizar la venta. Revisa la operación en Sincronización.',
+  );
+  assert.doesNotMatch(
+    mapped ?? '',
+    /https?:|authorization|bearer|api[-_ ]?key|password|postrest|\.ts:\d+/i,
+  );
+});
+
+test('bounds display errors deterministically and handles blank runtime values', () => {
+  const hugeUnknown = `Fallo opaco ${'x'.repeat(10_000)}`;
+  const mappedHuge = projectLocalSale(
+    makeQueueItem({ status: 'error', error_message: hugeUnknown }),
+    null,
+  )?.errorMessage;
+  const mappedBlank = projectLocalSale(
+    makeQueueItem({ status: 'error', error_message: ' \n\t ' }),
+    null,
+  )?.errorMessage;
+  const mappedInvalid = projectLocalSale(
+    makeQueueItem({
+      status: 'error',
+      error_message: { password: 'secret' } as unknown as string,
+    }),
+    null,
+  )?.errorMessage;
+
+  assert.ok(mappedHuge && mappedHuge.length <= 200);
+  assert.equal(
+    mappedHuge,
+    'No se pudo sincronizar la venta. Revisa la operación en Sincronización.',
+  );
+  assert.equal(mappedBlank, mappedHuge);
+  assert.equal(mappedInvalid, mappedHuge);
 });
 
 test('does not project done sales because their card comes from Odoo refresh', () => {
@@ -108,6 +261,17 @@ test('does not project done sales because their card comes from Odoo refresh', (
     projectLocalSale(makeQueueItem({ status: 'done' }), makeTicket()),
     null,
   );
+});
+
+test('excludes unknown runtime queue statuses', () => {
+  const corruptStatuses = ['deferred', 'updating', ''];
+
+  for (const status of corruptStatuses) {
+    const corruptItem = makeQueueItem({
+      status: status as SyncQueueItem['status'],
+    });
+    assert.equal(projectLocalSale(corruptItem, null), null, status);
+  }
 });
 
 test('excludes queue items that are not sale_order operations', () => {

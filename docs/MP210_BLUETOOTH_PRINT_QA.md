@@ -106,11 +106,14 @@ la ruta nativa y el transporte Bluetooth ya están comprobados.
 
 ## Evidencia adicional: folio Odoo (2026-07-25)
 
-Esta ejecución corresponde a la rama `codex/odoo-ticket-folio` y verifica los
-cambios de folio Odoo, referencia local pendiente y consumo frontend del
-vendedor recibido de Odoo. La resolución autoritativa del vendedor en backend
-sigue pendiente y no fue probada en esta ejecución. Esta evidencia no reemplaza
-la ejecución histórica del 2026-07-22 documentada arriba.
+Esta ejecución corresponde a la rama `codex/odoo-ticket-folio` y probó el SHA
+de implementación `4b07c62b3b8eab9f4881ed0d8a90c7a9bea3a0cf`. Verifica los
+cambios de folio Odoo, referencia local pendiente y consumo frontend del campo
+`employee_name` simulado en pruebas. La resolución autoritativa del vendedor en
+backend sigue pendiente y no fue probada en esta ejecución. Los commits
+`c1055e1`, `3e79849` y el commit correctivo que incorpora estas precisiones son
+exclusivamente documentales y posteriores al SHA probado. Esta evidencia no
+reemplaza la ejecución histórica del 2026-07-22 documentada arriba.
 
 ### Verificación automatizada
 
@@ -122,6 +125,12 @@ la ejecución histórica del 2026-07-22 documentada arriba.
 | Pruebas Kotlin enfocadas de Task 7 | `BUILD SUCCESSFUL`; `ThermalPrinterModuleTest`: 9 de 9 y `ThermalTicketLayoutTest`: 34 de 34; 43 en total, 0 fallidas |
 | Suite Kotlin completa | 164 pruebas, 0 fallidas; 43 pertenecen a las dos clases de Task 7 |
 | `./gradlew :thermal-printer:testDebugUnitTest :app:assembleRelease --offline --no-daemon --console=plain` | `BUILD SUCCESSFUL` en 2 min 8 s; 1276 tareas accionables (881 ejecutadas y 395 actualizadas) |
+
+El comando reproducible de las pruebas Kotlin enfocadas fue:
+
+```text
+./gradlew :thermal-printer:testDebugUnitTest --tests 'mx.grupofrio.thermalprinter.ThermalPrinterModuleTest' --tests 'mx.grupofrio.thermalprinter.ThermalTicketLayoutTest' --offline --no-daemon --console=plain
+```
 
 El APK producido localmente fue:
 
@@ -139,8 +148,10 @@ scaffold Android existente; este uso fue exclusivamente local.
 
 Además, `node scripts/verify-thermal-printer-android.mjs` falla porque encuentra
 0 ocurrencias de `android.permission.BLUETOOTH` en el manifest generado. Por
-esta razón, aunque la compilación terminó correctamente, el APK anterior **no
-es candidato de entrega ni de instalación**.
+esta razón, aunque la compilación terminó correctamente, el APK de esta
+ejecución, SHA-256
+`e250385b2eae47aa75605e5a21a89684deae8a1485f5b592e8cd9a49802c7f94`, **no es
+candidato de entrega ni de instalación**.
 
 `adb devices -l` no mostró dispositivos conectados. No se instaló este APK y
 no se realizó una impresión física. Esta ejecución no afirma resultados sobre

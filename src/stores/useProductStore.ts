@@ -45,7 +45,10 @@ import {
   upsertRecentProducts,
   type RecentProductSnapshot,
 } from '../services/recentProductIndex';
-import { describeInventoryAuthority } from '../services/productInventoryFreshness';
+import {
+  createContextSingleFlight,
+  describeInventoryAuthority,
+} from '../services/productInventoryFreshness';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
 
@@ -159,6 +162,12 @@ interface CatalogCachePayload {
 let catalogGeneration = 0;
 let recentWriteChain: Promise<void> = Promise.resolve();
 let activeCatalogContextIdentity: string | null = null;
+const authoritativeProductRefreshes = createContextSingleFlight<InventoryLoadResult>(() => ({
+  ok: false,
+  authoritative: false,
+  reason: 'unknown',
+  source: 'superseded',
+}));
 
 function positiveSafeId(value: unknown): value is number {
   return typeof value === 'number'
@@ -607,37 +616,70 @@ export const useProductStore = create<ProductState>((set, get) => ({
   // P1-2: carga con resultado AUTORITATIVO explícito. loadProducts absorbe sus
   // errores (setea `error`, resuelve) y puede terminar en `global_legacy` (lista
   // global sin scope de almacén). Aquí NO inferimos éxito por Promise/error null:
-  // exigimos la misma autoridad estricta expuesta a la UI: truck_stock fresco,
-  // online, sin caché y para el warehouse solicitado.
-  loadProductsAuthoritative: async (warehouseId: number): Promise<InventoryLoadResult> => {
-    if (!warehouseId || warehouseId <= 0) {
-      return { ok: false, authoritative: false, reason: 'missing_warehouse' };
-    }
-    try {
-      await get().loadProducts(warehouseId);
-    } catch (e) {
-      logWarn('inventory', 'authoritative_load_threw', {
-        message: e instanceof Error ? e.message : String(e),
+  // exigimos la misma autoridad estricta expuesta a la UI: fuente scoped
+  // (truck_stock/stock_quant), online, sin caché y para el warehouse solicitado.
+  // La acción no es `async` deliberadamente: callers concurrentes del mismo
+  // contexto reciben exactamente la misma Promise y un solo transporte.
+  loadProductsAuthoritative: (warehouseId: number): Promise<InventoryLoadResult> => {
+    if (!positiveSafeId(warehouseId)) {
+      return Promise.resolve({
+        ok: false,
+        authoritative: false,
+        reason: 'missing_warehouse',
       });
-      return { ok: false, authoritative: false, reason: 'network_error' };
     }
-    const err = get().error;
-    const source = get().inventorySource;
-    const loadedWh = get().loadedWarehouseId;
-    const inventoryFreshness = get().inventoryFreshness;
-    if (err) {
-      return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
+    const context = currentOfflineCatalogContext(warehouseId);
+    if (!context) {
+      return Promise.resolve({
+        ok: false,
+        authoritative: false,
+        reason: 'warehouse_mismatch',
+      });
     }
-    if (source === 'global_legacy') {
-      return { ok: false, authoritative: false, reason: 'global_legacy_fallback', source };
-    }
-    if (loadedWh !== warehouseId) {
-      return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
-    }
-    if (source === 'truck_stock' && inventoryFreshness === 'authoritative') {
-      return { ok: true, authoritative: true, warehouseId, source };
-    }
-    return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };
+    const contextIdentity = buildOfflineCatalogContextIdentity(context);
+
+    return authoritativeProductRefreshes.run(contextIdentity, async () => {
+      try {
+        await get().loadProducts(warehouseId);
+      } catch (e) {
+        logWarn('inventory', 'authoritative_load_threw', {
+          message: e instanceof Error ? e.message : String(e),
+        });
+        return { ok: false, authoritative: false, reason: 'network_error' };
+      }
+      const currentContext = currentOfflineCatalogContext(warehouseId);
+      if (
+        !currentContext
+        || buildOfflineCatalogContextIdentity(currentContext) !== contextIdentity
+      ) {
+        return {
+          ok: false,
+          authoritative: false,
+          reason: 'unknown',
+          source: 'superseded',
+        };
+      }
+      const err = get().error;
+      const source = get().inventorySource;
+      const loadedWh = get().loadedWarehouseId;
+      const inventoryFreshness = get().inventoryFreshness;
+      if (err) {
+        return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
+      }
+      if (source === 'global_legacy') {
+        return { ok: false, authoritative: false, reason: 'global_legacy_fallback', source };
+      }
+      if (loadedWh !== warehouseId) {
+        return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
+      }
+      if (
+        (source === 'truck_stock' || source === 'stock_quant')
+        && inventoryFreshness === 'authoritative'
+      ) {
+        return { ok: true, authoritative: true, warehouseId, source };
+      }
+      return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };
+    });
   },
 
   /**
@@ -872,6 +914,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   },
 
   reset: () => {
+    authoritativeProductRefreshes.invalidate();
     catalogGeneration += 1;
     activeCatalogContextIdentity = null;
     set({

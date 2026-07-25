@@ -1,14 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { describeInventoryAuthority } from '../src/services/productInventoryFreshness.ts';
+import {
+  createContextSingleFlight,
+  describeInventoryAuthority,
+} from '../src/services/productInventoryFreshness.ts';
 
-test('marks only a fresh online truck-stock load for the expected warehouse as authoritative', () => {
+test('marks fresh online scoped loads for the expected warehouse as authoritative', () => {
   assert.equal(describeInventoryAuthority({
     isOnline: true,
     loadedWarehouseId: 8,
     expectedWarehouseId: 8,
     inventorySource: 'truck_stock',
+    fromCache: false,
+  }), 'authoritative');
+  assert.equal(describeInventoryAuthority({
+    isOnline: true,
+    loadedWarehouseId: 8,
+    expectedWarehouseId: 8,
+    inventorySource: 'stock_quant',
     fromCache: false,
   }), 'authoritative');
 });
@@ -26,11 +36,6 @@ test('keeps cached and unknown inventory non-authoritative when connectivity ret
     ...base,
     fromCache: false,
     inventorySource: null,
-  }), 'unknown');
-  assert.equal(describeInventoryAuthority({
-    ...base,
-    fromCache: false,
-    inventorySource: 'stock_quant',
   }), 'unknown');
   assert.equal(describeInventoryAuthority({
     ...base,
@@ -75,4 +80,99 @@ test('is runtime-safe for malformed JavaScript callers', () => {
     inventorySource: 'server_guess',
     fromCache: false,
   } as never), 'unknown');
+});
+
+type RefreshResult =
+  | { ok: true; source: string }
+  | { ok: false; reason: 'failed' | 'superseded' };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+test('coalesces same-context authoritative refreshes into the same pending promise', async () => {
+  const gate = deferred<RefreshResult>();
+  let loads = 0;
+  let legacyRefreshPending = true;
+  const coordinator = createContextSingleFlight<RefreshResult>(() => ({
+    ok: false,
+    reason: 'superseded',
+  }));
+  const refresh = () => coordinator.run('employee:1|warehouse:8', async () => {
+    loads += 1;
+    return gate.promise;
+  });
+
+  const first = refresh();
+  const second = refresh();
+  assert.equal(first, second);
+  assert.equal(loads, 0, 'the task starts after the promise is published');
+  await Promise.resolve();
+  assert.equal(loads, 1);
+
+  let settled = false;
+  void second.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'prior authoritative state must not produce an early success');
+
+  gate.resolve({ ok: false, reason: 'failed' });
+  const result = await first;
+  if (result.ok) legacyRefreshPending = false;
+  assert.deepEqual(result, { ok: false, reason: 'failed' });
+  assert.equal(legacyRefreshPending, true, 'a failed active load must preserve refresh pending');
+});
+
+test('a context change supersedes the old refresh without letting its cleanup clear the new one', async () => {
+  const firstGate = deferred<RefreshResult>();
+  const secondGate = deferred<RefreshResult>();
+  const coordinator = createContextSingleFlight<RefreshResult>(() => ({
+    ok: false,
+    reason: 'superseded',
+  }));
+
+  const first = coordinator.run('employee:1|warehouse:8', () => firstGate.promise);
+  const second = coordinator.run('employee:1|warehouse:9', () => secondGate.promise);
+  assert.notEqual(first, second);
+
+  firstGate.resolve({ ok: true, source: 'truck_stock' });
+  assert.deepEqual(await first, { ok: false, reason: 'superseded' });
+
+  const coalescedSecond = coordinator.run(
+    'employee:1|warehouse:9',
+    () => Promise.resolve({ ok: false, reason: 'failed' }),
+  );
+  assert.equal(coalescedSecond, second, 'stale cleanup must not delete the active context entry');
+  secondGate.resolve({ ok: true, source: 'stock_quant' });
+  assert.deepEqual(await second, { ok: true, source: 'stock_quant' });
+});
+
+test('reset supersedes pending work and active sync throws or rejections clean up for retry', async () => {
+  const gate = deferred<RefreshResult>();
+  const coordinator = createContextSingleFlight<RefreshResult>(() => ({
+    ok: false,
+    reason: 'superseded',
+  }));
+  const pending = coordinator.run('ctx', () => gate.promise);
+  coordinator.invalidate();
+  gate.reject(new Error('old network failure'));
+  assert.deepEqual(await pending, { ok: false, reason: 'superseded' });
+
+  await assert.rejects(
+    coordinator.run('ctx', () => { throw new Error('sync failure'); }),
+    /sync failure/,
+  );
+  await assert.rejects(
+    coordinator.run('ctx', async () => { throw new Error('async failure'); }),
+    /async failure/,
+  );
+  assert.deepEqual(
+    await coordinator.run('ctx', async () => ({ ok: true, source: 'truck_stock' })),
+    { ok: true, source: 'truck_stock' },
+  );
 });

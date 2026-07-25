@@ -35,14 +35,30 @@ assert.match(
   /products\.length > 0[\s\S]*persistCatalogToDisk\([\s\S]*saveLastKnownCatalogStrict\(/,
   'una carga normalizada no vacía debe guardar caché del día y last-known',
 );
+const authoritativeActionStart = productStore.lastIndexOf('loadProductsAuthoritative:');
 const authoritativeAction = productStore.slice(
-  productStore.indexOf('loadProductsAuthoritative: async'),
-  productStore.indexOf('\n  updateLocalStock:', productStore.indexOf('loadProductsAuthoritative: async')),
+  authoritativeActionStart,
+  productStore.indexOf('\n  updateLocalStock:', authoritativeActionStart),
 );
 assert.match(
   authoritativeAction,
   /inventoryFreshness === 'authoritative'/,
-  'la API legacy de refresh no debe elevar stock_quant/global/cached a autoridad',
+  'la API legacy de refresh debe exigir la frescura autoritativa calculada',
+);
+assert.match(
+  authoritativeAction,
+  /source === 'truck_stock'[\s\S]*source === 'stock_quant'/,
+  'la API legacy debe admitir ambas fuentes scoped del contrato existente',
+);
+assert.match(
+  authoritativeAction,
+  /authoritativeProductRefreshes\.run\(/,
+  'las cargas autoritativas deben pasar por single-flight según contexto',
+);
+assert.match(
+  productStore,
+  /reset:\s*\(\) =>[\s\S]*authoritativeProductRefreshes\.invalidate\(\)/,
+  'reset/logout debe invalidar cualquier resultado autoritativo pendiente',
 );
 assert.doesNotMatch(
   productStore,

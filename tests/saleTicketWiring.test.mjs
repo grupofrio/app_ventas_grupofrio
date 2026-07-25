@@ -14,6 +14,14 @@ function main() {
     'utf8',
   );
   const saleTicketPdfService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicketPdf.ts'), 'utf8');
+  const saleTicketStorageService = readFileSync(
+    resolve(REPO_ROOT, 'src/services/saleTicketStorage.ts'),
+    'utf8',
+  );
+  const saleRecoveryIntentService = readFileSync(
+    resolve(REPO_ROOT, 'src/services/saleRecoveryIntent.ts'),
+    'utf8',
+  );
   const customerPricingRepository = readFileSync(
     resolve(REPO_ROOT, 'src/services/customerPricingSnapshotRepository.ts'),
     'utf8',
@@ -114,6 +122,16 @@ function main() {
     /operation_id\.trim\(\)/,
     'Ventas debe usar el operation_id remoto normalizado y no un folio inventado',
   );
+  assert.match(
+    salesScreen,
+    /useRef\(createSaleTicketOpenGuard\(\)\)/,
+    'Ventas debe conservar un guard de aperturas remotas durante la vida de la pantalla',
+  );
+  assert.match(
+    remoteOpenBody,
+    /await ticketOpenGuardRef\.current\.run\(\s*normalizedOperationId,/,
+    'Toques repetidos del mismo operation_id no deben encolar guardados ni navegaciones',
+  );
   assert.doesNotMatch(
     salesScreen,
     /customerPricingSnapshot|CUSTOMER_PRICING_SNAPSHOTS|replaceCustomerPricing|updateCustomerPricing/,
@@ -123,6 +141,25 @@ function main() {
     customerPricingRepository,
     /sale-ticket:/,
     'El repositorio de pricing debe permanecer aislado de las llaves de tickets',
+  );
+  assert.match(
+    saleTicketService,
+    /export function parseSaleTicketSnapshot/,
+    'El dominio de ticket debe exponer un unico parser runtime defensivo',
+  );
+  assert(
+    (saleTicketStorageService.match(/parseSaleTicketSnapshot\(/g) ?? []).length >= 3,
+    'Las lecturas, precedencia y escrituras de ticket deben compartir el parser runtime',
+  );
+  assert.match(
+    saleRecoveryIntentService,
+    /parseSaleTicketSnapshot\(\s*value\.ticketSnapshot,\s*value\.operationId\s*,?\s*\)/,
+    'La recuperacion de venta debe usar el mismo parser runtime de storage/print',
+  );
+  assert.doesNotMatch(
+    saleRecoveryIntentService,
+    /function restoreTicketSnapshot/,
+    'La recuperacion no debe mantener un segundo parser divergente',
   );
 
   console.log('sale ticket wiring tests: ok');

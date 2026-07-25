@@ -5,7 +5,9 @@ import {
   buildSaleTicketSnapshotFromOrder,
   buildSaleTicketHtml,
   buildSaleTicketSnapshot,
+  createSaleTicketOpenGuard,
   getSaleTicketStorageKey,
+  parseSaleTicketSnapshot,
 } from '../src/services/saleTicket.ts';
 
 test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () => {
@@ -284,6 +286,91 @@ test('buildSaleTicketSnapshotFromOrder uses real order lines when available', ()
   assert.equal(snapshot.totalKg, 18);
 });
 
+test('buildSaleTicketSnapshotFromOrder preserves discounted and taxed Odoo money', () => {
+  const snapshot = buildSaleTicketSnapshotFromOrder({
+    id: 42,
+    name: 'S00042',
+    operation_id: 'sale_discounted',
+    partner_name: 'Cliente Ruta',
+    amount_untaxed: 80,
+    amount_total: 92.8,
+    kg_total: 10,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+    lines: [{
+      product_id: 10,
+      product_name: 'Bolsa 5kg',
+      quantity: 2,
+      price_unit: 50,
+      price_subtotal: 80,
+      kg_total: 10,
+    }],
+  });
+  const html = buildSaleTicketHtml(snapshot);
+
+  assert.equal(snapshot.lines[0].unitPrice, 40);
+  assert.equal(snapshot.lines[0].lineTotal, 80);
+  assert.equal(snapshot.subtotal, 80);
+  assert.equal(snapshot.total, 92.8);
+  assert.match(html, /\$40\.00/);
+  assert.match(html, /\$80\.00/);
+  assert.match(html, /\$92\.80/);
+});
+
+test('buildSaleTicketSnapshotFromOrder preserves free lines and bounds invalid money fallbacks', () => {
+  const free = buildSaleTicketSnapshotFromOrder({
+    id: 42,
+    name: 'S00042',
+    operation_id: 'sale_free',
+    partner_name: 'Cliente Ruta',
+    amount_untaxed: 0,
+    amount_total: 0,
+    kg_total: 0,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+    lines: [{
+      product_id: 10,
+      product_name: 'Muestra',
+      quantity: 1,
+      price_unit: 0,
+      price_subtotal: 0,
+      kg_total: 0,
+    }],
+  });
+  const invalid = buildSaleTicketSnapshotFromOrder({
+    id: 43,
+    name: 'S00043',
+    operation_id: 'sale_invalid_money',
+    partner_name: 'Cliente Ruta',
+    amount_untaxed: Number.NaN,
+    amount_total: Number.POSITIVE_INFINITY,
+    kg_total: -1,
+    confirmation_date: '2026-05-28T19:00:00.000Z',
+    date_order: '2026-05-28T18:59:00.000Z',
+    lines: [{
+      product_id: 11,
+      product_name: 'Fallback',
+      quantity: 1,
+      price_unit: -10,
+      price_subtotal: Number.NaN,
+      kg_total: -5,
+    }],
+  });
+
+  assert.equal(free.lines.length, 1);
+  assert.equal(free.lines[0].unitPrice, 0);
+  assert.equal(free.lines[0].lineTotal, 0);
+  assert.equal(free.subtotal, 0);
+  assert.equal(free.total, 0);
+  assert.equal(free.totalKg, 0);
+
+  assert.equal(invalid.lines[0].unitPrice, 0);
+  assert.equal(invalid.lines[0].lineTotal, 0);
+  assert.equal(invalid.subtotal, 0);
+  assert.equal(invalid.total, 0);
+  assert.equal(invalid.totalKg, 0);
+});
+
 test('buildSaleTicketSnapshotFromOrder falls back to order id when operation id is missing', () => {
   const snapshot = buildSaleTicketSnapshotFromOrder({
     id: 42,
@@ -302,4 +389,122 @@ test('buildSaleTicketSnapshotFromOrder falls back to order id when operation id 
 
 test('getSaleTicketStorageKey namespaces tickets by sale id', () => {
   assert.equal(getSaleTicketStorageKey('sale_123'), 'sale-ticket:sale_123');
+});
+
+test('parseSaleTicketSnapshot restores a defensive legacy-compatible copy', () => {
+  const current = buildSaleTicketSnapshot({
+    saleId: 'sale_parser',
+    customerName: 'Cliente',
+    sellerName: 'Vendedor',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [{
+      productId: 10,
+      productName: 'Bolsa 5kg',
+      qty: 2,
+      price: 42.5,
+      weight: 5,
+      priceSource: 'last_known_customer',
+      priceCapturedAtMs: 1_753_350_000_000,
+      pricelistId: 81,
+    }],
+  });
+  const legacy = { ...current };
+  delete legacy.origin;
+
+  const restored = parseSaleTicketSnapshot(legacy, ' sale_parser ');
+
+  assert.deepEqual(restored, legacy);
+  assert.notStrictEqual(restored, legacy);
+  assert.notStrictEqual(restored?.lines, legacy.lines);
+  assert.notStrictEqual(restored?.lines[0], legacy.lines[0]);
+  assert.equal(restored?.origin, undefined);
+});
+
+test('parseSaleTicketSnapshot rejects malformed full snapshots and exact-id mismatches', () => {
+  const valid = buildSaleTicketSnapshot({
+    saleId: 'sale_parser',
+    customerName: 'Cliente',
+    sellerName: 'Vendedor',
+    paymentMethod: 'cash',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [{
+      productId: 10,
+      productName: 'Bolsa 5kg',
+      qty: 2,
+      price: 42.5,
+      weight: 5,
+      priceSource: 'prepared_customer',
+      priceCapturedAtMs: 1_753_350_000_000,
+      pricelistId: 81,
+    }],
+  });
+  const invalidSnapshots: unknown[] = [
+    { ...valid, lines: undefined },
+    { ...valid, total: undefined },
+    { ...valid, origin: 'server' },
+    { ...valid, customerName: null },
+    { ...valid, paymentMethod: 'card' },
+    { ...valid, subtotal: -1 },
+    { ...valid, total: Number.POSITIVE_INFINITY },
+    { ...valid, totalKg: -1 },
+    { ...valid, saleId: ' sale_parser ' },
+    { ...valid, lines: [{ ...valid.lines[0], productId: 0 }] },
+    { ...valid, lines: [{ ...valid.lines[0], productId: 1.5 }] },
+    { ...valid, lines: [{ ...valid.lines[0], qty: 0 }] },
+    { ...valid, lines: [{ ...valid.lines[0], unitPrice: -1 }] },
+    { ...valid, lines: [{ ...valid.lines[0], lineTotal: Number.NaN }] },
+    { ...valid, lines: [{ ...valid.lines[0], weight: -1 }] },
+    { ...valid, lines: [{ ...valid.lines[0], priceSource: 'guessed' }] },
+    { ...valid, lines: [{ ...valid.lines[0], priceCapturedAtMs: -1 }] },
+    { ...valid, lines: [{ ...valid.lines[0], pricelistId: 0 }] },
+  ];
+
+  for (const snapshot of invalidSnapshots) {
+    assert.equal(parseSaleTicketSnapshot(snapshot, 'sale_parser'), null);
+  }
+  assert.equal(parseSaleTicketSnapshot(valid, '   '), null);
+  assert.equal(parseSaleTicketSnapshot(valid, 'sale_other'), null);
+});
+
+test('sale ticket open guard deduplicates normalized operation ids and releases after handoff', async () => {
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const guard = createSaleTicketOpenGuard();
+  let calls = 0;
+
+  const first = guard.run(' sale-op-1 ', async () => {
+    calls += 1;
+    await firstGate;
+  });
+  const duplicate = await guard.run('sale-op-1', async () => {
+    calls += 1;
+  });
+
+  assert.equal(duplicate, false);
+  assert.equal(calls, 1);
+  releaseFirst();
+  assert.equal(await first, true);
+  assert.equal(await guard.run('sale-op-1', async () => {
+    calls += 1;
+  }), true);
+  assert.equal(calls, 2);
+  assert.equal(await guard.run('   ', async () => {
+    calls += 1;
+  }), false);
+  assert.equal(calls, 2);
+});
+
+test('sale ticket open guard releases an operation id after failure', async () => {
+  const guard = createSaleTicketOpenGuard();
+
+  await assert.rejects(
+    guard.run('sale-op-1', async () => {
+      throw new Error('save failed');
+    }),
+    /save failed/,
+  );
+  assert.equal(await guard.run('sale-op-1', async () => {}), true);
 });

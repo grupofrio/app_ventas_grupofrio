@@ -132,6 +132,60 @@ test('local save never overwrites Odoo, while Odoo refresh replaces Odoo', async
   assert.equal(memory.durable.get('sale-ticket:sale-op-1')?.total, 140);
 });
 
+test('malformed existing tickets fail closed for local saves and can be repaired by Odoo', async () => {
+  let durable: unknown = {
+    ...ticket('sale-op-1', 'odoo', 50),
+    origin: 'unknown',
+    lines: undefined,
+  };
+  const writes: SaleTicketSnapshot[] = [];
+  const repository = createSaleTicketSnapshotRepository({
+    load: async () => clone(durable),
+    save: async (_key, snapshot) => {
+      writes.push(clone(snapshot));
+      durable = clone(snapshot);
+    },
+    saveStrict: async (_key, snapshot) => {
+      writes.push(clone(snapshot));
+      durable = clone(snapshot);
+    },
+  });
+
+  assert.equal(await repository.saveLocal(ticket('sale-op-1', 'local', 60)), false);
+  assert.equal(writes.length, 0);
+  assert.equal((durable as { origin: unknown }).origin, 'unknown');
+
+  assert.equal(
+    await repository.saveAuthoritative(ticket('sale-op-1', 'odoo', 70)),
+    true,
+  );
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].origin, 'odoo');
+  assert.equal(writes[0].total, 140);
+});
+
+test('ticket repository loads return null for unsafe print shapes', async () => {
+  const valid = ticket('sale-op-1', 'local', 50);
+  const malformed: unknown[] = [
+    { ...valid, lines: undefined },
+    { ...valid, total: undefined },
+    { ...valid, origin: 'unknown' },
+    { ...valid, total: -1 },
+    { ...valid, lines: [{ ...valid.lines[0], qty: 0 }] },
+    { ...valid, lines: [{ ...valid.lines[0], priceSource: 'guessed' }] },
+  ];
+
+  for (const stored of malformed) {
+    const repository = createSaleTicketSnapshotRepository({
+      load: async () => clone(stored),
+      saveStrict: async () => {
+        throw new Error('load must not write');
+      },
+    });
+    assert.equal(await repository.load('sale-op-1'), null);
+  }
+});
+
 test('local writes retain tolerant persistence while authoritative writes stay strict', async () => {
   let tolerantWrites = 0;
   let strictWrites = 0;

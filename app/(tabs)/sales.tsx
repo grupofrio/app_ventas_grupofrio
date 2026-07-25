@@ -15,7 +15,10 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
-import { buildSaleTicketSnapshotFromOrder } from '../../src/services/saleTicket';
+import {
+  buildSaleTicketSnapshotFromOrder,
+  createSaleTicketOpenGuard,
+} from '../../src/services/saleTicket';
 import { saveAuthoritativeSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 
 export default function SalesScreen() {
@@ -23,6 +26,7 @@ export default function SalesScreen() {
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const summary = useSalesStore((s) => s.summary);
   const orders = useSalesStore((s) => s.orders);
+  const ticketOpenGuardRef = React.useRef(createSaleTicketOpenGuard());
 
   useFocusEffect(
     useCallback(() => {
@@ -48,14 +52,16 @@ export default function SalesScreen() {
       return;
     }
 
-    const ticket = {
-      ...buildSaleTicketSnapshotFromOrder(order),
-      saleId: normalizedOperationId,
-    };
-    const ticketId = ticket.saleId;
     try {
-      await saveAuthoritativeSaleTicketSnapshot(ticket);
-      router.push(`/print/${ticketId}` as never);
+      await ticketOpenGuardRef.current.run(normalizedOperationId, async () => {
+        const ticket = {
+          ...buildSaleTicketSnapshotFromOrder(order),
+          saleId: normalizedOperationId,
+        };
+        const ticketId = ticket.saleId;
+        await saveAuthoritativeSaleTicketSnapshot(ticket);
+        router.push(`/print/${ticketId}` as never);
+      });
     } catch {
       Alert.alert(
         'Ticket no disponible',

@@ -121,6 +121,31 @@ test('rejects invalid present ticket origin and captured price provenance', () =
         pricelistId: Number.POSITIVE_INFINITY,
       }],
     },
+    { ...base.ticketSnapshot, lines: undefined },
+    { ...base.ticketSnapshot, total: undefined },
+    { ...base.ticketSnapshot, subtotal: -1 },
+    { ...base.ticketSnapshot, total: Number.POSITIVE_INFINITY },
+    { ...base.ticketSnapshot, totalKg: -1 },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], productId: 0 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], qty: 0 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], unitPrice: -1 }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], lineTotal: Number.NaN }],
+    },
+    {
+      ...base.ticketSnapshot,
+      lines: [{ ...base.ticketSnapshot.lines[0], weight: -1 }],
+    },
   ];
 
   for (const snapshot of invalidSnapshots) {

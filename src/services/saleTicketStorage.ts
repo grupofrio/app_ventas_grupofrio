@@ -6,8 +6,8 @@ import {
 } from '../persistence/storage.ts';
 import {
   getSaleTicketStorageKey,
+  parseSaleTicketSnapshot,
   shouldReplaceTicketSnapshot,
-  SALE_TICKET_DEFAULT_SELLER,
 } from './saleTicket.ts';
 import type {
   SaleTicketOrigin,
@@ -25,34 +25,6 @@ function normalizeOperationId(operationId: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function readOrigin(value: unknown): SaleTicketOrigin | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const origin = (value as { origin?: unknown }).origin;
-  return origin === 'local' || origin === 'odoo' ? origin : undefined;
-}
-
-function restoreLoadedSnapshot(
-  value: unknown,
-  operationId: string,
-): SaleTicketSnapshot | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null;
-  }
-  const snapshot = value as SaleTicketSnapshot;
-  if (typeof snapshot.saleId !== 'string' || snapshot.saleId.trim() !== operationId) {
-    return null;
-  }
-  return {
-    ...snapshot,
-    saleId: operationId,
-    sellerName: typeof snapshot.sellerName === 'string' && snapshot.sellerName.trim().length > 0
-      ? snapshot.sellerName
-      : SALE_TICKET_DEFAULT_SELLER,
-  };
-}
-
 export class SaleTicketSnapshotRepository {
   private readonly storage: SaleTicketSnapshotStorage;
   private operationTail: Promise<void> = Promise.resolve();
@@ -67,7 +39,7 @@ export class SaleTicketSnapshotRepository {
     const stored = await this.storage.load(
       getSaleTicketStorageKey(normalizedOperationId),
     );
-    return restoreLoadedSnapshot(stored, normalizedOperationId);
+    return parseSaleTicketSnapshot(stored, normalizedOperationId);
   }
 
   saveLocal(snapshot: SaleTicketSnapshot): Promise<boolean> {
@@ -96,21 +68,33 @@ export class SaleTicketSnapshotRepository {
         if (requireStrictWrite) throw error;
         return false;
       }
+      const existingSnapshot = existing === null
+        ? null
+        : parseSaleTicketSnapshot(existing, normalizedOperationId);
+      if (existing !== null && !existingSnapshot && !requireStrictWrite) {
+        return false;
+      }
       if (
-        existing
+        existingSnapshot
         && !shouldReplaceTicketSnapshot({
-          existingOrigin: readOrigin(existing),
+          existingOrigin: existingSnapshot.origin,
           incomingOrigin,
         })
       ) {
         return false;
       }
 
-      const incoming: SaleTicketSnapshot = {
+      const incoming = parseSaleTicketSnapshot({
         ...snapshot,
         saleId: normalizedOperationId,
         origin: incomingOrigin,
-      };
+      }, normalizedOperationId);
+      if (!incoming) {
+        if (requireStrictWrite) {
+          throw new TypeError('Invalid authoritative sale ticket snapshot');
+        }
+        return false;
+      }
       if (requireStrictWrite || !this.storage.save) {
         await this.storage.saveStrict(key, incoming);
       } else {
@@ -160,5 +144,5 @@ export async function loadSaleTicketSnapshot(
   const stored = await storeLoad<unknown>(
     getSaleTicketStorageKey(normalizedOperationId),
   );
-  return restoreLoadedSnapshot(stored, normalizedOperationId);
+  return parseSaleTicketSnapshot(stored, normalizedOperationId);
 }

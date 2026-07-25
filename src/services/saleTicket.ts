@@ -42,6 +42,7 @@ export interface SaleTicketOrderSource {
   name: string;
   operation_id: string;
   partner_name: string;
+  amount_untaxed?: number;
   amount_total: number;
   kg_total: number;
   confirmation_date: string;
@@ -88,6 +89,10 @@ export interface SaleTicketSnapshot {
   totalKg: number;
 }
 
+export interface SaleTicketOpenGuard {
+  run(operationId: string, operation: () => Promise<void>): Promise<boolean>;
+}
+
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
 export const SALE_TICKET_LEGAL_NAME = SALE_TICKET_BRANDING.legalName;
 export const SALE_TICKET_RFC = SALE_TICKET_BRANDING.rfcLabel.replace(/^RFC:\s*/, '');
@@ -98,12 +103,112 @@ export function getSaleTicketStorageKey(saleId: string): string {
   return `sale-ticket:${saleId}`;
 }
 
+export function parseSaleTicketSnapshot(
+  value: unknown,
+  expectedSaleId: string,
+): SaleTicketSnapshot | null {
+  try {
+    const normalizedSaleId = typeof expectedSaleId === 'string'
+      ? expectedSaleId.trim()
+      : '';
+    if (!normalizedSaleId || !isRecord(value) || value.saleId !== normalizedSaleId) {
+      return null;
+    }
+    if (
+      (value.origin !== undefined && value.origin !== 'local' && value.origin !== 'odoo')
+      || typeof value.customerName !== 'string'
+      || typeof value.sellerName !== 'string'
+      || !isSaleTicketPaymentMethod(value.paymentMethod)
+      || typeof value.paymentLabel !== 'string'
+      || typeof value.createdAt !== 'string'
+      || !Array.isArray(value.lines)
+      || !nonNegativeFiniteNumber(value.subtotal)
+      || !nonNegativeFiniteNumber(value.total)
+      || !nonNegativeFiniteNumber(value.totalKg)
+    ) {
+      return null;
+    }
+
+    const lines: SaleTicketLine[] = [];
+    for (const candidate of value.lines) {
+      if (
+        !isRecord(candidate)
+        || !positiveInteger(candidate.productId)
+        || typeof candidate.productName !== 'string'
+        || !positiveFiniteNumber(candidate.qty)
+        || !nonNegativeFiniteNumber(candidate.unitPrice)
+        || !nonNegativeFiniteNumber(candidate.lineTotal)
+        || !nonNegativeFiniteNumber(candidate.weight)
+        || !validOptionalPriceSource(candidate.priceSource)
+        || !validOptionalCapturedAt(candidate.priceCapturedAtMs)
+        || !validOptionalPricelistId(candidate.pricelistId)
+      ) {
+        return null;
+      }
+      lines.push({
+        productId: candidate.productId,
+        productName: candidate.productName,
+        qty: candidate.qty,
+        unitPrice: candidate.unitPrice,
+        lineTotal: candidate.lineTotal,
+        ...(candidate.priceSource === undefined
+          ? {}
+          : { priceSource: candidate.priceSource }),
+        ...(candidate.priceCapturedAtMs === undefined
+          ? {}
+          : { priceCapturedAtMs: candidate.priceCapturedAtMs }),
+        ...(candidate.pricelistId === undefined
+          ? {}
+          : { pricelistId: candidate.pricelistId }),
+        weight: candidate.weight,
+      });
+    }
+
+    return {
+      saleId: normalizedSaleId,
+      ...(value.origin === undefined ? {} : { origin: value.origin }),
+      customerName: value.customerName,
+      sellerName: normalizeSellerName(value.sellerName),
+      paymentMethod: value.paymentMethod,
+      paymentLabel: value.paymentLabel,
+      createdAt: value.createdAt,
+      lines,
+      subtotal: value.subtotal,
+      total: value.total,
+      totalKg: value.totalKg,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function shouldReplaceTicketSnapshot(input: {
   existingOrigin?: SaleTicketOrigin;
   incomingOrigin: SaleTicketOrigin;
 }): boolean {
   const existingOrigin = input.existingOrigin ?? 'local';
   return input.incomingOrigin === 'odoo' || existingOrigin !== 'odoo';
+}
+
+export function createSaleTicketOpenGuard(): SaleTicketOpenGuard {
+  const inFlightOperationIds = new Set<string>();
+
+  return {
+    async run(operationId, operation) {
+      const normalizedOperationId = operationId.trim();
+      if (!normalizedOperationId || inFlightOperationIds.has(normalizedOperationId)) {
+        return false;
+      }
+
+      inFlightOperationIds.add(normalizedOperationId);
+      try {
+        await operation();
+        return true;
+      } finally {
+        inFlightOperationIds.delete(normalizedOperationId);
+      }
+    },
+  };
 }
 
 export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): SaleTicketSnapshot {
@@ -147,12 +252,17 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   const paymentMethod = normalizePaymentMethod(order.payment_method);
   const paymentLabel = order.payment_method_label?.trim() || getPaymentLabel(paymentMethod);
   const orderLines = Array.isArray(order.lines)
-    ? order.lines.filter((line) => line.quantity > 0)
+    ? order.lines.filter((line) => Number.isFinite(line.quantity) && line.quantity > 0)
     : [];
 
   if (orderLines.length > 0) {
     const totalQty = orderLines.reduce((sum, line) => sum + line.quantity, 0);
-    const fallbackUnitWeight = totalQty > 0 ? order.kg_total / totalQty : 0;
+    const authoritativeTotalKg = nonNegativeFiniteNumber(order.kg_total)
+      ? order.kg_total
+      : null;
+    const fallbackUnitWeight = authoritativeTotalKg === null
+      ? 0
+      : authoritativeTotalKg / totalQty;
     const snapshot = buildSaleTicketSnapshot({
       saleId,
       customerName,
@@ -161,10 +271,16 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
       paymentLabel,
       createdAt,
       lines: orderLines.map((line) => {
-        const unitPrice = line.price_unit || (line.price_subtotal / line.quantity);
-        const unitWeight = typeof line.weight === 'number'
+        const fallbackLineTotal = nonNegativeFiniteNumber(line.price_unit)
+          ? line.price_unit * line.quantity
+          : 0;
+        const lineTotal = nonNegativeFiniteNumber(line.price_subtotal)
+          ? line.price_subtotal
+          : fallbackLineTotal;
+        const unitPrice = lineTotal / line.quantity;
+        const unitWeight = nonNegativeFiniteNumber(line.weight)
           ? line.weight
-          : typeof line.kg_total === 'number' && line.quantity > 0
+          : nonNegativeFiniteNumber(line.kg_total)
             ? line.kg_total / line.quantity
             : fallbackUnitWeight;
 
@@ -181,10 +297,26 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
     return {
       ...snapshot,
       origin: 'odoo',
-      totalKg: order.kg_total || snapshot.totalKg,
+      subtotal: nonNegativeFiniteNumber(order.amount_untaxed)
+        ? order.amount_untaxed
+        : snapshot.subtotal,
+      total: nonNegativeFiniteNumber(order.amount_total)
+        ? order.amount_total
+        : nonNegativeFiniteNumber(order.amount_untaxed)
+          ? order.amount_untaxed
+          : snapshot.subtotal,
+      totalKg: authoritativeTotalKg ?? snapshot.totalKg,
     };
   }
 
+  const fallbackSubtotal = nonNegativeFiniteNumber(order.amount_untaxed)
+    ? order.amount_untaxed
+    : nonNegativeFiniteNumber(order.amount_total)
+      ? order.amount_total
+      : 0;
+  const fallbackTotal = nonNegativeFiniteNumber(order.amount_total)
+    ? order.amount_total
+    : fallbackSubtotal;
   return {
     ...buildSaleTicketSnapshot({
       saleId,
@@ -197,11 +329,13 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
         productId: order.id,
         productName: `Venta ${orderName}`,
         qty: 1,
-        price: order.amount_total,
-        weight: order.kg_total,
+        price: fallbackSubtotal,
+        weight: nonNegativeFiniteNumber(order.kg_total) ? order.kg_total : 0,
       }],
     }),
     origin: 'odoo',
+    subtotal: fallbackSubtotal,
+    total: fallbackTotal,
   };
 }
 
@@ -360,4 +494,46 @@ function normalizePaymentMethod(value: string | undefined): SaleTicketPaymentMet
   if (['credit', 'credito', 'crédito'].includes(normalized)) return 'credit';
   if (['transfer', 'transferencia', 'bank_transfer'].includes(normalized)) return 'transfer';
   return 'unknown';
+}
+
+function nonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function positiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSaleTicketPaymentMethod(value: unknown): value is SaleTicketPaymentMethod {
+  return value === 'cash'
+    || value === 'credit'
+    || value === 'transfer'
+    || value === 'unknown';
+}
+
+function validOptionalPriceSource(
+  value: unknown,
+): value is SaleTicketPriceSource | undefined {
+  return value === undefined
+    || value === 'prepared_customer'
+    || value === 'last_known_customer'
+    || value === 'public_fallback';
+}
+
+function validOptionalCapturedAt(value: unknown): value is number | null | undefined {
+  return value === undefined
+    || value === null
+    || nonNegativeFiniteNumber(value);
+}
+
+function validOptionalPricelistId(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || positiveInteger(value);
 }

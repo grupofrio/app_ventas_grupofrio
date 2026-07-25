@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   activatePreparedPricingRun,
+  compactPricingSnapshotState,
   emptyPricingSnapshotState,
   recordLastKnownServerPrices,
   resolveCapturedCustomerPrice,
@@ -169,10 +170,132 @@ test('activates a new preparation run without overwriting prior snapshots', () =
   });
 
   assert.equal(next.activeManifest?.preparationRunId, 'run-new');
-  assert.equal(next.snapshots['run-old:34:99:81'], previousSnapshot);
+  assert.deepEqual(next.snapshots['run-old:34:99:81'], previousSnapshot);
+  assert.notEqual(next.snapshots['run-old:34:99:81'], previousSnapshot);
   assert.deepEqual(next.snapshots['run-new:34:99:81']?.prices, [[10, 42]]);
   assert.equal(previous.activeManifest?.preparationRunId, 'run-old');
   assert.equal(previous.snapshots['run-new:34:99:81'], undefined);
+});
+
+test('explicit compaction retains only snapshots referenced by the active repeated run', () => {
+  const runOld = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-old',
+    preparedAtMs: 1_000,
+    unitPrice: 40,
+  });
+  const runMiddle = activateSinglePreparedTarget(runOld, {
+    preparationRunId: 'run-middle',
+    preparedAtMs: 2_000,
+    unitPrice: 41,
+  });
+  const runActive = activateSinglePreparedTarget(runMiddle, {
+    preparationRunId: 'run-active',
+    preparedAtMs: 3_000,
+    unitPrice: 42,
+  });
+
+  assert.deepEqual(Object.keys(runActive.snapshots).sort(), [
+    'run-active:34:99:81',
+    'run-middle:34:99:81',
+    'run-old:34:99:81',
+  ]);
+
+  const compacted = compactPricingSnapshotState(runActive);
+
+  assert.deepEqual(Object.keys(compacted.snapshots), ['run-active:34:99:81']);
+  assert.deepEqual(compacted.activeManifest, runActive.activeManifest);
+  assert.deepEqual(compacted.requestedMappings, runActive.requestedMappings);
+  assert.deepEqual(compacted.lastKnownPrices, runActive.lastKnownPrices);
+  assert.equal(Object.isFrozen(compacted), true);
+  assert.equal(Object.isFrozen(compacted.snapshots['run-active:34:99:81']), true);
+});
+
+test('compaction drops every unreferenced snapshot when there is no active manifest', () => {
+  const prepared = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-detached',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+  const detached: PricingSnapshotStateV1 = {
+    ...prepared,
+    activeManifest: null,
+  };
+
+  const compacted = compactPricingSnapshotState(detached);
+
+  assert.deepEqual(compacted.snapshots, {});
+  assert.deepEqual(compacted.requestedMappings, prepared.requestedMappings);
+  assert.deepEqual(compacted.lastKnownPrices, prepared.lastKnownPrices);
+  assert.equal(Object.isFrozen(compacted.requestedMappings), true);
+  assert.equal(Object.isFrozen(compacted.lastKnownPrices['34:99:81']), true);
+});
+
+test('published state is deeply immutable without freezing its input state', () => {
+  const original = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
+    preparationRunId: 'run-frozen',
+    preparedAtMs: 1_000,
+    unitPrice: 42,
+  });
+  const mutableInput = JSON.parse(JSON.stringify(original)) as PricingSnapshotStateV1;
+  const state = activatePreparedPricingRun(mutableInput, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'run-failed',
+    activatedAtMs: 2_000,
+    targets: [{
+      status: 'failed',
+      partnerId: 100,
+      requestedPricelistId: 104,
+    }],
+  });
+  const snapshot = state.snapshots['run-frozen:34:99:81']!;
+  const target = state.activeManifest!.targets[0]!;
+  const mapping = state.requestedMappings['34:99:104']!;
+  const ledgerPrice = state.lastKnownPrices['34:99:81']!['10']!;
+
+  assert.equal(Object.isFrozen(mutableInput), false);
+  assert.equal(Object.isFrozen(mutableInput.snapshots['run-frozen:34:99:81']), false);
+  assert.equal(Object.isFrozen(state), true);
+  assert.equal(Object.isFrozen(state.snapshots), true);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot.prices), true);
+  assert.equal(Object.isFrozen(snapshot.prices[0]), true);
+  assert.equal(Object.isFrozen(state.activeManifest), true);
+  assert.equal(Object.isFrozen(state.activeManifest?.targets), true);
+  assert.equal(Object.isFrozen(target), true);
+  assert.equal(Object.isFrozen(mapping), true);
+  assert.equal(Object.isFrozen(ledgerPrice), true);
+
+  assert.throws(() => {
+    (snapshot.prices as unknown as Array<[number, number]>)[0]![1] = 999;
+  }, TypeError);
+  assert.throws(() => {
+    (target as { status: 'prepared' | 'failed' }).status = 'prepared';
+  }, TypeError);
+  assert.throws(() => {
+    (mapping as { resolvedPricelistId: number }).resolvedPricelistId = 82;
+  }, TypeError);
+  assert.throws(() => {
+    (ledgerPrice as { unitPrice: number }).unitPrice = 999;
+  }, TypeError);
+
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(state, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      productId: 10,
+      publicPrice: 100,
+    }),
+    {
+      unitPrice: 42,
+      source: 'last_known_customer',
+      capturedAtMs: 1_000,
+      pricelistId: 81,
+    },
+  );
+  assert.deepEqual(snapshot.prices, [[10, 42]]);
 });
 
 test('a failed target preserves its prior snapshots, mapping, and last-known ledger', () => {
@@ -234,7 +357,8 @@ test('foreground last-known recording does not activate or replace prepared snap
     validation,
   });
 
-  assert.equal(next.activeManifest, previous.activeManifest);
+  assert.deepEqual(next.activeManifest, previous.activeManifest);
+  assert.notEqual(next.activeManifest, previous.activeManifest);
   assert.deepEqual(next.snapshots, previous.snapshots);
   assert.deepEqual(next.lastKnownPrices['34:99:82']?.['10'], {
     productId: 10,
@@ -242,6 +366,58 @@ test('foreground last-known recording does not activate or replace prepared snap
     capturedAtMs: 2_000,
     preparationRunId: 'foreground-1',
   });
+});
+
+test('older or equal foreground responses cannot roll back a newer requested mapping', () => {
+  const newer = recordLastKnownServerPrices(emptyPricingSnapshotState(), {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-newer',
+    validation: validServerSnapshot([[10, 44]], 81),
+  });
+  const older = recordLastKnownServerPrices(newer, {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    capturedAtMs: 1_000,
+    captureRunId: 'foreground-older',
+    validation: validServerSnapshot([[10, 22]], 82),
+  });
+  const equal = recordLastKnownServerPrices(older, {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-equal',
+    validation: validServerSnapshot([[10, 33]], 83),
+  });
+
+  assert.deepEqual(equal.requestedMappings['34:99:104'], {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 104,
+    resolvedPricelistId: 81,
+    preparationRunId: 'foreground-newer',
+    capturedAtMs: 2_000,
+  });
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(equal, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      productId: 10,
+      publicPrice: 100,
+    }),
+    {
+      unitPrice: 44,
+      source: 'last_known_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
 });
 
 test('an older prepared response cannot roll back a newer last-known ledger entry', () => {

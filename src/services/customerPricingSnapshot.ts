@@ -1,19 +1,24 @@
 export interface ServerCustomerProductPriceRow {
-  productId: number;
-  unitPrice: number;
+  readonly productId: number;
+  readonly unitPrice: number;
 }
 
 export interface ValidateServerPriceSnapshotInput {
-  resolvedPricelistId: number | null;
-  requestedProductIds: number[];
-  rows: ServerCustomerProductPriceRow[];
+  readonly resolvedPricelistId: number | null;
+  readonly requestedProductIds: readonly number[];
+  readonly rows: readonly ServerCustomerProductPriceRow[];
 }
 
+export type CustomerProductPriceTuple = readonly [
+  productId: number,
+  unitPrice: number,
+];
+
 export interface ValidatedServerPriceSnapshot {
-  ok: true;
-  resolvedPricelistId: number;
-  productFingerprint: string;
-  prices: Array<[productId: number, unitPrice: number]>;
+  readonly ok: true;
+  readonly resolvedPricelistId: number;
+  readonly productFingerprint: string;
+  readonly prices: readonly CustomerProductPriceTuple[];
 }
 
 export type InvalidServerPriceSnapshot =
@@ -47,76 +52,77 @@ export type ValidationResult =
   | InvalidServerPriceSnapshot;
 
 export interface PreparedCustomerPricingSnapshot {
-  version: 1;
-  snapshotId: string;
-  companyId: number;
-  partnerId: number;
-  resolvedPricelistId: number;
-  preparedAtMs: number;
-  preparedPlanId: number | null;
-  preparationRunId: string;
-  origin: 'odoo_server_full';
-  productFingerprint: string;
-  prices: Array<[productId: number, unitPrice: number]>;
+  readonly version: 1;
+  readonly snapshotId: string;
+  readonly companyId: number;
+  readonly partnerId: number;
+  readonly resolvedPricelistId: number;
+  readonly preparedAtMs: number;
+  readonly preparedPlanId: number | null;
+  readonly preparationRunId: string;
+  readonly origin: 'odoo_server_full';
+  readonly productFingerprint: string;
+  readonly prices: readonly CustomerProductPriceTuple[];
 }
 
 export interface LastKnownCustomerProductPrice {
-  productId: number;
-  unitPrice: number;
-  capturedAtMs: number;
-  preparationRunId: string;
+  readonly productId: number;
+  readonly unitPrice: number;
+  readonly capturedAtMs: number;
+  readonly preparationRunId: string;
 }
 
 export interface ResolvedPricelistMapping {
-  companyId: number;
-  partnerId: number;
-  requestedPricelistId: number | null;
-  resolvedPricelistId: number;
-  preparationRunId: string;
+  readonly companyId: number;
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
+  readonly resolvedPricelistId: number;
+  readonly preparationRunId: string;
+  readonly capturedAtMs: number;
 }
 
 export interface PricingPreparationTarget {
-  partnerId: number;
-  requestedPricelistId: number | null;
-  resolvedPricelistId: number | null;
-  snapshotId: string | null;
-  status: 'prepared' | 'failed';
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
+  readonly resolvedPricelistId: number | null;
+  readonly snapshotId: string | null;
+  readonly status: 'prepared' | 'failed';
 }
 
 export interface PricingPreparationManifest {
-  version: 1;
-  companyId: number;
-  planId: number | null;
-  preparationRunId: string;
-  activatedAtMs: number;
-  targets: PricingPreparationTarget[];
+  readonly version: 1;
+  readonly companyId: number;
+  readonly planId: number | null;
+  readonly preparationRunId: string;
+  readonly activatedAtMs: number;
+  readonly targets: readonly PricingPreparationTarget[];
 }
 
 export interface PricingSnapshotStateV1 {
-  version: 1;
-  activeManifest: PricingPreparationManifest | null;
-  snapshots: Record<string, PreparedCustomerPricingSnapshot>;
-  requestedMappings: Record<string, ResolvedPricelistMapping>;
-  lastKnownPrices: Record<
+  readonly version: 1;
+  readonly activeManifest: PricingPreparationManifest | null;
+  readonly snapshots: Readonly<Record<string, PreparedCustomerPricingSnapshot>>;
+  readonly requestedMappings: Readonly<Record<string, ResolvedPricelistMapping>>;
+  readonly lastKnownPrices: Readonly<Record<
     string,
-    Record<string, LastKnownCustomerProductPrice>
-  >;
+    Readonly<Record<string, LastKnownCustomerProductPrice>>
+  >>;
 }
 
 export interface NewPreparedPricingTargetInput {
-  status: 'prepared';
-  partnerId: number;
-  requestedPricelistId: number | null;
-  snapshot: {
-    preparedAtMs: number;
-    validation: ValidatedServerPriceSnapshot;
+  readonly status: 'prepared';
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
+  readonly snapshot: {
+    readonly preparedAtMs: number;
+    readonly validation: ValidatedServerPriceSnapshot;
   };
 }
 
 export interface FailedPreparedPricingTargetInput {
-  status: 'failed';
-  partnerId: number;
-  requestedPricelistId: number | null;
+  readonly status: 'failed';
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
 }
 
 export type ActivatePreparedPricingTargetInput =
@@ -124,39 +130,39 @@ export type ActivatePreparedPricingTargetInput =
   | FailedPreparedPricingTargetInput;
 
 export interface ActivatePreparedPricingRunInput {
-  companyId: number;
-  planId: number | null;
-  preparationRunId: string;
-  activatedAtMs: number;
-  targets: ActivatePreparedPricingTargetInput[];
+  readonly companyId: number;
+  readonly planId: number | null;
+  readonly preparationRunId: string;
+  readonly activatedAtMs: number;
+  readonly targets: readonly ActivatePreparedPricingTargetInput[];
 }
 
 export interface RecordLastKnownServerPricesInput {
-  companyId: number;
-  partnerId: number;
-  requestedPricelistId: number | null;
-  capturedAtMs: number;
-  captureRunId: string;
-  validation: ValidatedServerPriceSnapshot;
+  readonly companyId: number;
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
+  readonly capturedAtMs: number;
+  readonly captureRunId: string;
+  readonly validation: ValidatedServerPriceSnapshot;
 }
 
 export interface ResolveCapturedCustomerPriceInput {
-  companyId: number;
-  planId: number | null;
-  partnerId: number;
-  requestedPricelistId: number | null;
-  productId: number;
-  publicPrice: number;
+  readonly companyId: number;
+  readonly planId: number | null;
+  readonly partnerId: number;
+  readonly requestedPricelistId: number | null;
+  readonly productId: number;
+  readonly publicPrice: number;
 }
 
 export interface CapturedCustomerPrice {
-  unitPrice: number;
-  source:
+  readonly unitPrice: number;
+  readonly source:
     | 'prepared_customer'
     | 'last_known_customer'
     | 'public_fallback';
-  capturedAtMs: number | null;
-  pricelistId: number | null;
+  readonly capturedAtMs: number | null;
+  readonly pricelistId: number | null;
 }
 
 function isPositiveInteger(value: number): boolean {
@@ -203,6 +209,65 @@ function hasSamePricePayload(
   );
 }
 
+function freezePricingSnapshotState(
+  source: PricingSnapshotStateV1,
+): PricingSnapshotStateV1 {
+  const snapshots: Record<string, PreparedCustomerPricingSnapshot> = {};
+  for (const [snapshotId, snapshot] of Object.entries(source.snapshots)) {
+    const prices = Object.freeze(
+      snapshot.prices.map(
+        ([productId, unitPrice]) =>
+          Object.freeze([productId, unitPrice] as const),
+      ),
+    );
+    snapshots[snapshotId] = Object.freeze({
+      ...snapshot,
+      prices,
+    });
+  }
+
+  const requestedMappings: Record<string, ResolvedPricelistMapping> = {};
+  for (const [mappingKey, mapping] of Object.entries(source.requestedMappings)) {
+    requestedMappings[mappingKey] = Object.freeze({ ...mapping });
+  }
+
+  const lastKnownPrices: Record<
+    string,
+    Readonly<Record<string, LastKnownCustomerProductPrice>>
+  > = {};
+  for (const [canonicalKey, productPrices] of Object.entries(
+    source.lastKnownPrices,
+  )) {
+    const frozenProductPrices: Record<
+      string,
+      LastKnownCustomerProductPrice
+    > = {};
+    for (const [productId, price] of Object.entries(productPrices)) {
+      frozenProductPrices[productId] = Object.freeze({ ...price });
+    }
+    lastKnownPrices[canonicalKey] = Object.freeze(frozenProductPrices);
+  }
+
+  const activeManifest = source.activeManifest
+    ? Object.freeze({
+        ...source.activeManifest,
+        targets: Object.freeze(
+          source.activeManifest.targets.map(
+            (target) => Object.freeze({ ...target }),
+          ),
+        ),
+      })
+    : null;
+
+  return Object.freeze({
+    version: 1,
+    activeManifest,
+    snapshots: Object.freeze(snapshots),
+    requestedMappings: Object.freeze(requestedMappings),
+    lastKnownPrices: Object.freeze(lastKnownPrices),
+  });
+}
+
 function withLastKnownPrices(
   current: PricingSnapshotStateV1['lastKnownPrices'],
   input: {
@@ -211,7 +276,7 @@ function withLastKnownPrices(
     resolvedPricelistId: number;
     capturedAtMs: number;
     preparationRunId: string;
-    prices: Array<[productId: number, unitPrice: number]>;
+    prices: readonly CustomerProductPriceTuple[];
   },
 ): PricingSnapshotStateV1['lastKnownPrices'] {
   const canonicalKey = canonicalPricingKey(
@@ -242,13 +307,13 @@ function withLastKnownPrices(
 }
 
 export function emptyPricingSnapshotState(): PricingSnapshotStateV1 {
-  return {
+  return freezePricingSnapshotState({
     version: 1,
     activeManifest: null,
     snapshots: {},
     requestedMappings: {},
     lastKnownPrices: {},
-  };
+  });
 }
 
 export function validateServerPriceSnapshot(
@@ -326,7 +391,7 @@ export function validateServerPriceSnapshot(
     };
   }
 
-  const prices: Array<[productId: number, unitPrice: number]> = [];
+  const prices: CustomerProductPriceTuple[] = [];
   for (const productId of requestedProductIds) {
     const unitPrice = acceptedRows.get(productId)!.unitPrice;
     if (!Number.isFinite(unitPrice) || unitPrice < 0) {
@@ -440,6 +505,7 @@ export function activatePreparedPricingRun(
         requestedPricelistId: target.requestedPricelistId,
         resolvedPricelistId: validation.resolvedPricelistId,
         preparationRunId: input.preparationRunId,
+        capturedAtMs: input.activatedAtMs,
       },
     };
     lastKnownPrices = withLastKnownPrices(lastKnownPrices, {
@@ -459,7 +525,7 @@ export function activatePreparedPricingRun(
     });
   }
 
-  return {
+  return freezePricingSnapshotState({
     version: 1,
     activeManifest: {
       version: 1,
@@ -472,7 +538,7 @@ export function activatePreparedPricingRun(
     snapshots,
     requestedMappings,
     lastKnownPrices,
-  };
+  });
 }
 
 export function recordLastKnownServerPrices(
@@ -484,19 +550,27 @@ export function recordLastKnownServerPrices(
     input.partnerId,
     input.requestedPricelistId,
   );
+  const existingMapping = current.requestedMappings[mappingKey];
+  const requestedMappings = (
+    existingMapping
+    && existingMapping.capturedAtMs >= input.capturedAtMs
+  )
+    ? current.requestedMappings
+    : {
+        ...current.requestedMappings,
+        [mappingKey]: {
+          companyId: input.companyId,
+          partnerId: input.partnerId,
+          requestedPricelistId: input.requestedPricelistId,
+          resolvedPricelistId: input.validation.resolvedPricelistId,
+          preparationRunId: input.captureRunId,
+          capturedAtMs: input.capturedAtMs,
+        },
+      };
 
-  return {
+  return freezePricingSnapshotState({
     ...current,
-    requestedMappings: {
-      ...current.requestedMappings,
-      [mappingKey]: {
-        companyId: input.companyId,
-        partnerId: input.partnerId,
-        requestedPricelistId: input.requestedPricelistId,
-        resolvedPricelistId: input.validation.resolvedPricelistId,
-        preparationRunId: input.captureRunId,
-      },
-    },
+    requestedMappings,
     lastKnownPrices: withLastKnownPrices(current.lastKnownPrices, {
       companyId: input.companyId,
       partnerId: input.partnerId,
@@ -505,7 +579,32 @@ export function recordLastKnownServerPrices(
       preparationRunId: input.captureRunId,
       prices: input.validation.prices,
     }),
-  };
+  });
+}
+
+export function compactPricingSnapshotState(
+  current: PricingSnapshotStateV1,
+): PricingSnapshotStateV1 {
+  const referencedSnapshotIds = new Set(
+    current.activeManifest?.targets.flatMap((target) =>
+      target.status === 'prepared' && target.snapshotId
+        ? [target.snapshotId]
+        : [],
+    ) ?? [],
+  );
+  const snapshots: Record<string, PreparedCustomerPricingSnapshot> = {};
+
+  for (const snapshotId of referencedSnapshotIds) {
+    const snapshot = current.snapshots[snapshotId];
+    if (snapshot) {
+      snapshots[snapshotId] = snapshot;
+    }
+  }
+
+  return freezePricingSnapshotState({
+    ...current,
+    snapshots,
+  });
 }
 
 export function resolveCapturedCustomerPrice(

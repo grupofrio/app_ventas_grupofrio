@@ -14,6 +14,58 @@
 
 ---
 
+## Preparation: isolate the dirty backend checkout
+
+The primary backend checkout is intentionally not the implementation surface:
+it currently contains an unrelated local commit, is behind its remote branch,
+and has an untracked `ayuda.py`. Preserve all of that state.
+
+- [ ] Fetch the authoritative backend branch:
+
+```bash
+git -C /Users/sebis/Documents/odoo/GrupoFrio fetch origin GrupoFrio
+```
+
+- [ ] Create the isolated worktree and feature branch:
+
+```bash
+git -C /Users/sebis/Documents/odoo/GrupoFrio worktree add \
+  -b codex/odoo-ticket-seller \
+  /Users/sebis/Documents/odoo/GrupoFrio/.worktrees/odoo-ticket-seller \
+  origin/GrupoFrio
+```
+
+- [ ] Run every remaining backend command from:
+
+```text
+/Users/sebis/Documents/odoo/GrupoFrio/.worktrees/odoo-ticket-seller
+```
+
+- [ ] Confirm the isolated worktree is clean and the primary checkout still
+contains its original unrelated state.
+
+The repository does not contain Odoo core or a local `odoo-bin`, and no CI
+workflow in this checkout provisions a disposable Odoo database. Therefore,
+the backend plan has a hard runtime checkpoint:
+
+- implementation and structural checks may be prepared on the isolated branch;
+- the branch may be pushed only as explicitly unverified/draft work for the
+  collaborator;
+- Task 2 must not be marked GREEN, and the branch must not be merged or
+  deployed, until an authorized disposable Odoo/Odoo.sh runner is identified;
+- before running the Odoo commands below, replace every
+  `<disposable_test_db>` with the exact non-production database name and record
+  the runner, addons path, database creation/cleanup procedure, and command
+  output;
+- production is never an acceptable test database.
+
+If no authorized runner is available at execution time, stop the backend plan
+at the runtime checkpoint and report that precise blocker. `py_compile` and
+diff checks remain useful local gates but never substitute for Odoo runtime
+tests.
+
+---
+
 ## File map
 
 - Modify `gf_logistics_ops/models/sale_order.py`: resolve the authoritative seller and serialize `employee_name`.
@@ -92,9 +144,10 @@ the fallback mutations. If the shared fixture has no distinct salesperson,
 create one and assign it to the plan so the salesperson and driver fallbacks
 are independently observable.
 
-- [ ] **Step 3: Run the targeted Odoo test and verify RED**
+- [ ] **Step 3: Runtime checkpoint and targeted RED**
 
-In an Odoo test environment with the GrupoFrio addons path configured, run:
+Only after the preparation checkpoint names an authorized disposable Odoo
+runner, its database lifecycle, and the GrupoFrio addons path, run:
 
 ```bash
 odoo-bin -d <disposable_test_db> \
@@ -104,7 +157,8 @@ odoo-bin -d <disposable_test_db> \
   --test-tags '/gf_logistics_ops:TestGFLogisticsOpsFastTrackAPI.test_sales_list_seller_prefers_sale_employee_then_route_fallbacks'
 ```
 
-Expected: FAIL with missing key `employee_name`.
+Expected: FAIL with missing key `employee_name`. If the runner is unavailable,
+do not implement Task 2 and report the blocked runtime checkpoint.
 
 Also run the existing list test:
 
@@ -184,7 +238,8 @@ serialization.
 
 - [ ] **Step 3: Run the focused tests and verify GREEN**
 
-Run the two exact Odoo test commands from Task 1.
+Run the two exact Odoo test commands from Task 1 on the same recorded
+disposable runner/database setup.
 
 Expected: both PASS.
 
@@ -248,6 +303,10 @@ git push -u origin codex/odoo-ticket-seller
 ```
 
 Expected: the remote branch points to the verified local HEAD.
+
+If runtime verification is still blocked, do not call the branch verified.
+Push only when the user explicitly wants the collaborator to inspect draft
+work, label it unverified in the handoff, and keep merge/deployment blocked.
 
 - [ ] **Step 4: Run or observe CI**
 

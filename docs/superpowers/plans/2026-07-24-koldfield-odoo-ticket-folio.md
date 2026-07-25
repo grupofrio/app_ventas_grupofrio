@@ -8,7 +8,7 @@
 
 **Tech Stack:** React Native, Expo Router, TypeScript, AsyncStorage-backed persistence, Node test runner, Kotlin/Expo Module API, Android Gradle/JUnit.
 
-**Repository:** `/Users/sebis/Desktop/app-ventas-v2`
+**Repository/worktree:** `/Users/sebis/Desktop/app-ventas-v2/.worktrees/odoo-ticket-folio`
 
 **Backend prerequisite:** The app remains compatible without the new
 `employee_name` field, but the seller fix when reopening from Ventas requires
@@ -16,9 +16,34 @@ the backend plan `2026-07-24-odoo-sales-list-seller.md` to be deployed first.
 
 ---
 
+## Preparation: use only the isolated frontend worktree
+
+The primary checkout at `/Users/sebis/Desktop/app-ventas-v2` contains unrelated
+work on `codex/offline-sale-continuity`. Do not modify, stage, merge, or clean
+that checkout.
+
+- [ ] Run every frontend command in this plan from:
+
+```text
+/Users/sebis/Desktop/app-ventas-v2/.worktrees/odoo-ticket-folio
+```
+
+- [ ] Verify the isolated branch and its starting state:
+
+```bash
+git branch --show-current
+git status --short
+```
+
+Expected: branch `codex/odoo-ticket-folio`; only the changes belonging to the
+current plan may appear.
+
+---
+
 ## File map
 
 - Modify `src/services/saleTicket.ts`: add `odooFolio`, normalization, promotion, order merge, and shared presentation.
+- Modify `src/persistence/storage.ts`: add strict reads for critical ticket promotion.
 - Modify `src/services/saleTicketStorage.ts`: migrate old snapshots, make folio persistence monotonic, and promote queued tickets.
 - Modify `src/services/saleRecoveryIntent.ts`: accept legacy snapshots and preserve nullable folio.
 - Modify `src/services/saleCreateResult.ts`: require and return Odoo `name`.
@@ -151,10 +176,15 @@ git commit -m "feat: separate Odoo ticket folio"
 
 **Files:**
 - Create: `tests/saleTicketStorage.test.ts`
+- Modify: `tests/legacyRefillUnloadWiring.test.mjs`
+- Modify: `src/persistence/storage.ts`
 - Modify: `src/services/saleTicketStorage.ts`
 - Modify: `tests/saleRecoveryIntent.test.ts`
 - Modify: `src/services/saleRecoveryIntent.ts`
-- Modify: existing TypeScript tests that construct `SaleTicketSnapshot` literals
+- Modify: `tests/saleRehydrateRecovery.test.ts`
+- Modify: `tests/visitPersistence.test.ts`
+- Modify: `tests/visitState.test.ts`
+- Modify: `tests/visitStatePersistence.test.ts`
 
 - [ ] **Step 1: Write failing pure persistence tests**
 
@@ -191,6 +221,22 @@ await assert.rejects(() => promote(...loadThrows...));
 await assert.rejects(() => promote(...saveThrows...));
 ```
 
+Extend the strict-storage wiring test to require:
+
+```typescript
+export async function storeLoadStrict<T>(key: string): Promise<T | null>
+```
+
+and prove structurally that it awaits `AsyncStorage.getItem`, returns `null`
+only for a real missing key, parses the JSON, and has no catch that converts a
+storage/parse failure into `null`.
+
+Add a deferred-storage race test. Start an official-folio save and a pending
+save for the same `saleId` without awaiting either one, deliberately release
+the raw storage promises in the order that would overwrite the official folio
+without serialization, then assert the stored snapshot still contains
+`S00042`.
+
 - [ ] **Step 2: Extend recovery-intent compatibility tests**
 
 Require `restoreSaleRecoveryIntent` to:
@@ -205,7 +251,8 @@ Require `restoreSaleRecoveryIntent` to:
 ```bash
 node --test \
   tests/saleTicketStorage.test.ts \
-  tests/saleRecoveryIntent.test.ts
+  tests/saleRecoveryIntent.test.ts \
+  tests/legacyRefillUnloadWiring.test.mjs
 ```
 
 Expected: failures for missing migration, merge, promotion, and recovery fields.
@@ -241,8 +288,61 @@ export function mergeStoredSaleTicketSnapshot(
 }
 ```
 
-Make `saveSaleTicketSnapshot` load the current value, merge, then save. Keep the
-same storage key based on `saleId`.
+Import `normalizeSellerName` explicitly from `saleTicketFormatting.ts`.
+
+In `storage.ts`, add the strict read counterpart beside the existing strict
+save/remove functions:
+
+```typescript
+export async function storeLoadStrict<T>(key: string): Promise<T | null> {
+  const raw = await AsyncStorage.getItem(`${PREFIX}${key}`);
+  if (raw === null) return null;
+  return JSON.parse(raw) as T;
+}
+```
+
+The existing tolerant `storeLoad` remains unchanged for noncritical UI reads.
+
+Define one injectable adapter shared by both critical ticket write paths:
+
+```typescript
+export interface SaleTicketStorageAdapter {
+  load<T>(key: string): Promise<T | null>;
+  save<T>(key: string, data: T): Promise<void>;
+}
+
+const strictSaleTicketStorage: SaleTicketStorageAdapter = {
+  load: storeLoadStrict,
+  save: storeSaveStrict,
+};
+```
+
+Serialize every read-modify-write operation through one module-level keyed
+promise tail:
+
+```typescript
+const saleTicketWriteTails = new Map<string, Promise<void>>();
+
+function runSerializedSaleTicketWrite<T>(
+  saleId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = saleTicketWriteTails.get(saleId) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const tail = result.then(() => undefined, () => undefined);
+  saleTicketWriteTails.set(saleId, tail);
+  return result.finally(() => {
+    if (saleTicketWriteTails.get(saleId) === tail) {
+      saleTicketWriteTails.delete(saleId);
+    }
+  });
+}
+```
+
+Make `saveSaleTicketSnapshot` enter this critical section, load the current raw
+value, merge, and write once. Its optional adapter parameter defaults to
+`strictSaleTicketStorage`, giving the deferred race test a deterministic seam.
+Keep the same storage key based on `saleId`.
 
 Add:
 
@@ -250,17 +350,30 @@ Add:
 export async function promoteStoredSaleTicketOdooFolio(
   saleId: string,
   odooFolio: string,
-  deps = {
-    load: loadSaleTicketSnapshot,
-    save: saveSaleTicketSnapshot,
-  },
+  storage: SaleTicketStorageAdapter = strictSaleTicketStorage,
 ): Promise<'updated' | 'missing'> {
-  const current = await deps.load(saleId);
-  if (!current) return 'missing';
-  await deps.save(withSaleTicketOdooFolio(current, odooFolio));
-  return 'updated';
+  return runSerializedSaleTicketWrite(saleId, async () => {
+    const key = getSaleTicketStorageKey(saleId);
+    const current = await storage.load<SaleTicketSnapshot>(key);
+    if (!current) return 'missing';
+    await storage.save(
+      key,
+      mergeStoredSaleTicketSnapshot(
+        current,
+        withSaleTicketOdooFolio(current, odooFolio),
+      ),
+    );
+    return 'updated';
+  });
 }
 ```
+
+Promotion must not call public `saveSaleTicketSnapshot` from inside the
+critical section, which would recursively acquire the same key and deadlock.
+Both public write paths use the same keyed serializer and the same strict
+adapter contract. Real read, JSON parse, and write failures reject so queue
+processing remains retryable; only a successful strict read returning no value
+produces `'missing'`. Failures settle the tail and do not poison later writes.
 
 Update `saleRecoveryIntent.ts` so a missing legacy field becomes `null`, a
 present field is `null` or a normalized non-empty string, and invalid types
@@ -268,12 +381,14 @@ return `null` for the whole intent.
 
 - [ ] **Step 5: Update compile-time snapshot fixtures**
 
-Find every typed `SaleTicketSnapshot` literal outside the deliberate legacy
-migration tests and add `odooFolio: null` or the explicit official value:
+Add `odooFolio: null` or the explicit official value to the current-version
+snapshot literals in:
 
-```bash
-rg -n "SaleTicketSnapshot|ticketSnapshot:" tests src app
-```
+- `tests/saleRecoveryIntent.test.ts`;
+- `tests/saleRehydrateRecovery.test.ts`;
+- `tests/visitPersistence.test.ts`;
+- `tests/visitState.test.ts`;
+- `tests/visitStatePersistence.test.ts`.
 
 Do not add the field to the one legacy-persistence fixture whose purpose is to
 prove that records written by older app versions still load.
@@ -296,8 +411,14 @@ Expected: all tests pass and every non-legacy typed fixture compiles.
 git add \
   src/services/saleTicketStorage.ts \
   src/services/saleRecoveryIntent.ts \
+  src/persistence/storage.ts \
   tests/saleTicketStorage.test.ts \
-  tests/saleRecoveryIntent.test.ts
+  tests/saleRecoveryIntent.test.ts \
+  tests/legacyRefillUnloadWiring.test.mjs \
+  tests/saleRehydrateRecovery.test.ts \
+  tests/visitPersistence.test.ts \
+  tests/visitState.test.ts \
+  tests/visitStatePersistence.test.ts
 git commit -m "feat: persist Odoo ticket folio safely"
 ```
 
@@ -410,7 +531,25 @@ Require the post-confirmation save to use `confirmedTicketSnapshot`, while
 offline and ambiguous pre-confirmation saves continue using the pending
 `recoveryIntent.ticketSnapshot`.
 
-- [ ] **Step 2: Write failing queued-flow wiring assertions**
+- [ ] **Step 2: Write failing queue-ordering assertions**
+
+For both the offline and ambiguous-response paths, require:
+
+```typescript
+await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
+await persistAmbiguousSaleRecovery(...);
+```
+
+The pending ticket must be durably saved before
+`persistAmbiguousSaleRecovery()` releases queue processing holds. In the
+ambiguous-response path, also assert that both operations finish before
+`processQueue()` starts. Remove the later duplicate pending-ticket save.
+
+This ordering ensures a queued retry cannot receive the Odoo folio while the
+ticket is still absent, then complete before the UI writes a stale pending
+snapshot.
+
+- [ ] **Step 3: Write failing queued-flow promotion assertions**
 
 For `case 'sale_order'`, require:
 
@@ -424,9 +563,10 @@ if (promotion === 'missing') {
 
 The missing result must not throw. A rejected load/save promise must propagate
 out of `processSyncItem`, leaving the item retryable under existing queue error
-handling.
+handling. The non-blocking `missing` result remains a recovery escape hatch for
+confirmed legacy/corrupt storage absence; it is not the normal new-sale path.
 
-- [ ] **Step 3: Verify RED**
+- [ ] **Step 4: Verify RED**
 
 ```bash
 node --test \
@@ -437,19 +577,27 @@ node --test \
 
 Expected: missing captured result and promotion calls.
 
-- [ ] **Step 4: Implement online promotion**
+- [ ] **Step 5: Implement online promotion**
 
 Import `withSaleTicketOdooFolio`, capture the `createSale` result, build
 `confirmedTicketSnapshot`, and save it only after a confirmed online response.
 Do not change the pending snapshot in the durable recovery intent.
 
-- [ ] **Step 5: Implement queue promotion**
+- [ ] **Step 6: Fix queue release ordering**
+
+In both offline and ambiguous-response branches, save the pending snapshot
+before calling `persistAmbiguousSaleRecovery`. Preserve the current durable
+confirmation lock, idempotent operation ID, error handling, and queue payload.
+Only call `processQueue()` after the pending save and queue persistence have
+both succeeded.
+
+- [ ] **Step 7: Implement queue promotion**
 
 Import `promoteStoredSaleTicketOdooFolio` in `useSyncStore.ts`. Capture the sale
 result, await promotion before returning from the `sale_order` case, and emit a
 sanitized `logWarn` containing only `operation_id` when the snapshot is absent.
 
-- [ ] **Step 6: Verify GREEN**
+- [ ] **Step 8: Verify GREEN**
 
 Run the three-test command from Step 3 and:
 
@@ -459,7 +607,7 @@ npm run typecheck
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add \
@@ -498,6 +646,8 @@ assert.deepEqual(merged.lines, existing.lines);
 
 Add a second case where `employee_name` is blank: preserve a meaningful
 existing seller; if no existing snapshot, use `Vendedor no especificado`.
+Add a third case where `order.name` is blank but the current snapshot already
+has `odooFolio: 'S00042'`; the merge must preserve `S00042`.
 
 - [ ] **Step 2: Add failing screen wiring assertions**
 
@@ -527,7 +677,7 @@ export function mergeSaleTicketFromOrder(
   const employeeName = order.employee_name?.trim();
   return {
     ...current,
-    odooFolio: authoritative.odooFolio,
+    odooFolio: authoritative.odooFolio ?? current.odooFolio,
     sellerName: employeeName || current.sellerName,
   };
 }

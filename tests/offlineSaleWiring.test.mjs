@@ -106,7 +106,7 @@ assert.match(
 // Sólo public_fallback offline envuelve el add/close existente en una alerta.
 assert.match(
   picker,
-  /if \(product\.priceSelection\.requiresPublicFallbackConfirmation\) \{[\s\S]*?Alert\.alert\([\s\S]*?precio del cliente guardado[\s\S]*?precio público[\s\S]*?text:\s*'Cancelar'[\s\S]*?style:\s*'cancel'[\s\S]*?text:\s*'Usar precio público'[\s\S]*?onPress:\s*commitSelection/,
+  /if \(product\.priceSelection\.requiresPublicFallbackConfirmation\) \{[\s\S]*?Alert\.alert\([\s\S]*?precio del cliente guardado[\s\S]*?precio público[\s\S]*?text:\s*'Cancelar'[\s\S]*?style:\s*'cancel'[\s\S]*?text:\s*'Usar precio público'[\s\S]*?onPress:\s*confirmPending/,
   'fallback público debe pedir una confirmación cancelable antes de agregar',
 );
 assert.equal(
@@ -118,6 +118,21 @@ assert.equal(
   (picker.match(/\baddSaleLine\(line\)/g) ?? []).length,
   1,
   'la confirmación debe conservar un solo sink addSaleLine',
+);
+assert(
+  picker.includes('pendingPublicFallbackRef')
+    && picker.includes('if (pendingPublicFallbackRef.current) return'),
+  'fallback público debe bloquear taps repetidos mientras la alerta está abierta',
+);
+assert.match(
+  picker,
+  /if \([\s\S]*?pending\.committed[\s\S]*?\|\| pendingPublicFallbackRef\.current !== pending[\s\S]*?\|\| selectionContextKeyRef\.current !== pending\.contextKey[\s\S]*?\) return;[\s\S]*?pending\.committed = true/,
+  'confirmar fallback debe ser idempotente y exigir la selección todavía vigente',
+);
+assert.match(
+  picker,
+  /text:\s*'Cancelar'[\s\S]*?onPress:\s*clearPending[\s\S]*?onPress:\s*confirmPending[\s\S]*?onDismiss:\s*clearPending/,
+  'cancelar, confirmar o cerrar la alerta debe limpiar el guard local',
 );
 
 // Un full response online alimenta display + ledger; nunca activa preparación.
@@ -134,13 +149,39 @@ assert.equal(
 );
 assert.match(
   picker,
-  /const validation = await fetchServerCustomerPricingSnapshot\([\s\S]*?const displayPrices = new Map\(validation\.prices\)[\s\S]*?updateCustomerPricingSnapshotState\(\(current\) =>[\s\S]*?recordLastKnownServerPrices\(current,[\s\S]*?validation,[\s\S]*?\)\s*\)/,
+  /const validation = await fetchFullCustomerPricingOnce\([\s\S]*?const displayPrices = new Map\(validation\.prices\)[\s\S]*?updateCustomerPricingSnapshotState\(\(current\) =>[\s\S]*?recordLastKnownServerPrices\(current,[\s\S]*?validation,[\s\S]*?\)\s*\)/,
   'la misma respuesta completa debe alimentar display y recordLastKnownServerPrices',
+);
+assert(
+  picker.includes('const requestToken = requestGate.begin(')
+    && /nextForegroundPricingCapture\([\s\S]*?maxCustomerPricingCaptureAtMs\([\s\S]*?getCustomerPricingSnapshotState\(\)/.test(picker)
+    && /loadOnlineCustomerPricing\(\{[\s\S]*?requestToken,[\s\S]*?requestGate,/.test(picker),
+  'la captura foreground debe asignarse al iniciar la petición y viajar con su token',
 );
 assert.match(
   picker,
-  /updateCustomerPricingSnapshotState\(\(current\) => \{[\s\S]*?nextForegroundPricingCapture\(\s*maxCustomerPricingCaptureAtMs\(current\),?\s*\)[\s\S]*?recordLastKnownServerPrices\(current,/,
-  'la captura foreground debe ser monótona incluso frente al estado persistido',
+  /if \(!input\.requestGate\.isCurrent\(input\.requestToken\)\) \{[\s\S]*?return staleCustomerPricingResult\(\);[\s\S]*?\}[\s\S]*?updateCustomerPricingSnapshotState/,
+  'una respuesta obsoleta no debe alcanzar la escritura del ledger',
+);
+assert.match(
+  picker,
+  /if \(requestGate\.isCurrent\(requestToken\)\) \{[\s\S]*?setPriceMap\(loaded\.displayPrices\)[\s\S]*?setOnlineCapturedPrices\(loaded\.capturedPrices\)/,
+  'una respuesta obsoleta no debe publicar precios en UI',
+);
+assert(
+  picker.includes('createLatestProductPricingRequestGate')
+    && picker.includes('requestGate.cancel(requestToken)'),
+  'efecto y refresh deben compartir una compuerta latest-request-wins cancelable',
+);
+assert.match(
+  picker,
+  /const closePicker = useCallback\(\(\) => \{[\s\S]*?requestGate\.invalidate\(\)[\s\S]*?pendingPublicFallbackRef\.current = null[\s\S]*?onClose\(\)/,
+  'cerrar el picker debe invalidar inmediatamente requests y confirmaciones pendientes',
+);
+assert(
+  picker.includes('computeCustomerPricesClientFallback')
+    && !picker.includes('computeCustomerPrices('),
+  'tras fallar el full response debe usar fallback client-only sin repetir el endpoint estricto',
 );
 assert(
   !picker.includes('activatePreparedPricingRun'),

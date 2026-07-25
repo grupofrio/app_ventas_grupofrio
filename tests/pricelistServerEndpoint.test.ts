@@ -73,9 +73,26 @@ function testPricelistEndpointUsesReadTimeout() {
   );
 }
 
+function testClientFallbackDoesNotRetryServerPricing() {
+  const pricelist = readFileSync(resolve(REPO_ROOT, 'src/services/pricelist.ts'), 'utf8');
+  const body = extractFunctionBody(pricelist, 'computeCustomerPricesClientFallback');
+
+  assert.doesNotMatch(
+    body,
+    /fetchServerCustomerPricingSnapshot|fetchServerSidePrices|pricing\/by_partner/,
+    'fallback client-only no debe repetir el transporte estricto ya fallido',
+  );
+  assert.match(
+    body,
+    /resolvePartnerPricelist/,
+    'fallback client-only debe conservar el cálculo compatible de lista local',
+  );
+}
+
 function main() {
   testPricelistUsesSecureBackendPricingEndpoint();
   testPricelistEndpointUsesReadTimeout();
+  testClientFallbackDoesNotRetryServerPricing();
   console.log('pricelist server endpoint tests: ok');
 }
 

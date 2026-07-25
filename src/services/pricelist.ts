@@ -638,6 +638,19 @@ async function _computeCustomerPricesUncached(
     }
   }
 
+  return computeCustomerPricesClientFallback(partnerId, products, options);
+}
+
+/**
+ * Existing client-side pricelist compatibility path without a server attempt.
+ * Foreground callers use this only after the strict full endpoint already
+ * failed, so one failure cannot trigger the same transport twice.
+ */
+export async function computeCustomerPricesClientFallback(
+  partnerId: number,
+  products: PricingProduct[],
+  options?: PricingOptions,
+): Promise<Map<number, number>> {
   // ── Strategy 2: Client-side fallback ──
   const priceMap = new Map<number, number>();
 

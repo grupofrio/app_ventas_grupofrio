@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  createLatestProductPricingRequestGate,
   selectProductPrice,
   type ProductPriceSelectionInput,
 } from '../src/services/productPriceSelection.ts';
@@ -162,4 +163,68 @@ test('selection is pure and does not mutate its input', () => {
     capturedAtMs: 1_000,
     pricelistId: 81,
   });
+});
+
+test('latest pricing request wins when overlapping responses resolve out of order', async () => {
+  const gate = createLatestProductPricingRequestGate();
+  const published: string[] = [];
+  let resolveOlder!: (value: string) => void;
+  let resolveNewer!: (value: string) => void;
+  const olderResponse = new Promise<string>((resolve) => {
+    resolveOlder = resolve;
+  });
+  const newerResponse = new Promise<string>((resolve) => {
+    resolveNewer = resolve;
+  });
+  const older = gate.begin('company=34|partner=99|list=81|products=10', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+  const publishOlder = olderResponse.then((value) => {
+    if (gate.isCurrent(older)) published.push(value);
+  });
+  const newer = gate.begin('company=34|partner=99|list=81|products=10', {
+    capturedAtMs: 1_001,
+    captureRunId: 'picker:1001',
+  });
+  const publishNewer = newerResponse.then((value) => {
+    if (gate.isCurrent(newer)) published.push(value);
+  });
+
+  resolveNewer('newer');
+  await publishNewer;
+  resolveOlder('older');
+  await publishOlder;
+
+  assert.deepEqual(published, ['newer']);
+  assert.equal(older.capture.capturedAtMs, 1_000);
+  assert.equal(newer.capture.capturedAtMs, 1_001);
+});
+
+test('context invalidation rejects an in-flight request for both UI and ledger publication', () => {
+  const gate = createLatestProductPricingRequestGate();
+  const request = gate.begin('company=34|partner=99|list=81|products=10', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+
+  gate.invalidate();
+
+  assert.equal(gate.isCurrent(request), false);
+  assert.equal(gate.cancel(request), false);
+});
+
+test('cancelling an older request cannot invalidate a newer request', () => {
+  const gate = createLatestProductPricingRequestGate();
+  const older = gate.begin('customer-a', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+  const newer = gate.begin('customer-b', {
+    capturedAtMs: 1_001,
+    captureRunId: 'picker:1001',
+  });
+
+  assert.equal(gate.cancel(older), false);
+  assert.equal(gate.isCurrent(newer), true);
 });

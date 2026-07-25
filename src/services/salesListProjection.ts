@@ -340,25 +340,27 @@ function remoteDateOrderMs(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function projectRemoteSale(order: GFSalesOrder): SalesListEntry | null {
-  const orderId = validRemoteOrderId(order.id);
-  const createdAtMs = remoteDateOrderMs(order.date_order);
+function projectRemoteSale(value: unknown): SalesListEntry | null {
+  if (!isRecord(value)) return null;
+
+  const orderId = validRemoteOrderId(value.id);
+  const createdAtMs = remoteDateOrderMs(value.date_order);
   if (orderId === null || createdAtMs === null) return null;
 
-  const operationId = typeof order.operation_id === 'string'
-    ? order.operation_id.trim()
+  const operationId = typeof value.operation_id === 'string'
+    ? value.operation_id
     : '';
   return {
     key: `odoo:${orderId}`,
     operationId,
     origin: 'odoo',
     customerName:
-      normalizeDisplayString(order.partner_name)
+      normalizeDisplayString(value.partner_name)
       ?? FALLBACK_CUSTOMER_NAME,
-    amountTotal: nonNegativeFiniteNumber(order.amount_total),
-    kgTotal: nonNegativeFiniteNumber(order.kg_total),
+    amountTotal: nonNegativeFiniteNumber(value.amount_total),
+    kgTotal: nonNegativeFiniteNumber(value.kg_total),
     createdAtMs,
-    remoteOrder: order,
+    remoteOrder: value as unknown as GFSalesOrder,
   };
 }
 
@@ -404,20 +406,33 @@ export function mergeSalesListEntries(
     if (
       entry === null
       || localDayForTimestamp(entry.createdAtMs) !== input.localDay
-      || remoteByKey.has(entry.key)
     ) {
       continue;
     }
-    remoteByKey.set(entry.key, entry);
+    const existing = remoteByKey.get(entry.key);
+    if (!existing || compareSalesListEntries(entry, existing) < 0) {
+      remoteByKey.set(entry.key, entry);
+    }
   }
 
-  const remoteOperationIds = new Set<string>();
+  const blankRemoteByKey = new Map<string, SalesListEntry>();
+  const remoteByOperationId = new Map<string, SalesListEntry>();
   for (const entry of remoteByKey.values()) {
     const normalized = normalizeOperationIdForComparison(entry.operationId);
-    if (normalized) remoteOperationIds.add(normalized);
+    if (!normalized) {
+      blankRemoteByKey.set(entry.key, entry);
+      continue;
+    }
+    const existing = remoteByOperationId.get(normalized);
+    if (!existing || compareSalesListEntries(entry, existing) < 0) {
+      remoteByOperationId.set(normalized, entry);
+    }
   }
 
-  const mergedByKey = new Map<string, SalesListEntry>(remoteByKey);
+  const mergedByKey = new Map<string, SalesListEntry>(blankRemoteByKey);
+  for (const entry of remoteByOperationId.values()) {
+    mergedByKey.set(entry.key, entry);
+  }
   for (const entry of input.localEntries) {
     if (
       entry.origin !== 'local'
@@ -426,7 +441,7 @@ export function mergeSalesListEntries(
       continue;
     }
     const normalized = normalizeOperationIdForComparison(entry.operationId);
-    if (normalized && remoteOperationIds.has(normalized)) continue;
+    if (normalized && remoteByOperationId.has(normalized)) continue;
     if (!mergedByKey.has(entry.key)) mergedByKey.set(entry.key, entry);
   }
 

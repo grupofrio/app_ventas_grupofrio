@@ -478,14 +478,16 @@ test('prefers the remote Odoo sale for the same normalized operation ID', () => 
   assert.equal(merged[0].operationId, 'ABC');
 });
 
-test('keeps the original trimmed remote operation ID for display and navigation', () => {
+test('keeps the exact remote operation ID while using its normalized value only for comparison', () => {
   const merged = mergeSalesListEntries({
     remoteOrders: [remoteWithOperation('  Sale-AbC  ')],
-    localEntries: [],
+    localEntries: [localWithOperation('sale-abc')],
     localDay: '2026-07-24',
   });
 
-  assert.equal(merged[0]?.operationId, 'Sale-AbC');
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.origin, 'odoo');
+  assert.equal(merged[0]?.operationId, '  Sale-AbC  ');
 });
 
 test('keeps multiple blank remote operation IDs distinct by Odoo order identity', () => {
@@ -504,7 +506,7 @@ test('keeps multiple blank remote operation IDs distinct by Odoo order identity'
   );
   assert.deepEqual(
     merged.map((entry) => entry.operationId),
-    ['', ''],
+    ['   ', ''],
   );
 });
 
@@ -532,6 +534,33 @@ test('deduplicates repeated remote responses with the same real order ID', () =>
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0].key, 'odoo:101');
+});
+
+test('deduplicates equivalent nonblank remote operation IDs deterministically', () => {
+  const lowerKeyOrder = remoteWithOperation('ABC', {
+    id: 101,
+    date_order: '2026-07-24T12:00:00.000-06:00',
+  });
+  const higherKeyOrder = remoteWithOperation('  abc  ', {
+    id: 202,
+    date_order: '2026-07-24T12:00:00.000-06:00',
+  });
+
+  for (const remoteOrders of [
+    [higherKeyOrder, lowerKeyOrder],
+    [lowerKeyOrder, higherKeyOrder],
+  ]) {
+    const merged = mergeSalesListEntries({
+      remoteOrders,
+      localEntries: [localWithOperation('AbC')],
+      localDay: '2026-07-24',
+    });
+
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].origin, 'odoo');
+    assert.equal(merged[0].key, 'odoo:101');
+    assert.equal(merged[0].operationId, 'ABC');
+  }
 });
 
 test('uses collision-safe origin-prefixed keys', () => {
@@ -641,6 +670,31 @@ test('projects remote authoritative fields defensively without NaN', () => {
   assert.equal(merged[0].kgTotal, null);
   assert.equal(Number.isNaN(merged[0].createdAtMs), false);
   assert.equal(merged[0].remoteOrder, malformed);
+});
+
+test('skips malformed remote rows without throwing', () => {
+  const malformedRows = [
+    null,
+    undefined,
+    'not an order',
+    42,
+    [],
+    {},
+  ] as unknown as GFSalesOrder[];
+
+  const merged = mergeSalesListEntries({
+    remoteOrders: [
+      ...malformedRows,
+      remoteWithOperation('valid-order', { id: 601 }),
+    ],
+    localEntries: [],
+    localDay: '2026-07-24',
+  });
+
+  assert.deepEqual(
+    merged.map((entry) => entry.key),
+    ['odoo:601'],
+  );
 });
 
 test('excludes remote orders with invalid dates rather than leaking them across days', () => {

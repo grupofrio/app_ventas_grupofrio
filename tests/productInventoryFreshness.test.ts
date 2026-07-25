@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createContextSingleFlight,
   describeInventoryAuthority,
+  isProductLoadInvocationCurrent,
 } from '../src/services/productInventoryFreshness.ts';
 
 test('marks fresh online scoped loads for the expected warehouse as authoritative', () => {
@@ -175,4 +176,69 @@ test('reset supersedes pending work and active sync throws or rejections clean u
     await coordinator.run('ctx', async () => ({ ok: true, source: 'truck_stock' })),
     { ok: true, source: 'truck_stock' },
   );
+});
+
+test('an exact product-load invocation is superseded by a direct same-context load', () => {
+  const priorSharedState = {
+    inventoryFreshness: 'authoritative',
+    inventorySource: 'truck_stock',
+    loadedWarehouseId: 8,
+  };
+  let legacyRefreshPending = true;
+  const authoritativeInvocation = {
+    generation: 41,
+    contextIdentity: 'employee:1|warehouse:8',
+  };
+
+  // A public load starts while the authoritative call is pending. Its failure
+  // may leave the prior authoritative state in memory, but generation 42 still
+  // makes invocation A ineligible for publication.
+  const directLoadGeneration = 42;
+  const current = isProductLoadInvocationCurrent({
+    invocation: authoritativeInvocation,
+    currentGeneration: directLoadGeneration,
+    currentContextIdentity: 'employee:1|warehouse:8',
+  });
+  if (current && priorSharedState.inventoryFreshness === 'authoritative') {
+    legacyRefreshPending = false;
+  }
+
+  assert.equal(current, false);
+  assert.equal(legacyRefreshPending, true);
+});
+
+test('hydrate or reset supersedes an exact product-load invocation', () => {
+  const invocation = {
+    generation: 8,
+    contextIdentity: 'employee:1|warehouse:8',
+  };
+  assert.equal(isProductLoadInvocationCurrent({
+    invocation,
+    currentGeneration: 9,
+    currentContextIdentity: 'employee:1|warehouse:8',
+  }), false, 'hydrate increments the catalog generation');
+  assert.equal(isProductLoadInvocationCurrent({
+    invocation,
+    currentGeneration: 9,
+    currentContextIdentity: null,
+  }), false, 'reset invalidates both generation and context');
+  assert.equal(isProductLoadInvocationCurrent({
+    invocation,
+    currentGeneration: 8,
+    currentContextIdentity: 'employee:1|warehouse:8',
+  }), true);
+});
+
+test('product-load invocation checks fail closed for malformed runtime input', () => {
+  assert.equal(isProductLoadInvocationCurrent(null as never), false);
+  assert.equal(isProductLoadInvocationCurrent({
+    invocation: { generation: Number.MAX_SAFE_INTEGER + 1, contextIdentity: 'ctx' },
+    currentGeneration: Number.MAX_SAFE_INTEGER + 1,
+    currentContextIdentity: 'ctx',
+  }), false);
+  assert.equal(isProductLoadInvocationCurrent({
+    invocation: { generation: 1, contextIdentity: '' },
+    currentGeneration: 1,
+    currentContextIdentity: '',
+  }), false);
 });

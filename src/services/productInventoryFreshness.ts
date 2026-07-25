@@ -9,6 +9,39 @@ export interface InventoryAuthorityInput {
   fromCache: boolean;
 }
 
+export interface ProductLoadInvocation {
+  readonly generation: number;
+  readonly contextIdentity: string;
+}
+
+export interface ProductLoadInvocationCheck {
+  invocation: ProductLoadInvocation | null;
+  currentGeneration: number;
+  currentContextIdentity: string | null;
+}
+
+/**
+ * Ensures a caller publishes only facts produced by its exact product load.
+ * A direct load, hydration, context switch, or reset advances the generation
+ * and makes any older invocation ineligible even if shared state still looks
+ * authoritative from an earlier successful request.
+ */
+export function isProductLoadInvocationCurrent(
+  input: ProductLoadInvocationCheck,
+): boolean {
+  const invocation = input?.invocation;
+  return Boolean(
+    invocation
+    && Number.isSafeInteger(invocation.generation)
+    && invocation.generation > 0
+    && Number.isSafeInteger(input.currentGeneration)
+    && input.currentGeneration === invocation.generation
+    && typeof invocation.contextIdentity === 'string'
+    && invocation.contextIdentity.length > 0
+    && input.currentContextIdentity === invocation.contextIdentity,
+  );
+}
+
 export interface ContextSingleFlight<Result> {
   /**
    * Coalesces work for the same context. Starting work for another context

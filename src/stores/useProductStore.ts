@@ -48,6 +48,8 @@ import {
 import {
   createContextSingleFlight,
   describeInventoryAuthority,
+  isProductLoadInvocationCurrent,
+  type ProductLoadInvocation,
 } from '../services/productInventoryFreshness';
 
 export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
@@ -94,7 +96,10 @@ interface ProductState {
   productCount: number;
 
   // Actions
-  loadProducts: (warehouseId: number) => Promise<void>;
+  loadProducts: (
+    warehouseId: number,
+    captureProductLoadInvocation?: (invocation: ProductLoadInvocation) => void,
+  ) => Promise<void>;
   /**
    * Carga de inventario con RESULTADO AUTORITATIVO explícito (P1-2). Envuelve
    * loadProducts y devuelve si la carga fue autoritativa para el warehouse
@@ -315,7 +320,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   totalStockKg: 0,
   productCount: 0,
 
-  loadProducts: async (warehouseId: number) => {
+  loadProducts: async (warehouseId, captureProductLoadInvocation) => {
     // BLD-20260408-P0: Guard against null/0 warehouseId — this was the root
     // cause of inventory loading the global product list (104 products,
     // 595k kg) instead of the truck's scoped stock.
@@ -351,6 +356,10 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
     const contextIdentity = buildOfflineCatalogContextIdentity(context);
     const loadGeneration = ++catalogGeneration;
+    captureProductLoadInvocation?.({
+      generation: loadGeneration,
+      contextIdentity,
+    });
     if (
       activeCatalogContextIdentity !== null
       && activeCatalogContextIdentity !== contextIdentity
@@ -639,8 +648,11 @@ export const useProductStore = create<ProductState>((set, get) => ({
     const contextIdentity = buildOfflineCatalogContextIdentity(context);
 
     return authoritativeProductRefreshes.run(contextIdentity, async () => {
+      let loadInvocation: ProductLoadInvocation | null = null;
       try {
-        await get().loadProducts(warehouseId);
+        await get().loadProducts(warehouseId, (invocation) => {
+          loadInvocation = invocation;
+        });
       } catch (e) {
         logWarn('inventory', 'authoritative_load_threw', {
           message: e instanceof Error ? e.message : String(e),
@@ -649,8 +661,13 @@ export const useProductStore = create<ProductState>((set, get) => ({
       }
       const currentContext = currentOfflineCatalogContext(warehouseId);
       if (
-        !currentContext
-        || buildOfflineCatalogContextIdentity(currentContext) !== contextIdentity
+        !isProductLoadInvocationCurrent({
+          invocation: loadInvocation,
+          currentGeneration: catalogGeneration,
+          currentContextIdentity: currentContext
+            ? buildOfflineCatalogContextIdentity(currentContext)
+            : null,
+        })
       ) {
         return {
           ok: false,

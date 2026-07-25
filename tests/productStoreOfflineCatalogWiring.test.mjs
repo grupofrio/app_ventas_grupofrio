@@ -56,6 +56,17 @@ assert.match(
   'las cargas autoritativas deben pasar por single-flight según contexto',
 );
 assert.match(
+  authoritativeAction,
+  /let loadInvocation[\s\S]*get\(\)\.loadProducts\(warehouseId,[\s\S]*isProductLoadInvocationCurrent\(/,
+  'la carga autoritativa debe validar el token exacto asignado por su loadProducts interno',
+);
+const exactInvocationGuard = authoritativeAction.indexOf('isProductLoadInvocationCurrent(');
+const sharedErrorRead = authoritativeAction.indexOf('get().error');
+assert(
+  exactInvocationGuard >= 0 && sharedErrorRead > exactInvocationGuard,
+  'un resultado obsoleto debe rechazarse antes de leer estado autoritativo compartido',
+);
+assert.match(
   productStore,
   /reset:\s*\(\) =>[\s\S]*authoritativeProductRefreshes\.invalidate\(\)/,
   'reset/logout debe invalidar cualquier resultado autoritativo pendiente',

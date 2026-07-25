@@ -113,3 +113,13 @@ export async function loadSaleTicketSnapshot(saleId: string): Promise<SaleTicket
   if (!snapshot) return null;
   return normalizeStoredSaleTicketSnapshot(snapshot);
 }
+
+export async function loadSaleTicketSnapshotStrict(
+  saleId: string,
+): Promise<SaleTicketSnapshot | null> {
+  const snapshot = await storeLoadStrict<StoredSaleTicketSnapshot>(
+    getSaleTicketStorageKey(saleId),
+  );
+  if (snapshot === null) return null;
+  return normalizeStoredSaleTicketSnapshot(snapshot);
+}

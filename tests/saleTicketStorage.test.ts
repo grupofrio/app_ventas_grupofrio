@@ -24,15 +24,15 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-async function withRawStoredValue<T>(
-  raw: string | null,
+async function withStoredRead<T>(
+  read: () => Promise<string | null>,
   operation: () => Promise<T>,
 ): Promise<T> {
   const storage = AsyncStorage as unknown as {
     getItem?: (key: string) => Promise<string | null>;
   };
   const originalGetItem = storage.getItem;
-  storage.getItem = async () => raw;
+  storage.getItem = read;
   try {
     return await operation();
   } finally {
@@ -42,6 +42,13 @@ async function withRawStoredValue<T>(
       delete storage.getItem;
     }
   }
+}
+
+async function withRawStoredValue<T>(
+  raw: string | null,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return withStoredRead(async () => raw, operation);
 }
 
 function snapshot(
@@ -72,6 +79,56 @@ test('strict load distinguishes an absent key from a present JSON null payload',
   await assert.rejects(
     withRawStoredValue('null', () => storeLoadStrict('sale-ticket:corrupt-null')),
     /persisted null/i,
+  );
+});
+
+test('strict sale ticket load returns missing only for an absent key and normalizes stored data', async () => {
+  assert.equal(
+    await withRawStoredValue(null, () => (
+      saleTicketStorage.loadSaleTicketSnapshotStrict('sale-absent')
+    )),
+    null,
+  );
+
+  const stored = snapshot({
+    saleId: 'sale-strict-load',
+    odooFolio: '  S00042  ',
+    sellerName: '  María López  ',
+  });
+  assert.deepEqual(
+    await withRawStoredValue(JSON.stringify(stored), () => (
+      saleTicketStorage.loadSaleTicketSnapshotStrict('sale-strict-load')
+    )),
+    {
+      ...stored,
+      odooFolio: 'S00042',
+      sellerName: 'María López',
+    },
+  );
+});
+
+test('strict sale ticket load rejects storage errors, corrupt null, and malformed JSON', async () => {
+  const storageFailure = new Error('storage read failed');
+  await assert.rejects(
+    withStoredRead(
+      async () => {
+        throw storageFailure;
+      },
+      () => saleTicketStorage.loadSaleTicketSnapshotStrict('sale-read-failure'),
+    ),
+    (error) => error === storageFailure,
+  );
+  await assert.rejects(
+    withRawStoredValue('null', () => (
+      saleTicketStorage.loadSaleTicketSnapshotStrict('sale-corrupt-null')
+    )),
+    /persisted null/i,
+  );
+  await assert.rejects(
+    withRawStoredValue('{malformed', () => (
+      saleTicketStorage.loadSaleTicketSnapshotStrict('sale-malformed')
+    )),
+    SyntaxError,
   );
 });
 

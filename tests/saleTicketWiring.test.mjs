@@ -91,53 +91,62 @@ function main() {
     'La vista previa del ticket ya no debe mostrar la marca anterior',
   );
 
+  assert.match(
+    salesScreen,
+    /import\s+\{\s*openSaleTicketForOrder\s*\}\s+from\s+['"]\.\.\/\.\.\/src\/services\/saleTicketOpen['"]/,
+    'Ventas debe delegar la apertura a un flujo seguro e inyectable',
+  );
+  assert.match(
+    salesScreen,
+    /loadSaleTicketSnapshotStrict/,
+    'Ventas debe usar lectura estricta antes de combinar y guardar el ticket',
+  );
+  assert.doesNotMatch(
+    salesScreen,
+    /\bloadSaleTicketSnapshot\b/,
+    'Ventas no debe usar la lectura tolerante en el flujo read-modify-write',
+  );
+
   const openTicketMatch = salesScreen.match(
-    /async function openTicketForOrder\(order: GFSalesOrder\) \{([\s\S]*?)\n  \}/,
+    /function openTicketForOrder\(order: GFSalesOrder\) \{([\s\S]*?)\n  \}/,
   );
   assert.ok(openTicketMatch, 'Ventas debe definir openTicketForOrder');
   const openTicketBody = openTicketMatch[1];
 
-  const authoritativeMatch = openTicketBody.match(
-    /const\s+(\w+)\s*=\s*buildSaleTicketSnapshotFromOrder\(order\)/,
-  );
-  assert.ok(
-    authoritativeMatch,
-    'Ventas debe derivar el ticket autoritativo para obtener el saleId tecnico',
+  assert.match(
+    openTicketBody,
+    /return\s+openSaleTicketForOrder\(order,\s*\{/,
+    'Ventas debe retornar el resultado seguro del flujo de apertura',
   );
   assert.match(
     openTicketBody,
-    new RegExp(`loadSaleTicketSnapshot\\(${authoritativeMatch[1]}\\.saleId\\)`),
-    'Ventas debe cargar el snapshot actual usando el saleId tecnico autoritativo',
-  );
-
-  const mergedMatch = openTicketBody.match(
-    /const\s+(\w+)\s*=\s*mergeSaleTicketFromOrder\(\w+,\s*order\)/,
-  );
-  assert.ok(
-    mergedMatch,
-    'Ventas debe combinar el snapshot local con folio y vendedor autoritativos',
+    /load:\s*loadSaleTicketSnapshotStrict/,
+    'Ventas debe inyectar la lectura estricta',
   );
   assert.match(
     openTicketBody,
-    new RegExp(`await\\s+saveSaleTicketSnapshot\\(${mergedMatch[1]}\\)`),
-    'Ventas siempre debe guardar el ticket combinado aunque ya exista localmente',
-  );
-  const ticketIdMatch = openTicketBody.match(
-    new RegExp(`const\\s+(\\w+)\\s*=\\s*${mergedMatch[1]}\\.saleId`),
-  );
-  assert.ok(
-    ticketIdMatch,
-    'Ventas debe derivar el id de navegacion desde el ticket combinado',
+    /save:\s*saveSaleTicketSnapshot/,
+    'Ventas debe inyectar el guardado estricto',
   );
   assert.match(
     openTicketBody,
-    new RegExp(`router\\.push\\(\\\`/print/\\$\\{${ticketIdMatch[1]}\\}\\\``),
-    'Ventas debe navegar usando el saleId del ticket combinado',
+    /navigate:\s*\(ticketId\)\s*=>\s*router\.push\(`\/print\/\$\{ticketId\}`/,
+    'Ventas debe navegar solo mediante el callback del flujo seguro',
   );
-  assert.doesNotMatch(
+  assert.match(
     openTicketBody,
-    /if\s*\(\s*!\s*\w+\s*\)/,
-    'Ventas no debe omitir el guardado cuando ya existe un ticket local',
+    /onError:\s*showTicketOpenError/,
+    'Ventas debe mostrar feedback sanitizado cuando el flujo falla',
+  );
+  assert.match(
+    salesScreen,
+    /Alert\.alert\(\s*['"]No se pudo abrir el ticket['"]/,
+    'Ventas debe mantener la pantalla actual y explicar que el ticket no se abrio',
+  );
+  assert.match(
+    salesScreen,
+    /console\.error\(\s*['"][^'"]+['"]\s*\)/,
+    'Ventas debe registrar un mensaje sanitizado sin exponer el error original',
   );
 
   console.log('sale ticket wiring tests: ok');

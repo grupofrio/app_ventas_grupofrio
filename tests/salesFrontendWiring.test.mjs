@@ -94,8 +94,8 @@ function main() {
   );
   assert.match(
     salesTab,
-    /buildSaleTicketSnapshotFromOrder/,
-    'si no existe snapshot local, la tab Ventas debe crear un ticket imprimible desde la fila de venta',
+    /openSaleTicketForOrder/,
+    'la tab Ventas debe delegar la apertura y creacion del ticket a un flujo seguro',
   );
   assert.match(
     salesTab,

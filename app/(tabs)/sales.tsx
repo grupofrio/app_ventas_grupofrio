@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -15,11 +15,19 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
+import { openSaleTicketForOrder } from '../../src/services/saleTicketOpen';
 import {
-  buildSaleTicketSnapshotFromOrder,
-  mergeSaleTicketFromOrder,
-} from '../../src/services/saleTicket';
-import { loadSaleTicketSnapshot, saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+  loadSaleTicketSnapshotStrict,
+  saveSaleTicketSnapshot,
+} from '../../src/services/saleTicketStorage';
+
+function showTicketOpenError() {
+  console.error('[sales] No se pudo abrir el ticket');
+  Alert.alert(
+    'No se pudo abrir el ticket',
+    'Intenta nuevamente. Permanecerás en la pantalla de Ventas.',
+  );
+}
 
 export default function SalesScreen() {
   const router = useRouter();
@@ -41,13 +49,13 @@ export default function SalesScreen() {
   const progressPct = monthlyTarget > 0
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
-  async function openTicketForOrder(order: GFSalesOrder) {
-    const authoritativeTicket = buildSaleTicketSnapshotFromOrder(order);
-    const existingTicket = await loadSaleTicketSnapshot(authoritativeTicket.saleId);
-    const mergedTicket = mergeSaleTicketFromOrder(existingTicket, order);
-    await saveSaleTicketSnapshot(mergedTicket);
-    const ticketId = mergedTicket.saleId;
-    router.push(`/print/${ticketId}` as never);
+  function openTicketForOrder(order: GFSalesOrder) {
+    return openSaleTicketForOrder(order, {
+      load: loadSaleTicketSnapshotStrict,
+      save: saveSaleTicketSnapshot,
+      navigate: (ticketId) => router.push(`/print/${ticketId}` as never),
+      onError: showTicketOpenError,
+    });
   }
 
   return (

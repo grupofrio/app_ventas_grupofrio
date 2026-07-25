@@ -114,6 +114,8 @@ export const STORAGE_KEYS = {
   // dump del caché de precios por cliente. Solo LECTURA offline; la venta
   // sigue online-first y el backend valida stock/precio al confirmar.
   PRODUCTS_CATALOG: 'cache:products:catalog',
+  LAST_KNOWN_CATALOG: 'cache:products:lastKnown:v1',
+  RECENT_PRODUCTS: 'cache:products:recent:v1',
   PRICES_CACHE: 'cache:prices',
   CUSTOMER_PRICING_SNAPSHOTS: 'cache:customerPricingSnapshots:v1',
   // Perf Fase 2D-1: consignaciones activas cacheadas SOLO para lectura offline.

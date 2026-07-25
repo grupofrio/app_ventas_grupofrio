@@ -40,6 +40,10 @@ import {
   peekCachedCustomerPrices,
   clearPricelistCaches as clearPartnerPricelistCaches,
 } from './pricelistCache';
+import {
+  validateServerPriceSnapshot,
+  type ValidatedServerPriceSnapshot,
+} from './customerPricingSnapshot';
 
 // ── Dev-only logging helper (D) ─────────────────────────────────────────────
 // Pricing/pricelist logs are noisy on devices in production. Wrap with
@@ -112,9 +116,24 @@ interface PartnerPricelistResolution {
   source: 'partner_field' | 'company_fallback' | 'none';
 }
 
-interface PricingOptions {
+export interface PricingProduct {
+  id: number;
+  list_price: number;
+  product_tmpl_id?: any;
+  categ_id?: any;
+  standard_price?: number;
+}
+
+export type ServerPricingRequest = (
+  url: string,
+  data: Record<string, unknown>,
+  options: { timeoutMs?: number },
+) => Promise<unknown>;
+
+export interface PricingOptions {
   companyId?: number | null;
   fallbackPricelistId?: number | null;
+  requestServerPricing?: ServerPricingRequest;
 }
 
 const GF_BASE = 'gf/logistics/api/employee';
@@ -393,78 +412,151 @@ function findMatchingRule(
   });
 }
 
+export function parseServerCustomerPricingSnapshot(
+  response: unknown,
+  requestedProductIds: number[],
+): ValidatedServerPriceSnapshot {
+  const responseRecord = (
+    response !== null && typeof response === 'object'
+      ? response
+      : {}
+  ) as Record<string, unknown>;
+  const rawData = responseRecord.data !== undefined
+    ? responseRecord.data
+    : response;
+  const data = (
+    rawData !== null && typeof rawData === 'object'
+      ? rawData
+      : {}
+  ) as Record<string, unknown>;
+  const rawPrices = data.prices ?? data.price_map ?? data.items ?? rawData;
+  const rows: Array<{ productId: number; unitPrice: number }> = [];
+
+  if (Array.isArray(rawPrices)) {
+    for (const rawRow of rawPrices) {
+      const row = (
+        rawRow !== null && typeof rawRow === 'object'
+          ? rawRow
+          : {}
+      ) as Record<string, unknown>;
+      rows.push({
+        productId: (row.product_id ?? row.id) as number,
+        unitPrice: (row.price ?? row.price_unit ?? row.unit_price) as number,
+      });
+    }
+  } else if (rawPrices !== null && typeof rawPrices === 'object') {
+    for (const [productId, unitPrice] of Object.entries(rawPrices)) {
+      rows.push({
+        productId: Number(productId),
+        unitPrice: unitPrice as number,
+      });
+    }
+  }
+
+  const validation = validateServerPriceSnapshot({
+    resolvedPricelistId: typeof data.pricelist_id === 'number'
+      ? data.pricelist_id
+      : null,
+    requestedProductIds,
+    rows,
+  });
+  if (!validation.ok) {
+    const details = 'productId' in validation
+      ? ` product_id=${String(validation.productId)}`
+      : 'missingProductIds' in validation
+        ? ` missing_product_ids=${validation.missingProductIds.join(',')}`
+        : '';
+    throw new Error(
+      `[pricelist] invalid full server pricing snapshot: ${validation.reason}${details}`,
+    );
+  }
+
+  return validation;
+}
+
 /**
- * Fetch customer-specific prices from Odoo's custom endpoint.
- * This endpoint computes prices server-side using Odoo's native pricelist engine,
- * guaranteeing consistency with what Odoo itself would calculate.
- *
- * Returns Map<productId, customerPrice> or null if the endpoint is unavailable.
+ * Call Odoo's native pricelist engine and return the complete validated result.
+ * Errors are intentionally allowed to escape; only the legacy display API may
+ * fall back to client-side pricelist rules.
  */
 async function fetchServerSidePrices(
   partnerId: number,
-  products: Array<{ id: number; list_price: number }>,
+  products: PricingProduct[],
   options?: PricingOptions,
-): Promise<Map<number, number> | null> {
-  if (!shouldTryServerPricingEndpoint()) return null;
+): Promise<ValidatedServerPriceSnapshot> {
+  if (!Number.isInteger(partnerId) || partnerId <= 0) {
+    throw new Error(`[pricelist] invalid_partner partner_id=${String(partnerId)}`);
+  }
+  if (!Array.isArray(products) || products.length === 0) {
+    throw new Error('[pricelist] empty_product_set');
+  }
 
-  const productIds = products
-    .map((product) => product.id)
-    .filter((id) => typeof id === 'number' && Number.isFinite(id) && id > 0);
-  if (partnerId <= 0 || productIds.length === 0) return null;
+  const productIds = products.map((product) => product?.id);
+  const invalidProductId = productIds.find(
+    (productId) => !Number.isInteger(productId) || productId <= 0,
+  );
+  if (invalidProductId !== undefined) {
+    throw new Error(
+      `[pricelist] invalid_requested_product product_id=${String(invalidProductId)}`,
+    );
+  }
+  if (!shouldTryServerPricingEndpoint()) {
+    throw new Error('[pricelist] server_pricing_endpoint_temporarily_unavailable');
+  }
 
-  const explicitPricelistId = typeof options?.fallbackPricelistId === 'number' && options.fallbackPricelistId > 0
-    ? options.fallbackPricelistId
+  const requestedPricelistId = options?.fallbackPricelistId;
+  const explicitPricelistId = Number.isInteger(requestedPricelistId)
+    && (requestedPricelistId ?? 0) > 0
+    ? requestedPricelistId
     : null;
 
-  try {
-    const payload: Record<string, unknown> = {
-      partner_id: partnerId,
-      product_ids: productIds,
-    };
-    if (explicitPricelistId) {
-      payload.pricelist_id = explicitPricelistId;
-    }
+  const payload: Record<string, unknown> = {
+    partner_id: partnerId,
+    product_ids: productIds,
+  };
+  if (explicitPricelistId) {
+    payload.pricelist_id = explicitPricelistId;
+  }
 
-    const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
+  const result = options?.requestServerPricing
+    ? await options.requestServerPricing(`${GF_BASE}/pricing/by_partner`, payload, {
+      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+    })
+    : await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
       timeoutMs: DEFAULT_READ_TIMEOUT_MS,
     });
-    const data = result?.data !== undefined ? result.data : result;
-    const rawPrices = data?.prices ?? data?.price_map ?? data?.items ?? data;
-    const productById = new Map(products.map((product) => [product.id, product]));
-    const priceMap = new Map<number, number>();
 
-    function addPrice(productId: unknown, price: unknown): void {
-      if (typeof productId !== 'number' || !Number.isFinite(productId) || productId <= 0) return;
-      if (typeof price !== 'number' || !Number.isFinite(price)) return;
-      const product = productById.get(productId);
-      if (!product) return;
-      if (Math.abs(price - product.list_price) > 0.01) {
-        priceMap.set(productId, price);
-      }
-    }
+  return parseServerCustomerPricingSnapshot(result, productIds);
+}
 
-    if (Array.isArray(rawPrices)) {
-      rawPrices.forEach((row) => {
-        addPrice(
-          row?.product_id ?? row?.id,
-          row?.price ?? row?.price_unit ?? row?.unit_price,
-        );
-      });
-    } else if (rawPrices && typeof rawPrices === 'object') {
-      Object.entries(rawPrices).forEach(([productId, price]) => {
-        addPrice(Number(productId), price);
-      });
-    } else {
-      return null;
-    }
-
+export async function fetchServerCustomerPricingSnapshot(
+  partnerId: number,
+  products: PricingProduct[],
+  options?: PricingOptions,
+): Promise<ValidatedServerPriceSnapshot> {
+  try {
+    const snapshot = await fetchServerSidePrices(partnerId, products, options);
     markServerPricingEndpointAvailable();
-    return priceMap;
+    return snapshot;
   } catch (error) {
-    if (__DEV__) console.warn('[pricelist] pricing/by_partner unavailable, falling back:', error);
     disableServerPricingEndpointIfMissing(error);
-    return null;
+    throw error;
   }
+}
+
+function deriveCustomerPriceOverrides(
+  snapshot: ValidatedServerPriceSnapshot,
+  products: PricingProduct[],
+): Map<number, number> {
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const overrides = new Map<number, number>();
+  for (const [productId, unitPrice] of snapshot.prices) {
+    const product = productById.get(productId);
+    if (product && Math.abs(unitPrice - product.list_price) > 0.01) {
+      overrides.set(productId, unitPrice);
+    }
+  }
+  return overrides;
 }
 
 /**
@@ -537,14 +629,23 @@ export async function computeCustomerPrices(
 
 async function _computeCustomerPricesUncached(
   partnerId: number,
-  products: Array<{ id: number; list_price: number; product_tmpl_id?: any; categ_id?: any; standard_price?: number }>,
+  products: PricingProduct[],
   options?: PricingOptions,
 ): Promise<Map<number, number>> {
   // ── Strategy 1: Server-side (preferred — Odoo native pricelist engine) ──
-  const serverPrices = await fetchServerSidePrices(partnerId, products, options);
-  if (serverPrices !== null) {
+  try {
+    const serverSnapshot = await fetchServerCustomerPricingSnapshot(
+      partnerId,
+      products,
+      options,
+    );
+    const serverPrices = deriveCustomerPriceOverrides(serverSnapshot, products);
     cacheCustomerPrices(partnerId, products, serverPrices, options);
     return serverPrices;
+  } catch (error) {
+    if (isDev) {
+      console.warn('[pricelist] pricing/by_partner unavailable, falling back:', error);
+    }
   }
 
   // ── Strategy 2: Client-side fallback ──

@@ -566,6 +566,169 @@ test('failed strict save does not publish the candidate in memory', async () => 
   assert.deepEqual(durable, publishedBeforeFailure);
 });
 
+test('an incomplete runtime update rejects before save and preserves published state', async () => {
+  const savedStates: PricingSnapshotStateV1[] = [];
+  const repository = createCustomerPricingSnapshotRepository({
+    load: async () => null,
+    saveStrict: async (state) => {
+      savedStates.push(clone(state));
+    },
+  });
+  const initial = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'strict-initial',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  await repository.replace(initial);
+  const publishedBeforeInvalidUpdate = repository.getState();
+
+  await assert.rejects(
+    repository.update(() => ({ version: 1 } as PricingSnapshotStateV1)),
+    /Invalid customer pricing snapshot state/,
+  );
+
+  assert.equal(savedStates.length, 1);
+  assert.strictEqual(repository.getState(), publishedBeforeInvalidUpdate);
+});
+
+test('strict runtime writes reject malformed nested state and prepared cross-references', async () => {
+  const valid = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'strict-nested',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  const corruptions: Array<{
+    name: string;
+    mutate: (candidate: any) => void;
+  }> = [
+    {
+      name: 'snapshot fingerprint',
+      mutate: (candidate) => {
+        const snapshotId = candidate.activeManifest.targets[0].snapshotId;
+        candidate.snapshots[snapshotId].productFingerprint = '999';
+      },
+    },
+    {
+      name: 'mapping key',
+      mutate: (candidate) => {
+        candidate.requestedMappings['wrong-key'] = clone(
+          candidate.requestedMappings['3:11:7'],
+        );
+      },
+    },
+    {
+      name: 'ledger product',
+      mutate: (candidate) => {
+        candidate.lastKnownPrices['3:11:17']['101'].unitPrice = -1;
+      },
+    },
+    {
+      name: 'manifest metadata',
+      mutate: (candidate) => {
+        candidate.activeManifest.activatedAtMs = -1;
+      },
+    },
+    {
+      name: 'manifest target',
+      mutate: (candidate) => {
+        candidate.activeManifest.targets.push({
+          partnerId: -1,
+          requestedPricelistId: 8,
+          resolvedPricelistId: 18,
+          snapshotId: 'invalid-target',
+          status: 'prepared',
+        });
+      },
+    },
+    {
+      name: 'prepared target cross-reference',
+      mutate: (candidate) => {
+        candidate.activeManifest.targets[0].snapshotId = 'missing-snapshot';
+      },
+    },
+  ];
+
+  for (const corruption of corruptions) {
+    let saveCalls = 0;
+    const repository = createCustomerPricingSnapshotRepository({
+      load: async () => null,
+      saveStrict: async () => {
+        saveCalls += 1;
+      },
+    });
+    await repository.replace(valid);
+    const publishedBeforeInvalidReplace = repository.getState();
+    const malformed = clone(valid) as any;
+    corruption.mutate(malformed);
+
+    await assert.rejects(
+      repository.replace(malformed),
+      /Invalid customer pricing snapshot state/,
+      corruption.name,
+    );
+    assert.equal(saveCalls, 1, corruption.name);
+    assert.strictEqual(
+      repository.getState(),
+      publishedBeforeInvalidReplace,
+      corruption.name,
+    );
+  }
+});
+
+test('a valid queued update succeeds after strict validation rejects its predecessor', async () => {
+  const savedStates: PricingSnapshotStateV1[] = [];
+  const repository = createCustomerPricingSnapshotRepository({
+    load: async () => null,
+    saveStrict: async (state) => {
+      savedStates.push(clone(state));
+    },
+  });
+  const initial = activateSingleTarget(emptyPricingSnapshotState(), {
+    runId: 'strict-queue-initial',
+    partnerId: 11,
+    requestedPricelistId: 7,
+    resolvedPricelistId: 17,
+    productId: 101,
+    unitPrice: 81,
+    capturedAtMs: 1_000,
+  });
+  await repository.replace(initial);
+
+  const rejected = repository.update(
+    () => ({ version: 1 } as PricingSnapshotStateV1),
+  );
+  const accepted = repository.update((current) => recordPrice(current, {
+    runId: 'strict-queue-recovery',
+    partnerId: 12,
+    requestedPricelistId: 8,
+    resolvedPricelistId: 18,
+    productId: 102,
+    unitPrice: 82,
+    capturedAtMs: 2_000,
+  }));
+
+  await assert.rejects(
+    rejected,
+    /Invalid customer pricing snapshot state/,
+  );
+  const published = await accepted;
+
+  assert.equal(savedStates.length, 2);
+  assert.deepEqual(
+    Object.keys(published.requestedMappings).sort(),
+    ['3:11:7', '3:12:8'],
+  );
+  assert.strictEqual(repository.getState(), published);
+});
+
 test('the serialized queue continues from published state after a rejected save', async () => {
   let rejectNextSave = true;
   let saveCalls = 0;

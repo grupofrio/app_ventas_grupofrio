@@ -221,6 +221,37 @@ test('sanitizes real Odoo char false and extra fields before persistence and loa
   assert.equal('confidential_server_field' in loadedProduct, false);
 });
 
+test('persists finite signed Odoo stock without rejecting the catalog', async () => {
+  const storage = new MemoryStorage();
+  const repository = createOfflineCatalogRepository(storage);
+  const runtimeSnapshot = snapshot({
+    products: [
+      {
+        ...product(7),
+        qty_available: -3,
+        _totalKg: -3,
+      },
+      product(8),
+    ],
+  });
+  const context = buildOfflineCatalogContext(runtimeSnapshot);
+
+  await repository.saveLastKnownCatalogStrict(runtimeSnapshot);
+
+  const loaded = await repository.loadLastKnownCatalog(context);
+  assert.deepEqual(
+    loaded?.products.map(({ id, qty_available, _totalKg }) => ({
+      id,
+      qty_available,
+      _totalKg,
+    })),
+    [
+      { id: 7, qty_available: -3, _totalKg: -3 },
+      { id: 8, qty_available: 8, _totalKg: 8 },
+    ],
+  );
+});
+
 test('retains multiple contexts in one base key without overwriting them', async () => {
   const storage = new MemoryStorage();
   const repository = createOfflineCatalogRepository(storage);
@@ -265,6 +296,34 @@ test('ignores corrupt and version-mismatched data without deleting or throwing',
   assert.deepEqual(await repository.loadRecentProducts(context), []);
 });
 
+test('replaces corrupt and version-mismatched v1 catalog roots on a valid save', async () => {
+  const storage = new MemoryStorage();
+  const repository = createOfflineCatalogRepository(storage);
+  const saved = snapshot({ products: [product(7)] });
+  const context = buildOfflineCatalogContext(saved);
+  const recentSentinel = { version: 99, untouched: true };
+  storage.values.set(STORAGE_KEYS.RECENT_PRODUCTS, recentSentinel);
+
+  storage.values.set(STORAGE_KEYS.LAST_KNOWN_CATALOG, '{broken');
+  await repository.saveLastKnownCatalogStrict(saved);
+  assert.deepEqual(
+    (await repository.loadLastKnownCatalog(context))?.products.map(({ id }) => id),
+    [7],
+  );
+
+  storage.values.set(STORAGE_KEYS.LAST_KNOWN_CATALOG, {
+    version: 2,
+    records: { legacy: 'must-not-survive' },
+  });
+  const replacement = snapshot({ fetchedAtMs: 2_000, products: [product(8)] });
+  await repository.saveLastKnownCatalogStrict(replacement);
+  assert.deepEqual(
+    (await repository.loadLastKnownCatalog(context))?.products.map(({ id }) => id),
+    [8],
+  );
+  assert.deepEqual(storage.values.get(STORAGE_KEYS.RECENT_PRODUCTS), recentSentinel);
+});
+
 test('a failed strict replacement leaves the prior last-known snapshot readable', async () => {
   const storage = new MemoryStorage();
   const repository = createOfflineCatalogRepository(storage);
@@ -273,12 +332,19 @@ test('a failed strict replacement leaves the prior last-known snapshot readable'
   const context = buildOfflineCatalogContext(original);
 
   await repository.saveLastKnownCatalogStrict(original);
+  const priorValue = structuredClone(
+    storage.values.get(STORAGE_KEYS.LAST_KNOWN_CATALOG),
+  );
   storage.failNextSave = true;
   await assert.rejects(
     repository.saveLastKnownCatalogStrict(replacement),
     /write failed/,
   );
 
+  assert.deepEqual(
+    storage.values.get(STORAGE_KEYS.LAST_KNOWN_CATALOG),
+    priorValue,
+  );
   assert.deepEqual(
     (await repository.loadLastKnownCatalog(context))?.products.map(({ id }) => id),
     [1],
@@ -318,6 +384,18 @@ test('rejects invalid strict snapshots without replacing valid prior data', asyn
     repository.saveLastKnownCatalogStrict(snapshot({
       fetchedAtMs: Number.NaN,
       products: [{ ...product(2), qty_display: Number.NaN }],
+    })),
+    /Invalid last-known catalog snapshot/,
+  );
+  await assert.rejects(
+    repository.saveLastKnownCatalogStrict(snapshot({
+      products: [{ ...product(2), qty_available: Number.POSITIVE_INFINITY }],
+    })),
+    /Invalid last-known catalog snapshot/,
+  );
+  await assert.rejects(
+    repository.saveLastKnownCatalogStrict(snapshot({
+      products: [{ ...product(2), _totalKg: Number.NEGATIVE_INFINITY }],
     })),
     /Invalid last-known catalog snapshot/,
   );

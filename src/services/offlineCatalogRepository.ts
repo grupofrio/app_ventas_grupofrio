@@ -139,6 +139,10 @@ function nonNegativeFiniteNumber(value: unknown): value is number {
     && value >= 0;
 }
 
+function finiteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function nullablePositiveSafeInteger(
   value: unknown,
 ): value is number | null {
@@ -189,7 +193,7 @@ function sanitizeTruckProduct(value: unknown): TruckProduct | null {
       && typeof value.default_code !== 'string'
     )
     || !nonNegativeFiniteNumber(value.list_price)
-    || !nonNegativeFiniteNumber(value.qty_available)
+    || !finiteNumber(value.qty_available)
     || typeof value.sale_ok !== 'boolean'
     || !isMany2one(value.product_tmpl_id)
     || (
@@ -202,7 +206,7 @@ function sanitizeTruckProduct(value: unknown): TruckProduct | null {
       && value.image_128 !== false
       && typeof value.image_128 !== 'string'
     )
-    || !nonNegativeFiniteNumber(value._totalKg)
+    || !finiteNumber(value._totalKg)
     || !nonNegativeFiniteNumber(value.qty_reserved)
     || !nonNegativeFiniteNumber(value.qty_display)
     || typeof value._isGlobalFallback !== 'boolean'
@@ -484,9 +488,6 @@ export function createOfflineCatalogRepository(
       return serializeWrite(async () => {
         const raw = await storage.load(STORAGE_KEYS.LAST_KNOWN_CATALOG);
         const previous = raw === null ? null : parseLastKnownState(raw);
-        if (raw !== null && !previous) {
-          throw new TypeError('Invalid last-known catalog repository state');
-        }
         await storage.saveStrict(STORAGE_KEYS.LAST_KNOWN_CATALOG, {
           version: 1,
           records: {

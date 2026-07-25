@@ -107,8 +107,10 @@ la ruta nativa y el transporte Bluetooth ya están comprobados.
 ## Evidencia adicional: folio Odoo (2026-07-25)
 
 Esta ejecución corresponde a la rama `codex/odoo-ticket-folio` y verifica los
-cambios de folio Odoo, referencia local pendiente y vendedor autoritativo. No
-reemplaza la ejecución histórica del 2026-07-22 documentada arriba.
+cambios de folio Odoo, referencia local pendiente y consumo frontend del
+vendedor recibido de Odoo. La resolución autoritativa del vendedor en backend
+sigue pendiente y no fue probada en esta ejecución. Esta evidencia no reemplaza
+la ejecución histórica del 2026-07-22 documentada arriba.
 
 ### Verificación automatizada
 
@@ -117,7 +119,7 @@ reemplaza la ejecución histórica del 2026-07-22 documentada arriba.
 | `npm test -- --runInBand` | 456 de 456 pruebas aprobadas; exit 0 |
 | `npm run typecheck` | exit 0 |
 | `git diff --check` | limpio |
-| Pruebas Kotlin enfocadas de Task 7 | `BUILD SUCCESSFUL` |
+| Pruebas Kotlin enfocadas de Task 7 | `BUILD SUCCESSFUL`; `ThermalPrinterModuleTest`: 9 de 9 y `ThermalTicketLayoutTest`: 34 de 34; 43 en total, 0 fallidas |
 | Suite Kotlin completa | 164 pruebas, 0 fallidas; 43 pertenecen a las dos clases de Task 7 |
 | `./gradlew :thermal-printer:testDebugUnitTest :app:assembleRelease --offline --no-daemon --console=plain` | `BUILD SUCCESSFUL` en 2 min 8 s; 1276 tareas accionables (881 ejecutadas y 395 actualizadas) |
 

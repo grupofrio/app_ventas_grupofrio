@@ -139,12 +139,37 @@ test('drops malformed identities and unsafe new entries without throwing', () =>
     recentProduct(0, 1_000),
     recentProduct(-1, 1_000),
     recentProduct(1.5, 1_000),
+    recentProduct(Number.MAX_SAFE_INTEGER + 1, 1_000),
     recentProduct(10, Number.NaN),
+    recentProduct(11, Number.POSITIVE_INFINITY),
+    recentProduct(12, -1),
+    recentProduct(13, 1.5),
+    recentProduct(14, Number.MAX_SAFE_INTEGER + 1),
     { productId: '20', lastSeenAtMs: 2_000 },
   ] as unknown as RecentProductSnapshot[];
 
   assert.doesNotThrow(() => upsertRecentProducts(malformed, malformed));
   assert.deepEqual(upsertRecentProducts(malformed, malformed), []);
+});
+
+test('accepts safe integer boundaries for identifiers and timestamps', () => {
+  const result = upsertRecentProducts([], [
+    recentProduct(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, {
+      listPrice: 10,
+    }),
+    recentProduct(Number.MAX_SAFE_INTEGER + 1, 1_000),
+    recentProduct(10, Number.MAX_SAFE_INTEGER + 1),
+    recentProduct(20, 2.5),
+  ]);
+
+  assert.deepEqual(result, [{
+    productId: Number.MAX_SAFE_INTEGER,
+    name: `Producto ${Number.MAX_SAFE_INTEGER}`,
+    defaultCode: `SKU-${Number.MAX_SAFE_INTEGER}`,
+    listPrice: 10,
+    weight: 1,
+    lastSeenAtMs: Number.MAX_SAFE_INTEGER,
+  }]);
 });
 
 test('treats malformed index containers as empty without throwing', () => {

@@ -46,7 +46,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function positiveProductId(value: unknown): number | null {
   return typeof value === 'number'
-    && Number.isInteger(value)
+    && Number.isSafeInteger(value)
     && value > 0
     ? value
     : null;
@@ -84,7 +84,7 @@ function safeDefaultCode(value: unknown): string | null {
 
 function safeCapturedAtMs(value: unknown): number | null {
   return typeof value === 'number'
-    && Number.isFinite(value)
+    && Number.isSafeInteger(value)
     && value >= 0
     ? value
     : null;

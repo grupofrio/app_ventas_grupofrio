@@ -32,7 +32,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function positiveProductId(value: unknown): number | null {
   return typeof value === 'number'
-    && Number.isInteger(value)
+    && Number.isSafeInteger(value)
     && value > 0
     ? value
     : null;
@@ -40,7 +40,7 @@ function positiveProductId(value: unknown): number | null {
 
 function safeTimestamp(value: unknown): number | null {
   return typeof value === 'number'
-    && Number.isFinite(value)
+    && Number.isSafeInteger(value)
     && value >= 0
     ? value
     : null;

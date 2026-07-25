@@ -155,6 +155,7 @@ test('rejects invalid identities and normalizes malformed presentation values sa
       truckProduct(0),
       truckProduct(-1),
       truckProduct(1.5),
+      truckProduct(Number.MAX_SAFE_INTEGER + 1),
       truckProduct(10, {
         name: '   ',
         default_code: false,
@@ -200,6 +201,64 @@ test('rejects invalid identities and normalizes malformed presentation values sa
       inventoryCapturedAtMs: null,
     },
   ] satisfies EffectiveOfflineProduct[]);
+});
+
+test('accepts only safe positive integer product identities across every source', () => {
+  const result = buildEffectiveOfflineCatalog({
+    currentProducts: [
+      truckProduct(Number.MAX_SAFE_INTEGER),
+      truckProduct(Number.MAX_SAFE_INTEGER + 1),
+      truckProduct(3.5),
+    ],
+    lastKnownProducts: [
+      truckProduct(20),
+      truckProduct(Number.POSITIVE_INFINITY),
+    ],
+    recentProducts: [
+      recentProduct(30),
+      recentProduct(Number.MAX_SAFE_INTEGER + 1),
+      recentProduct(-30),
+    ],
+  });
+
+  assert.deepEqual(
+    result.map(({ productId }) => productId),
+    [Number.MAX_SAFE_INTEGER, 20, 30],
+  );
+});
+
+test('accepts only safe non-negative integer inventory capture timestamps', () => {
+  const accepted = buildEffectiveOfflineCatalog({
+    currentProducts: [truckProduct(10)],
+    currentInventoryCapturedAtMs: Number.MAX_SAFE_INTEGER,
+    lastKnownProducts: [truckProduct(20)],
+    lastKnownInventoryCapturedAtMs: 0,
+  });
+
+  assert.deepEqual(
+    accepted.map(({ inventoryCapturedAtMs }) => inventoryCapturedAtMs),
+    [Number.MAX_SAFE_INTEGER, 0],
+  );
+
+  for (const invalidTimestamp of [
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.POSITIVE_INFINITY,
+    Number.NaN,
+  ]) {
+    const result = buildEffectiveOfflineCatalog({
+      currentProducts: [truckProduct(10)],
+      currentInventoryCapturedAtMs: invalidTimestamp,
+      lastKnownProducts: [truckProduct(20)],
+      lastKnownInventoryCapturedAtMs: invalidTimestamp,
+    });
+
+    assert.deepEqual(
+      result.map(({ inventoryCapturedAtMs }) => inventoryCapturedAtMs),
+      [null, null],
+    );
+  }
 });
 
 test('treats malformed source containers as empty without throwing', () => {

@@ -4,11 +4,13 @@ import { loadSaleTicketSnapshots } from '../services/saleTicketStorage';
 import { collectLocalSaleOperationIds } from '../services/localSaleTickets';
 import {
   mergeSalesListEntries,
+  normalizeOperationIdForComparison,
   projectLocalSale,
   summarizeLocalSales,
   type LocalSalesSummary,
   type SalesListEntry,
 } from '../services/salesListProjection';
+import { reconcileCompletedSaleRetention } from '../services/completedSaleRetention';
 import { shouldRefreshSalesAfterQueueChange } from '../services/salesRefreshPolicy';
 import { useSalesStore } from '../stores/useSalesStore';
 import { useSyncStore } from '../stores/useSyncStore';
@@ -16,11 +18,12 @@ import type { SaleTicketSnapshot } from '../services/saleTicket';
 import type { SyncItemStatus, SyncQueueItem } from '../types/sync';
 import { todayLocalISO } from '../utils/localDate';
 
-const ACTIVE_LOCAL_SALE_STATUSES = new Set<SyncItemStatus>([
+const PROJECTABLE_LOCAL_SALE_STATUSES = new Set<SyncItemStatus>([
   'pending',
   'syncing',
   'error',
   'dead',
+  'done',
 ]);
 
 interface SalesListProjectionResult {
@@ -40,7 +43,7 @@ function buildLocalSalesTicketSignature(queue: SyncQueueItem[]): string {
   for (const item of queue) {
     if (
       item.type !== 'sale_order'
-      || !ACTIVE_LOCAL_SALE_STATUSES.has(item.status)
+      || !PROJECTABLE_LOCAL_SALE_STATUSES.has(item.status)
       || typeof item.id !== 'string'
       || !item.id.trim()
     ) {
@@ -58,6 +61,53 @@ function buildLocalSalesTicketSignature(queue: SyncQueueItem[]): string {
   return JSON.stringify(relevantItems);
 }
 
+function collectProjectionTicketOperationIds(
+  queue: SyncQueueItem[],
+): string[] {
+  const operationIds = collectLocalSaleOperationIds(queue);
+  const seen = new Set(
+    operationIds.map(normalizeOperationIdForComparison),
+  );
+
+  for (const item of queue) {
+    if (item.type !== 'sale_order' || item.status !== 'done') continue;
+    const normalized = normalizeOperationIdForComparison(item.id);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    operationIds.push(item.id);
+  }
+
+  return operationIds;
+}
+
+function sameProjectedEntry(
+  left: SalesListEntry,
+  right: SalesListEntry,
+): boolean {
+  return left.key === right.key
+    && left.operationId === right.operationId
+    && left.origin === right.origin
+    && left.customerName === right.customerName
+    && left.amountTotal === right.amountTotal
+    && left.kgTotal === right.kgTotal
+    && left.createdAtMs === right.createdAtMs
+    && left.localStatus === right.localStatus
+    && left.errorMessage === right.errorMessage
+    && left.remoteOrder === right.remoteOrder;
+}
+
+function sameCompletedEntries(
+  left: ReadonlyMap<string, SalesListEntry>,
+  right: ReadonlyMap<string, SalesListEntry>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [operationId, entry] of left) {
+    const candidate = right.get(operationId);
+    if (!candidate || !sameProjectedEntry(entry, candidate)) return false;
+  }
+  return true;
+}
+
 export function useSalesListProjection(): SalesListProjectionResult {
   const queue = useSyncStore((state) => state.queue);
   const orders = useSalesStore((state) => state.orders);
@@ -66,8 +116,12 @@ export function useSalesListProjection(): SalesListProjectionResult {
     () => new Map(),
   );
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [retainedCompletedEntries, setRetainedCompletedEntries] = useState<
+    Map<string, SalesListEntry>
+  >(() => new Map());
   const ticketLoadGenerationRef = useRef(0);
   const previousQueueRef = useRef<SyncQueueItem[] | null>(null);
+  const previousLocalEntriesRef = useRef<SalesListEntry[]>([]);
   const hasObservedQueueRef = useRef(false);
 
   const ticketSignature = useMemo(
@@ -78,7 +132,7 @@ export function useSalesListProjection(): SalesListProjectionResult {
   useEffect(() => {
     let active = true;
     const generation = ++ticketLoadGenerationRef.current;
-    const operationIds = collectLocalSaleOperationIds(queue);
+    const operationIds = collectProjectionTicketOperationIds(queue);
 
     if (operationIds.length === 0) {
       setTickets(new Map());
@@ -143,11 +197,42 @@ export function useSalesListProjection(): SalesListProjectionResult {
     }
   }, [loadTodaySales, queue]);
 
-  const localEntries = useMemo(
+  const activeLocalEntries = useMemo(
     () => queue
       .map((item) => projectLocalSale(item, tickets.get(item.id)))
       .filter((entry): entry is SalesListEntry => entry !== null),
     [queue, tickets],
+  );
+  const projectedRetainedCompletedEntries = useMemo(
+    () => reconcileCompletedSaleRetention({
+      retainedCompletedEntries,
+      previousLocalEntries: previousLocalEntriesRef.current,
+      queue,
+      tickets,
+      remoteOrders: orders,
+    }),
+    [orders, queue, retainedCompletedEntries, tickets],
+  );
+
+  useEffect(() => {
+    const projectedEntries = [
+      ...activeLocalEntries,
+      ...projectedRetainedCompletedEntries.values(),
+    ];
+    previousLocalEntriesRef.current = projectedEntries;
+    setRetainedCompletedEntries((current) => (
+      sameCompletedEntries(current, projectedRetainedCompletedEntries)
+        ? current
+        : projectedRetainedCompletedEntries
+    ));
+  }, [activeLocalEntries, projectedRetainedCompletedEntries]);
+
+  const localEntries = useMemo(
+    () => [
+      ...activeLocalEntries,
+      ...projectedRetainedCompletedEntries.values(),
+    ],
+    [activeLocalEntries, projectedRetainedCompletedEntries],
   );
   const localDay = todayLocalISO();
   const entries = useMemo(
@@ -158,9 +243,13 @@ export function useSalesListProjection(): SalesListProjectionResult {
     }),
     [localDay, localEntries, orders],
   );
+  const visibleLocalEntries = useMemo(
+    () => entries.filter((entry) => entry.origin === 'local'),
+    [entries],
+  );
   const localSummary = useMemo(
-    () => summarizeLocalSales(localEntries),
-    [localEntries],
+    () => summarizeLocalSales(visibleLocalEntries),
+    [visibleLocalEntries],
   );
 
   return { entries, localSummary, ticketsLoading };

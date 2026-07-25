@@ -9,6 +9,13 @@ const hookPath = resolve(
 const hook = existsSync(hookPath)
   ? readFileSync(hookPath, 'utf8')
   : '';
+const retentionPath = resolve(
+  process.cwd(),
+  'src/services/completedSaleRetention.ts',
+);
+const retention = existsSync(retentionPath)
+  ? readFileSync(retentionPath, 'utf8')
+  : '';
 
 assert.match(
   hook,
@@ -31,6 +38,8 @@ for (const collaborator of [
   'loadSaleTicketSnapshots',
   'projectLocalSale',
   'mergeSalesListEntries',
+  'normalizeOperationIdForComparison',
+  'reconcileCompletedSaleRetention',
   'summarizeLocalSales',
   'shouldRefreshSalesAfterQueueChange',
 ]) {
@@ -103,6 +112,31 @@ assert.match(
   /loadTodaySales\(\{\s*force:\s*true\s*\}\)/,
   'una transición aprobada debe solicitar un refresh forzado coalescido',
 );
+assert.match(
+  retention,
+  /localStatus:\s*['"]updating['"]/,
+  'una venta completada debe conservarse como updating mientras Odoo la confirma',
+);
+assert.match(
+  hook,
+  /retainedCompletedEntries/,
+  'el hook debe conservar la última proyección local después de que salga de la cola activa',
+);
+assert.match(
+  retention,
+  /normalizeOperationIdForComparison\(/,
+  'la retención debe reconciliar ids con las mismas reglas de trim y case que la lista',
+);
+assert.match(
+  retention,
+  /projectLocalSale\([\s\S]*status:\s*['"]pending['"]/,
+  'un done observado al montar debe poder derivarse defensivamente desde su payload',
+);
+assert.match(
+  retention,
+  /remoteOperationIds\.has\(/,
+  'una venta local retenida debe ocultarse tan pronto aparezca su equivalente remoto',
+);
 
 assert.match(
   hook,
@@ -111,8 +145,13 @@ assert.match(
 );
 assert.match(
   hook,
-  /summarizeLocalSales\(localEntries\)/,
-  'el resumen pendiente debe calcularse exclusivamente con ventas locales',
+  /entries\.filter\(\(entry\)\s*=>\s*entry\.origin\s*===\s*['"]local['"]\)/,
+  'el resumen pendiente debe usar solo ventas locales visibles y no reconciliadas',
+);
+assert.match(
+  hook,
+  /summarizeLocalSales\(visibleLocalEntries\)/,
+  'el resumen debe dejar de contar una venta cuando Odoo la reemplaza',
 );
 assert.match(
   hook,

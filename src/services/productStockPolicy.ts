@@ -2,6 +2,32 @@ import type { InventoryFreshness } from './effectiveOfflineCatalog.ts';
 
 export type ProductStockPolicy = 'strict' | 'offline_sale';
 
+export interface ProductSelectionContextIdentityInput {
+  visible: boolean;
+  companyId: number | null;
+  planId: number | null;
+  partnerId: number | null;
+  pricelistId: number | null;
+  warehouseId: number | null;
+  isOnline: boolean;
+  freshness: InventoryFreshness;
+  inventoryCapturedAtMs: number | null;
+  catalogIdentity: string;
+}
+
+export interface SelectableProductSnapshot {
+  productId: number;
+  qtyDisplay: number | null;
+  freshness: InventoryFreshness;
+}
+
+export type ProductSelectionRevalidation =
+  | { ok: true; quantity: number; qtyDisplay: number | null }
+  | {
+      ok: false;
+      reason: 'context_changed' | 'product_missing' | 'product_unavailable';
+    };
+
 interface ProductStockContext {
   policy: ProductStockPolicy;
   isOnline: boolean;
@@ -30,6 +56,46 @@ function hasPositiveStock(qtyDisplay: number | null): boolean {
 
 function hasValidCartQuantity(quantity: number): boolean {
   return Number.isSafeInteger(quantity) && quantity > 0;
+}
+
+function validCapturedAtMs(value: unknown, nowMs: number): number | null {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && value <= nowMs
+    ? value
+    : null;
+}
+
+export function resolveInventoryCapturedAtMs(input: {
+  cachedAtMs: number | null;
+  lastSyncAtMs: number | null;
+  nowMs?: number;
+}): number | null {
+  const nowMs = typeof input.nowMs === 'number'
+    && Number.isSafeInteger(input.nowMs)
+    && input.nowMs >= 0
+    ? input.nowMs
+    : Date.now();
+  return validCapturedAtMs(input.cachedAtMs, nowMs)
+    ?? validCapturedAtMs(input.lastSyncAtMs, nowMs);
+}
+
+export function buildProductSelectionContextKey(
+  input: ProductSelectionContextIdentityInput,
+): string {
+  return JSON.stringify([
+    input.visible === true,
+    input.companyId,
+    input.planId,
+    input.partnerId,
+    input.pricelistId,
+    input.warehouseId,
+    input.isOnline === true,
+    input.freshness,
+    input.inventoryCapturedAtMs,
+    input.catalogIdentity,
+  ]);
 }
 
 export function shouldRefreshInventoryAuthority(
@@ -63,6 +129,40 @@ export function normalizeProductQuantity(
   return integerStock > 0
     ? Math.min(input.requestedQty, integerStock)
     : null;
+}
+
+export function revalidateProductSelection(input: {
+  expectedContextKey: string;
+  currentContextKey: string;
+  productId: number;
+  requestedQty: number;
+  policy: ProductStockPolicy;
+  isOnline: boolean;
+  products: readonly SelectableProductSnapshot[];
+}): ProductSelectionRevalidation {
+  if (input.expectedContextKey !== input.currentContextKey) {
+    return { ok: false, reason: 'context_changed' };
+  }
+  const product = input.products.find((candidate) => (
+    candidate.productId === input.productId
+  ));
+  if (!product) return { ok: false, reason: 'product_missing' };
+  const context = {
+    policy: input.policy,
+    isOnline: input.isOnline,
+    qtyDisplay: product.qtyDisplay,
+    freshness: product.freshness,
+  };
+  if (!canSelectProduct(context)) {
+    return { ok: false, reason: 'product_unavailable' };
+  }
+  const quantity = normalizeProductQuantity({
+    ...context,
+    requestedQty: input.requestedQty,
+  });
+  return quantity === null
+    ? { ok: false, reason: 'product_unavailable' }
+    : { ok: true, quantity, qtyDisplay: product.qtyDisplay };
 }
 
 function formatCapturedAge(capturedAtMs: unknown, nowMs: unknown): string | null {

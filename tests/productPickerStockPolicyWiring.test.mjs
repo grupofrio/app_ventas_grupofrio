@@ -16,6 +16,24 @@ assert.match(picker, /recentProducts/);
 assert.match(picker, /canSelectProduct\(\{/);
 assert.match(picker, /normalizeProductQuantity\(\{/);
 assert.match(picker, /formatProductStockLabel\(\{/);
+assert.match(picker, /resolveInventoryCapturedAtMs\(\{[\s\S]*?cachedAtMs,[\s\S]*?lastSyncAtMs,/);
+assert.match(picker, /buildProductSelectionContextKey\(\{[\s\S]*?isOnline,[\s\S]*?freshness:\s*inventoryFreshness,[\s\S]*?catalogIdentity:\s*currentPricingContextKey/);
+assert.match(picker, /selectionRuntimeRef\.current/);
+const confirmStart = picker.indexOf('const confirmPending = () => {');
+const liveRead = picker.indexOf('selectionRuntimeRef.current', confirmStart);
+const revalidation = picker.indexOf('revalidateProductSelection({', liveRead);
+const rejection = picker.indexOf('if (!revalidation.ok)', revalidation);
+const safeAlert = picker.indexOf("Alert.alert(\n            'Selección desactualizada'", rejection);
+const commit = picker.indexOf('commitSelection();', safeAlert);
+assert(
+  confirmStart >= 0
+    && liveRead > confirmStart
+    && revalidation > liveRead
+    && rejection > revalidation
+    && safeAlert > rejection
+    && commit > safeAlert,
+  'la confirmación diferida debe revalidar contra el contexto vivo antes de agregar',
+);
 
 assert.match(visitStore, /stock:\s*number\s*\|\s*null/);
 assert.match(visitStore, /updateSaleQty:\s*\([\s\S]*?options\?:\s*\{\s*enforceStock\?:\s*boolean\s*\}/);

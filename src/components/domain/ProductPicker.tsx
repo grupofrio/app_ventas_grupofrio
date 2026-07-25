@@ -73,10 +73,14 @@ import {
   type InventoryFreshness,
 } from '../../services/effectiveOfflineCatalog';
 import {
+  buildProductSelectionContextKey,
   canSelectProduct,
   formatProductStockLabel,
   normalizeProductQuantity,
+  resolveInventoryCapturedAtMs,
+  revalidateProductSelection,
   type ProductStockPolicy,
+  type SelectableProductSnapshot,
 } from '../../services/productStockPolicy';
 import type { RecentProductSnapshot } from '../../services/recentProductIndex';
 
@@ -389,6 +393,13 @@ interface PendingPublicFallback {
   selectionCommit: ProductSelectionCommitToken;
 }
 
+interface ProductSelectionRuntime {
+  contextKey: string;
+  policy: ProductStockPolicy;
+  isOnline: boolean;
+  products: SelectableProductSnapshot[];
+}
+
 function buildPickerCatalogProducts(input: {
   products: TruckProduct[];
   recentProducts: RecentProductSnapshot[];
@@ -434,7 +445,8 @@ export function ProductPicker({
   const products = useProductStore((s) => s.products);
   const recentProducts = useProductStore((s) => s.recentProducts);
   const inventoryFreshness = useProductStore((s) => s.inventoryFreshness);
-  const inventoryCapturedAtMs = useProductStore((s) => s.cachedAtMs);
+  const cachedAtMs = useProductStore((s) => s.cachedAtMs);
+  const lastSyncAtMs = useProductStore((s) => s.lastSync);
   const inventorySource = useProductStore((s) => s.inventorySource);
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
   // dd78489). Reemplaza la heurística client-side anterior.
@@ -447,6 +459,10 @@ export function ProductPicker({
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const isOnline = useSyncStore((s) => s.isOnline);
   const isGlobalFallback = inventorySource === 'global_legacy';
+  const inventoryCapturedAtMs = resolveInventoryCapturedAtMs({
+    cachedAtMs,
+    lastSyncAtMs,
+  });
   const pickerProducts = useMemo(() => buildPickerCatalogProducts({
     products,
     recentProducts,
@@ -487,22 +503,43 @@ export function ProductPicker({
     useState<string | null>(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
-  const pendingPublicFallbackRef = useRef<PendingPublicFallback | null>(null);
-  const selectionContextKey = [
-    visible ? 1 : 0,
-    companyId ?? 0,
-    planId ?? 0,
-    partnerId ?? 0,
-    pricelistId ?? 0,
-  ].join('|');
-  const selectionContextKeyRef = useRef(selectionContextKey);
-  selectionContextKeyRef.current = selectionContextKey;
   const currentPricingContextKey = customerPricingContextKey({
     companyId,
     partnerId: partnerId ?? 0,
     requestedPricelistId: pricelistId ?? null,
     products: pickerProducts,
   });
+  const pendingPublicFallbackRef = useRef<PendingPublicFallback | null>(null);
+  const selectionContextKey = buildProductSelectionContextKey({
+    visible,
+    companyId,
+    planId,
+    partnerId: partnerId ?? null,
+    pricelistId: pricelistId ?? null,
+    warehouseId,
+    isOnline,
+    freshness: inventoryFreshness,
+    inventoryCapturedAtMs,
+    catalogIdentity: currentPricingContextKey,
+  });
+  const selectionContextKeyRef = useRef(selectionContextKey);
+  selectionContextKeyRef.current = selectionContextKey;
+  const selectionRuntimeRef = useRef<ProductSelectionRuntime>({
+    contextKey: selectionContextKey,
+    policy: stockPolicy,
+    isOnline,
+    products: [],
+  });
+  selectionRuntimeRef.current = {
+    contextKey: selectionContextKey,
+    policy: stockPolicy,
+    isOnline,
+    products: pickerProducts.map((product) => ({
+      productId: product.id,
+      qtyDisplay: product.qty_display,
+      freshness: product.inventoryFreshness,
+    })),
+  };
   const pricingContextKeyRef = useRef(currentPricingContextKey);
   pricingContextKeyRef.current = currentPricingContextKey;
   const selectionReadiness = useMemo(
@@ -957,11 +994,31 @@ export function ProductPicker({
         selectionCommitGuard.cancel(pending.selectionCommit);
       };
       const confirmPending = () => {
+        const liveSelection = selectionRuntimeRef.current;
+        const revalidation = revalidateProductSelection({
+          expectedContextKey: pending.contextKey,
+          currentContextKey: liveSelection.contextKey,
+          productId: product.id,
+          requestedQty: line.qty,
+          policy: liveSelection.policy,
+          isOnline: liveSelection.isOnline,
+          products: liveSelection.products,
+        });
+        if (!revalidation.ok) {
+          clearPending();
+          Alert.alert(
+            'Selección desactualizada',
+            'La conexión o el inventario cambió. Revisa el producto y vuelve a seleccionarlo.',
+          );
+          return;
+        }
         if (
           pending.committed
           || pendingPublicFallbackRef.current !== pending
           || selectionContextKeyRef.current !== pending.contextKey
         ) return;
+        line.qty = revalidation.quantity;
+        line.stock = revalidation.qtyDisplay;
         pending.committed = true;
         pendingPublicFallbackRef.current = null;
         commitSelection();

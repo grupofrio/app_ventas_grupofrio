@@ -103,3 +103,43 @@ Una persona debe confirmar sobre el papel:
 
 Hasta recibir esa confirmación, la aceptación física permanece pendiente aunque
 la ruta nativa y el transporte Bluetooth ya están comprobados.
+
+## Evidencia adicional: folio Odoo (2026-07-25)
+
+Esta ejecución corresponde a la rama `codex/odoo-ticket-folio` y verifica los
+cambios de folio Odoo, referencia local pendiente y vendedor autoritativo. No
+reemplaza la ejecución histórica del 2026-07-22 documentada arriba.
+
+### Verificación automatizada
+
+| Comando o alcance | Resultado fresco |
+| --- | --- |
+| `npm test -- --runInBand` | 456 de 456 pruebas aprobadas; exit 0 |
+| `npm run typecheck` | exit 0 |
+| `git diff --check` | limpio |
+| Pruebas Kotlin enfocadas de Task 7 | `BUILD SUCCESSFUL` |
+| Suite Kotlin completa | 164 pruebas, 0 fallidas; 43 pertenecen a las dos clases de Task 7 |
+| `./gradlew :thermal-printer:testDebugUnitTest :app:assembleRelease --offline --no-daemon --console=plain` | `BUILD SUCCESSFUL` en 2 min 8 s; 1276 tareas accionables (881 ejecutadas y 395 actualizadas) |
+
+El APK producido localmente fue:
+
+| Ruta | Tamaño | SHA-256 |
+| --- | ---: | --- |
+| `android/app/build/outputs/apk/release/app-release.apk` | 69,031,393 bytes | `e250385b2eae47aa75605e5a21a89684deae8a1485f5b592e8cd9a49802c7f94` |
+
+### Límites de esta ejecución
+
+El Android limpio **no quedó verificado**. El comando
+`npx expo prebuild --platform android --clean --no-install` requería descargar
+`expo-template-bare-minimum` para SDK 52 y la descarga/red necesaria no estuvo
+autorizada ni disponible. Para compilar y ejecutar las pruebas se copió un
+scaffold Android existente; este uso fue exclusivamente local.
+
+Además, `node scripts/verify-thermal-printer-android.mjs` falla porque encuentra
+0 ocurrencias de `android.permission.BLUETOOTH` en el manifest generado. Por
+esta razón, aunque la compilación terminó correctamente, el APK anterior **no
+es candidato de entrega ni de instalación**.
+
+`adb devices -l` no mostró dispositivos conectados. No se instaló este APK y
+no se realizó una impresión física. Esta ejecución no afirma resultados sobre
+papel, apertura de PDF ni comportamiento físico de una MP210.

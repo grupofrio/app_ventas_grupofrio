@@ -33,6 +33,7 @@ import { normalizePlanStopPayload, extractPlanStopsArray } from './planStopPaylo
 import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
 import { validateSaleCreateResult } from './saleCreateResult';
+import type { SaleCreateResultData } from './saleCreateResult';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -561,15 +562,14 @@ export async function uploadStopImage(
 export async function createSale(
   payload: Record<string, unknown>,
   meta?: ClientEventMeta | null,
-): Promise<boolean> {
+): Promise<SaleCreateResultData> {
   const body = attachClientMetaToRestPayload(payload, meta ?? null);
   const result = await postRest<unknown>(
     `${GF_BASE}/sales/create`,
     body,
   );
   const expectedOperationId = typeof body.operation_id === 'string' ? body.operation_id : '';
-  validateSaleCreateResult(result, expectedOperationId);
-  return true;
+  return validateSaleCreateResult(result, expectedOperationId);
 }
 
 export async function acceptRouteLoad(routePlanId: number, pickingId: number): Promise<boolean> {

@@ -1,6 +1,7 @@
 export interface SaleCreateResultData {
   success: true;
   order_id: number;
+  name: string;
   operation_id: string;
   duplicate?: boolean;
   [key: string]: unknown;
@@ -37,6 +38,8 @@ export function validateSaleCreateResult(
       || typeof data.order_id !== 'number'
       || !Number.isInteger(data.order_id)
       || data.order_id <= 0
+      || typeof data.name !== 'string'
+      || data.name.trim().length === 0
       || typeof expectedOperationId !== 'string'
       || expectedOperationId.trim().length === 0
       || typeof data.operation_id !== 'string'
@@ -47,7 +50,7 @@ export function validateSaleCreateResult(
       throw invalidSaleCreateResponse();
     }
 
-    return data as SaleCreateResultData;
+    return { ...data, name: data.name.trim() } as SaleCreateResultData;
   } catch {
     throw invalidSaleCreateResponse();
   }

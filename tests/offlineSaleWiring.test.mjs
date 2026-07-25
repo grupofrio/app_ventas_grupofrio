@@ -134,6 +134,27 @@ assert.match(
   /text:\s*'Cancelar'[\s\S]*?onPress:\s*clearPending[\s\S]*?onPress:\s*confirmPending[\s\S]*?onDismiss:\s*clearPending/,
   'cancelar, confirmar o cerrar la alerta debe limpiar el guard local',
 );
+assert(
+  picker.includes('createProductSelectionCommitGuard')
+    && picker.includes('selectionCommitGuard.begin(')
+    && picker.includes('selectionCommitGuard.commit('),
+  'todos los caminos de add deben compartir un guard de commit idempotente',
+);
+assert.match(
+  picker,
+  /const commitSelection = \(\) => \{[\s\S]*?selectionContextKeyRef\.current !== selectionCommit\.contextKey[\s\S]*?selectionCommitGuard\.commit\([\s\S]*?onAddLine\(line\)[\s\S]*?addSaleLine\(line\)/,
+  'el commit general debe validar contexto y envolver ambos sinks exactamente una vez',
+);
+assert.match(
+  picker,
+  /const clearPending = \(\) => \{[\s\S]*?selectionCommitGuard\.cancel\(pending\.selectionCommit\)/,
+  'cancelar el fallback debe liberar el intento general no confirmado',
+);
+assert.match(
+  picker,
+  /const closePicker = useCallback\(\(\) => \{[\s\S]*?selectionCommitGuard\.cancelUncommitted\(\)[\s\S]*?onClose\(\)/,
+  'cerrar sin commit debe liberar el guard general',
+);
 
 // Un full response online alimenta display + ledger; nunca activa preparación.
 assert(
@@ -165,8 +186,18 @@ assert.match(
 );
 assert.match(
   picker,
-  /if \(requestGate\.isCurrent\(requestToken\)\) \{[\s\S]*?setPriceMap\(loaded\.displayPrices\)[\s\S]*?setOnlineCapturedPrices\(loaded\.capturedPrices\)/,
-  'una respuesta obsoleta no debe publicar precios en UI',
+  /runCommitIfCurrent\(\s*input\.requestToken,\s*async \(\) => \{[\s\S]*?await updateCustomerPricingSnapshotState\([\s\S]*?\},\s*\)/,
+  'la aceptación del token debe abarcar saveStrict y publicación del ledger',
+);
+assert.match(
+  picker,
+  /await input\.requestGate\.waitUntilCurrent\(input\.requestToken\)/,
+  'una petición en espera debe activarse después del commit durable anterior',
+);
+assert.match(
+  picker,
+  /requestGate\.isCurrent\(requestToken\)[\s\S]*?pricingContextKeyRef\.current === requestToken\.contextKey[\s\S]*?selectionContextKeyRef\.current === requestSelectionContextKey[\s\S]*?setPriceMap\(loaded\.displayPrices\)[\s\S]*?setOnlineCapturedPrices\(loaded\.capturedPrices\)/,
+  'una respuesta obsoleta no debe publicar precios en UI tras cambio exacto de contexto',
 );
 assert(
   picker.includes('createLatestProductPricingRequestGate')

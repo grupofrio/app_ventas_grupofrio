@@ -48,10 +48,12 @@ import {
 } from '../../services/customerPricingSnapshotRepository';
 import {
   createLatestProductPricingRequestGate,
+  createProductSelectionCommitGuard,
   selectProductPrice,
   type LatestProductPricingRequestGate,
   type ProductPricingRequestToken,
   type ProductPriceSelection,
+  type ProductSelectionCommitToken,
 } from '../../services/productPriceSelection';
 import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
@@ -206,6 +208,9 @@ async function loadOnlineCustomerPricing(input: {
   requestToken: ProductPricingRequestToken;
   requestGate: LatestProductPricingRequestGate;
 }): Promise<LoadedCustomerPricing> {
+  if (!(await input.requestGate.waitUntilCurrent(input.requestToken))) {
+    return staleCustomerPricingResult();
+  }
   const pricingOptions = {
     companyId: input.companyId,
     fallbackPricelistId: input.requestedPricelistId,
@@ -236,17 +241,23 @@ async function loadOnlineCustomerPricing(input: {
     ) {
       const companyId = input.companyId;
       try {
-        await updateCustomerPricingSnapshotState((current) => {
-          if (!input.requestGate.isCurrent(input.requestToken)) return current;
-          return recordLastKnownServerPrices(current, {
-            companyId,
-            partnerId: input.partnerId,
-            requestedPricelistId: input.requestedPricelistId,
-            capturedAtMs: input.requestToken.capture.capturedAtMs,
-            captureRunId: input.requestToken.capture.captureRunId,
-            validation,
-          });
-        });
+        const committed = await input.requestGate.runCommitIfCurrent(
+          input.requestToken,
+          async () => {
+            await updateCustomerPricingSnapshotState((current) =>
+              recordLastKnownServerPrices(current, {
+                companyId,
+                partnerId: input.partnerId,
+                requestedPricelistId: input.requestedPricelistId,
+                capturedAtMs: input.requestToken.capture.capturedAtMs,
+                captureRunId: input.requestToken.capture.captureRunId,
+                validation,
+              }));
+          },
+        );
+        if (!committed) {
+          return staleCustomerPricingResult();
+        }
       } catch (error) {
         logWarn('general', 'product_picker_price_ledger_write_failed', {
           partner_id: input.partnerId,
@@ -354,6 +365,7 @@ type EnrichedProduct = TruckProduct & {
 interface PendingPublicFallback {
   contextKey: string;
   committed: boolean;
+  selectionCommit: ProductSelectionCommitToken;
 }
 
 // ═══ Component ═══
@@ -374,6 +386,10 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const isGlobalFallback = inventorySource === 'global_legacy';
   const requestGate = useMemo(
     () => createLatestProductPricingRequestGate(),
+    [],
+  );
+  const selectionCommitGuard = useMemo(
+    () => createProductSelectionCommitGuard(),
     [],
   );
 
@@ -410,10 +426,13 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     requestedPricelistId: pricelistId ?? null,
     products,
   });
+  const pricingContextKeyRef = useRef(currentPricingContextKey);
+  pricingContextKeyRef.current = currentPricingContextKey;
 
   useEffect(() => {
     pendingPublicFallbackRef.current = null;
-  }, [selectionContextKey]);
+    selectionCommitGuard.invalidate();
+  }, [selectionCommitGuard, selectionContextKey]);
 
   // Load base URL for image URLs
   useEffect(() => {
@@ -460,6 +479,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       return;
     }
 
+    const requestSelectionContextKey = selectionContextKeyRef.current;
     const requestToken = requestGate.begin(
       currentPricingContextKey,
       nextForegroundPricingCapture(
@@ -476,7 +496,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       requestToken,
       requestGate,
     }).then((loaded) => {
-      if (requestGate.isCurrent(requestToken)) {
+      if (
+        requestGate.isCurrent(requestToken)
+        && pricingContextKeyRef.current === requestToken.contextKey
+        && selectionContextKeyRef.current === requestSelectionContextKey
+      ) {
         if (loaded.stale) return;
         setPriceMap(loaded.displayPrices);
         setOnlineCapturedPrices(loaded.capturedPrices);
@@ -484,7 +508,13 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         setPriceLoading(false);
       }
     }).catch(() => {
-      if (requestGate.isCurrent(requestToken)) setPriceLoading(false);
+      if (
+        requestGate.isCurrent(requestToken)
+        && pricingContextKeyRef.current === requestToken.contextKey
+        && selectionContextKeyRef.current === requestSelectionContextKey
+      ) {
+        setPriceLoading(false);
+      }
     });
     return () => {
       requestGate.cancel(requestToken);
@@ -497,6 +527,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     pricelistId,
     products,
     requestGate,
+    selectionContextKey,
     visible,
   ]);
 
@@ -513,6 +544,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       Alert.alert('Sin conexión', 'Conéctate para actualizar catálogo y precios.');
       return;
     }
+    const requestSelectionContextKey = selectionContextKeyRef.current;
     let requestToken = requestGate.begin(
       currentPricingContextKey,
       nextForegroundPricingCapture(
@@ -525,6 +557,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setPriceLoading(true);
     clearPricelistCaches();
     try {
+      if (!(await requestGate.waitUntilCurrent(requestToken))) return;
       await loadProducts(warehouseId);
       if (!requestGate.isCurrent(requestToken)) return;
       if (partnerId) {
@@ -550,7 +583,12 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           requestToken,
           requestGate,
         });
-        if (requestGate.isCurrent(requestToken) && !loaded.stale) {
+        if (
+          requestGate.isCurrent(requestToken)
+          && pricingContextKeyRef.current === requestToken.contextKey
+          && selectionContextKeyRef.current === requestSelectionContextKey
+          && !loaded.stale
+        ) {
           setPriceMap(loaded.displayPrices);
           setOnlineCapturedPrices(loaded.capturedPrices);
           setPublishedPricingContextKey(requestToken.contextKey);
@@ -732,15 +770,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const closePicker = useCallback(() => {
     requestGate.invalidate();
     pendingPublicFallbackRef.current = null;
+    selectionCommitGuard.cancelUncommitted();
     setSearch('');
     setQuantities({});
     onClose();
-  }, [onClose, requestGate]);
+  }, [onClose, requestGate, selectionCommitGuard]);
 
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
     if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
+    if (pendingPublicFallbackRef.current) return;
 
     const qty = quantities[product.id] || 1;
     // SaleLineItem.price = base price SIN IVA (for Odoo sync).
@@ -758,27 +798,36 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       stock: product.qty_display,
       weight: product.weight || 5,
     };
+    const selectionCommit = selectionCommitGuard.begin(
+      selectionContextKeyRef.current,
+    );
+    if (!selectionCommit) return;
 
     const commitSelection = () => {
-      if (onAddLine) {
-        onAddLine(line); // caller-managed cart (e.g. Preventa)
-      } else {
-        addSaleLine(line); // default: active-visit cart
-      }
+      if (selectionContextKeyRef.current !== selectionCommit.contextKey) return;
+      const committed = selectionCommitGuard.commit(selectionCommit, () => {
+        if (onAddLine) {
+          onAddLine(line); // caller-managed cart (e.g. Preventa)
+        } else {
+          addSaleLine(line); // default: active-visit cart
+        }
+      });
+      if (!committed) return;
       closePicker();
     };
 
     if (product.priceSelection.requiresPublicFallbackConfirmation) {
-      if (pendingPublicFallbackRef.current) return;
       const pending: PendingPublicFallback = {
         contextKey: selectionContextKeyRef.current,
         committed: false,
+        selectionCommit,
       };
       pendingPublicFallbackRef.current = pending;
       const clearPending = () => {
         if (pendingPublicFallbackRef.current === pending) {
           pendingPublicFallbackRef.current = null;
         }
+        selectionCommitGuard.cancel(pending.selectionCommit);
       };
       const confirmPending = () => {
         if (
@@ -803,7 +852,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     }
 
     commitSelection();
-  }, [existingProductIds, quantities, onAddLine, addSaleLine, closePicker]);
+  }, [
+    existingProductIds,
+    quantities,
+    onAddLine,
+    addSaleLine,
+    closePicker,
+    selectionCommitGuard,
+  ]);
 
   // ═══ Product Image ═══
 

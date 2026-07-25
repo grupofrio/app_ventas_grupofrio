@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createLatestProductPricingRequestGate,
+  createProductSelectionCommitGuard,
   selectProductPrice,
   type ProductPriceSelectionInput,
 } from '../src/services/productPriceSelection.ts';
@@ -227,4 +228,128 @@ test('cancelling an older request cannot invalidate a newer request', () => {
 
   assert.equal(gate.cancel(older), false);
   assert.equal(gate.isCurrent(newer), true);
+});
+
+test('strict persistence lease delays a switched context until save-before-publish completes', async () => {
+  const gate = createLatestProductPricingRequestGate();
+  const saveStarted = Promise.withResolvers<void>();
+  const releaseSave = Promise.withResolvers<void>();
+  const activationOrder: string[] = [];
+  let durableLedger = 'initial';
+  let publishedLedger = 'initial';
+
+  const older = gate.begin('company=34|partner=99|list=81|products=10', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+  const olderCommit = gate.runCommitIfCurrent(older, async () => {
+    saveStarted.resolve();
+    await releaseSave.promise;
+    durableLedger = 'customer-a';
+    publishedLedger = 'customer-a';
+    activationOrder.push('older-published');
+  });
+  await saveStarted.promise;
+
+  // Reproduce a prop/context switch while saveStrict is still awaiting:
+  // effect cleanup invalidates A, then the next effect begins B.
+  gate.invalidate();
+  const newer = gate.begin('company=34|partner=100|list=82|products=10', {
+    capturedAtMs: 1_001,
+    captureRunId: 'picker:1001',
+  });
+  const newerActivation = gate.waitUntilCurrent(newer).then((activated) => {
+    if (activated) activationOrder.push('newer-active');
+    return activated;
+  });
+
+  assert.equal(gate.isCurrent(older), false, 'old UI must be stale immediately');
+  assert.equal(gate.isCurrent(newer), false, 'new context waits behind strict persistence');
+  assert.equal(durableLedger, 'initial');
+  assert.equal(publishedLedger, 'initial');
+
+  releaseSave.resolve();
+  assert.equal(await olderCommit, true);
+  assert.equal(await newerActivation, true);
+  assert.deepEqual(activationOrder, ['older-published', 'newer-active']);
+  assert.equal(durableLedger, 'customer-a');
+  assert.equal(publishedLedger, 'customer-a');
+  assert.equal(gate.isCurrent(newer), true);
+
+  const newerCommit = await gate.runCommitIfCurrent(newer, async () => {
+    durableLedger = 'customer-b';
+    publishedLedger = 'customer-b';
+  });
+  assert.equal(newerCommit, true, 'subsequent context must proceed after the lease');
+  assert.equal(durableLedger, 'customer-b');
+  assert.equal(publishedLedger, 'customer-b');
+});
+
+test('a pending request superseded during strict persistence never activates', async () => {
+  const gate = createLatestProductPricingRequestGate();
+  const saveStarted = Promise.withResolvers<void>();
+  const releaseSave = Promise.withResolvers<void>();
+  const older = gate.begin('customer-a', {
+    capturedAtMs: 1_000,
+    captureRunId: 'picker:1000',
+  });
+  const olderCommit = gate.runCommitIfCurrent(older, async () => {
+    saveStarted.resolve();
+    await releaseSave.promise;
+  });
+  await saveStarted.promise;
+
+  const superseded = gate.begin('customer-b', {
+    capturedAtMs: 1_001,
+    captureRunId: 'picker:1001',
+  });
+  const supersededActivation = gate.waitUntilCurrent(superseded);
+  const latest = gate.begin('customer-c', {
+    capturedAtMs: 1_002,
+    captureRunId: 'picker:1002',
+  });
+  const latestActivation = gate.waitUntilCurrent(latest);
+
+  assert.equal(await supersededActivation, false);
+  releaseSave.resolve();
+  assert.equal(await olderCommit, true);
+  assert.equal(await latestActivation, true);
+  assert.equal(gate.isCurrent(latest), true);
+});
+
+test('selection commit guard invokes a direct add sink at most once', () => {
+  const guard = createProductSelectionCommitGuard();
+  const token = guard.begin('visible=1|partner=99|product=10');
+  assert.ok(token);
+  let onAddLineCalls = 0;
+  const add = () => {
+    onAddLineCalls += 1;
+  };
+
+  assert.equal(guard.commit(token, add), true);
+  assert.equal(guard.commit(token, add), false, 'same callback may fire twice');
+  assert.equal(
+    guard.begin('visible=1|partner=99|product=10'),
+    null,
+    'a second tap before the picker context changes must remain blocked',
+  );
+  assert.equal(onAddLineCalls, 1);
+});
+
+test('selection commit guard resets uncommitted attempts on cancel and context change', () => {
+  const guard = createProductSelectionCommitGuard();
+  const cancelled = guard.begin('visible=1|partner=99|product=10');
+  assert.ok(cancelled);
+  assert.equal(guard.cancel(cancelled), true);
+
+  const afterCancel = guard.begin('visible=1|partner=99|product=10');
+  assert.ok(afterCancel, 'public fallback cancel must permit another attempt');
+  assert.equal(guard.cancelUncommitted(), true, 'manual close clears a pending attempt');
+
+  const oldContext = guard.begin('visible=1|partner=99|product=10');
+  assert.ok(oldContext);
+  guard.invalidate();
+  const newContext = guard.begin('visible=1|partner=100|product=10');
+  assert.ok(newContext, 'prop/context switch must permit a fresh selection');
+  assert.equal(guard.commit(oldContext, () => assert.fail('stale sink ran')), false);
 });

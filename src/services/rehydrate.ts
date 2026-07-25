@@ -18,6 +18,7 @@ import { useVisitStore } from '../stores/useVisitStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
 import { useProductStore } from '../stores/useProductStore';
 import { hydratePriceCacheFromDisk } from './offlineCache';
+import { hydrateCustomerPricingSnapshots } from './customerPricingSnapshotRepository';
 import { GFPlan, GFStop } from '../types/plan';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
 import {
@@ -132,7 +133,12 @@ export async function rehydrateAppState(): Promise<{
       await storeRemove(STORAGE_KEYS.VISIT_STATE);
     }
 
-    // 3. Perf Fase 2B: rehidratar catálogo + precios desde el caché de jornada.
+    // 3. Restore the durable pricing publication before catalog/price consumers.
+    // The legacy override cache remains separate and is hydrated only for
+    // compatibility with existing screens.
+    await hydrateCustomerPricingSnapshots();
+
+    // 3b. Perf Fase 2B: rehidratar catálogo + precios desde el caché de jornada.
     // Antes los productos se BORRABAN siempre para no vender contra stock viejo;
     // ahora se rehidratan SOLO si el contexto coincide (día/empleado/empresa/
     // almacén) y no venció — así un reinicio en ruta sin señal no deja al

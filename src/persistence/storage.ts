@@ -109,6 +109,7 @@ export const STORAGE_KEYS = {
   // sigue online-first y el backend valida stock/precio al confirmar.
   PRODUCTS_CATALOG: 'cache:products:catalog',
   PRICES_CACHE: 'cache:prices',
+  CUSTOMER_PRICING_SNAPSHOTS: 'cache:customerPricingSnapshots:v1',
   // Perf Fase 2D-1: consignaciones activas cacheadas SOLO para lectura offline.
   // create/visit/close siguen online-first; backend = fuente de verdad.
   CONSIGNMENTS: 'cache:consignments',

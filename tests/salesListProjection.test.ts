@@ -706,7 +706,14 @@ test('sorts newest first with a deterministic key tie-break', () => {
 
 test('filters remote and local entries by the exact local calendar day', () => {
   const lateLocalTime = new Date(2026, 6, 24, 23, 30, 0);
-  assert.equal(lateLocalTime.toISOString().slice(0, 10), '2026-07-25');
+  assert.deepEqual(
+    [
+      lateLocalTime.getFullYear(),
+      lateLocalTime.getMonth() + 1,
+      lateLocalTime.getDate(),
+    ],
+    [2026, 7, 24],
+  );
 
   const merged = mergeSalesListEntries({
     remoteOrders: [
@@ -776,7 +783,99 @@ test('projects remote authoritative fields defensively without NaN', () => {
   assert.equal(merged[0].amountTotal, null);
   assert.equal(merged[0].kgTotal, null);
   assert.equal(Number.isNaN(merged[0].createdAtMs), false);
-  assert.equal(merged[0].remoteOrder, malformed);
+  assert.notEqual(merged[0].remoteOrder, malformed);
+  assert.equal(merged[0].remoteOrder?.partner_name, '');
+  assert.equal(merged[0].remoteOrder?.amount_total, 0);
+  assert.equal(merged[0].remoteOrder?.kg_total, 0);
+});
+
+test('sanitizes colliding malformed remote values into one order-independent safe result', () => {
+  const malformedAlpha = remoteWithOperation('same-malformed', {
+    id: 701,
+    name: { label: 'alpha' } as unknown as string,
+    partner_id: Number.NaN,
+    partner_name: { label: 'alpha' } as unknown as string,
+    amount_total: Number.NaN,
+    amount_untaxed: Number.POSITIVE_INFINITY,
+    amount_tax: Number.NEGATIVE_INFINITY,
+    kg_total: Number.NaN,
+    state: false as unknown as string,
+    confirmation_date: { date: 'alpha' } as unknown as string,
+    stop_id: Number.POSITIVE_INFINITY,
+    payment_method: { code: 'alpha' } as unknown as string,
+    payment_method_label: false as unknown as string,
+    employee_name: ['alpha'] as unknown as string,
+    lines: [{
+      product_id: Number.NaN,
+      product_name: { label: 'alpha' } as unknown as string,
+      quantity: Number.POSITIVE_INFINITY,
+      price_unit: Number.NEGATIVE_INFINITY,
+      price_subtotal: Number.NaN,
+      kg_total: Number.POSITIVE_INFINITY,
+    }],
+  });
+  const malformedZeta = remoteWithOperation('same-malformed', {
+    id: 701,
+    name: ['zeta'] as unknown as string,
+    partner_id: Number.NEGATIVE_INFINITY,
+    partner_name: false as unknown as string,
+    amount_total: Number.POSITIVE_INFINITY,
+    amount_untaxed: Number.NEGATIVE_INFINITY,
+    amount_tax: Number.NaN,
+    kg_total: Number.POSITIVE_INFINITY,
+    state: { code: 'zeta' } as unknown as string,
+    confirmation_date: false as unknown as string,
+    stop_id: Number.NaN,
+    payment_method: ['zeta'] as unknown as string,
+    payment_method_label: { label: 'zeta' } as unknown as string,
+    employee_name: false as unknown as string,
+    lines: [{
+      product_id: Number.POSITIVE_INFINITY,
+      product_name: false as unknown as string,
+      quantity: Number.NaN,
+      price_unit: Number.POSITIVE_INFINITY,
+      price_subtotal: Number.NEGATIVE_INFINITY,
+      kg_total: Number.NaN,
+    }],
+  });
+
+  const mergedEntry = (remoteOrders: GFSalesOrder[]) => (
+    mergeSalesListEntries({
+      remoteOrders,
+      localEntries: [],
+      localDay: '2026-07-24',
+    })[0]
+  );
+  const alphaFirst = mergedEntry([malformedAlpha, malformedZeta]);
+  const zetaFirst = mergedEntry([malformedZeta, malformedAlpha]);
+
+  assert.deepEqual(alphaFirst, zetaFirst);
+  assert.deepEqual(alphaFirst.remoteOrder, {
+    id: 701,
+    name: '',
+    partner_id: null,
+    partner_name: '',
+    amount_total: 0,
+    amount_untaxed: 0,
+    amount_tax: 0,
+    kg_total: 0,
+    state: '',
+    date_order: '2026-07-24T16:30:00.000-06:00',
+    confirmation_date: '',
+    stop_id: null,
+    operation_id: 'same-malformed',
+    payment_method: '',
+    payment_method_label: '',
+    employee_name: '',
+    lines: [{
+      product_id: 0,
+      product_name: '',
+      quantity: 0,
+      price_unit: 0,
+      price_subtotal: 0,
+      kg_total: 0,
+    }],
+  });
 });
 
 test('skips malformed remote rows without throwing', () => {
@@ -880,6 +979,42 @@ test('includes every active local status and sums currency in rounded cents', ()
     count: 4,
     knownAmountTotal: 10.31,
     unknownAmountCount: 0,
+    needsAttentionCount: 0,
+  });
+});
+
+test('treats an amount whose rounded cents are not a safe integer as unknown', () => {
+  const entries = [
+    localWithOperation('known', { amountTotal: 25 }),
+    localWithOperation('unsafe-cents', {
+      amountTotal: Number.MAX_SAFE_INTEGER,
+    }),
+  ];
+
+  assert.deepEqual(summarizeLocalSales(entries), {
+    count: 2,
+    knownAmountTotal: 25,
+    unknownAmountCount: 1,
+    needsAttentionCount: 0,
+  });
+});
+
+test('treats an amount that would overflow the safe cent sum as unknown', () => {
+  const individuallySafeCents = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1;
+  const individuallySafeAmount = individuallySafeCents / 100;
+  const entries = [
+    localWithOperation('safe-first', {
+      amountTotal: individuallySafeAmount,
+    }),
+    localWithOperation('overflowing-second', {
+      amountTotal: individuallySafeAmount,
+    }),
+  ];
+
+  assert.deepEqual(summarizeLocalSales(entries), {
+    count: 2,
+    knownAmountTotal: individuallySafeAmount,
+    unknownAmountCount: 1,
     needsAttentionCount: 0,
   });
 });

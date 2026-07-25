@@ -276,6 +276,57 @@ function validRemoteOrderId(value: unknown): number | null {
     : null;
 }
 
+function safeRemoteString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function safeRemoteNumber(value: unknown): number {
+  return nonNegativeFiniteNumber(value) ?? 0;
+}
+
+function safeRemoteNullableNumber(value: unknown): number | null {
+  return positiveFiniteNumber(value);
+}
+
+function sanitizeRemoteLine(value: unknown): GFSalesOrder['lines'][number] {
+  const line = isRecord(value) ? value : {};
+  return {
+    product_id: safeRemoteNumber(line.product_id),
+    product_name: safeRemoteString(line.product_name),
+    quantity: safeRemoteNumber(line.quantity),
+    price_unit: safeRemoteNumber(line.price_unit),
+    price_subtotal: safeRemoteNumber(line.price_subtotal),
+    kg_total: safeRemoteNumber(line.kg_total),
+  };
+}
+
+function sanitizeRemoteOrder(
+  value: Record<string, unknown>,
+  orderId: number,
+): GFSalesOrder {
+  return {
+    id: orderId,
+    name: safeRemoteString(value.name),
+    partner_id: safeRemoteNullableNumber(value.partner_id),
+    partner_name: safeRemoteString(value.partner_name),
+    amount_total: safeRemoteNumber(value.amount_total),
+    amount_untaxed: safeRemoteNumber(value.amount_untaxed),
+    amount_tax: safeRemoteNumber(value.amount_tax),
+    kg_total: safeRemoteNumber(value.kg_total),
+    state: safeRemoteString(value.state),
+    date_order: safeRemoteString(value.date_order),
+    confirmation_date: safeRemoteString(value.confirmation_date),
+    stop_id: safeRemoteNullableNumber(value.stop_id),
+    operation_id: safeRemoteString(value.operation_id),
+    payment_method: safeRemoteString(value.payment_method),
+    payment_method_label: safeRemoteString(value.payment_method_label),
+    employee_name: safeRemoteString(value.employee_name),
+    lines: Array.isArray(value.lines)
+      ? value.lines.map(sanitizeRemoteLine)
+      : [],
+  };
+}
+
 function remoteDateOrderMs(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
@@ -347,12 +398,10 @@ function projectRemoteSale(value: unknown): SalesListEntry | null {
   const createdAtMs = remoteDateOrderMs(value.date_order);
   if (orderId === null || createdAtMs === null) return null;
 
-  const operationId = typeof value.operation_id === 'string'
-    ? value.operation_id
-    : '';
+  const remoteOrder = sanitizeRemoteOrder(value, orderId);
   return {
     key: `odoo:${orderId}`,
-    operationId,
+    operationId: remoteOrder.operation_id,
     origin: 'odoo',
     customerName:
       normalizeDisplayString(value.partner_name)
@@ -360,7 +409,7 @@ function projectRemoteSale(value: unknown): SalesListEntry | null {
     amountTotal: nonNegativeFiniteNumber(value.amount_total),
     kgTotal: nonNegativeFiniteNumber(value.kg_total),
     createdAtMs,
-    remoteOrder: value as unknown as GFSalesOrder,
+    remoteOrder,
   };
 }
 
@@ -546,7 +595,7 @@ function roundedCurrencyCents(value: unknown): number | null {
   const amount = nonNegativeFiniteNumber(value);
   if (amount === null) return null;
   const cents = Math.round((amount + Number.EPSILON) * 100);
-  return Number.isFinite(cents) ? cents : null;
+  return Number.isSafeInteger(cents) ? cents : null;
 }
 
 export function summarizeLocalSales(
@@ -575,7 +624,12 @@ export function summarizeLocalSales(
       unknownAmountCount += 1;
       continue;
     }
-    knownAmountCents += cents;
+    const nextKnownAmountCents = knownAmountCents + cents;
+    if (!Number.isSafeInteger(nextKnownAmountCents)) {
+      unknownAmountCount += 1;
+      continue;
+    }
+    knownAmountCents = nextKnownAmountCents;
   }
 
   return {

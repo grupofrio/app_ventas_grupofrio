@@ -160,6 +160,45 @@ test('keeps compatible stock text protected after a definitive 422 without a str
   assert.deepEqual(classifySyncFailure(sale, error), terminalStockFailure);
 });
 
+test('unknown structured metadata cannot hide compatible stock detail', () => {
+  for (const error of [
+    Object.assign(new Error('Stock insuficiente para Hielo 5 kg'), {
+      code: 'api_error',
+      responseReceived: true,
+    }),
+    Object.assign(new Error('Stock insuficiente para Hielo 5 kg'), {
+      name: 'UnexpectedBackendError',
+      responseReceived: true,
+    }),
+  ]) {
+    assert.deepEqual(classifySyncFailure(sale, error), terminalStockFailure);
+  }
+});
+
+test('recognized ambiguous code or name still overrides compatible stock text', () => {
+  for (const error of [
+    Object.assign(new Error('Stock insuficiente para Hielo 5 kg'), {
+      code: 'invalid_response',
+      responseReceived: true,
+    }),
+    Object.assign(new Error('Stock insuficiente para Hielo 5 kg'), {
+      name: 'AbortError',
+      responseReceived: true,
+    }),
+    Object.assign(new Error('Stock insuficiente para Hielo 5 kg'), {
+      code: 'timeout',
+      responseReceived: true,
+    }),
+  ]) {
+    assert.deepEqual(classifySyncFailure(sale, error), {
+      retryAutomatically: true,
+      terminalStatus: 'error',
+      errorCode: null,
+      protectFromGenericClear: false,
+    });
+  }
+});
+
 test('uses the existing non-sale retry behavior', () => {
   assert.deepEqual(classifySyncFailure({ type: 'photo' }, new Error('Network request failed')), {
     retryAutomatically: true,
@@ -319,4 +358,16 @@ test('normal legacy items are not treated as protected stock', () => {
   assert.equal(isProtectedStockSyncItem({}), false);
   assert.equal(isProtectedStockSyncItem({ error_code: null }), false);
   assert.equal(isProtectedStockSyncItem({ error_code: 'validation_error' }), false);
+  assert.equal(
+    isProtectedStockSyncItem({ type: 'photo', error_code: 'insufficient_stock' }),
+    false,
+  );
+  assert.equal(
+    isProtectedStockSyncItem({ type: 'gps', error_code: 'insufficient_stock' }),
+    false,
+  );
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  assert.doesNotThrow(() => isProtectedStockSyncItem(revocable.proxy));
+  assert.equal(isProtectedStockSyncItem(revocable.proxy), false);
 });

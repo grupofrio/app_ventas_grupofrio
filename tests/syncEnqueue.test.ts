@@ -150,6 +150,31 @@ function testNeverRearmsProtectedStockThroughGenericEnqueue(m: SyncEnqueueModule
   }
 }
 
+function testCorruptStockCodeOnNonSaleDoesNotBlockNormalRearm(m: SyncEnqueueModule) {
+  for (const type of ['photo', 'gps'] as const) {
+    const existing = makeItem({
+      id: `${type}-dead`,
+      type,
+      status: 'dead',
+      retries: 3,
+      error_message: 'old failure',
+      error_code: 'insufficient_stock',
+    });
+    const result = m.applySyncEnqueue({
+      queue: [existing],
+      type,
+      payload: { replacement: true },
+      options: { operationId: existing.id },
+      generatedId: 'unused',
+      createdAt: 20_000,
+    });
+
+    assert.equal(result.action, 'rearmed_dead');
+    assert.equal(result.queue[0].status, 'pending');
+    assert.equal(result.queue[0].error_code, null);
+  }
+}
+
 function testRejectsExplicitIdCollisionAcrossTypes(m: SyncEnqueueModule) {
   const queue = [makeItem({ id: 'shared-id', type: 'photo', status: 'pending' })];
   assert.throws(
@@ -220,6 +245,7 @@ async function main() {
   testReusesEveryLiveOrTerminalNonDeadState(module);
   testRearmsOnlyMatchingDeadItemWithoutReplacingPayload(module);
   testNeverRearmsProtectedStockThroughGenericEnqueue(module);
+  testCorruptStockCodeOnNonSaleDoesNotBlockNormalRearm(module);
   testRejectsExplicitIdCollisionAcrossTypes(module);
   testRejectsInvalidExplicitIdsWithoutUuidFallback(module);
   testCopiesDependsOnInsteadOfAliasingCallerArray(module);

@@ -6,6 +6,7 @@ import {
 } from './insufficientStock.ts';
 import {
   classifySaleSubmissionError,
+  hasExplicitAmbiguousSaleSubmissionMetadata,
   readSaleSubmissionErrorMetadata,
 } from './saleSubmissionOutcome.ts';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure.ts';
@@ -18,7 +19,8 @@ export interface SyncFailureClassification {
 }
 
 export function isProtectedStockSyncItem(item: unknown): boolean {
-  return normalizedCode(readProperty(item, 'error_code')) === 'insufficient_stock';
+  return readProperty(item, 'type') === 'sale_order'
+    && normalizedCode(readProperty(item, 'error_code')) === 'insufficient_stock';
 }
 
 export function excludeProtectedStockSyncItems<Item>(items: readonly Item[]): Item[] {
@@ -78,14 +80,8 @@ export function classifySyncFailure(
     const metadata = readSaleSubmissionErrorMetadata(error);
     const directCode = normalizedCode(metadata.code);
     const dataCode = normalizedCode(readProperty(readProperty(error, 'data'), 'error_code'));
-    const errorName = normalizedCode(metadata.name);
-    const authoritativeTransportAmbiguity =
-      metadata.responseReceived === false
-      || (metadata.httpStatus !== undefined
-        && metadata.httpStatus >= 500
-        && metadata.httpStatus <= 599);
 
-    if (authoritativeTransportAmbiguity) {
+    if (hasExplicitAmbiguousSaleSubmissionMetadata(error)) {
       return {
         retryAutomatically: true,
         terminalStatus: 'error',
@@ -138,18 +134,6 @@ export function classifySyncFailure(
     }
 
     if (isRetryableSyncErrorMessage(metadata.message)) {
-      return {
-        retryAutomatically: true,
-        terminalStatus: 'error',
-        errorCode: null,
-        protectFromGenericClear: false,
-      };
-    }
-
-    const hasStructuredAmbiguousMetadata =
-      saleOutcome.kind === 'ambiguous_result'
-      && (directCode !== null || (errorName !== null && errorName !== 'error'));
-    if (hasStructuredAmbiguousMetadata) {
       return {
         retryAutomatically: true,
         terminalStatus: 'error',

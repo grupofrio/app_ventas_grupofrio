@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   classifySaleSubmissionError,
+  hasExplicitAmbiguousSaleSubmissionMetadata,
   readSaleSubmissionErrorMetadata,
   type SaleSubmissionOutcomeKind,
 } from '../src/services/saleSubmissionOutcome.ts';
@@ -50,6 +51,36 @@ test('does not throw while reading unusual unknown values', () => {
   assert.deepEqual(readSaleSubmissionErrorMetadata(hostile), {});
   assert.deepEqual(readSaleSubmissionErrorMetadata(null), {});
   assert.deepEqual(readSaleSubmissionErrorMetadata(42), {});
+});
+
+test('only recognizes authoritative ambiguous submission metadata', () => {
+  for (const error of [
+    { responseReceived: false },
+    { httpStatus: 503, responseReceived: true },
+    { code: 'invalid_response', responseReceived: true },
+    { name: 'AbortError', responseReceived: true },
+    { code: 'timeout', responseReceived: true },
+    new Error('Network request failed'),
+  ]) {
+    assert.equal(hasExplicitAmbiguousSaleSubmissionMetadata(error), true);
+  }
+
+  for (const error of [
+    { httpStatus: 422, responseReceived: true, code: 'timeout' },
+    { responseReceived: true, code: 'validation_error', message: 'Network request failed' },
+    { responseReceived: true, code: 'api_error' },
+    { responseReceived: true, name: 'UnexpectedBackendError' },
+  ]) {
+    assert.equal(hasExplicitAmbiguousSaleSubmissionMetadata(error), false);
+  }
+});
+
+test('authoritative ambiguity detection is total for hostile metadata', () => {
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+
+  assert.doesNotThrow(() => hasExplicitAmbiguousSaleSubmissionMetadata(revocable.proxy));
+  assert.equal(hasExplicitAmbiguousSaleSubmissionMetadata(revocable.proxy), false);
 });
 
 const classificationCases: Array<{

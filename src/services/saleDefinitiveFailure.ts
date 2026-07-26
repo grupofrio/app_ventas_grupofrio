@@ -1,4 +1,5 @@
 import type { SyncQueueItem } from '../types/sync.ts';
+import { isProtectedStockSyncItem } from './syncErrorClassification.ts';
 
 export const SALE_DEFINITIVE_CLEAR_DEFERRED_MESSAGE =
   'sale definitive rejection clear deferred (storage)';
@@ -13,7 +14,9 @@ export function applySaleDefinitiveClearDeferral(
       ? {
           ...item,
           status: 'error',
-          error_message: SALE_DEFINITIVE_CLEAR_DEFERRED_MESSAGE,
+          error_message: isProtectedStockSyncItem(item)
+            ? item.error_message
+            : SALE_DEFINITIVE_CLEAR_DEFERRED_MESSAGE,
           retries: 0,
           next_retry_at: retryAt,
         }

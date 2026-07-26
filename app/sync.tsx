@@ -16,8 +16,8 @@ import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
 import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
-import { isProtectedStockSyncItem } from '../src/services/syncErrorClassification';
 import { isRetryableProtectedSaleOrder } from '../src/services/saleRetry';
+import { clearUnprotectedDeadItems } from '../src/services/syncDeadCleanup';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -48,8 +48,12 @@ export default function SyncScreen() {
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
-  const clearableDeadCount = dead.filter((item) => !isProtectedStockSyncItem(item)).length;
-  const protectedStockDeadCount = dead.length - clearableDeadCount;
+  const deadCleanupPreview = React.useMemo(
+    () => clearUnprotectedDeadItems(queue),
+    [queue],
+  );
+  const clearableDeadCount = deadCleanupPreview.removed;
+  const protectedStockDeadCount = deadCleanupPreview.protected;
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
@@ -73,15 +77,26 @@ export default function SyncScreen() {
           text: 'Limpiar',
           style: 'destructive',
           onPress: () => {
-            const { removed, protected: protectedCount } = clearDead();
-            Alert.alert(
-              'Historial limpio',
-              `Se eliminaron ${removed} operación(es) fallidas. Permanecen ${protectedCount} venta(s) rechazadas por stock que requieren atención.`,
-            );
+            void clearDeadDurably();
           },
         },
       ],
     );
+  }
+
+  async function clearDeadDurably() {
+    try {
+      const { removed, protected: protectedCount } = await clearDead();
+      Alert.alert(
+        'Historial limpio',
+        `Se eliminaron ${removed} operación(es) fallidas. Permanecen ${protectedCount} venta(s) rechazadas por stock que requieren atención.`,
+      );
+    } catch {
+      Alert.alert(
+        'No se pudo limpiar el historial',
+        'No se cambió la cola. Intenta nuevamente.',
+      );
+    }
   }
 
   async function handleRetryProtectedSale(operationId: string) {
@@ -89,10 +104,10 @@ export default function SyncScreen() {
     setRetryingOperationId(operationId);
     try {
       await retrySaleOrder(operationId);
-    } catch (error) {
+    } catch {
       Alert.alert(
         'No se pudo reintentar',
-        error instanceof Error ? error.message : 'Intenta nuevamente con conexión.',
+        'No pudimos reintentar la venta. Intenta nuevamente con conexión.',
       );
     } finally {
       setRetryingOperationId(null);

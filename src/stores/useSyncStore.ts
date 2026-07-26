@@ -94,7 +94,7 @@ import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
-import { clearUnprotectedDeadItems } from '../services/syncDeadCleanup';
+import { createDeadCleanupAction } from '../services/syncDeadCleanup';
 import { createSaleOrderRetryAction } from '../services/saleRetry';
 
 // ═══ Constants ═══
@@ -229,7 +229,7 @@ interface SyncState {
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
-  clearDead: () => { removed: number; protected: number };
+  clearDead: () => Promise<{ removed: number; protected: number }>;
   retrySaleOrder: (operationId: string) => Promise<void>;
 
   // Persistence
@@ -310,6 +310,11 @@ const retrySaleOrderAction = createSaleOrderRetryAction({
   },
   persistAndPublish: (transform) => queuePersistence.transformAndPersist(transform),
   processQueue: () => useSyncStore.getState().processQueue(),
+});
+
+const clearDeadAction = createDeadCleanupAction({
+  read: () => useSyncStore.getState().queue,
+  transformAndPersist: (transform) => queuePersistence.transformAndPersist(transform),
 });
 
 // ═══ Store ═══
@@ -513,18 +518,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   //
   // Devuelve los conteos eliminados/protegidos para feedback al operador sin
   // volver a consultar la cola.
-  clearDead: () => {
-    const result = clearUnprotectedDeadItems(get().queue);
-    if (result.removed > 0) {
-      set({ queue: result.queue, ...computeCounts(result.queue) });
-      schedulePersist();
-      logInfo('sync', 'dead_items_purged', {
-        removed: result.removed,
-        protected: result.protected,
-      });
-    }
-    return { removed: result.removed, protected: result.protected };
-  },
+  clearDead: () => clearDeadAction(),
 
   retrySaleOrder: (operationId) => retrySaleOrderAction(operationId),
 

@@ -101,15 +101,17 @@ function CheckoutScreenInner() {
       if (after.status === 'failed') {
         Alert.alert(
           'Venta sigue sin sincronizar',
-          after.message || 'Reintenta más tarde o contacta soporte.',
+          'No pudimos reintentar la venta. Intenta nuevamente con conexión.',
         );
       } else if (after.status === 'done') {
         // Quiet success — the banner disappears automatically because
         // liveSaleSyncState is reactive on queue.
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
-      Alert.alert('Error al reintentar', message);
+    } catch {
+      Alert.alert(
+        'Error al reintentar',
+        'No pudimos reintentar la venta. Intenta nuevamente con conexión.',
+      );
     } finally {
       setRetryingSale(false);
     }

@@ -139,12 +139,10 @@ export default function SalesScreen() {
     setRetryingOperationId(entry.operationId);
     try {
       await retrySaleOrder(entry.operationId);
-    } catch (retryError) {
+    } catch {
       Alert.alert(
         'No se pudo reintentar',
-        retryError instanceof Error
-          ? retryError.message
-          : 'Intenta nuevamente con conexión.',
+        'No pudimos reintentar la venta. Intenta nuevamente con conexión.',
       );
     } finally {
       retryingSalesRef.current.delete(entry.operationId);

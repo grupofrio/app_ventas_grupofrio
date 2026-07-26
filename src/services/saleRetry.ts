@@ -23,6 +23,7 @@
 
 import type { SyncQueueItem, SyncItemStatus } from '../types/sync';
 import { isProtectedStockSyncItem } from './syncErrorClassification.ts';
+import { collectDeadDependencyClosure } from './syncDeadCleanup.ts';
 
 const REARMED = {
   status: 'pending' as SyncItemStatus,
@@ -47,13 +48,18 @@ export function rearmSaleOrderForRetry(
   );
   if (!targetCanBeRearmed) return queue;
 
-  return queue.map((item) => {
+  const dependentIndexes = collectDeadDependencyClosure(
+    queue,
+    new Set([saleOperationId]),
+  );
+
+  return queue.map((item, index) => {
     // 1) The sale itself: error/dead, plus a recovered protected pending state.
     if (item.id === saleOperationId && item.type === 'sale_order') {
       return { ...item, ...REARMED };
     }
     // 2) Dead dependents of this sale (cascaded by markDead) → back to pending.
-    if (item.status === 'dead' && (item.dependsOn ?? []).includes(saleOperationId)) {
+    if (dependentIndexes.has(index)) {
       return { ...item, ...REARMED };
     }
     return item;

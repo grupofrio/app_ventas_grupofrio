@@ -36,6 +36,14 @@ assert.doesNotMatch(
   /useSyncStore\.setState/,
   'checkout no debe mutar directamente la cola',
 );
+
+const retryBlock = checkout.match(
+  /const retrySaleSync = React\.useCallback\(async \(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/,
+)?.[0] ?? '';
+assert.ok(retryBlock, 'se localiza el handler de reintento');
+assert.doesNotMatch(retryBlock, /\.message\b/, 'el handler no expone mensajes técnicos');
+assert.match(retryBlock, /No pudimos reintentar la venta|Intenta nuevamente con conexión/,
+  'el handler usa copy fija segura');
 assert.doesNotMatch(
   checkout,
   /rearmSaleOrderForRetry/,

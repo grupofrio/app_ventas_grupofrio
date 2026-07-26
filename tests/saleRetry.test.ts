@@ -328,6 +328,33 @@ function testRearmsDeadDependentPhotos(m: SaleRetryModule) {
   assert.deepEqual(out[1].dependsOn, ['sale-1'], 'dependsOn preservado (sigue esperando la venta)');
 }
 
+function testRearmsRetainedDependentsTransitivelyAndTerminatesCycles(m: SaleRetryModule) {
+  const queue: SyncQueueItem[] = [
+    makeItem({
+      id: 'sale-root', type: 'sale_order', status: 'dead',
+      error_code: 'insufficient_stock',
+    }),
+    makeItem({
+      id: 'photo-child', type: 'photo', status: 'dead',
+      dependsOn: ['sale-root', 'checkout-grandchild'],
+    }),
+    makeItem({
+      id: 'checkout-grandchild', type: 'checkout', status: 'dead',
+      dependsOn: ['photo-child'],
+    }),
+  ];
+
+  const out = m.rearmSaleOrderForRetry(queue, 'sale-root');
+
+  assert.deepEqual(out.map((entry) => entry.status), ['pending', 'pending', 'pending']);
+  assert.deepEqual(
+    out.map((entry) => entry.dependsOn),
+    [undefined, ['sale-root', 'checkout-grandchild'], ['photo-child']],
+    'preserva las dependencias y solo rearma cada ítem una vez',
+  );
+  assert.deepEqual(queue.map((entry) => entry.status), ['dead', 'dead', 'dead']);
+}
+
 function testIgnoresDependentOfAnotherSale(m: SaleRetryModule) {
   const queue: SyncQueueItem[] = [
     makeItem({ id: 'sale-1', type: 'sale_order', status: 'dead' }),
@@ -365,6 +392,7 @@ async function main() {
   testIgnoresAlreadyDoneOrPending(mod);
   testReturnsQueueUntouchedForEmptyId(mod);
   testRearmsDeadDependentPhotos(mod);
+  testRearmsRetainedDependentsTransitivelyAndTerminatesCycles(mod);
   testIgnoresDependentOfAnotherSale(mod);
   testDoesNotTouchLiveDependent(mod);
   await testRetryActionPersistsBeforePublishingAndProcessing(mod);

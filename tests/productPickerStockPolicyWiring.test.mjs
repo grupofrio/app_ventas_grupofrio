@@ -63,7 +63,16 @@ assert.match(
 );
 assert.match(sale, /stockPolicy="offline_sale"/);
 assert.match(sale, /const quantityIssues\s*=\s*findSaleQuantityIssues\(saleLines\)/);
-assert.match(sale, /updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*false\s*\},?\s*\)/);
+assert.match(
+  sale,
+  /function setSaleQtyFromText[\s\S]*?updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*saleStockEnforcement\.enforceFreshStock\s*\},?\s*\)/,
+  'texto debe respetar stock autoritativo online y omitirlo solo bajo la política offline',
+);
+assert.match(
+  sale,
+  /function changeSaleQty[\s\S]*?updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*saleStockEnforcement\.enforceFreshStock\s*,?\s*\},?\s*\)/,
+  'los botones deben respetar stock autoritativo online y omitirlo solo bajo la política offline',
+);
 assert.match(sale, /line\.stock\s*===\s*null[\s\S]*?Stock sin validar[\s\S]*?Stock:\s*\$\{line\.stock\}\s*·\s*ref\./);
 assert.match(sale, /quantityIssues\.length\s*>\s*0[\s\S]*?Cantidad inválida/);
 assert.match(sale, /hasValidQuantities:\s*quantityIssues\.length\s*===\s*0/);

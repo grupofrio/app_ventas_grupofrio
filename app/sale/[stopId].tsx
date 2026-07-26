@@ -442,13 +442,15 @@ function SaleScreenInner() {
     updateSaleQty(
       productId,
       digits ? Number(digits) : 0,
-      { enforceStock: false },
+      { enforceStock: saleStockEnforcement.enforceFreshStock },
     );
   }
 
   function changeSaleQty(productId: number, qty: number) {
     if (saleInputsAreLockedNow()) return;
-    updateSaleQty(productId, qty, { enforceStock: false });
+    updateSaleQty(productId, qty, {
+      enforceStock: saleStockEnforcement.enforceFreshStock,
+    });
   }
 
   function handleSetSalePayment(method: 'cash' | 'credit') {

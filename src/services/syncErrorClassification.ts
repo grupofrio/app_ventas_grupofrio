@@ -17,6 +17,14 @@ export interface SyncFailureClassification {
   protectFromGenericClear: boolean;
 }
 
+export function isProtectedStockSyncItem(item: unknown): boolean {
+  return normalizedCode(readProperty(item, 'error_code')) === 'insufficient_stock';
+}
+
+export function excludeProtectedStockSyncItems<Item>(items: readonly Item[]): Item[] {
+  return items.filter((item) => !isProtectedStockSyncItem(item));
+}
+
 function readProperty(value: unknown, key: string): unknown {
   if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
     return undefined;
@@ -97,6 +105,38 @@ export function classifySyncFailure(
       };
     }
 
+    const dataCodeOutcome = dataCode === null
+      ? null
+      : classifySaleSubmissionError({
+          httpStatus: metadata.httpStatus,
+          responseReceived: metadata.responseReceived,
+          code: dataCode,
+          name: metadata.name,
+          message: metadata.message,
+        });
+    const hasDefinitiveMetadata =
+      saleOutcome.kind === 'definitive_rejection'
+      || dataCodeOutcome?.kind === 'definitive_rejection';
+    if (hasDefinitiveMetadata) {
+      if (directCode === null && dataCode === null && readInsufficientStockDetail(error)) {
+        return {
+          retryAutomatically: false,
+          terminalStatus: 'dead',
+          errorCode: 'insufficient_stock',
+          protectFromGenericClear: true,
+        };
+      }
+      const definitiveCode = saleOutcome.kind === 'definitive_rejection'
+        ? directCode
+        : dataCode;
+      return {
+        retryAutomatically: false,
+        terminalStatus: 'dead',
+        errorCode: definitiveCode,
+        protectFromGenericClear: false,
+      };
+    }
+
     if (isRetryableSyncErrorMessage(metadata.message)) {
       return {
         retryAutomatically: true,
@@ -136,7 +176,7 @@ export function classifySyncFailure(
     };
   }
 
-  const message = error instanceof Error ? error.message : 'Sync error';
+  const message = readSaleSubmissionErrorMetadata(error).message;
   const retryAutomatically = isRetryableSyncErrorMessage(message);
   return {
     retryAutomatically,
@@ -150,11 +190,11 @@ export function describeSyncFailureForUser(
   error: unknown,
   classification: SyncFailureClassification,
 ): string {
-  if (classification.errorCode === 'insufficient_stock') {
+  if (normalizedCode(readProperty(classification, 'errorCode')) === 'insufficient_stock') {
     const detail = readInsufficientStockDetail(error) ?? { lines: [] };
     return describeInsufficientStock(detail).slice(0, 500);
   }
-  return classification.retryAutomatically
+  return readProperty(classification, 'retryAutomatically') === true
     ? 'No se pudo sincronizar. Se reintentará automáticamente.'
     : 'La operación fue rechazada y requiere atención.';
 }

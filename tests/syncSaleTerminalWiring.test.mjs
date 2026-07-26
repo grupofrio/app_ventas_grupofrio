@@ -12,6 +12,11 @@ assert.match(
   /import\s*\{[\s\S]*?classifySyncFailure[\s\S]*?describeSyncFailureForUser[\s\S]*?\}\s*from\s*['"]\.\.\/services\/syncErrorClassification['"]/,
   'sync usa un solo clasificador estructurado y copy seguro',
 );
+assert.match(
+  syncStore,
+  /import\s*\{[\s\S]*?excludeProtectedStockSyncItems[\s\S]*?isProtectedStockSyncItem[\s\S]*?\}\s*from\s*['"]\.\.\/services\/syncErrorClassification['"]/,
+  'sync comparte la invariante durable de stock protegido',
+);
 
 const completionImport = syncStore.match(
   /import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/services\/syncItemCompletion['"]/,
@@ -136,6 +141,21 @@ assert.notEqual(gpsHandler, '', 'se localiza handleGpsItemError');
 assert.match(gpsHandler, /classifySyncFailure\(item, error\)/);
 assert.match(gpsHandler, /describeSyncFailureForUser\(error, classification\)/);
 assert.doesNotMatch(gpsHandler, /error\.message|\bString\s*\(\s*error\s*\)/);
+assert.match(
+  syncStore,
+  /const isReady = \(item: SyncQueueItem\): boolean => \{\s*if \(isProtectedStockSyncItem\(item\)\) return false;/,
+  'ningún status protegido entra al dispatcher automático',
+);
+assert.match(
+  syncStore,
+  /queue:\s*excludeProtectedStockSyncItems\(\s*processingHolds\.withoutHeld\(get\(\)\.queue\)\s*\)/,
+  'post-ciclo ignora protegidos para no redrenar',
+);
+assert.match(
+  syncStore,
+  /nextWakeDelayMs\(\s*excludeProtectedStockSyncItems\(processingHolds\.withoutHeld\(queue\)\)/,
+  'el wake timer nunca agenda el retry de un stock protegido',
+);
 assert.match(
   syncStore,
   /if\s*\(outcome\s*===\s*['"]deferred['"]\)\s*hadDeferredStorageFailure\s*=\s*true/,

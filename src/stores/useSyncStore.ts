@@ -62,6 +62,8 @@ import { logInfo, logWarn, logError } from '../utils/logger';
 import {
   classifySyncFailure,
   describeSyncFailureForUser,
+  excludeProtectedStockSyncItems,
+  isProtectedStockSyncItem,
 } from '../services/syncErrorClassification';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
@@ -565,6 +567,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     // - pending with no backoff, OR
     // - error with retries < MAX and backoff elapsed
     const isReady = (item: SyncQueueItem): boolean => {
+      if (isProtectedStockSyncItem(item)) return false;
       if (item.status === 'pending') return true;
       if (item.status === 'error' && item.retries < MAX_RETRIES) {
         if (item.next_retry_at && now < item.next_retry_at) return false;
@@ -714,7 +717,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const action = decidePostCycleActionAfterCycle({
         hadUnhandledCycleError,
         hadDeferredStorageFailure,
-        queue: processingHolds.withoutHeld(get().queue),
+        queue: excludeProtectedStockSyncItems(
+          processingHolds.withoutHeld(get().queue)
+        ),
         now: Date.now(),
         maxRetries: MAX_RETRIES,
         depsSatisfied: areSyncDependenciesSatisfied,
@@ -745,10 +750,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const { queue, isOnline } = get();
     // Offline: no tiene sentido agendar; el flanco de reconexión re-arma.
     if (!isOnline) return;
-    const delay = nextWakeDelayMs(processingHolds.withoutHeld(queue), {
+    const delay = nextWakeDelayMs(
+      excludeProtectedStockSyncItems(processingHolds.withoutHeld(queue)),
+      {
       maxRetries: MAX_RETRIES,
       now: Date.now(),
-    });
+      },
+    );
     if (delay == null) return;
     _wakeTimer = setTimeout(() => {
       _wakeTimer = null;

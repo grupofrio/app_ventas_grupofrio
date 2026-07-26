@@ -4,6 +4,7 @@ import {
   type SyncItemType,
   type SyncQueueItem,
 } from '../types/sync.ts';
+import { isProtectedStockSyncItem } from './syncErrorClassification.ts';
 
 export interface ApplySyncEnqueueInput {
   queue: SyncQueueItem[];
@@ -37,6 +38,9 @@ export function applySyncEnqueue(input: ApplySyncEnqueueInput): ApplySyncEnqueue
     if (existing.type !== type) {
       throw new Error(`Sync operation id collision: ${id} already belongs to ${existing.type}`);
     }
+    if (isProtectedStockSyncItem(existing)) {
+      return { id, queue, action: 'reused' };
+    }
     if (existing.status !== 'dead') {
       return { id, queue, action: 'reused' };
     }
@@ -47,6 +51,7 @@ export function applySyncEnqueue(input: ApplySyncEnqueueInput): ApplySyncEnqueue
             status: 'pending' as const,
             retries: 0,
             error_message: null,
+            error_code: null,
             next_retry_at: null,
           }
         : item,

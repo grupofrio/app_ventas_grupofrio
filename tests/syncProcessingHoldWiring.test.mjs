@@ -122,8 +122,8 @@ assert.match(
 );
 assert.match(
   processQueueBlock,
-  /queue: processingHolds\.withoutHeld\(get\(\)\.queue\),/,
-  'post-cycle decisions receive a held-filtered queue',
+  /queue:\s*excludeProtectedStockSyncItems\(\s*processingHolds\.withoutHeld\(get\(\)\.queue\)\s*\),/,
+  'post-cycle decisions receive a held-filtered queue without protected stock retries',
 );
 
 const oneItemBlock = block(
@@ -184,8 +184,8 @@ const wakeBlock = block(
 );
 assert.match(
   wakeBlock,
-  /nextWakeDelayMs\(processingHolds\.withoutHeld\(queue\),/,
-  'wake delay ignores held retryable items',
+  /nextWakeDelayMs\(\s*excludeProtectedStockSyncItems\(processingHolds\.withoutHeld\(queue\)\),/,
+  'wake delay ignores held and protected retryable items',
 );
 
 // Concrete race (a): enqueue can reuse an existing pending sale without changing

@@ -27,6 +27,7 @@ function makeItem(
     created_at: partial.created_at ?? 1_000,
     retries: partial.retries ?? 0,
     error_message: partial.error_message ?? null,
+    error_code: partial.error_code,
     priority: partial.priority ?? (partial.type === 'gps' ? 3 : 1),
     next_retry_at: partial.next_retry_at ?? null,
     dependsOn: partial.dependsOn,
@@ -120,7 +121,33 @@ function testRearmsOnlyMatchingDeadItemWithoutReplacingPayload(m: SyncEnqueueMod
   assert.equal(result.queue[1].status, 'pending');
   assert.equal(result.queue[1].retries, 0);
   assert.equal(result.queue[1].error_message, null);
+  assert.equal(result.queue[1].error_code, null);
   assert.equal(result.queue[1].next_retry_at, null);
+}
+
+function testNeverRearmsProtectedStockThroughGenericEnqueue(m: SyncEnqueueModule) {
+  for (const status of ['pending', 'error', 'dead'] as const) {
+    const existing = makeItem({
+      id: `protected-${status}`,
+      type: 'sale_order',
+      status,
+      retries: 3,
+      error_message: 'Stock insuficiente',
+      error_code: 'insufficient_stock',
+      next_retry_at: 1,
+    });
+    const queue = [existing];
+    const result = insert(m, {
+      queue,
+      options: { operationId: existing.id },
+    });
+
+    assert.equal(result.action, 'reused');
+    assert.equal(result.queue, queue);
+    assert.equal(result.queue[0], existing);
+    assert.equal(result.queue[0].status, status);
+    assert.equal(result.queue[0].error_code, 'insufficient_stock');
+  }
 }
 
 function testRejectsExplicitIdCollisionAcrossTypes(m: SyncEnqueueModule) {
@@ -192,6 +219,7 @@ async function main() {
   testNormalizesExplicitIdAndCallerCannotOverwriteIt(module);
   testReusesEveryLiveOrTerminalNonDeadState(module);
   testRearmsOnlyMatchingDeadItemWithoutReplacingPayload(module);
+  testNeverRearmsProtectedStockThroughGenericEnqueue(module);
   testRejectsExplicitIdCollisionAcrossTypes(module);
   testRejectsInvalidExplicitIdsWithoutUuidFallback(module);
   testCopiesDependsOnInsteadOfAliasingCallerArray(module);

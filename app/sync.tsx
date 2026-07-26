@@ -16,6 +16,8 @@ import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
 import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
+import { isProtectedStockSyncItem } from '../src/services/syncErrorClassification';
+import { isRetryableProtectedSaleOrder } from '../src/services/saleRetry';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -39,12 +41,15 @@ const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' |
 export default function SyncScreen() {
   const {
     queue, isOnline, isSyncing, pendingCount, errorCount, deadCount,
-    processQueue, clearDone, clearDead,
+    processQueue, clearDone, clearDead, retrySaleOrder,
   } = useSyncStore();
+  const [retryingOperationId, setRetryingOperationId] = React.useState<string | null>(null);
 
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
+  const clearableDeadCount = dead.filter((item) => !isProtectedStockSyncItem(item)).length;
+  const protectedStockDeadCount = dead.length - clearableDeadCount;
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
@@ -58,25 +63,40 @@ export default function SyncScreen() {
   // red, etc.) que ya no van a sincronizar y solo ensucian el SyncBar.
   // La confirmación evita borrados accidentales.
   function handleClearDead() {
-    if (deadCount === 0) return;
+    if (clearableDeadCount === 0) return;
     Alert.alert(
       'Limpiar historial de errores',
-      `Se eliminarán ${deadCount} operación(es) que fallaron permanentemente y ya no volverán a intentarse. Esta acción no se puede deshacer.\n\n¿Continuar?`,
+      `Se eliminarán ${clearableDeadCount} operación(es) que fallaron permanentemente. Las ventas rechazadas por stock insuficiente permanecerán protegidas (${protectedStockDeadCount}). Esta acción no se puede deshacer.\n\n¿Continuar?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Limpiar',
           style: 'destructive',
           onPress: () => {
-            const removed = clearDead();
+            const { removed, protected: protectedCount } = clearDead();
             Alert.alert(
               'Historial limpio',
-              `Se eliminaron ${removed} operación(es) fallidas. La alerta roja desaparecerá en cuanto se actualice la pantalla.`,
+              `Se eliminaron ${removed} operación(es) fallidas. Permanecen ${protectedCount} venta(s) rechazadas por stock que requieren atención.`,
             );
           },
         },
       ],
     );
+  }
+
+  async function handleRetryProtectedSale(operationId: string) {
+    if (!isOnline || retryingOperationId !== null) return;
+    setRetryingOperationId(operationId);
+    try {
+      await retrySaleOrder(operationId);
+    } catch (error) {
+      Alert.alert(
+        'No se pudo reintentar',
+        error instanceof Error ? error.message : 'Intenta nuevamente con conexión.',
+      );
+    } finally {
+      setRetryingOperationId(null);
+    }
   }
 
   return (
@@ -129,9 +149,9 @@ export default function SyncScreen() {
         {/* BLD-20260424-PURGE: botón visible y diferenciado para limpiar
             items DEAD. Solo aparece cuando hay items fallidos permanentemente
             para no añadir ruido cuando la cola está sana. */}
-        {deadCount > 0 ? (
+        {clearableDeadCount > 0 ? (
           <Button
-            label={`🚮 Limpiar Historial de Errores (${deadCount})`}
+            label={`🚮 Limpiar Historial de Errores (${clearableDeadCount})`}
             variant="danger"
             onPress={handleClearDead}
             fullWidth
@@ -146,7 +166,13 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>PENDIENTES ({pending.length})</Text>
             {pending.map((item) => (
-              <SyncItem key={item.id} item={item} />
+              <SyncItem
+                key={item.id}
+                item={item}
+                isOnline={isOnline}
+                retrying={retryingOperationId === item.id}
+                onRetry={handleRetryProtectedSale}
+              />
             ))}
           </>
         )}
@@ -156,7 +182,13 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>CON ERROR ({errors.length})</Text>
             {errors.map((item) => (
-              <SyncItem key={item.id} item={item} />
+              <SyncItem
+                key={item.id}
+                item={item}
+                isOnline={isOnline}
+                retrying={retryingOperationId === item.id}
+                onRetry={handleRetryProtectedSale}
+              />
             ))}
           </>
         )}
@@ -169,10 +201,16 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({dead.length})</Text>
             <Text style={styles.deadHint}>
-              No se completarán: agotaron sus reintentos o dependían de una venta que falló. Reintenta la venta desde su visita, o usa "Limpiar Historial" arriba para borrarlas (padre y dependientes juntos) y quitar la alerta roja.
+              Las ventas rechazadas por stock permanecen protegidas hasta que las reintentes con conexión. Los demás fallos permanentes sí pueden retirarse con "Limpiar Historial".
             </Text>
             {dead.map((item) => (
-              <SyncItem key={item.id} item={item} />
+              <SyncItem
+                key={item.id}
+                item={item}
+                isOnline={isOnline}
+                retrying={retryingOperationId === item.id}
+                onRetry={handleRetryProtectedSale}
+              />
             ))}
           </>
         )}
@@ -182,7 +220,13 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>COMPLETADOS (ultimos 10)</Text>
             {done.map((item) => (
-              <SyncItem key={item.id} item={item} />
+              <SyncItem
+                key={item.id}
+                item={item}
+                isOnline={isOnline}
+                retrying={retryingOperationId === item.id}
+                onRetry={handleRetryProtectedSale}
+              />
             ))}
           </>
         )}
@@ -202,11 +246,24 @@ export default function SyncScreen() {
   );
 }
 
-function SyncItem({ item }: { item: SyncQueueItem }) {
+function SyncItem({
+  item,
+  isOnline,
+  retrying,
+  onRetry,
+}: {
+  item: SyncQueueItem;
+  isOnline: boolean;
+  retrying: boolean;
+  onRetry: (operationId: string) => Promise<void>;
+}) {
   const icon = typeIcons[item.type] || '📦';
   const label = typeLabels[item.type] || item.type;
   const orderDetail = describeSaleOrderItem(item);
-  const badge = statusBadge[item.status] || statusBadge.pending;
+  const requiresStockRetry = isRetryableProtectedSaleOrder(item);
+  const badge = requiresStockRetry
+    ? { label: 'Requiere atención', variant: 'red' as const }
+    : statusBadge[item.status] || statusBadge.pending;
   // BLD-20260617-DEAD-CASCADE: un dependiente (p.ej. foto) que murió porque su
   // padre (la venta) falló. No debe parecer un pendiente normal: se explica la
   // causa real y se evita duplicar el mensaje en la línea de hora.
@@ -241,6 +298,17 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
           {item.retries > 0 ? ` · Intento ${item.retries}/3` : ''}
           {item.error_message && !blockedByParent ? ` · ${item.error_message}` : ''}
         </Text>
+        {requiresStockRetry && isOnline ? (
+          <Button
+            label={retrying ? 'Reintentando…' : 'Reintentar'}
+            variant="primary"
+            small
+            onPress={() => { void onRetry(item.id); }}
+            disabled={retrying}
+            loading={retrying}
+            style={{ marginTop: 8 }}
+          />
+        ) : null}
       </View>
       <Badge label={badge.label} variant={badge.variant} />
     </View>

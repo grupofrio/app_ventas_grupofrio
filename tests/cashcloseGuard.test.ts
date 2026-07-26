@@ -31,6 +31,11 @@ function run(m: GuardModule) {
   // dead blocks (NEW)
   assert.equal(m.canConfirmLiquidation({ ...ok, deadCount: 1 }), false);
   assert.match(m.describeBlockingReason({ ...ok, deadCount: 3 }) ?? '', /error/i);
+  assert.equal(
+    m.canConfirmLiquidation({ ...ok, deadCount: 1 }),
+    false,
+    'una venta protegida por stock (contada como dead) mantiene bloqueada la liquidación',
+  );
   // syncing blocks
   assert.equal(m.canConfirmLiquidation({ ...ok, isSyncing: true }), false);
   // no liquidation data blocks

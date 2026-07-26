@@ -120,6 +120,22 @@ test('projects a pending sale from its preferred ticket fields', () => {
   assert.strictEqual(entry.ticketSnapshot, ticket);
 });
 
+test('durable insufficient-stock code overrides transient queue statuses', () => {
+  for (const status of ['pending', 'error', 'dead'] as const) {
+    const entry = projectLocalSale(makeQueueItem({
+      status,
+      error_code: ' insufficient_STOCK ',
+      error_message: 'token=secret raw backend trace',
+    }), makeTicket());
+
+    assert.ok(entry, status);
+    assert.equal(entry.localStatus, 'needs_attention', status);
+    assert.equal(entry.requiresStockRetry, true, status);
+    assert.match(entry.errorMessage ?? '', /stock insuficiente/i, status);
+    assert.doesNotMatch(entry.errorMessage ?? '', /secret|trace|token/i, status);
+  }
+});
+
 test('ignores every field from a ticket that belongs to another sale', () => {
   const queueItem = makeQueueItem({
     payload: {

@@ -38,6 +38,18 @@ function run(m: Mod) {
   assert.equal(m.summarizePendingOrders([]).total, 0);
   assert.equal(m.summarizePendingOrders([{ type: 'checkout', status: 'error' }]).total, 0);
 
+  for (const status of ['pending', 'error', 'dead']) {
+    const protectedStock = m.summarizePendingOrders([
+      { type: 'sale_order', status, error_code: 'insufficient_stock' } as any,
+    ]);
+    assert.equal(protectedStock.total, 1, `stock protegido ${status} sigue irresuelto`);
+    assert.equal(
+      protectedStock.failed,
+      status === 'pending' ? 0 : 1,
+      `stock protegido ${status} conserva el bucket del estado durable`,
+    );
+  }
+
   // ── describeSaleOrderItem (Sync: cliente + total + estado) ───────────────
   const pendItem = { type: 'sale_order', status: 'pending', id: 'op-1',
     payload: { _clientCustomerName: 'Abarrotes Lupita', _clientTotal: 70, _operationId: 'op-1', stop_id: 5 } };

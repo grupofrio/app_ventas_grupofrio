@@ -94,6 +94,8 @@ import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
+import { clearUnprotectedDeadItems } from '../services/syncDeadCleanup';
+import { createSaleOrderRetryAction } from '../services/saleRetry';
 
 // ═══ Constants ═══
 
@@ -227,7 +229,8 @@ interface SyncState {
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
-  clearDead: () => number;
+  clearDead: () => { removed: number; protected: number };
+  retrySaleOrder: (operationId: string) => Promise<void>;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -299,6 +302,15 @@ function computeCounts(queue: SyncQueueItem[]) {
     deadCount: visibleQueue.filter((i) => i.status === 'dead').length,
   };
 }
+
+const retrySaleOrderAction = createSaleOrderRetryAction({
+  read: () => {
+    const state = useSyncStore.getState();
+    return { queue: state.queue, isOnline: state.isOnline };
+  },
+  persistAndPublish: (transform) => queuePersistence.transformAndPersist(transform),
+  processQueue: () => useSyncStore.getState().processQueue(),
+});
 
 // ═══ Store ═══
 
@@ -499,19 +511,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // (por ejemplo: ventas viejas con shape obsoleto, GPS sin red de hace
   // semanas, ACL errors ya resueltos pero con items huérfanos).
   //
-  // Devuelve el número de items eliminados — útil para feedback al
-  // operador sin necesidad de consultar el queue de vuelta.
+  // Devuelve los conteos eliminados/protegidos para feedback al operador sin
+  // volver a consultar la cola.
   clearDead: () => {
-    const before = get().queue.length;
-    const newQueue = get().queue.filter((i) => i.status !== 'dead');
-    const removed = before - newQueue.length;
-    if (removed > 0) {
-      set({ queue: newQueue, ...computeCounts(newQueue) });
+    const result = clearUnprotectedDeadItems(get().queue);
+    if (result.removed > 0) {
+      set({ queue: result.queue, ...computeCounts(result.queue) });
       schedulePersist();
-      logInfo('sync', 'dead_items_purged', { removed });
+      logInfo('sync', 'dead_items_purged', {
+        removed: result.removed,
+        protected: result.protected,
+      });
     }
-    return removed;
+    return { removed: result.removed, protected: result.protected };
   },
+
+  retrySaleOrder: (operationId) => retrySaleOrderAction(operationId),
 
   // ═══ Persistence ═══
 

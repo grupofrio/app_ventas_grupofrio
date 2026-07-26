@@ -32,6 +32,7 @@ import {
   createSaleTicketOpenGuard,
 } from '../../src/services/saleTicket';
 import { saveAuthoritativeSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+import { useSyncStore } from '../../src/stores/useSyncStore';
 
 export default function SalesScreen() {
   const router = useRouter();
@@ -40,7 +41,11 @@ export default function SalesScreen() {
   const isLoading = useSalesStore((s) => s.isLoading);
   const error = useSalesStore((s) => s.error);
   const { entries, localSummary, ticketsLoading } = useSalesListProjection();
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const retrySaleOrder = useSyncStore((s) => s.retrySaleOrder);
   const ticketOpenGuardRef = React.useRef(createSaleTicketOpenGuard());
+  const retryingSalesRef = React.useRef(new Set<string>());
+  const [retryingOperationId, setRetryingOperationId] = React.useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -120,6 +125,34 @@ export default function SalesScreen() {
   const refreshOfficialSales = useCallback(() => {
     void loadTodaySales({ force: true });
   }, [loadTodaySales]);
+
+  async function retryProtectedSale(entry: SalesListEntry) {
+    if (
+      !isOnline
+      || entry.origin !== 'local'
+      || entry.requiresStockRetry !== true
+      || retryingSalesRef.current.has(entry.operationId)
+    ) {
+      return;
+    }
+    retryingSalesRef.current.add(entry.operationId);
+    setRetryingOperationId(entry.operationId);
+    try {
+      await retrySaleOrder(entry.operationId);
+    } catch (retryError) {
+      Alert.alert(
+        'No se pudo reintentar',
+        retryError instanceof Error
+          ? retryError.message
+          : 'Intenta nuevamente con conexión.',
+      );
+    } finally {
+      retryingSalesRef.current.delete(entry.operationId);
+      setRetryingOperationId((current) => (
+        current === entry.operationId ? null : current
+      ));
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -225,56 +258,70 @@ export default function SalesScreen() {
               const ticketUnavailable =
                 entry.origin === 'local' && !entry.ticketSnapshot;
               return (
-                <TouchableOpacity
+                <View
                   key={entry.key}
-                  style={[
-                    styles.orderCard,
-                    ticketUnavailable ? styles.orderCardDisabled : null,
-                  ]}
-                  onPress={() => void openTicketForEntry(entry)}
-                  disabled={entry.origin === 'local' && !entry.ticketSnapshot}
-                  activeOpacity={0.82}
+                  style={styles.orderCard}
                 >
-                  <View style={styles.orderRow}>
-                    <Text style={styles.orderName}>
-                      {entry.remoteOrder?.name || 'Venta local'}
+                  <TouchableOpacity
+                    style={ticketUnavailable ? styles.orderCardDisabled : undefined}
+                    onPress={() => void openTicketForEntry(entry)}
+                    disabled={entry.origin === 'local' && !entry.ticketSnapshot}
+                    activeOpacity={0.82}
+                  >
+                    <View style={styles.orderRow}>
+                      <Text style={styles.orderName}>
+                        {entry.remoteOrder?.name || 'Venta local'}
+                      </Text>
+                      <Text style={[
+                        styles.orderAmount,
+                        entry.amountTotal === null ? styles.orderAmountPending : null,
+                      ]}>
+                        {entry.amountTotal === null
+                          ? 'Monto pendiente'
+                          : formatCurrency(entry.amountTotal)}
+                      </Text>
+                    </View>
+                    <Text style={styles.orderMeta}>
+                      {entry.customerName} · {entry.kgTotal === null
+                        ? 'Peso por confirmar'
+                        : `${entry.kgTotal.toFixed(0)} kg`}
                     </Text>
+                    <View style={styles.badgeRow}>
+                      <Badge
+                        label={entry.origin === 'local' ? 'Local' : 'Odoo'}
+                        variant={entry.origin === 'local' ? 'yellow' : 'green'}
+                      />
+                      <Badge label={status.label} variant={status.tone} />
+                    </View>
+                    <Text style={styles.statusDetail}>{status.detail}</Text>
+                    {entry.errorMessage ? (
+                      <Text style={styles.entryError}>
+                        {entry.errorMessage.slice(0, 200)}
+                      </Text>
+                    ) : null}
                     <Text style={[
-                      styles.orderAmount,
-                      entry.amountTotal === null ? styles.orderAmountPending : null,
+                      styles.orderHint,
+                      ticketUnavailable ? styles.orderHintDisabled : null,
                     ]}>
-                      {entry.amountTotal === null
-                        ? 'Monto pendiente'
-                        : formatCurrency(entry.amountTotal)}
+                      {ticketUnavailable
+                        ? 'Ticket no disponible'
+                        : 'Toca para abrir PDF'}
                     </Text>
-                  </View>
-                  <Text style={styles.orderMeta}>
-                    {entry.customerName} · {entry.kgTotal === null
-                      ? 'Peso por confirmar'
-                      : `${entry.kgTotal.toFixed(0)} kg`}
-                  </Text>
-                  <View style={styles.badgeRow}>
-                    <Badge
-                      label={entry.origin === 'local' ? 'Local' : 'Odoo'}
-                      variant={entry.origin === 'local' ? 'yellow' : 'green'}
+                  </TouchableOpacity>
+                  {entry.requiresStockRetry && isOnline ? (
+                    <Button
+                      label={retryingOperationId === entry.operationId
+                        ? 'Reintentando…'
+                        : 'Reintentar'}
+                      variant="primary"
+                      small
+                      onPress={() => { void retryProtectedSale(entry); }}
+                      disabled={retryingOperationId === entry.operationId}
+                      loading={retryingOperationId === entry.operationId}
+                      style={{ marginTop: 8 }}
                     />
-                    <Badge label={status.label} variant={status.tone} />
-                  </View>
-                  <Text style={styles.statusDetail}>{status.detail}</Text>
-                  {entry.errorMessage ? (
-                    <Text style={styles.entryError}>
-                      {entry.errorMessage.slice(0, 200)}
-                    </Text>
                   ) : null}
-                  <Text style={[
-                    styles.orderHint,
-                    ticketUnavailable ? styles.orderHintDisabled : null,
-                  ]}>
-                    {ticketUnavailable
-                      ? 'Ticket no disponible'
-                      : 'Toca para abrir PDF'}
-                  </Text>
-                </TouchableOpacity>
+                </View>
               );
             })}
           </View>

@@ -4,6 +4,7 @@ import {
   type SaleTicketSnapshot,
 } from './saleTicket.ts';
 import type { SyncQueueItem, SyncItemStatus } from '../types/sync.ts';
+import { isProtectedStockSyncItem } from './syncErrorClassification.ts';
 
 export type LocalSaleStatus =
   | 'pending'
@@ -22,6 +23,7 @@ export interface SalesListEntry {
   createdAtMs: number;
   localStatus?: LocalSaleStatus;
   errorMessage?: string | null;
+  requiresStockRetry?: boolean;
   ticketSnapshot?: SaleTicketSnapshot;
   remoteOrder?: GFSalesOrder;
 }
@@ -242,8 +244,17 @@ export function projectLocalSale(
     : '';
   if (!operationId) return null;
 
-  const localStatus = projectStatus(queueItem.status);
-  if (localStatus === null) return null;
+  const projectedStatus = projectStatus(queueItem.status);
+  if (projectedStatus === null) return null;
+  const requiresStockRetry = isProtectedStockSyncItem(queueItem)
+    && (
+      queueItem.status === 'pending'
+      || queueItem.status === 'error'
+      || queueItem.status === 'dead'
+    );
+  const localStatus = requiresStockRetry
+    ? 'needs_attention'
+    : projectedStatus;
 
   const payload = isRecord(queueItem.payload) ? queueItem.payload : {};
   const eligibleTicket = matchingTicket(ticket, operationId);
@@ -260,8 +271,9 @@ export function projectLocalSale(
   const createdAtMs =
     ticketCreatedAtMs(eligibleTicket)
     ?? queueCreatedAtMs(queueItem.created_at);
-  const errorMessage =
-    localStatus === 'retrying' || localStatus === 'needs_attention'
+  const errorMessage = requiresStockRetry
+    ? STOCK_ERROR_COPY
+    : localStatus === 'retrying' || localStatus === 'needs_attention'
       ? mapSaleQueueErrorForDisplay(queueItem.error_message)
       : null;
 
@@ -275,6 +287,7 @@ export function projectLocalSale(
     createdAtMs,
     localStatus,
     errorMessage,
+    ...(requiresStockRetry ? { requiresStockRetry: true } : {}),
     ...(eligibleTicket ? { ticketSnapshot: eligibleTicket } : {}),
   };
 }

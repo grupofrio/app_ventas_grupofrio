@@ -24,7 +24,7 @@ import { checkOut } from '../../src/services/gfLogistics';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
-import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
+import { isRetryableProtectedSaleOrder } from '../../src/services/saleRetry';
 import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
@@ -55,6 +55,7 @@ function CheckoutScreenInner() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
   const processQueue = useSyncStore((s) => s.processQueue);
+  const retrySaleOrder = useSyncStore((s) => s.retrySaleOrder);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
@@ -67,6 +68,12 @@ function CheckoutScreenInner() {
   const liveSaleSyncState = React.useMemo(
     () => getSaleSyncState(saleOperationId, queue),
     [saleOperationId, queue],
+  );
+  const protectedStockSale = React.useMemo(
+    () => queue.find((item) => (
+      item.id === saleOperationId && isRetryableProtectedSaleOrder(item)
+    )) ?? null,
+    [queue, saleOperationId],
   );
 
   // BLD-20260506-CHECKOUT-SALE-RETRY: retry handler that drives the
@@ -86,12 +93,7 @@ function CheckoutScreenInner() {
     if (retryingSale) return;
     setRetryingSale(true);
     try {
-      // Re-arm the failed sale_order so processQueue sees it as ready.
-      // rearmSaleOrderForRetry is a pure helper — see saleRetry.ts.
-      useSyncStore.setState((prev) => ({
-        queue: rearmSaleOrderForRetry(prev.queue, saleOperationId),
-      }));
-      await processQueue();
+      await retrySaleOrder(saleOperationId);
       const after = getSaleSyncState(
         saleOperationId,
         useSyncStore.getState().queue,
@@ -111,7 +113,7 @@ function CheckoutScreenInner() {
     } finally {
       setRetryingSale(false);
     }
-  }, [saleOperationId, processQueue, retryingSale]);
+  }, [saleOperationId, retrySaleOrder, retryingSale]);
 
   if (!stop) {
     return (
@@ -186,16 +188,18 @@ function CheckoutScreenInner() {
       Alert.alert(
         'Venta no sincronizada',
         `${saleSyncState.message || 'La venta no se pudo enviar a Odoo.'}\n\n¿Quieres reintentar la sincronización?`,
-        [
-          { text: 'Cancelar', style: 'cancel', onPress: () => setCheckingOut(false) },
-          {
-            text: 'Reintentar',
-            onPress: async () => {
-              setCheckingOut(false);
-              await retrySaleSync();
-            },
-          },
-        ],
+        protectedStockSale && isOnline
+          ? [
+              { text: 'Cancelar', style: 'cancel', onPress: () => setCheckingOut(false) },
+              {
+                text: 'Reintentar',
+                onPress: async () => {
+                  setCheckingOut(false);
+                  await retrySaleSync();
+                },
+              },
+            ]
+          : [{ text: 'OK', onPress: () => setCheckingOut(false) }],
       );
       return;
     }
@@ -354,15 +358,17 @@ function CheckoutScreenInner() {
               No puedes cerrar la visita hasta que la venta llegue al servidor.
               Reintenta cuando tengas mejor señal.
             </Text>
-            <Button
-              label={retryingSale ? 'Reintentando…' : '🔄 Reintentar sincronización'}
-              variant="primary"
-              onPress={() => { void retrySaleSync(); }}
-              fullWidth
-              disabled={retryingSale}
-              loading={retryingSale}
-              style={{ marginTop: 8 }}
-            />
+            {protectedStockSale && isOnline ? (
+              <Button
+                label={retryingSale ? 'Reintentando…' : '🔄 Reintentar sincronización'}
+                variant="primary"
+                onPress={() => { void retrySaleSync(); }}
+                fullWidth
+                disabled={retryingSale}
+                loading={retryingSale}
+                style={{ marginTop: 8 }}
+              />
+            ) : null}
           </View>
         )}
 

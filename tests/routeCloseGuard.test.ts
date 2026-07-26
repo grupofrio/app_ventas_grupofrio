@@ -34,6 +34,11 @@ function runGuard(m: GuardMod) {
   assert.equal(m.canCloseRoute({ ...CLEAN, deadCount: 2 }), false);
   assert.equal(m.unsyncedCount({ ...CLEAN, errorCount: 1, deadCount: 2 }), 3);
   assert.ok(m.describeCloseSyncBlock({ ...CLEAN, errorCount: 2 })?.includes('error'));
+  assert.equal(
+    m.canCloseRoute({ ...CLEAN, deadCount: 1 }),
+    false,
+    'una venta protegida por stock (contada como dead) mantiene bloqueado el cierre',
+  );
 
   // syncing → bloquea con mensaje de "sincronizando".
   const syncing = { ...CLEAN, isSyncing: true };

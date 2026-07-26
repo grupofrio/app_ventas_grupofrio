@@ -21,6 +21,7 @@ import { fetchServerCustomerPricingSnapshot } from '../services/pricelist';
 import {
   buildCustomerNameMap,
   prepareRoutePricingTargets,
+  refreshRoutePreparationCatalog,
   type PreparationFailure,
 } from '../services/routePreparationLogic';
 import { buildRoutePricingTargets } from '../services/routePricingTargets';
@@ -80,6 +81,7 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       set({ lastError: 'Sesión no iniciada. Vuelve a entrar.' });
       return;
     }
+    const preparationRequestedOnline = useSyncStore.getState().isOnline;
 
     set({
       isPreparing: true,
@@ -115,10 +117,42 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       // ── Step 2: ensure products ───────────────────────────────────────────
       set({ currentStep: 'Cargando productos' });
       const productStore = useProductStore.getState();
-      if (productStore.products.length === 0 && auth.warehouseId) {
+      let products = productStore.products;
+      if (preparationRequestedOnline) {
+        if (!auth.warehouseId) {
+          set({
+            isPreparing: false,
+            currentStep: null,
+            lastError: 'Almacén no disponible para actualizar productos.',
+          });
+          return;
+        }
+        const catalogRefresh = await refreshRoutePreparationCatalog({
+          warehouseId: auth.warehouseId,
+          loadAuthoritative: (warehouseId) =>
+            useProductStore.getState().loadProductsAuthoritative(warehouseId),
+          readCatalog: () => useProductStore.getState(),
+        });
+        if (!catalogRefresh.ok) {
+          set({
+            isPreparing: false,
+            currentStep: null,
+            lastError: catalogRefresh.reason === 'empty_catalog'
+              ? 'Productos no disponibles. Pide carga al CEDIS y reintenta.'
+              : 'No pudimos actualizar el catálogo actual. Revisa la conexión y reintenta.',
+          });
+          logWarn('general', 'route_prep_catalog_not_authoritative', {
+            plan_id: plan.plan_id,
+            warehouse_id: auth.warehouseId,
+            reason: catalogRefresh.reason,
+          });
+          return;
+        }
+        products = [...catalogRefresh.products];
+      } else if (products.length === 0 && auth.warehouseId) {
         await productStore.loadProducts(auth.warehouseId);
+        products = useProductStore.getState().products;
       }
-      const products = useProductStore.getState().products;
 
       if (products.length === 0) {
         // Continue anyway — without products we can't preload prices, but

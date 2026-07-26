@@ -16,6 +16,64 @@ import {
 import type {
   RoutePricingTarget,
 } from './routePricingTargets.ts';
+import type { InventoryLoadResult } from './legacyRefreshRunner.ts';
+import type { InventoryFreshness } from './effectiveOfflineCatalog.ts';
+
+export interface RoutePreparationCatalogState<TProduct> {
+  readonly products: readonly TProduct[];
+  readonly error: string | null;
+  readonly inventorySource: 'truck_stock' | 'stock_quant' | 'global_legacy' | null;
+  readonly loadedWarehouseId: number | null;
+  readonly fromCache: boolean;
+  readonly inventoryFreshness: InventoryFreshness;
+}
+
+export type RoutePreparationCatalogResult<TProduct> =
+  | {
+      readonly ok: true;
+      readonly products: readonly TProduct[];
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | Exclude<InventoryLoadResult, { ok: true }>['reason']
+        | 'catalog_not_authoritative'
+        | 'empty_catalog';
+    };
+
+/**
+ * Refreshes the exact warehouse catalog used by an explicit online route
+ * preparation. A populated cache is deliberately ignored as proof of freshness:
+ * only the post-refresh authoritative state can feed pricing preparation.
+ */
+export async function refreshRoutePreparationCatalog<TProduct>(input: {
+  readonly warehouseId: number;
+  readonly loadAuthoritative: (
+    warehouseId: number,
+  ) => Promise<InventoryLoadResult>;
+  readonly readCatalog: () => RoutePreparationCatalogState<TProduct>;
+}): Promise<RoutePreparationCatalogResult<TProduct>> {
+  const loadResult = await input.loadAuthoritative(input.warehouseId);
+  if (!loadResult.ok) {
+    return { ok: false, reason: loadResult.reason };
+  }
+
+  const catalog = input.readCatalog();
+  if (
+    loadResult.warehouseId !== input.warehouseId
+    || catalog.error !== null
+    || catalog.inventorySource !== loadResult.source
+    || catalog.loadedWarehouseId !== input.warehouseId
+    || catalog.fromCache
+    || catalog.inventoryFreshness !== 'authoritative'
+  ) {
+    return { ok: false, reason: 'catalog_not_authoritative' };
+  }
+  if (catalog.products.length === 0) {
+    return { ok: false, reason: 'empty_catalog' };
+  }
+  return { ok: true, products: [...catalog.products] };
+}
 
 export interface PreparationFailure {
   partnerId: number;

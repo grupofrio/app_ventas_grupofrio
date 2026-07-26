@@ -447,4 +447,3 @@ git commit -m "fix: close pending sales projection gaps"
 ```
 
 Skip if no files changed.
-

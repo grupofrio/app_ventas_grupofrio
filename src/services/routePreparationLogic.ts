@@ -90,6 +90,8 @@ export interface PartnerLike {
 const MAX_ROUTE_PRICING_CONCURRENCY = 4;
 const INVALID_PRICING_RESPONSE_REASON =
   'Respuesta de precios incompleta o inválida';
+const STALE_PREPARATION_REASON =
+  'Se conservaron precios más recientes para esta combinación';
 
 export interface SettleRoutePricingTargetsInput {
   readonly targets: readonly RoutePricingTarget[];
@@ -282,10 +284,58 @@ export async function prepareRoutePricingTargets(
 ): Promise<SettledRoutePricingPreparation> {
   const settled = await settleRoutePricingTargets(input);
   const activateRun = input.activateRun ?? activatePreparedPricingRun;
-  await input.updateState((current) =>
+  const publishedState = await input.updateState((current) =>
     activateRun(current, settled.activationInput)
   );
-  return settled;
+  const manifest = publishedState.activeManifest;
+  const publishedTargets = new Map(
+    manifest
+    && manifest.companyId === input.companyId
+    && manifest.planId === input.planId
+    && manifest.preparationRunId === input.preparationRunId
+      ? manifest.targets.map((target) => [
+          `${target.partnerId}:${target.requestedPricelistId ?? 'null'}`,
+          target,
+        ])
+      : [],
+  );
+  const settledFailures = new Map(
+    settled.failures.map((failure) => [
+      `${failure.partnerId}:${failure.requestedPricelistId ?? 'null'}`,
+      failure,
+    ]),
+  );
+  const failures: PreparationFailure[] = [];
+  let preparedCount = 0;
+  let pricesPrepared = 0;
+
+  for (const target of settled.activationInput.targets) {
+    const key = `${target.partnerId}:${target.requestedPricelistId ?? 'null'}`;
+    const existingFailure = settledFailures.get(key);
+    if (existingFailure) {
+      failures.push(existingFailure);
+      continue;
+    }
+
+    if (target.status === 'prepared' && publishedTargets.get(key)?.status === 'prepared') {
+      preparedCount += 1;
+      pricesPrepared += target.snapshot.validation.prices.length;
+      continue;
+    }
+
+    failures.push({
+      partnerId: target.partnerId,
+      requestedPricelistId: target.requestedPricelistId,
+      reason: STALE_PREPARATION_REASON,
+    });
+  }
+
+  return {
+    ...settled,
+    failures,
+    preparedCount,
+    pricesPrepared,
+  };
 }
 
 /**

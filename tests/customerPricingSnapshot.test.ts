@@ -471,6 +471,222 @@ test('an older prepared response cannot roll back a newer last-known ledger entr
   );
 });
 
+test('a delayed preparation activates only observations newer than foreground pricing', () => {
+  for (const [label, preparedAtMs] of [
+    ['older', 1_000],
+    ['equal', 2_000],
+    ['invalid', Number.NaN],
+  ] as const) {
+    const foreground = recordLastKnownServerPrices(emptyPricingSnapshotState(), {
+      companyId: 34,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      capturedAtMs: 2_000,
+      captureRunId: 'foreground-newer',
+      validation: validServerSnapshot([[10, 44]], 82),
+    });
+
+    const activated = activatePreparedPricingRun(foreground, {
+      companyId: 34,
+      planId: 7,
+      preparationRunId: `delayed-${label}`,
+      activatedAtMs: 3_000,
+      targets: [
+        {
+          status: 'prepared',
+          partnerId: 99,
+          requestedPricelistId: 104,
+          snapshot: {
+            preparedAtMs,
+            validation: validServerSnapshot([[10, 22]], 81),
+          },
+        },
+        {
+          status: 'prepared',
+          partnerId: 100,
+          requestedPricelistId: 104,
+          snapshot: {
+            preparedAtMs: 2_500,
+            validation: validServerSnapshot([[10, 55]], 83),
+          },
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      activated.requestedMappings['34:99:104'],
+      foreground.requestedMappings['34:99:104'],
+      `${label} preparation must preserve the newer foreground mapping`,
+    );
+    assert.deepEqual(
+      resolveCapturedCustomerPrice(activated, {
+        companyId: 34,
+        planId: 7,
+        partnerId: 99,
+        requestedPricelistId: 104,
+        productId: 10,
+        publicPrice: 100,
+      }),
+      {
+        unitPrice: 44,
+        source: 'last_known_customer',
+        capturedAtMs: 2_000,
+        pricelistId: 82,
+      },
+      `${label} preparation must preserve the newer foreground price`,
+    );
+    assert.deepEqual(activated.activeManifest?.targets, [
+      {
+        partnerId: 99,
+        requestedPricelistId: 104,
+        resolvedPricelistId: null,
+        snapshotId: null,
+        status: 'failed',
+      },
+      {
+        partnerId: 100,
+        requestedPricelistId: 104,
+        resolvedPricelistId: 83,
+        snapshotId: `delayed-${label}:34:100:83`,
+        status: 'prepared',
+      },
+    ]);
+    assert.deepEqual(activated.requestedMappings['34:100:104'], {
+      companyId: 34,
+      partnerId: 100,
+      requestedPricelistId: 104,
+      resolvedPricelistId: 83,
+      preparationRunId: `delayed-${label}`,
+      capturedAtMs: 2_500,
+    });
+    assert.deepEqual(
+      resolveCapturedCustomerPrice(activated, {
+        companyId: 34,
+        planId: 7,
+        partnerId: 100,
+        requestedPricelistId: 104,
+        productId: 10,
+        publicPrice: 100,
+      }),
+      {
+        unitPrice: 55,
+        source: 'prepared_customer',
+        capturedAtMs: 2_500,
+        pricelistId: 83,
+      },
+    );
+  }
+});
+
+test('a delayed preparation cannot bypass newer foreground pricing through a canonical alias', () => {
+  const foreground = recordLastKnownServerPrices(emptyPricingSnapshotState(), {
+    companyId: 34,
+    partnerId: 99,
+    requestedPricelistId: 105,
+    capturedAtMs: 2_000,
+    captureRunId: 'foreground-alias',
+    validation: validServerSnapshot([[10, 44]], 81),
+  });
+
+  const activated = activatePreparedPricingRun(foreground, {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'delayed-other-alias',
+    activatedAtMs: 3_000,
+    targets: [{
+      status: 'prepared',
+      partnerId: 99,
+      requestedPricelistId: 104,
+      snapshot: {
+        preparedAtMs: 1_000,
+        validation: validServerSnapshot([[10, 22]], 81),
+      },
+    }],
+  });
+
+  assert.deepEqual(activated.activeManifest?.targets, [{
+    partnerId: 99,
+    requestedPricelistId: 104,
+    resolvedPricelistId: null,
+    snapshotId: null,
+    status: 'failed',
+  }]);
+  assert.equal(activated.requestedMappings['34:99:104'], undefined);
+  assert.deepEqual(
+    resolveCapturedCustomerPrice(activated, {
+      companyId: 34,
+      planId: 7,
+      partnerId: 99,
+      requestedPricelistId: 105,
+      productId: 10,
+      publicPrice: 100,
+    }),
+    {
+      unitPrice: 44,
+      source: 'last_known_customer',
+      capturedAtMs: 2_000,
+      pricelistId: 81,
+    },
+  );
+});
+
+test('conflicting temporal aliases in one run cannot publish an older price', () => {
+  assert.throws(
+    () => activatePreparedPricingRun(emptyPricingSnapshotState(), {
+      companyId: 34,
+      planId: 7,
+      preparationRunId: 'same-run-alias-race',
+      activatedAtMs: 3_000,
+      targets: [
+        {
+          status: 'prepared',
+          partnerId: 99,
+          requestedPricelistId: 104,
+          snapshot: {
+            preparedAtMs: 2_000,
+            validation: validServerSnapshot([[10, 44]], 81),
+          },
+        },
+        {
+          status: 'prepared',
+          partnerId: 99,
+          requestedPricelistId: 105,
+          snapshot: {
+            preparedAtMs: 1_000,
+            validation: validServerSnapshot([[10, 22]], 81),
+          },
+        },
+      ],
+    }),
+    /Conflicting pricing snapshot candidates/,
+  );
+});
+
+test('reapplying the same preparation run and payload remains idempotently prepared', () => {
+  const input = {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'idempotent-run',
+    activatedAtMs: 2_000,
+    targets: [{
+      status: 'prepared' as const,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      snapshot: {
+        preparedAtMs: 1_000,
+        validation: validServerSnapshot([[10, 42]], 81),
+      },
+    }],
+  };
+  const first = activatePreparedPricingRun(emptyPricingSnapshotState(), input);
+  const replay = activatePreparedPricingRun(first, input);
+
+  assert.equal(replay.activeManifest?.targets[0]?.status, 'prepared');
+  assert.deepEqual(replay.snapshots, first.snapshots);
+  assert.deepEqual(replay.requestedMappings, first.requestedMappings);
+  assert.deepEqual(replay.lastKnownPrices, first.lastKnownPrices);
+});
+
 test('canonicalizes the requested pricelist before prepared lookup', () => {
   const state = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
     preparationRunId: 'run-prepared',

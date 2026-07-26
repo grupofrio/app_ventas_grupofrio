@@ -169,6 +169,10 @@ function isPositiveInteger(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeFiniteNumber(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
 function requestedMappingKey(
   companyId: number,
   partnerId: number,
@@ -469,6 +473,47 @@ export function activatePreparedPricingRun(
     }
 
     const { validation } = target.snapshot;
+    const mappingKey = requestedMappingKey(
+      input.companyId,
+      target.partnerId,
+      target.requestedPricelistId,
+    );
+    const existingMapping = requestedMappings[mappingKey];
+    const preparedAtMs = target.snapshot.preparedAtMs;
+    const canonicalPrices = lastKnownPrices[
+      canonicalPricingKey(
+        input.companyId,
+        target.partnerId,
+        validation.resolvedPricelistId,
+      )
+    ];
+    const hasNewerCanonicalObservation = Object.values(
+      canonicalPrices ?? {},
+    ).some((price) => (
+      price.preparationRunId !== input.preparationRunId
+      && isNonNegativeFiniteNumber(price.capturedAtMs)
+      && price.capturedAtMs >= preparedAtMs
+    ));
+    if (
+      !isNonNegativeFiniteNumber(preparedAtMs)
+      || hasNewerCanonicalObservation
+      || (
+        existingMapping
+        && existingMapping.preparationRunId !== input.preparationRunId
+        && isNonNegativeFiniteNumber(existingMapping.capturedAtMs)
+        && existingMapping.capturedAtMs >= preparedAtMs
+      )
+    ) {
+      manifestTargets.push({
+        partnerId: target.partnerId,
+        requestedPricelistId: target.requestedPricelistId,
+        resolvedPricelistId: null,
+        snapshotId: null,
+        status: 'failed',
+      });
+      continue;
+    }
+
     const snapshotId = snapshotIdFor(
       input.preparationRunId,
       input.companyId,
@@ -527,11 +572,6 @@ export function activatePreparedPricingRun(
       };
     }
 
-    const mappingKey = requestedMappingKey(
-      input.companyId,
-      target.partnerId,
-      target.requestedPricelistId,
-    );
     requestedMappings = {
       ...requestedMappings,
       [mappingKey]: {
@@ -540,7 +580,7 @@ export function activatePreparedPricingRun(
         requestedPricelistId: target.requestedPricelistId,
         resolvedPricelistId: validation.resolvedPricelistId,
         preparationRunId: input.preparationRunId,
-        capturedAtMs: input.activatedAtMs,
+        capturedAtMs: preparedAtMs,
       },
     };
     lastKnownPrices = withLastKnownPrices(lastKnownPrices, {

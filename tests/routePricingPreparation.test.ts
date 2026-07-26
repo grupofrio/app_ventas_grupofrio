@@ -226,6 +226,53 @@ test('publishes once after every fetch settles and merges with latest repository
   );
 });
 
+test('reports a stale prepared target as failed after activation preserves newer pricing', async () => {
+  const timestamps = [1_000, 2_500, 3_000];
+  let current = emptyPricingSnapshotState();
+
+  const result = await prepareRoutePricingTargets({
+    targets: [
+      { partnerId: 99, requestedPricelistId: 104 },
+      { partnerId: 100, requestedPricelistId: 104 },
+    ],
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'prepare-interleaved',
+    concurrency: 1,
+    nowMs: () => timestamps.shift()!,
+    fetchTarget: async (target) => target.partnerId === 99
+      ? validSnapshot(81, 22)
+      : validSnapshot(83, 55),
+    updateState: async (updater) => {
+      current = recordLastKnownServerPrices(current, {
+        companyId: 34,
+        partnerId: 99,
+        requestedPricelistId: 105,
+        capturedAtMs: 2_000,
+        captureRunId: 'foreground-alias',
+        validation: validSnapshot(81, 44),
+      });
+      current = updater(current);
+      return current;
+    },
+  });
+
+  assert.deepEqual(current.activeManifest?.targets.map((target) => ({
+    partnerId: target.partnerId,
+    status: target.status,
+  })), [
+    { partnerId: 99, status: 'failed' },
+    { partnerId: 100, status: 'prepared' },
+  ]);
+  assert.equal(result.preparedCount, 1);
+  assert.equal(result.pricesPrepared, 2);
+  assert.deepEqual(result.failures, [{
+    partnerId: 99,
+    requestedPricelistId: 104,
+    reason: 'Se conservaron precios más recientes para esta combinación',
+  }]);
+});
+
 test('a strict save failure leaves no partially published preparation state', async () => {
   const repository = createCustomerPricingSnapshotRepository({
     load: async () => null,

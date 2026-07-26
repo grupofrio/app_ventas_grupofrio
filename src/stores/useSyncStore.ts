@@ -1112,6 +1112,7 @@ async function processOneItemUnheld(
       if (!shouldRetry) {
         const definitiveGate = await gateSaleDefinitiveFailure({
           item,
+          failureCode: classification.errorCode,
           clearMatchingVisit: (operationId) =>
             useVisitStore.getState().clearSaleConfirmationLock(operationId),
         });

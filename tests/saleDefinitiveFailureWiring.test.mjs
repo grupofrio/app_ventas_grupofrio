@@ -17,6 +17,11 @@ test('sync definitive rejection gates dead and rollback behind strict visit clea
   assert(gateIndex >= 0);
   assert(gateIndex > persistTryIndex, 'la visita no se limpia antes de persistir dead + error_code');
   assert(rollbackIndex > gateIndex);
+  assert.match(
+    catchBlock,
+    /failureCode:\s*classification\.errorCode/,
+    'el gate usa la clasificación capturada, no el item previo a markDead',
+  );
   assert.match(catchBlock, /if \(definitiveGate === 'deferred'\)[\s\S]*?applySaleDefinitiveClearDeferral[\s\S]*?return 'deferred'/);
   const persistFailure = catchBlock.slice(persistTryIndex, gateIndex);
   assert.match(persistFailure, /catch\s*\([^)]*\)/);

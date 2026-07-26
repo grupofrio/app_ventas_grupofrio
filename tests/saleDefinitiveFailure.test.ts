@@ -6,6 +6,7 @@ import {
   gateSaleDefinitiveFailure,
   SALE_DEFINITIVE_CLEAR_DEFERRED_MESSAGE,
 } from '../src/services/saleDefinitiveFailure.ts';
+import { rearmSaleOrderForRetry } from '../src/services/saleRetry.ts';
 import { excludeProtectedStockSyncItems } from '../src/services/syncErrorClassification.ts';
 import type { SyncQueueItem } from '../src/types/sync.ts';
 
@@ -26,6 +27,7 @@ test('a definitive queued rejection clears matching visit state before dead hand
 
   const outcome = await gateSaleDefinitiveFailure({
     item: sale,
+    failureCode: 'validation_error',
     clearMatchingVisit: async (operationId) => {
       events.push(`clear:${operationId}`);
       return true;
@@ -35,6 +37,36 @@ test('a definitive queued rejection clears matching visit state before dead hand
 
   assert.equal(outcome, 'proceed');
   assert.deepEqual(events, ['clear:sale-op-1', 'dead']);
+});
+
+test('an insufficient-stock classification preserves the visit lock for retry with the same id', async () => {
+  let visitOperationId: string | null = sale.id;
+  let clearCalls = 0;
+
+  const outcome = await gateSaleDefinitiveFailure({
+    item: sale,
+    failureCode: 'insufficient_stock',
+    clearMatchingVisit: async () => {
+      clearCalls += 1;
+      visitOperationId = null;
+      return true;
+    },
+  });
+  const restartedQueue: SyncQueueItem[] = [{
+    ...sale,
+    status: 'dead',
+    error_code: 'insufficient_stock',
+  }];
+  const retried = rearmSaleOrderForRetry(
+    restartedQueue,
+    visitOperationId ?? '',
+  );
+
+  assert.equal(outcome, 'proceed');
+  assert.equal(clearCalls, 0, 'el rechazo protegido no intenta limpiar la visita');
+  assert.equal(visitOperationId, sale.id, 'el operation id sobrevive para Checkout');
+  assert.equal(retried[0].id, sale.id);
+  assert.equal(retried[0].status, 'pending', 'retry rearma la misma operación persistida');
 });
 
 test('a failed visit clear defers the sale without spending retry budget or cascading', async () => {

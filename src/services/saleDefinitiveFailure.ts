@@ -26,12 +26,16 @@ export function applySaleDefinitiveClearDeferral(
 
 export async function gateSaleDefinitiveFailure({
   item,
+  failureCode,
   clearMatchingVisit,
 }: {
   item: Pick<SyncQueueItem, 'id' | 'type'>;
+  failureCode?: string | null;
   clearMatchingVisit: (operationId: string) => Promise<boolean>;
 }): Promise<'proceed' | 'deferred'> {
-  if (item.type !== 'sale_order') return 'proceed';
+  if (item.type !== 'sale_order' || failureCode === 'insufficient_stock') {
+    return 'proceed';
+  }
   try {
     await clearMatchingVisit(item.id);
     return 'proceed';

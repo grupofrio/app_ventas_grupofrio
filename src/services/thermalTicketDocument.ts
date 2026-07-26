@@ -1,5 +1,8 @@
 import type { SaleTicketSnapshot } from './saleTicket.ts';
-import { SALE_TICKET_CREDIT_NOTE } from './saleTicket.ts';
+import {
+  SALE_TICKET_CREDIT_NOTE,
+  getSaleTicketFolioPresentation,
+} from './saleTicket.ts';
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
 import {
   formatQuantityAndUnitPrice,
@@ -15,6 +18,8 @@ export type { ThermalTicketDocument } from './thermalPrinterTypes.ts';
 export function buildThermalTicketDocument(
   snapshot: SaleTicketSnapshot,
 ): ThermalTicketDocument {
+  const folioPresentation = getSaleTicketFolioPresentation(snapshot);
+
   return {
     schemaVersion: 1,
     branding: {
@@ -25,7 +30,10 @@ export function buildThermalTicketDocument(
       title: SALE_TICKET_BRANDING.title,
       footer: SALE_TICKET_BRANDING.footer,
     },
-    folio: snapshot.saleId,
+    folio: folioPresentation.odooFolio,
+    ...(folioPresentation.localReference === null
+      ? {}
+      : { localReference: folioPresentation.localReference }),
     formattedDate: formatTicketDate(snapshot.createdAt),
     customerName: snapshot.customerName,
     sellerName: normalizeSellerName(snapshot.sellerName),

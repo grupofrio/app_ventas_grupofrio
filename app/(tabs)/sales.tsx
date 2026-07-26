@@ -27,12 +27,21 @@ import { formatCurrency } from '../../src/utils/time';
 import { GFSalesOrder } from '../../src/services/gfLogistics';
 import type { SalesListEntry } from '../../src/services/salesListProjection';
 import { getSaleStatusCopy } from '../../src/services/localSaleStatusCopy';
+import { createSaleTicketOpenGuard } from '../../src/services/saleTicket';
+import { openSaleTicketForOrder } from '../../src/services/saleTicketOpen';
 import {
-  buildSaleTicketSnapshotFromOrder,
-  createSaleTicketOpenGuard,
-} from '../../src/services/saleTicket';
-import { saveAuthoritativeSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+  loadSaleTicketSnapshotStrict,
+  saveSaleTicketSnapshot,
+} from '../../src/services/saleTicketStorage';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+
+function showTicketOpenError() {
+  console.error('[sales] No se pudo abrir el ticket');
+  Alert.alert(
+    'No se pudo abrir el ticket',
+    'Intenta nuevamente. Permanecerás en la pantalla de Ventas.',
+  );
+}
 
 export default function SalesScreen() {
   const router = useRouter();
@@ -62,31 +71,18 @@ export default function SalesScreen() {
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
   async function openTicketForOrder(order: GFSalesOrder) {
-    const normalizedOperationId = order.operation_id.trim();
-    if (!normalizedOperationId) {
-      Alert.alert(
-        'Ticket no disponible',
-        'Esta venta no tiene un identificador de operación válido para abrir su comprobante.',
-      );
-      return;
-    }
-
-    try {
-      await ticketOpenGuardRef.current.run(normalizedOperationId, async () => {
-        const ticket = {
-          ...buildSaleTicketSnapshotFromOrder(order),
-          saleId: normalizedOperationId,
-        };
-        await saveAuthoritativeSaleTicketSnapshot(ticket);
-        const ticketId = encodeURIComponent(ticket.saleId);
-        router.push(`/print/${ticketId}` as never);
+    const ticketKey = order.operation_id.trim() || `odoo-order-${order.id}`;
+    await ticketOpenGuardRef.current.run(ticketKey, async () => {
+      await openSaleTicketForOrder(order, {
+        load: loadSaleTicketSnapshotStrict,
+        save: saveSaleTicketSnapshot,
+        navigate: (saleId) => {
+          const ticketId = encodeURIComponent(saleId);
+          router.push(`/print/${ticketId}` as never);
+        },
+        onError: showTicketOpenError,
       });
-    } catch {
-      Alert.alert(
-        'Ticket no disponible',
-        'No pudimos guardar el comprobante actualizado. Intenta abrirlo nuevamente.',
-      );
-    }
+    });
   }
 
   async function openTicketForEntry(entry: SalesListEntry) {

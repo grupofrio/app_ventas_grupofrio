@@ -85,9 +85,13 @@ import {
   runUnheldProcessingChunk,
 } from '../services/syncProcessingHolds';
 import {
+  applySaleTicketFolioPromotionDeferral,
+  applySaleTicketOdooConfirmation,
   applySaleTerminalMarkerDeferral,
+  isSaleTicketFolioPromotionPersistenceError,
   isSaleTerminalMarkerPersistenceError,
   processSyncItemToCompletion,
+  runSaleTicketOdooFolioCompletion,
 } from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
 import {
@@ -96,6 +100,7 @@ import {
 } from '../services/saleDefinitiveFailure';
 import { createDeadCleanupAction } from '../services/syncDeadCleanup';
 import { createSaleOrderRetryAction } from '../services/saleRetry';
+import { promoteStoredSaleTicketOdooFolio } from '../services/saleTicketStorage';
 
 // ═══ Constants ═══
 
@@ -1067,6 +1072,24 @@ async function processOneItemUnheld(
 
     return 'handled';
   } catch (error: unknown) {
+    if (isSaleTicketFolioPromotionPersistenceError(error)) {
+      const backoffMs = calculateBackoff(0);
+      const retryAt = Date.now() + backoffMs;
+      const newQueue = applySaleTicketFolioPromotionDeferral(
+        get().queue,
+        error.operationId,
+        error.odooFolio,
+        retryAt,
+      );
+      set({ queue: newQueue, ...computeCounts(newQueue) });
+      schedulePersist();
+      logWarn('sync', 'sale_ticket_folio_promotion_deferred', {
+        id: error.operationId,
+        delay_ms: backoffMs,
+      });
+      return 'deferred';
+    }
+
     if (isSaleTerminalMarkerPersistenceError(error)) {
       const backoffMs = calculateBackoff(0);
       const retryAt = Date.now() + backoffMs;
@@ -1315,7 +1338,24 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // write required ACLs the driver user doesn't have and failed
       // noisily. The REST endpoint also tolerates obsolete stop_id
       // (treated as offroute server-side).
-      await createSale(buildSalesCreatePayload(payload as Record<string, unknown>), meta);
+      const promotion = await runSaleTicketOdooFolioCompletion({
+        item,
+        createSale: () => createSale(
+          buildSalesCreatePayload(payload as Record<string, unknown>),
+          meta,
+        ),
+        persistRemoteConfirmation: (operationId, odooFolio) =>
+          queuePersistence.transformAndPersist((queue) =>
+            applySaleTicketOdooConfirmation(queue, operationId, odooFolio),
+          ),
+        promote: (operationId, odooFolio) =>
+          promoteStoredSaleTicketOdooFolio(operationId, odooFolio),
+      });
+      if (promotion === 'missing') {
+        logWarn('sync', 'sale_ticket_odoo_folio_missing', {
+          operation_id: item.id,
+        });
+      }
       break;
 
     case 'checkin':

@@ -29,6 +29,7 @@ import {
   SALE_TICKET_LEGAL_NAME,
   SALE_TICKET_RFC,
   SaleTicketSnapshot,
+  getSaleTicketFolioPresentation,
 } from '../../src/services/saleTicket';
 import { openSaleTicketPdf } from '../../src/services/saleTicketPdf';
 import {
@@ -129,6 +130,9 @@ export default function PrintTicketScreen() {
   const outputGateRef = React.useRef(createOutputGate());
   const { jobState: printerJobState, pickerVisible, selectedPrinter } = printerFlow;
   const isPrintJobActive = printerJobState !== 'idle';
+  const folioPresentation = ticket === null
+    ? null
+    : getSaleTicketFolioPresentation(ticket);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -423,7 +427,7 @@ export default function PrintTicketScreen() {
             <ActivityIndicator size="small" color={colors.primary} />
             <Text style={styles.loadingText}>Cargando ticket...</Text>
           </View>
-        ) : ticket ? (
+        ) : ticket && folioPresentation ? (
           <>
             <View style={styles.ticketPreview}>
               <Text style={styles.ticketHeader}>GRUPO FRIO</Text>
@@ -431,9 +435,15 @@ export default function PrintTicketScreen() {
               <Text style={styles.ticketTaxId}>RFC: {SALE_TICKET_RFC}</Text>
               <View style={styles.divider} />
               <View style={styles.ticketRow}>
-                <Text style={styles.ticketLabel}>Pedido</Text>
-                <Text style={styles.ticketValue}>#{ticket.saleId}</Text>
+                <Text style={styles.ticketLabel}>Folio Odoo</Text>
+                <Text style={styles.ticketValue}>{folioPresentation.odooFolio}</Text>
               </View>
+              {folioPresentation.localReference !== null ? (
+                <View style={styles.ticketRow}>
+                  <Text style={styles.ticketLabel}>Referencia local</Text>
+                  <Text style={styles.ticketValue}>{folioPresentation.localReference}</Text>
+                </View>
+              ) : null}
               <View style={styles.ticketRow}>
                 <Text style={styles.ticketLabel}>Cliente</Text>
                 <Text style={styles.ticketValue}>{ticket.customerName}</Text>

@@ -23,7 +23,20 @@ class ThermalPrinterModuleTest {
     assertEquals(listOf(ADDRESS), verifier.addresses)
     assertEquals(1, renderer.tickets.size)
     assertEquals("F-42", renderer.tickets.single().folio)
+    assertEquals(null, renderer.tickets.single().localReference)
     assertEquals(listOf(ADDRESS to raster), transport.jobs)
+  }
+
+  @Test
+  fun `optional local reference is normalized before rendering`() {
+    val renderer = RecordingRenderer(MonochromeRaster(384, 1, ByteArray(48)))
+    val record = validRecord().apply {
+      localReference = " \u200Bmobile-op-1\r\n "
+    }
+
+    coordinator(renderer = renderer).printTicket(ADDRESS, record)
+
+    assertEquals("mobile-op-1", renderer.tickets.single().localReference)
   }
 
   @Test

@@ -1,4 +1,5 @@
 import {
+  normalizeOdooFolio,
   parseSaleTicketSnapshot,
   type SaleTicketSnapshot,
 } from './saleTicket.ts';
@@ -52,7 +53,10 @@ export function restoreSaleRecoveryIntent(value: unknown): SaleRecoveryIntentV1 
       queuePayload: { ...value.queuePayload },
       stopId: value.stopId,
       photoUris: [...value.photoUris],
-      ticketSnapshot,
+      ticketSnapshot: {
+        ...ticketSnapshot,
+        odooFolio: normalizeOdooFolio(ticketSnapshot.odooFolio),
+      },
     };
   } catch {
     return null;

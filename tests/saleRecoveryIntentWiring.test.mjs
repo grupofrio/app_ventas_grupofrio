@@ -28,7 +28,14 @@ test('direct definitive rejection awaits strict matching clear and stays fail-cl
   assert.doesNotMatch(branch, /unlockSaleConfirm\(\)/);
 });
 
-test('offline, ambiguous, and success ticket paths reuse the persisted ticket snapshot', () => {
-  assert.match(source, /saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/);
-  assert(source.match(/saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/g)?.length >= 3);
+test('pending paths reuse the intent snapshot while confirmed success saves its promoted copy', () => {
+  assert.equal(
+    source.match(/saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/g)?.length,
+    2,
+  );
+  assert.match(
+    source,
+    /withSaleTicketOdooFolio\(\s*recoveryIntent\.ticketSnapshot,\s*saleResult\.name,?\s*\)/,
+  );
+  assert.match(source, /saveSaleTicketSnapshot\(confirmedTicketSnapshot\)/);
 });

@@ -69,7 +69,7 @@ const activeSale: TestVisitState = {
     stopId: 44,
     photoUris: ['file://sale.jpg'],
     ticketSnapshot: {
-      saleId: 'sale-current', customerName: 'Cliente', sellerName: 'Vendedor',
+      saleId: 'sale-current', odooFolio: null, customerName: 'Cliente', sellerName: 'Vendedor',
       paymentMethod: 'cash', paymentLabel: 'Efectivo', createdAt: '2026-07-21T10:00:00.000Z',
       lines: [], subtotal: 100, total: 100, totalKg: 10,
     },

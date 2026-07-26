@@ -303,7 +303,64 @@ const offlineIdx = sale.indexOf('if (confirmationIsOnline === false) {');
 const createIdx = sale.indexOf('await createSale(');
 assert(offlineIdx > -1 && createIdx > -1 && offlineIdx < createIdx,
   'la rama offline (enqueue) va antes del createSale online');
-assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhotos/.test(sale),
+const offlineBranch = extractBracedBlockAfter(
+  sale,
+  'if (confirmationIsOnline === false)',
+);
+const offlineTicketSaveIndex = offlineBranch.indexOf(
+  'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
+);
+assert(offlineTicketSaveIndex >= 0, 'offline intenta guardar el comprobante del intent durable');
+const offlineRecoveryPersistIndex = offlineBranch.indexOf(
+  'await persistAmbiguousSaleRecovery({',
+);
+assert(
+  offlineRecoveryPersistIndex > offlineTicketSaveIndex,
+  'offline guarda el ticket pendiente antes de persistir y liberar la cola',
+);
+const offlineTicketTryIndex = offlineBranch.lastIndexOf('try {', offlineTicketSaveIndex);
+const offlineTicketCatchIndex = offlineBranch.indexOf('catch (ticketError)', offlineTicketSaveIndex);
+assert(
+  offlineTicketTryIndex >= 0 && offlineTicketTryIndex < offlineTicketSaveIndex,
+  'el guardado estricto del ticket offline queda dentro de su propio try',
+);
+assert(
+  offlineTicketCatchIndex > offlineTicketSaveIndex,
+  'el guardado estricto del ticket offline tiene un catch explícito',
+);
+const offlineTicketCatch = extractBracedBlockAfter(offlineBranch, 'catch (ticketError)');
+assert.match(
+  offlineTicketCatch,
+  /setSaleRecoveryPersistenceFailed\(true\)[\s\S]*?setSaleSubmitting\(false\)/,
+  'fallar el ticket conserva el bloqueo durable antes de terminar submitting',
+);
+assert.match(
+  offlineTicketCatch,
+  /logError\(\s*['"]sync['"],\s*['"]offline_sale_ticket_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+  'el fallo del ticket offline queda registrado con operation_id y mensaje seguro',
+);
+assert.match(
+  offlineTicketCatch,
+  /safeUnknownErrorMessage\(\s*ticketError,/,
+  'el log del ticket offline sanitiza errores unknown',
+);
+assert.match(
+  offlineTicketCatch,
+  /Alert\.alert\([\s\S]*?comprobante local[\s\S]*?operación permanece bloqueada[\s\S]*?recuperará/,
+  'el aviso explica el fallo estricto y la recuperación durable',
+);
+assert.doesNotMatch(
+  offlineTicketCatch,
+  /Pedido guardado|quedó guardado en la cola|se enviará al reconectar/,
+  'el fallo anterior al enqueue no puede afirmar que el pedido ya está en la cola',
+);
+assert.match(offlineTicketCatch, /return;/);
+assert.doesNotMatch(
+  offlineTicketCatch,
+  /unlockSaleConfirm|saleConfirmationSingleFlight\.release|setLastSaleTicketId|setAfterSaleAction|updateStopState|markSaleReadyToContinue|clearSaleConfirmationLock/,
+  'fallar el ticket no desbloquea ni marca éxito de ruta/checkout',
+);
+assert(/const saleResult = await createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?enqueueVisitPhotos/.test(sale),
   'online: despues de crear venta en Odoo debe encolar la evidencia para subirla');
 
 const confirmBody = extractBracedBlockAfter(sale, 'async function handleConfirm()');
@@ -542,8 +599,16 @@ assert(sync.includes('sale_order_dead_no_stock_rollback'),
 assert(!/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
   'la venta no debe descontar inventario local (S1)');
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
-assert(/createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?saveSaleTicketSnapshot/.test(sale),
-  'online: snapshot del ticket después de createSale');
+assert.match(
+  sale,
+  /const saleResult = await createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?confirmedTicketSnapshot = withSaleTicketOdooFolio\(\s*recoveryIntent\.ticketSnapshot,\s*saleResult\.name,?\s*\)[\s\S]*?saveSaleTicketSnapshot\(confirmedTicketSnapshot\)/,
+  'online: captura el resultado validado, promueve el folio y guarda el ticket oficial',
+);
+assert.doesNotMatch(
+  sale,
+  /recoveryIntent\.ticketSnapshot\.(?:odooFolio|name)\s*=|recoveryIntent\.ticketSnapshot\s*=/,
+  'la promoción online no muta el snapshot pendiente del intent durable',
+);
 assert(/sellerName:\s*employeeName/.test(sale), 'el intent del ticket guarda el vendedor (employeeName)');
 
 // #5 insufficient_stock: el catch usa el detalle y refresca inventario real.

@@ -404,6 +404,19 @@ function requiredTicketString(object: object, key: string): string {
   return value;
 }
 
+function optionalNonBlankTicketString(object: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor) return undefined;
+  if (!('value' in descriptor)) throw new ThermalPrinterError('invalid_ticket');
+
+  const value = descriptor.value;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  return value;
+}
+
 function snapshotTicketBranding(value: unknown): ThermalTicketBranding {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new ThermalPrinterError('invalid_ticket');
@@ -471,11 +484,13 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
     if (creditNoteValue !== undefined && typeof creditNoteValue !== 'string') {
       throw new ThermalPrinterError('invalid_ticket');
     }
+    const localReference = optionalNonBlankTicketString(value, 'localReference');
 
     return Object.freeze({
       schemaVersion: 1,
       branding: snapshotTicketBranding(ownDataValue(value, 'branding')),
       folio: requiredTicketString(value, 'folio'),
+      ...(localReference === undefined ? {} : { localReference }),
       formattedDate: requiredTicketString(value, 'formattedDate'),
       customerName: requiredTicketString(value, 'customerName'),
       sellerName: requiredTicketString(value, 'sellerName'),

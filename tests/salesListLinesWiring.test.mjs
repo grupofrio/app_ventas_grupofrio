@@ -7,6 +7,10 @@ const REPO_ROOT = process.cwd();
 function main() {
   const gfLogistics = readFileSync(resolve(REPO_ROOT, 'src/services/gfLogistics.ts'), 'utf8');
   const salesScreen = readFileSync(resolve(REPO_ROOT, 'app/(tabs)/sales.tsx'), 'utf8');
+  const saleTicketOpen = readFileSync(
+    resolve(REPO_ROOT, 'src/services/saleTicketOpen.ts'),
+    'utf8',
+  );
 
   assert.match(
     gfLogistics,
@@ -49,14 +53,19 @@ function main() {
     'normalizeSalesList debe conservar employee_name para imprimir vendedor en el ticket',
   );
   assert.match(
-    salesScreen,
+    saleTicketOpen,
     /buildSaleTicketSnapshotFromOrder\(order\)/,
-    'Ventas debe convertir las lineas definitivas de /sales/list en el ticket remoto',
+    'El flujo de apertura debe convertir las lineas definitivas de /sales/list en el ticket remoto',
+  );
+  assert.match(
+    saleTicketOpen,
+    /mergeSaleTicketFromOrder\(current, order\)[\s\S]*?await dependencies\.save\(merged\)[\s\S]*?await dependencies\.navigate\(merged\.saleId\)/,
+    'El flujo debe combinar y guardar las lineas remotas antes de imprimir',
   );
   assert.match(
     salesScreen,
-    /await saveAuthoritativeSaleTicketSnapshot\(ticket\)/,
-    'Ventas debe guardar las lineas remotas con autoridad Odoo antes de imprimir',
+    /save:\s*saveSaleTicketSnapshot/,
+    'Ventas debe inyectar el guardado durable al flujo de apertura',
   );
   assert.doesNotMatch(
     salesScreen,

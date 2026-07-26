@@ -29,6 +29,7 @@ export interface SaleTicketSourceLine {
 
 export interface BuildSaleTicketSnapshotInput {
   saleId: string;
+  odooFolio?: string | null;
   customerName: string;
   sellerName?: string;
   paymentMethod: SaleTicketPaymentMethod;
@@ -78,6 +79,7 @@ export interface SaleTicketLine {
 export interface SaleTicketSnapshot {
   saleId: string;
   origin?: SaleTicketOrigin;
+  odooFolio?: string | null;
   customerName: string;
   sellerName: string;
   paymentMethod: SaleTicketPaymentMethod;
@@ -94,6 +96,7 @@ export interface SaleTicketOpenGuard {
 }
 
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
+export const ODOO_FOLIO_PENDING_LABEL = 'Pendiente por sincronizar';
 export const SALE_TICKET_LEGAL_NAME = SALE_TICKET_BRANDING.legalName;
 export const SALE_TICKET_RFC = SALE_TICKET_BRANDING.rfcLabel.replace(/^RFC:\s*/, '');
 export const SALE_TICKET_CREDIT_NOTE =
@@ -116,6 +119,11 @@ export function parseSaleTicketSnapshot(
     }
     if (
       (value.origin !== undefined && value.origin !== 'local' && value.origin !== 'odoo')
+      || (
+        value.odooFolio !== undefined
+        && value.odooFolio !== null
+        && typeof value.odooFolio !== 'string'
+      )
       || typeof value.customerName !== 'string'
       || typeof value.sellerName !== 'string'
       || !isSaleTicketPaymentMethod(value.paymentMethod)
@@ -167,6 +175,9 @@ export function parseSaleTicketSnapshot(
     return {
       saleId: normalizedSaleId,
       ...(value.origin === undefined ? {} : { origin: value.origin }),
+      ...(value.odooFolio === undefined
+        ? {}
+        : { odooFolio: normalizeOdooFolio(value.odooFolio) }),
       customerName: value.customerName,
       sellerName: normalizeSellerName(value.sellerName),
       paymentMethod: value.paymentMethod,
@@ -211,6 +222,28 @@ export function createSaleTicketOpenGuard(): SaleTicketOpenGuard {
   };
 }
 
+export function normalizeOdooFolio(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+export function withSaleTicketOdooFolio(
+  snapshot: SaleTicketSnapshot,
+  value: unknown,
+): SaleTicketSnapshot {
+  const odooFolio = normalizeOdooFolio(value);
+  return odooFolio === null ? snapshot : { ...snapshot, odooFolio };
+}
+
+export function getSaleTicketFolioPresentation(snapshot: SaleTicketSnapshot): {
+  odooFolio: string;
+  localReference: string | null;
+} {
+  const odooFolio = normalizeOdooFolio(snapshot.odooFolio);
+  return odooFolio === null
+    ? { odooFolio: ODOO_FOLIO_PENDING_LABEL, localReference: snapshot.saleId }
+    : { odooFolio, localReference: null };
+}
+
 export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): SaleTicketSnapshot {
   const lines = input.lines.map((line) => ({
     productId: line.productId,
@@ -231,6 +264,7 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
   return {
     saleId: input.saleId,
     origin: 'local',
+    odooFolio: normalizeOdooFolio(input.odooFolio),
     customerName: input.customerName,
     sellerName: normalizeSellerName(input.sellerName),
     paymentMethod: input.paymentMethod,
@@ -251,9 +285,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   const createdAt = order.confirmation_date.trim() || order.date_order.trim() || new Date().toISOString();
   const paymentMethod = normalizePaymentMethod(order.payment_method);
   const paymentLabel = order.payment_method_label?.trim() || getPaymentLabel(paymentMethod);
-  const orderLines = Array.isArray(order.lines)
-    ? order.lines.filter((line) => Number.isFinite(line.quantity) && line.quantity > 0)
-    : [];
+  const orderLines = getValidOrderLines(order.lines);
 
   if (orderLines.length > 0) {
     const totalQty = orderLines.reduce((sum, line) => sum + line.quantity, 0);
@@ -265,6 +297,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
       : authoritativeTotalKg / totalQty;
     const snapshot = buildSaleTicketSnapshot({
       saleId,
+      odooFolio: order.name,
       customerName,
       sellerName,
       paymentMethod,
@@ -320,6 +353,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   return {
     ...buildSaleTicketSnapshot({
       saleId,
+      odooFolio: order.name,
       customerName,
       sellerName,
       paymentMethod,
@@ -339,7 +373,62 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   };
 }
 
+export function mergeSaleTicketFromOrder(
+  current: SaleTicketSnapshot | null,
+  order: SaleTicketOrderSource,
+): SaleTicketSnapshot {
+  const authoritative = buildSaleTicketSnapshotFromOrder(order);
+  if (!current) return authoritative;
+
+  const employeeName = order.employee_name?.trim();
+  const hasDefinitiveLines = getValidOrderLines(order.lines).length > 0;
+  if (hasDefinitiveLines) {
+    const localLinesByProduct = new Map(
+      current.lines.map((line) => [line.productId, line]),
+    );
+    return {
+      ...authoritative,
+      odooFolio: authoritative.odooFolio ?? current.odooFolio,
+      customerName: order.partner_name.trim()
+        ? authoritative.customerName
+        : current.customerName,
+      sellerName: employeeName || current.sellerName,
+      paymentMethod: order.payment_method?.trim() || order.payment_method_label?.trim()
+        ? authoritative.paymentMethod
+        : current.paymentMethod,
+      paymentLabel: order.payment_method?.trim() || order.payment_method_label?.trim()
+        ? authoritative.paymentLabel
+        : current.paymentLabel,
+      createdAt: order.confirmation_date.trim() || order.date_order.trim()
+        ? authoritative.createdAt
+        : current.createdAt,
+      lines: authoritative.lines.map((line) => {
+        const local = localLinesByProduct.get(line.productId);
+        if (!local) return line;
+        return {
+          ...line,
+          ...(local.priceSource === undefined
+            ? {}
+            : { priceSource: local.priceSource }),
+          ...(local.priceCapturedAtMs === undefined
+            ? {}
+            : { priceCapturedAtMs: local.priceCapturedAtMs }),
+          ...(local.pricelistId === undefined
+            ? {}
+            : { pricelistId: local.pricelistId }),
+        };
+      }),
+    };
+  }
+  return {
+    ...current,
+    odooFolio: authoritative.odooFolio ?? current.odooFolio,
+    sellerName: employeeName || current.sellerName,
+  };
+}
+
 export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
+  const folioPresentation = getSaleTicketFolioPresentation(snapshot);
   const rows = snapshot.lines.map((line) => `
     <tr>
       <td class="item">
@@ -450,7 +539,10 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     <div class="muted">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
   </div>
   <div class="divider"></div>
-  <div class="row"><span>Folio</span><span>${escapeHtml(snapshot.saleId)}</span></div>
+  <div class="row"><span>Folio Odoo</span><span>${escapeHtml(folioPresentation.odooFolio)}</span></div>
+  ${folioPresentation.localReference === null
+    ? ''
+    : `<div class="row"><span>Referencia local</span><span>${escapeHtml(folioPresentation.localReference)}</span></div>`}
   <div class="row"><span>Fecha</span><span>${escapeHtml(formatTicketDate(snapshot.createdAt))}</span></div>
   <div>Cliente:</div>
   <div><strong>${escapeHtml(snapshot.customerName)}</strong></div>
@@ -506,6 +598,22 @@ function positiveFiniteNumber(value: unknown): value is number {
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+type ValidRuntimeOrderLine = Record<string, unknown> & {
+  product_id: number;
+  product_name: string;
+  quantity: number;
+};
+
+function getValidOrderLines(value: unknown): ValidRuntimeOrderLine[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((line): line is ValidRuntimeOrderLine => (
+    isRecord(line)
+    && positiveInteger(line.product_id)
+    && typeof line.product_name === 'string'
+    && positiveFiniteNumber(line.quantity)
+  ));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

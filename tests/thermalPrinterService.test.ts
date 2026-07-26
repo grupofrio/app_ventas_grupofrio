@@ -311,6 +311,10 @@ test('ticket job uses the saved address, preserves the DTO, and returns immutabl
   assert.equal(receivedAddress, ADDRESS);
   assert.notStrictEqual(receivedDocument, document);
   assert.deepEqual(receivedDocument, before);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(receivedDocument, 'localReference'),
+    false,
+  );
   assert.deepEqual(document, before);
   assert.deepEqual(result, {
     status: 'sent',
@@ -347,6 +351,7 @@ test('ticket job snapshots every nested DTO layer synchronously before persisten
   }), { selectionStore: store });
   const document: ThermalTicketDocument = {
     ...ticketDocument(),
+    localReference: 'mobile-op-1',
     creditNote: 'Pagaré original',
   };
   const atInvocation = structuredClone(document);
@@ -361,6 +366,7 @@ test('ticket job snapshots every nested DTO layer synchronously before persisten
   document.subtotal = 'mutated subtotal';
   document.totalKg = 'mutated kg';
   document.total = 'mutated total';
+  document.localReference = 'mutated local reference';
   document.creditNote = 'mutated note';
   document.branding.logoPngBase64 = 'mutated logo';
   document.branding.logoVersion = 'mutated-version';
@@ -391,7 +397,93 @@ test('ticket job snapshots every nested DTO layer synchronously before persisten
   assert.equal(received!.lines.every(Object.isFrozen), true);
   assert.equal(document.schemaVersion as number, 2);
   assert.equal(document.folio, 'MUTATED-FOLIO', 'the service must not freeze or rewrite caller data');
+  assert.equal(received.localReference, 'mobile-op-1');
   assert.equal(document.lines.length, 2);
+});
+
+test('invalid local references are rejected before storage or native awaits', async (t) => {
+  const invalidCases: Array<{
+    name: string;
+    build: (onAccessorRead: () => void) => ThermalTicketDocument;
+  }> = [
+    {
+      name: 'non-string value',
+      build: () => {
+        const document = ticketDocument();
+        (document as unknown as { localReference: unknown }).localReference = 42;
+        return document;
+      },
+    },
+    {
+      name: 'blank value',
+      build: () => ({ ...ticketDocument(), localReference: '' }),
+    },
+    {
+      name: 'whitespace value',
+      build: () => ({ ...ticketDocument(), localReference: ' \t\n ' }),
+    },
+    {
+      name: 'accessor',
+      build: (onAccessorRead) => {
+        const document = ticketDocument();
+        Object.defineProperty(document, 'localReference', {
+          enumerable: true,
+          get() {
+            onAccessorRead();
+            return 'mobile-op-1';
+          },
+        });
+        return document;
+      },
+    },
+    {
+      name: 'hostile descriptor',
+      build: () => new Proxy(ticketDocument(), {
+        getOwnPropertyDescriptor(target, property) {
+          if (property === 'localReference') throw new Error('private hostile detail');
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      }),
+    },
+  ];
+
+  for (const invalidCase of invalidCases) {
+    await t.test(invalidCase.name, async () => {
+      let accessorReads = 0;
+      let loadCalls = 0;
+      let nativeCalls = 0;
+      const document = invalidCase.build(() => {
+        accessorReads += 1;
+      });
+      const store: ThermalPrinterSelectionStore = {
+        load: async () => {
+          loadCalls += 1;
+          return { version: 1, name: 'MP210', address: ADDRESS };
+        },
+        save: async () => {},
+        remove: async () => {},
+      };
+      const subject = service(nativeModule({
+        printTicket: async () => {
+          nativeCalls += 1;
+          return EMPTY_PROGRESS;
+        },
+      }), { selectionStore: store });
+
+      await assert.rejects(subject.printTicket(document), (error: unknown) => {
+        assert.ok(error instanceof ThermalPrinterError);
+        assert.equal(error.code, 'invalid_ticket');
+        assert.equal(error.phase, null);
+        assert.deepEqual(error.progress, EMPTY_PROGRESS);
+        assert.equal(error.requiresManualReprint, false);
+        assert.doesNotMatch(error.message, /private hostile detail/);
+        return true;
+      });
+      assert.equal(accessorReads, 0);
+      assert.equal(loadCalls, 0);
+      assert.equal(nativeCalls, 0);
+    });
+  }
 });
 
 test('invalid runtime ticket shape is rejected before awaits without invoking getters or native', async () => {

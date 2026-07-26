@@ -153,7 +153,24 @@ assert(!/from '\.\.\/services\/connectivity'/.test(store) && !/require\(.*connec
 // ── storage: variantes ESTRICTAS que rechazan en fallo ───────────────────────
 const storage = read('src/persistence/storage.ts');
 assert(/export async function storeSaveStrict/.test(storage), 'existe storeSaveStrict (rechaza en fallo)');
+assert(/export async function storeLoadStrict/.test(storage), 'existe storeLoadStrict (rechaza en fallo)');
 assert(/export async function storeRemoveStrict/.test(storage), 'existe storeRemoveStrict');
+const strictLoadBlock = storage.match(
+  /export async function storeLoadStrict<T>\(key: string\): Promise<T \| null> \{[\s\S]*?\n\}/,
+);
+assert(strictLoadBlock, 'storeLoadStrict tiene un límite tipado y explícito');
+assert(/await AsyncStorage\.getItem\(`\$\{PREFIX\}\$\{key\}`\)/.test(strictLoadBlock[0]),
+  'storeLoadStrict espera directamente la lectura de AsyncStorage');
+assert(/if \(raw === null\) return null;/.test(strictLoadBlock[0]),
+  'storeLoadStrict devuelve null solo para ausencia confirmada');
+assert(/const parsed = JSON\.parse\(raw\) as unknown;/.test(strictLoadBlock[0]),
+  'storeLoadStrict parsea el JSON persistido sin asumir que tiene el tipo solicitado');
+assert(/if \(parsed === null\) \{[\s\S]*?throw new Error/.test(strictLoadBlock[0]),
+  'storeLoadStrict rechaza un payload presente que parsea a null');
+assert(/return parsed as T;/.test(strictLoadBlock[0]),
+  'storeLoadStrict devuelve solo un payload presente no nulo');
+assert(!/catch/.test(strictLoadBlock[0]),
+  'storeLoadStrict no absorbe errores de lectura ni de parseo');
 
 // ── #6/#7: carga con resultado AUTORITATIVO explícito en el product store ─────
 const productStore = read('src/stores/useProductStore.ts');

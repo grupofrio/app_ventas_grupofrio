@@ -28,10 +28,10 @@ assert.match(
 );
 assert.match(
   createSale,
-  /validateSaleCreateResult\(result, expectedOperationId\);/,
-  'createSale must validate the response against the submitted operation id',
+  /return validateSaleCreateResult\(result, expectedOperationId\);/,
+  'createSale must return validated response data matched to the submitted operation id',
 );
-assert.match(createSale, /return true;/, 'createSale must preserve its Promise<boolean> success contract');
+assert.doesNotMatch(createSale, /return true;/, 'createSale must not discard the validated response data');
 assert.equal(
   [...gfLogistics.matchAll(/validateSaleCreateResult\(result, expectedOperationId\)/g)].length,
   1,

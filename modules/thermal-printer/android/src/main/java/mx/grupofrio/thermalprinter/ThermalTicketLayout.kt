@@ -72,7 +72,10 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     builder.addWrapped(safeTicket.branding.title, TOTAL_BOLD_CENTER)
     builder.addDivider()
 
-    builder.addLabelValue("Folio:", safeTicket.folio, BODY_STYLE)
+    builder.addLabelValue("Folio Odoo:", safeTicket.folio, BODY_STYLE)
+    safeTicket.localReference?.let { reference ->
+      builder.addLabelValue("Referencia local:", reference, BODY_STYLE)
+    }
     builder.addLabelValue("Fecha:", safeTicket.formattedDate, BODY_STYLE)
     builder.addLabelValue("Cliente:", safeTicket.customerName, BODY_STYLE)
     builder.addLabelValue("Vendedor:", safeTicket.sellerName, BODY_STYLE)

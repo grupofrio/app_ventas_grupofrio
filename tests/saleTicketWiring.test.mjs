@@ -102,35 +102,10 @@ function main() {
     /KOLD FIELD/,
     'La vista previa del ticket ya no debe mostrar la marca anterior',
   );
-  const remoteOpenStart = salesScreen.indexOf('async function openTicketForOrder');
-  const remoteOpenEnd = salesScreen.indexOf('\n  return (', remoteOpenStart);
-  const remoteOpenBody = salesScreen.slice(remoteOpenStart, remoteOpenEnd);
-  const authoritativeSaveIndex = remoteOpenBody.indexOf('await saveAuthoritativeSaleTicketSnapshot');
-  const printNavigationIndex = remoteOpenBody.indexOf('router.push(`/print/${ticketId}`');
-  assert(remoteOpenStart >= 0, 'Ventas debe conservar el handler de apertura remota');
-  assert(
-    authoritativeSaveIndex >= 0 && authoritativeSaveIndex < printNavigationIndex,
-    'Ventas debe persistir el ticket Odoo autoritativo antes de navegar al PDF',
-  );
-  assert.match(
-    remoteOpenBody,
-    /buildSaleTicketSnapshotFromOrder\(order\)/,
-    'Ventas debe construir el ticket remoto desde las lineas definitivas de /sales/list',
-  );
-  assert.match(
-    remoteOpenBody,
-    /operation_id\.trim\(\)/,
-    'Ventas debe usar el operation_id remoto normalizado y no un folio inventado',
-  );
   assert.match(
     salesScreen,
     /useRef\(createSaleTicketOpenGuard\(\)\)/,
     'Ventas debe conservar un guard de aperturas remotas durante la vida de la pantalla',
-  );
-  assert.match(
-    remoteOpenBody,
-    /await ticketOpenGuardRef\.current\.run\(\s*normalizedOperationId,/,
-    'Toques repetidos del mismo operation_id no deben encolar guardados ni navegaciones',
   );
   assert.doesNotMatch(
     salesScreen,
@@ -160,6 +135,74 @@ function main() {
     saleRecoveryIntentService,
     /function restoreTicketSnapshot/,
     'La recuperacion no debe mantener un segundo parser divergente',
+  );
+
+  assert.match(
+    salesScreen,
+    /import\s+\{\s*openSaleTicketForOrder\s*\}\s+from\s+['"]\.\.\/\.\.\/src\/services\/saleTicketOpen['"]/,
+    'Ventas debe delegar la apertura a un flujo seguro e inyectable',
+  );
+  assert.match(
+    salesScreen,
+    /loadSaleTicketSnapshotStrict/,
+    'Ventas debe usar lectura estricta antes de combinar y guardar el ticket',
+  );
+  assert.doesNotMatch(
+    salesScreen,
+    /\bloadSaleTicketSnapshot\b/,
+    'Ventas no debe usar la lectura tolerante en el flujo read-modify-write',
+  );
+
+  const openTicketMatch = salesScreen.match(
+    /async function openTicketForOrder\(order: GFSalesOrder\) \{([\s\S]*?)\n  \}/,
+  );
+  assert.ok(openTicketMatch, 'Ventas debe definir openTicketForOrder');
+  const openTicketBody = openTicketMatch[1];
+
+  assert.match(
+    openTicketBody,
+    /const\s+ticketKey\s*=\s*order\.operation_id\.trim\(\)\s*\|\|\s*`odoo-order-\$\{order\.id\}`/,
+    'Ventas debe deduplicar por operation_id y conservar un fallback determinista',
+  );
+  assert.match(
+    openTicketBody,
+    /await\s+ticketOpenGuardRef\.current\.run\(\s*ticketKey,/,
+    'Toques repetidos no deben encolar guardados ni navegaciones duplicados',
+  );
+  assert.match(
+    openTicketBody,
+    /await\s+openSaleTicketForOrder\(order,\s*\{/,
+    'Ventas debe ejecutar el flujo seguro dentro del guard de apertura',
+  );
+  assert.match(
+    openTicketBody,
+    /load:\s*loadSaleTicketSnapshotStrict/,
+    'Ventas debe inyectar la lectura estricta',
+  );
+  assert.match(
+    openTicketBody,
+    /save:\s*saveSaleTicketSnapshot/,
+    'Ventas debe inyectar el guardado estricto',
+  );
+  assert.match(
+    openTicketBody,
+    /navigate:\s*\(saleId\)\s*=>\s*\{[\s\S]*?router\.push\(`\/print\/\$\{ticketId\}`/,
+    'Ventas debe navegar solo mediante el callback del flujo seguro',
+  );
+  assert.match(
+    openTicketBody,
+    /onError:\s*showTicketOpenError/,
+    'Ventas debe mostrar feedback sanitizado cuando el flujo falla',
+  );
+  assert.match(
+    salesScreen,
+    /Alert\.alert\(\s*['"]No se pudo abrir el ticket['"]/,
+    'Ventas debe mantener la pantalla actual y explicar que el ticket no se abrio',
+  );
+  assert.match(
+    salesScreen,
+    /console\.error\(\s*['"][^'"]+['"]\s*\)/,
+    'Ventas debe registrar un mensaje sanitizado sin exponer el error original',
   );
 
   console.log('sale ticket wiring tests: ok');

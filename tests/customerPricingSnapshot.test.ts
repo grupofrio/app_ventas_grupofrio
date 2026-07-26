@@ -687,6 +687,64 @@ test('reapplying the same preparation run and payload remains idempotently prepa
   assert.deepEqual(replay.lastKnownPrices, first.lastKnownPrices);
 });
 
+test('same-run replay rejects changed observation identity atomically', () => {
+  const originalInput = {
+    companyId: 34,
+    planId: 7,
+    preparationRunId: 'identity-run',
+    activatedAtMs: 2_000,
+    targets: [{
+      status: 'prepared' as const,
+      partnerId: 99,
+      requestedPricelistId: 104,
+      snapshot: {
+        preparedAtMs: 1_000,
+        validation: validServerSnapshot([[10, 42]], 81),
+      },
+    }],
+  };
+  const original = activatePreparedPricingRun(
+    emptyPricingSnapshotState(),
+    originalInput,
+  );
+
+  const conflictingSnapshots = [
+    {
+      preparedAtMs: 1_000,
+      validation: validServerSnapshot([[10, 42]], 82),
+    },
+    {
+      preparedAtMs: 1_001,
+      validation: validServerSnapshot([[10, 42]], 81),
+    },
+    {
+      preparedAtMs: 1_000,
+      validation: validServerSnapshot([[10, 43]], 81),
+    },
+  ];
+
+  for (const snapshot of conflictingSnapshots) {
+    assert.throws(
+      () => activatePreparedPricingRun(original, {
+        ...originalInput,
+        targets: [{
+          ...originalInput.targets[0],
+          snapshot,
+        }],
+      }),
+      /Conflicting pricing replay/,
+    );
+    assert.equal(
+      original.requestedMappings['34:99:104']?.resolvedPricelistId,
+      81,
+    );
+    assert.deepEqual(original.snapshots['identity-run:34:99:81']?.prices, [
+      [10, 42],
+    ]);
+    assert.equal(original.activeManifest?.preparationRunId, 'identity-run');
+  }
+});
+
 test('canonicalizes the requested pricelist before prepared lookup', () => {
   const state = activateSinglePreparedTarget(emptyPricingSnapshotState(), {
     preparationRunId: 'run-prepared',

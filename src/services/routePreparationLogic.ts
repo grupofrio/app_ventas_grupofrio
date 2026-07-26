@@ -202,6 +202,7 @@ export async function settleRoutePricingTargets(
       const target = input.targets[index]!;
 
       try {
+        const requestStartedAtMs = nowMs();
         const validation = await input.fetchTarget(target);
         if (
           !isCompleteValidatedPricingSnapshot(
@@ -224,7 +225,7 @@ export async function settleRoutePricingTargets(
           ...target,
           status: 'prepared',
           snapshot: {
-            preparedAtMs: nowMs(),
+            preparedAtMs: requestStartedAtMs,
             validation,
           },
         };

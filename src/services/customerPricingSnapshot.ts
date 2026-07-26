@@ -480,6 +480,47 @@ export function activatePreparedPricingRun(
     );
     const existingMapping = requestedMappings[mappingKey];
     const preparedAtMs = target.snapshot.preparedAtMs;
+    const snapshotId = snapshotIdFor(
+      input.preparationRunId,
+      input.companyId,
+      target.partnerId,
+      validation.resolvedPricelistId,
+    );
+    const snapshot: PreparedCustomerPricingSnapshot = {
+      version: 1,
+      snapshotId,
+      companyId: input.companyId,
+      partnerId: target.partnerId,
+      resolvedPricelistId: validation.resolvedPricelistId,
+      preparedAtMs,
+      preparedPlanId: input.planId,
+      preparationRunId: input.preparationRunId,
+      origin: 'odoo_server_full',
+      productFingerprint: validation.productFingerprint,
+      prices: validation.prices.map(([productId, unitPrice]) => [
+        productId,
+        unitPrice,
+      ]),
+    };
+    if (existingMapping?.preparationRunId === input.preparationRunId) {
+      const replaySnapshotId = snapshotIdFor(
+        input.preparationRunId,
+        input.companyId,
+        target.partnerId,
+        existingMapping.resolvedPricelistId,
+      );
+      const replaySnapshot = snapshots[replaySnapshotId];
+      if (
+        existingMapping.resolvedPricelistId !== validation.resolvedPricelistId
+        || existingMapping.capturedAtMs !== preparedAtMs
+        || !replaySnapshot
+        || replaySnapshot.preparedAtMs !== preparedAtMs
+        || replaySnapshot.preparedPlanId !== input.planId
+        || !hasSamePricePayload(replaySnapshot, snapshot)
+      ) {
+        throw new Error(`Conflicting pricing replay: ${mappingKey}`);
+      }
+    }
     const canonicalPrices = lastKnownPrices[
       canonicalPricingKey(
         input.companyId,
@@ -514,28 +555,6 @@ export function activatePreparedPricingRun(
       continue;
     }
 
-    const snapshotId = snapshotIdFor(
-      input.preparationRunId,
-      input.companyId,
-      target.partnerId,
-      validation.resolvedPricelistId,
-    );
-    const snapshot: PreparedCustomerPricingSnapshot = {
-      version: 1,
-      snapshotId,
-      companyId: input.companyId,
-      partnerId: target.partnerId,
-      resolvedPricelistId: validation.resolvedPricelistId,
-      preparedAtMs: target.snapshot.preparedAtMs,
-      preparedPlanId: input.planId,
-      preparationRunId: input.preparationRunId,
-      origin: 'odoo_server_full',
-      productFingerprint: validation.productFingerprint,
-      prices: validation.prices.map(([productId, unitPrice]) => [
-        productId,
-        unitPrice,
-      ]),
-    };
     const existingSnapshot = snapshots[snapshotId];
 
     if (

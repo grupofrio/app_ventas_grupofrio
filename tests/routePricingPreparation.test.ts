@@ -56,6 +56,7 @@ test('settles route pricing targets with bounded concurrency and deterministic o
   }));
   const gates = targets.map(() => deferred<ValidatedServerPriceSnapshot>());
   const started: number[] = [];
+  let nextTimestamp = 1_000;
   let active = 0;
   let maxActive = 0;
 
@@ -65,7 +66,7 @@ test('settles route pricing targets with bounded concurrency and deterministic o
     planId: 7,
     preparationRunId: 'prepare-1',
     concurrency: 4,
-    nowMs: () => 1_000,
+    nowMs: () => nextTimestamp++,
     fetchTarget: async (target) => {
       const index = target.partnerId - 1;
       started.push(index);
@@ -109,6 +110,13 @@ test('settles route pricing targets with bounded concurrency and deterministic o
   assert.equal(result.preparedCount, 6);
   assert.equal(result.pricesPrepared, 12);
   assert.deepEqual(result.failures, []);
+  assert.deepEqual(
+    result.activationInput.targets.map((target) =>
+      target.status === 'prepared' ? target.snapshot.preparedAtMs : null
+    ),
+    [1_000, 1_001, 1_002, 1_003, 1_004, 1_005],
+  );
+  assert.equal(result.activationInput.activatedAtMs, 1_006);
 });
 
 test('turns thrown and invalid target results into exact failed manifest targets', async () => {
@@ -224,6 +232,59 @@ test('publishes once after every fetch settles and merges with latest repository
     finalState.snapshots['prepare-race:34:99:81']?.prices,
     [[10, 81], [20, 82]],
   );
+});
+
+test('a response cannot overwrite foreground pricing published after its request started', async () => {
+  for (const foregroundCapturedAtMs of [1_000, 2_000]) {
+    const fetchStarted = deferred<void>();
+    const releaseFetch = deferred<void>();
+    let current = emptyPricingSnapshotState();
+    let wallClockMs = 1_000;
+
+    const preparing = prepareRoutePricingTargets({
+      targets: [{ partnerId: 99, requestedPricelistId: 81 }],
+      companyId: 34,
+      planId: 7,
+      preparationRunId: `request-clock-${foregroundCapturedAtMs}`,
+      concurrency: 1,
+      nowMs: () => wallClockMs,
+      fetchTarget: async () => {
+        fetchStarted.resolve();
+        await releaseFetch.promise;
+        return validSnapshot(81, 22);
+      },
+      updateState: async (updater) => {
+        current = updater(current);
+        return current;
+      },
+    });
+
+    await fetchStarted.promise;
+    current = recordLastKnownServerPrices(current, {
+      companyId: 34,
+      partnerId: 99,
+      requestedPricelistId: 81,
+      capturedAtMs: foregroundCapturedAtMs,
+      captureRunId: `foreground-${foregroundCapturedAtMs}`,
+      validation: validSnapshot(81, 44),
+    });
+    wallClockMs = 3_000;
+    releaseFetch.resolve();
+
+    const result = await preparing;
+    assert.equal(current.activeManifest?.targets[0]?.status, 'failed');
+    assert.equal(result.preparedCount, 0);
+    assert.equal(result.pricesPrepared, 0);
+    assert.deepEqual(result.failures, [{
+      partnerId: 99,
+      requestedPricelistId: 81,
+      reason: 'Se conservaron precios más recientes para esta combinación',
+    }]);
+    assert.equal(
+      current.lastKnownPrices['34:99:81']?.['10']?.unitPrice,
+      44,
+    );
+  }
 });
 
 test('reports a stale prepared target as failed after activation preserves newer pricing', async () => {

@@ -42,6 +42,7 @@ import {
   isApplicableSaleSubmissionContext,
   isSameSaleSubmissionInput,
   isSameSaleConfirmationContext,
+  resolveLiveSaleQuantityEdit,
   type CapturedSaleSubmissionInput,
   type SaleConfirmationContext,
 } from '../../src/services/saleStockEnforcement';
@@ -233,6 +234,9 @@ function SaleScreenInner() {
     policy: 'offline_sale',
     inventoryFreshness,
   });
+  const saleQuantityEditExpectedContext = readLiveSaleConfirmationContext(
+    stop?.id ?? 0,
+  );
   const onlineInventoryReady = saleStockEnforcement.allowConfirm
     && (isOnline === false || (!isLoadingProducts && !inventoryAuthorityRefreshing));
 
@@ -436,21 +440,36 @@ function SaleScreenInner() {
     useVisitStore.getState().addSaleLine(line);
   }
 
-  function setSaleQtyFromText(productId: number, qtyText: string) {
+  function applyLiveSaleQuantityEdit(productId: number, qty: number) {
     if (saleInputsAreLockedNow()) return;
-    const digits = qtyText.replace(/\D/g, '');
-    updateSaleQty(
+    const currentContext = readLiveSaleConfirmationContext(stop?.id ?? 0);
+    const productState = useProductStore.getState();
+    const decision = resolveLiveSaleQuantityEdit({
+      expectedContext: saleQuantityEditExpectedContext,
+      currentContext,
+      inventory: {
+        inventoryFreshness: productState.inventoryFreshness,
+        loadedWarehouseId: productState.loadedWarehouseId,
+        inventorySource: productState.inventorySource,
+      },
+      products: productState.products,
       productId,
-      digits ? Number(digits) : 0,
-      { enforceStock: saleStockEnforcement.enforceFreshStock },
-    );
+      requestedQty: qty,
+    });
+    if (decision.status === 'blocked') return;
+    updateSaleQty(productId, decision.quantity, {
+      enforceStock: decision.enforceStock,
+      stockLimit: decision.stockLimit,
+    });
+  }
+
+  function setSaleQtyFromText(productId: number, qtyText: string) {
+    const digits = qtyText.replace(/\D/g, '');
+    applyLiveSaleQuantityEdit(productId, digits ? Number(digits) : 0);
   }
 
   function changeSaleQty(productId: number, qty: number) {
-    if (saleInputsAreLockedNow()) return;
-    updateSaleQty(productId, qty, {
-      enforceStock: saleStockEnforcement.enforceFreshStock,
-    });
+    applyLiveSaleQuantityEdit(productId, qty);
   }
 
   function handleSetSalePayment(method: 'cash' | 'credit') {

@@ -38,6 +38,26 @@ export interface SaleInventoryAuthorityState {
   inventorySource: string | null;
 }
 
+export interface SaleQuantityEditProduct {
+  id: number;
+  qty_display?: number | null;
+}
+
+export type SaleQuantityEditDecision =
+  | {
+      status: 'apply';
+      quantity: number;
+      enforceStock: boolean;
+      stockLimit?: number | null;
+    }
+  | { status: 'blocked' };
+
+export interface SaleQuantityEditLine {
+  productId: number;
+  qty: number;
+  stock: number | null;
+}
+
 export type SaleSubmissionPriceSource =
   | 'prepared_customer'
   | 'last_known_customer'
@@ -386,6 +406,121 @@ export function isApplicableAuthoritativeSaleInventory(input: {
     && result.authoritative === true
     && result.warehouseId === input.expectedContext.warehouseId
     && result.source === inventory.inventorySource;
+}
+
+/**
+ * Resolves one quantity edit from live connectivity, visit identity and the
+ * current ProductStore snapshot. Connectivity is intentionally read from the
+ * event-time context: an offline render cannot leak its bypass after reconnect.
+ */
+export function resolveLiveSaleQuantityEdit(input: {
+  expectedContext: SaleConfirmationContext;
+  currentContext: SaleConfirmationContext;
+  inventory: SaleInventoryAuthorityState;
+  products: readonly SaleQuantityEditProduct[];
+  productId: number;
+  requestedQty: number;
+}): SaleQuantityEditDecision {
+  if (
+    !Number.isSafeInteger(input.requestedQty)
+    || !isPositiveSafeInteger(input.productId)
+  ) {
+    return { status: 'blocked' };
+  }
+
+  // Connectivity may legitimately change between render and tap. Compare all
+  // other identity fields against the live signal so reconnect uses authority
+  // and an online authority loss never falls back to the stale render policy.
+  const expectedAtLiveConnectivity: SaleConfirmationContext = {
+    ...input.expectedContext,
+    isOnline: input.currentContext.isOnline,
+  };
+  if (!isSameSaleConfirmationContext(
+    expectedAtLiveConnectivity,
+    input.currentContext,
+  )) {
+    return { status: 'blocked' };
+  }
+
+  // Removal is always safe once the visit identity is still current.
+  if (input.requestedQty <= 0) {
+    return {
+      status: 'apply',
+      quantity: input.requestedQty,
+      enforceStock: true,
+      stockLimit: null,
+    };
+  }
+
+  if (input.currentContext.isOnline === false) {
+    return {
+      status: 'apply',
+      quantity: input.requestedQty,
+      enforceStock: false,
+      stockLimit: null,
+    };
+  }
+
+  if (!isApplicableAuthoritativeSaleInventory({
+    expectedContext: expectedAtLiveConnectivity,
+    currentContext: input.currentContext,
+    inventory: input.inventory,
+  })) {
+    return { status: 'blocked' };
+  }
+
+  const product = input.products.find((candidate) => (
+    candidate.id === input.productId
+  ));
+  const liveStock = product?.qty_display;
+  if (
+    typeof liveStock !== 'number'
+    || !Number.isFinite(liveStock)
+    || liveStock < 0
+  ) {
+    return { status: 'blocked' };
+  }
+
+  return {
+    status: 'apply',
+    quantity: input.requestedQty,
+    enforceStock: true,
+    stockLimit: Math.floor(liveStock),
+  };
+}
+
+/** Pure cart transition shared by the store and unit tests. */
+export function applySaleQuantityEditToLines<Line extends SaleQuantityEditLine>(
+  lines: readonly Line[],
+  productId: number,
+  decision: SaleQuantityEditDecision,
+): Line[] {
+  if (decision.status === 'blocked') return lines as Line[];
+  if (!Number.isSafeInteger(decision.quantity)) return lines as Line[];
+  if (decision.quantity <= 0) {
+    return lines.filter((line) => line.productId !== productId);
+  }
+
+  return lines.map((line) => {
+    if (line.productId !== productId) return line;
+    if (!decision.enforceStock) {
+      return { ...line, qty: decision.quantity };
+    }
+    const available = decision.stockLimit === undefined
+      ? line.stock
+      : decision.stockLimit;
+    if (
+      typeof available !== 'number'
+      || !Number.isFinite(available)
+      || available <= 0
+    ) {
+      return line;
+    }
+    return {
+      ...line,
+      qty: Math.min(decision.quantity, Math.floor(available)),
+    };
+  });
 }
 
 export function isApplicableSaleSubmissionContext(input: {

@@ -454,8 +454,13 @@ assert.match(
 );
 assert.match(
   sale,
-  /function setSaleQtyFromText[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;[\s\S]*?function changeSaleQty[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;/,
-  'texto y botones de cantidad deben tener guard síncrono',
+  /function applyLiveSaleQuantityEdit[\s\S]*?if \(saleInputsAreLockedNow\(\)\) return;/,
+  'la frontera compartida de cantidad debe tener guard síncrono',
+);
+assert.match(
+  sale,
+  /function setSaleQtyFromText[\s\S]*?applyLiveSaleQuantityEdit[\s\S]*?function changeSaleQty[\s\S]*?applyLiveSaleQuantityEdit/,
+  'texto y botones deben delegar a la frontera protegida',
 );
 assert.match(
   sale,

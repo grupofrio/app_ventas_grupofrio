@@ -25,6 +25,7 @@ import {
   createSaleRecoveryIntent,
   type SaleRecoveryIntentV1,
 } from '../services/saleRecoveryIntent';
+import { applySaleQuantityEditToLines } from '../services/saleStockEnforcement';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -46,6 +47,7 @@ export interface SaleLineItem {
 
 export interface SaleStockOptions {
   enforceStock?: boolean;
+  stockLimit?: number | null;
 }
 
 export interface SaleStockIssue {
@@ -97,7 +99,7 @@ interface VisitState {
   updateSaleQty: (
     productId: number,
     qty: number,
-    options?: { enforceStock?: boolean },
+    options?: SaleStockOptions,
   ) => void;
   removeSaleLine: (productId: number) => void;
   setSalePayment: (method: 'cash' | 'credit') => void;
@@ -217,28 +219,20 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     }
   },
 
-  updateSaleQty: (productId, qty, options) => set((state) => {
-    const enforceStock = options?.enforceStock !== false;
-    if (!Number.isSafeInteger(qty)) return state;
-    if (qty <= 0) {
-      return enforceStock
-        ? { saleLines: state.saleLines.filter((line) => line.productId !== productId) }
-        : state;
-    }
-
-    return {
-      saleLines: state.saleLines.map((line) => {
-        if (line.productId !== productId) return line;
-        if (!enforceStock) return { ...line, qty };
-        if (
-          typeof line.stock !== 'number'
-          || !Number.isFinite(line.stock)
-          || line.stock <= 0
-        ) return line;
-        return { ...line, qty: Math.min(qty, Math.floor(line.stock)) };
-      }),
-    };
-  }),
+  updateSaleQty: (productId, qty, options) => set((state) => ({
+    saleLines: applySaleQuantityEditToLines(
+      state.saleLines,
+      productId,
+      {
+        status: 'apply',
+        quantity: qty,
+        enforceStock: options?.enforceStock !== false,
+        ...(options && Object.prototype.hasOwnProperty.call(options, 'stockLimit')
+          ? { stockLimit: options.stockLimit }
+          : {}),
+      },
+    ),
+  })),
 
   removeSaleLine: (productId) => set({
     saleLines: get().saleLines.filter((l) => l.productId !== productId),

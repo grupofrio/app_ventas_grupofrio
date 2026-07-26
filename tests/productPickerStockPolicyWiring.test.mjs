@@ -40,7 +40,8 @@ assert(
 );
 
 assert.match(visitStore, /stock:\s*number\s*\|\s*null/);
-assert.match(visitStore, /updateSaleQty:\s*\([\s\S]*?options\?:\s*\{\s*enforceStock\?:\s*boolean\s*\}/);
+assert.match(visitStore, /interface SaleStockOptions\s*\{[\s\S]*?stockLimit\?:\s*number\s*\|\s*null/);
+assert.match(visitStore, /updateSaleQty:\s*\([\s\S]*?options\?:\s*SaleStockOptions/);
 assert.match(visitStore, /hasStockIssues:\s*\(options\?:\s*\{\s*enforceStock\?:\s*boolean\s*\}\)/);
 assert.match(visitStore, /getStockIssues:\s*\(options\?:\s*\{\s*enforceStock\?:\s*boolean\s*\}\)/);
 assert.match(visitStore, /options\?\.enforceStock\s*!==\s*false/);
@@ -65,13 +66,20 @@ assert.match(sale, /stockPolicy="offline_sale"/);
 assert.match(sale, /const quantityIssues\s*=\s*findSaleQuantityIssues\(saleLines\)/);
 assert.match(
   sale,
-  /function setSaleQtyFromText[\s\S]*?updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*saleStockEnforcement\.enforceFreshStock\s*\},?\s*\)/,
-  'texto debe respetar stock autoritativo online y omitirlo solo bajo la política offline',
+  /function applyLiveSaleQuantityEdit[\s\S]*?readLiveSaleConfirmationContext[\s\S]*?useProductStore\.getState\(\)[\s\S]*?resolveLiveSaleQuantityEdit/,
+  'cada evento debe leer contexto e inventario vivos antes de decidir',
 );
 assert.match(
   sale,
-  /function changeSaleQty[\s\S]*?updateSaleQty\([\s\S]*?\{\s*enforceStock:\s*saleStockEnforcement\.enforceFreshStock\s*,?\s*\},?\s*\)/,
-  'los botones deben respetar stock autoritativo online y omitirlo solo bajo la política offline',
+  /updateSaleQty\([\s\S]*?stockLimit:\s*decision\.stockLimit/,
+  'el carrito recibe el límite vivo explícito',
+);
+assert.match(sale, /function setSaleQtyFromText[\s\S]*?applyLiveSaleQuantityEdit/);
+assert.match(sale, /function changeSaleQty[\s\S]*?applyLiveSaleQuantityEdit/);
+assert.doesNotMatch(
+  sale.match(/function applyLiveSaleQuantityEdit[\s\S]*?\n  \}/)?.[0] ?? '',
+  /saleStockEnforcement\.enforceFreshStock/,
+  'el evento no debe reutilizar la autoridad capturada durante render',
 );
 assert.match(sale, /line\.stock\s*===\s*null[\s\S]*?Stock sin validar[\s\S]*?Stock:\s*\$\{line\.stock\}\s*·\s*ref\./);
 assert.match(sale, /quantityIssues\.length\s*>\s*0[\s\S]*?Cantidad inválida/);

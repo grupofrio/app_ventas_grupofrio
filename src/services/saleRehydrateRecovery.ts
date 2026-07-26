@@ -2,6 +2,7 @@ import type { SyncEnqueueOptions, SyncItemType } from '../types/sync.ts';
 import { persistAmbiguousSaleRecovery } from './saleAmbiguousRecovery.ts';
 import type { SaleRecoveryIntentV1 } from './saleRecoveryIntent.ts';
 import type { SaleTicketSnapshot } from './saleTicket.ts';
+import { isProtectedStockSyncItem } from './syncErrorClassification.ts';
 
 type Enqueue = (
   type: SyncItemType,
@@ -13,6 +14,30 @@ export interface RehydrateSaleQueueItem {
   id: string;
   type: string;
   status?: string;
+  error_code?: unknown;
+}
+
+function readQueueProperty(item: unknown, key: string): unknown {
+  if ((typeof item !== 'object' && typeof item !== 'function') || item === null) {
+    return undefined;
+  }
+  try {
+    return (item as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function isAlreadyQueuedSale(item: unknown, operationId: string): boolean {
+  if (
+    readQueueProperty(item, 'type') !== 'sale_order'
+    || readQueueProperty(item, 'id') !== operationId
+  ) {
+    return false;
+  }
+
+  return readQueueProperty(item, 'status') !== 'dead'
+    || isProtectedStockSyncItem(item);
 }
 
 export interface RecoverPersistedSaleIntentInput {
@@ -45,9 +70,7 @@ export async function recoverPersistedSaleIntent({
   }
 
   const alreadyQueued = queue.some((item) => (
-    item.type === 'sale_order'
-    && item.id === intent.operationId
-    && item.status !== 'dead'
+    isAlreadyQueuedSale(item, intent.operationId)
   ));
 
   if (!alreadyQueued) {

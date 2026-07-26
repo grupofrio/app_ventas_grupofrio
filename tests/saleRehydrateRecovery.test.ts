@@ -3,7 +3,12 @@ import test from 'node:test';
 
 import { recoverPersistedSaleIntent } from '../src/services/saleRehydrateRecovery.ts';
 import type { SaleRecoveryIntentV1 } from '../src/services/saleRecoveryIntent.ts';
-import type { SyncEnqueueOptions, SyncItemType } from '../src/types/sync.ts';
+import { rearmSaleOrderForRetry } from '../src/services/saleRetry.ts';
+import type {
+  SyncEnqueueOptions,
+  SyncItemType,
+  SyncQueueItem,
+} from '../src/types/sync.ts';
 
 const intent: SaleRecoveryIntentV1 = {
   version: 1,
@@ -86,6 +91,135 @@ test('crash recovery skips duplicate enqueue when any matching sale already exis
   assert.equal(enqueueCalls, 0);
   assert.equal(persistCalls, 0);
   assert.equal(ticketCalls, 1);
+});
+
+test('restart keeps a protected dead sale and its original photo dependencies without duplicates', async () => {
+  const queue: SyncQueueItem[] = [
+    {
+      id: intent.operationId,
+      type: 'sale_order',
+      payload: { ...intent.queuePayload },
+      status: 'dead',
+      created_at: 1,
+      retries: 1,
+      error_message: 'Producto sin existencia',
+      error_code: 'insufficient_stock',
+      priority: 1,
+      next_retry_at: null,
+    },
+    {
+      id: 'photo-original-1',
+      type: 'photo',
+      payload: { localUri: intent.photoUris[0] },
+      status: 'dead',
+      created_at: 2,
+      retries: 1,
+      error_message: 'Parent operation failed',
+      priority: 2,
+      next_retry_at: null,
+      dependsOn: [intent.operationId],
+    },
+    {
+      id: 'photo-original-2',
+      type: 'photo',
+      payload: { localUri: intent.photoUris[1] },
+      status: 'dead',
+      created_at: 3,
+      retries: 1,
+      error_message: 'Parent operation failed',
+      priority: 2,
+      next_retry_at: null,
+      dependsOn: [intent.operationId],
+    },
+  ];
+  let enqueueCalls = 0;
+  let persistCalls = 0;
+
+  const recovered = await recoverPersistedSaleIntent({
+    saleConfirmed: true,
+    saleReadyToContinue: false,
+    intent,
+    queue,
+    enqueue: () => { enqueueCalls += 1; return 'unexpected'; },
+    persistQueue: async () => { persistCalls += 1; },
+    releaseProcessingHolds: () => {},
+    saveTicket: async () => {},
+  });
+  const retried = rearmSaleOrderForRetry(queue, intent.operationId);
+
+  assert.deepEqual(recovered, { status: 'already_queued' });
+  assert.equal(enqueueCalls, 0, 'restart must not enqueue another sale or photos');
+  assert.equal(persistCalls, 0, 'an unchanged protected queue needs no rewrite');
+  assert.deepEqual(
+    retried.map((item) => ({
+      id: item.id,
+      status: item.status,
+      dependsOn: item.dependsOn,
+    })),
+    [
+      { id: intent.operationId, status: 'pending', dependsOn: undefined },
+      { id: 'photo-original-1', status: 'pending', dependsOn: [intent.operationId] },
+      { id: 'photo-original-2', status: 'pending', dependsOn: [intent.operationId] },
+    ],
+    'explicit retry must preserve the exact operation id and dependency series',
+  );
+});
+
+test('restart safely ignores hostile queue rows before a matching protected sale', async () => {
+  const hostile = new Proxy({}, {
+    get() {
+      throw new Error('hostile persisted row');
+    },
+  });
+  let enqueueCalls = 0;
+
+  const recovered = await recoverPersistedSaleIntent({
+    saleConfirmed: true,
+    saleReadyToContinue: false,
+    intent,
+    queue: [
+      hostile as never,
+      {
+        id: intent.operationId,
+        type: 'sale_order',
+        status: 'dead',
+        error_code: ' INSUFFICIENT_STOCK ',
+      } as never,
+    ],
+    enqueue: () => { enqueueCalls += 1; return 'unexpected'; },
+    persistQueue: async () => {},
+    releaseProcessingHolds: () => {},
+    saveTicket: async () => {},
+  });
+
+  assert.deepEqual(recovered, { status: 'already_queued' });
+  assert.equal(enqueueCalls, 0);
+});
+
+test('an ordinary dead sale keeps legacy rematerialization semantics', async () => {
+  const calls: SyncItemType[] = [];
+
+  const recovered = await recoverPersistedSaleIntent({
+    saleConfirmed: true,
+    saleReadyToContinue: false,
+    intent,
+    queue: [{
+      id: intent.operationId,
+      type: 'sale_order',
+      status: 'dead',
+      error_code: 'validation_error',
+    } as never],
+    enqueue: (type) => {
+      calls.push(type);
+      return type === 'sale_order' ? intent.operationId : `photo-${calls.length}`;
+    },
+    persistQueue: async () => {},
+    releaseProcessingHolds: () => {},
+    saveTicket: async () => {},
+  });
+
+  assert.deepEqual(recovered, { status: 'materialized' });
+  assert.deepEqual(calls, ['sale_order', 'photo', 'photo']);
 });
 
 test('ticket persistence is best effort after durable recovery', async () => {

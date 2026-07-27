@@ -42,7 +42,7 @@ test('buildExchangeThermalTicketDocument builds a schemaVersion 1 exchange paylo
   assert.equal(document.folio, snapshot.folio);
   assert.equal(document.formattedDate, formatTicketDate(snapshot.createdAt));
   assert.equal(document.customerName, snapshot.customerName);
-  assert.equal(document.sellerName, 'No aplica');
+  assert.equal(document.sellerName, '—');
   assert.equal(document.paymentLabel, 'No aplica');
   assert.equal(document.subtotal, '—');
   assert.equal(document.totalKg, '—');
@@ -59,22 +59,22 @@ test('buildExchangeThermalTicketDocument keeps delivery and merma lines distinct
     {
       productId: 10,
       productName: 'Bolsa de hielo',
-      quantityAndUnitPrice: formatQuantity(2),
-      lineTotal: 'No aplica',
+      quantityAndUnitPrice: `Cantidad: ${formatQuantity(2)}`,
+      lineTotal: '—',
       sectionLabel: 'ENTREGA',
     },
     {
       productId: 11,
       productName: 'Hielo premium',
-      quantityAndUnitPrice: formatQuantity(1.5),
-      lineTotal: 'No aplica',
+      quantityAndUnitPrice: `Cantidad: ${formatQuantity(1.5)}`,
+      lineTotal: '—',
       sectionLabel: 'ENTREGA',
     },
     {
       productId: 12,
       productName: 'Bolsa rota',
-      quantityAndUnitPrice: formatQuantity(3.25),
-      lineTotal: 'No aplica',
+      quantityAndUnitPrice: `Cantidad: ${formatQuantity(3.25)}`,
+      lineTotal: '—',
       sectionLabel: 'MERMA',
     },
   ]);

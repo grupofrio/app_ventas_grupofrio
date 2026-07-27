@@ -150,6 +150,14 @@ const STABLE_NATIVE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const STABLE_NATIVE_PHASE = /^[a-z][a-z0-9_-]{0,63}$/;
 const MAX_NATIVE_ERROR_ENVELOPE_LENGTH = 65_536;
 const MAX_TICKET_SNAPSHOT_LINES = 10_000;
+const VALID_TICKET_KINDS = new Set<NonNullable<ThermalTicketDocument['ticketKind']>>([
+  'sale',
+  'exchange',
+]);
+const VALID_SECTION_LABELS = new Set<NonNullable<ThermalTicketDocument['lines'][number]['sectionLabel']>>([
+  'ENTREGA',
+  'MERMA',
+]);
 
 let thermalPrintJobInFlight = false;
 
@@ -417,6 +425,15 @@ function optionalNonBlankTicketString(object: object, key: string): string | und
   return value;
 }
 
+function optionalTicketString(object: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor) return undefined;
+  if (!('value' in descriptor) || typeof descriptor.value !== 'string') {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+  return descriptor.value;
+}
+
 function snapshotTicketBranding(value: unknown): ThermalTicketBranding {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new ThermalPrinterError('invalid_ticket');
@@ -439,11 +456,17 @@ function snapshotTicketLine(value: unknown): ThermalTicketDocument['lines'][numb
   if (typeof productId !== 'number' || !Number.isFinite(productId)) {
     throw new ThermalPrinterError('invalid_ticket');
   }
+  const sectionLabel = optionalTicketString(value, 'sectionLabel');
+  if (sectionLabel !== undefined && !VALID_SECTION_LABELS.has(sectionLabel)) {
+    throw new ThermalPrinterError('invalid_ticket');
+  }
+
   return Object.freeze({
     productId,
     productName: requiredTicketString(value, 'productName'),
     quantityAndUnitPrice: requiredTicketString(value, 'quantityAndUnitPrice'),
     lineTotal: requiredTicketString(value, 'lineTotal'),
+    ...(sectionLabel === undefined ? {} : { sectionLabel }),
   });
 }
 
@@ -476,18 +499,17 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
       throw new ThermalPrinterError('invalid_ticket');
     }
 
-    const creditNote = Object.getOwnPropertyDescriptor(value, 'creditNote');
-    if (creditNote && !('value' in creditNote)) {
-      throw new ThermalPrinterError('invalid_ticket');
-    }
-    const creditNoteValue = creditNote && 'value' in creditNote ? creditNote.value : undefined;
-    if (creditNoteValue !== undefined && typeof creditNoteValue !== 'string') {
+    const creditNoteValue = optionalTicketString(value, 'creditNote');
+    const exchangeNotes = optionalTicketString(value, 'exchangeNotes');
+    const ticketKind = optionalTicketString(value, 'ticketKind');
+    if (ticketKind !== undefined && !VALID_TICKET_KINDS.has(ticketKind)) {
       throw new ThermalPrinterError('invalid_ticket');
     }
     const localReference = optionalNonBlankTicketString(value, 'localReference');
 
     return Object.freeze({
       schemaVersion: 1,
+      ...(ticketKind === undefined ? {} : { ticketKind }),
       branding: snapshotTicketBranding(ownDataValue(value, 'branding')),
       folio: requiredTicketString(value, 'folio'),
       ...(localReference === undefined ? {} : { localReference }),
@@ -500,6 +522,7 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
       totalKg: requiredTicketString(value, 'totalKg'),
       total: requiredTicketString(value, 'total'),
       ...(creditNoteValue === undefined ? {} : { creditNote: creditNoteValue }),
+      ...(exchangeNotes === undefined ? {} : { exchangeNotes }),
     });
   } catch {
     throw new ThermalPrinterError('invalid_ticket');

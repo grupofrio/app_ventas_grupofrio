@@ -332,6 +332,36 @@ test('ticket job uses the saved address, preserves the DTO, and returns immutabl
   assert.equal(Object.isFrozen(result.progress), true);
 });
 
+test('ticket job preserves exchange ticket metadata when sanitizing before native dispatch', async () => {
+  const document: ThermalTicketDocument = {
+    ...ticketDocument(),
+    ticketKind: 'exchange',
+    exchangeNotes: 'Cambio por bolsa dañada',
+    lines: [
+      {
+        productId: 1,
+        productName: 'Producto',
+        quantityAndUnitPrice: '1.50',
+        lineTotal: 'No aplica',
+        sectionLabel: 'MERMA',
+      },
+    ],
+  };
+  let receivedDocument: ThermalTicketDocument | null = null;
+  const subject = service(nativeModule({
+    printTicket: async (_address, value) => {
+      receivedDocument = value;
+      return EMPTY_PROGRESS;
+    },
+  }));
+
+  await subject.printTicket(document);
+
+  assert.equal(receivedDocument?.ticketKind, 'exchange');
+  assert.equal(receivedDocument?.exchangeNotes, 'Cambio por bolsa dañada');
+  assert.equal(receivedDocument?.lines[0]?.sectionLabel, 'MERMA');
+});
+
 test('ticket job snapshots every nested DTO layer synchronously before persistence awaits', async () => {
   let releaseLoad!: (selection: SavedThermalPrinterV1) => void;
   const pendingLoad = new Promise<SavedThermalPrinterV1>((resolve) => {

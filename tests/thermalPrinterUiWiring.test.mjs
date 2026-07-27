@@ -4,12 +4,12 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const screenSource = readFileSync(
-  resolve(process.cwd(), 'app/print/[orderId].tsx'),
+  resolve(process.cwd(), 'src/components/domain/TicketOutputScreen.tsx'),
   'utf8',
 );
 
 test('button composes the real MP210 service without asking permission on mount', () => {
-  assert.match(screenSource, /import\s+ThermalPrinterModule\s+from\s+['"]\.\.\/\.\.\/modules\/thermal-printer/);
+  assert.match(screenSource, /import\s+ThermalPrinterModule\s+from\s+['"]\.\.\/\.\.\/\.\.\/modules\/thermal-printer/);
   assert.match(screenSource, /createThermalPrinterService/);
   assert.match(screenSource, /createThermalPrinterSelectionStore/);
   assert.match(screenSource, /Platform\.Version/);
@@ -17,7 +17,8 @@ test('button composes the real MP210 service without asking permission on mount'
   assert.match(screenSource, /PermissionsAndroid\.RESULTS\.GRANTED/);
   assert.match(screenSource, /PermissionsAndroid\.RESULTS\.DENIED/);
   assert.match(screenSource, /PermissionsAndroid\.RESULTS\.NEVER_ASK_AGAIN/);
-  assert.match(screenSource, /label="Imprimir en MP210"/);
+  assert.match(screenSource, /printActionLabel = 'Imprimir en MP210'/);
+  assert.match(screenSource, /label=\{printActionLabel\}/);
 
   const effectBodies = [...screenSource.matchAll(/React\.useEffect\(\(\)\s*=>\s*\{([\s\S]*?)\n\s*\},\s*\[[^\]]*\]\);/g)]
     .map((match) => match[1]);
@@ -53,11 +54,12 @@ test('success and PDF states use sent copy and disable both output actions durin
   assert.match(screenSource, /Ticket enviado a MP210/);
   assert.match(screenSource, /Diagn[oó]stico enviado a MP210/);
   assert.doesNotMatch(screenSource, /Ticket impreso|Diagn[oó]stico impreso/);
-  assert.match(screenSource, /label="Abrir PDF"/);
+  assert.match(screenSource, /pdfActionLabel = 'Abrir PDF'/);
+  assert.match(screenSource, /label=\{pdfActionLabel\}/);
   assert.match(screenSource, /disabled=\{isPrintJobActive/);
   assert.match(screenSource, /ActivityIndicator/);
   assert.match(screenSource, /Conectando|Enviando|permiso/i);
-  assert.match(screenSource, /buildThermalTicketDocument\(ticket/);
+  assert.match(screenSource, /buildThermalDocument\(ticket/);
 });
 
 test('preview uses the shared Odoo folio presentation without gating either output', () => {
@@ -143,7 +145,7 @@ test('long ticket preview and all output actions live in a vertically scrollable
   assert.match(screenSource, /\bScrollView\b/);
   assert.match(
     screenSource,
-    /<ScrollView[\s\S]*?contentContainerStyle=\{styles\.container\}[\s\S]*?styles\.ticketPreview[\s\S]*?Imprimir en MP210[\s\S]*?Abrir PDF[\s\S]*?<\/ScrollView>/,
+    /<ScrollView[\s\S]*?contentContainerStyle=\{styles\.container\}[\s\S]*?renderPreview\(ticket\)[\s\S]*?label=\{printActionLabel\}[\s\S]*?label=\{pdfActionLabel\}[\s\S]*?<\/ScrollView>/,
   );
   assert.match(screenSource, /container:\s*\{[\s\S]*?flexGrow:\s*1/);
 });

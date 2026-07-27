@@ -68,6 +68,18 @@ function main() {
 
   assert.match(
     exchangeScreen,
+    /const detail = error instanceof Error[\s\S]*?: undefined;/,
+    'un rechazo que no sea Error no debe inventar un detalle duplicado',
+  );
+
+  assert.doesNotMatch(
+    exchangeScreen,
+    /: 'Cambio registrado, pero no se pudo preparar el ticket\. No repitas el cambio\.';/,
+    'el texto genérico no debe repetirse como detalle del fallo de guardado',
+  );
+
+  assert.match(
+    exchangeScreen,
     /exchangeMessage:\s*registeredMessage/,
     'ante fallo de guardado debe volver a check-in con el mensaje ya registrado',
   );

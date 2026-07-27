@@ -268,12 +268,13 @@ export default function CambioProductoScreen() {
     try {
       await saveExchangeTicketSnapshot(snapshot);
     } catch (error) {
-      const message = error instanceof Error
+      const detail = error instanceof Error
         ? error.message
-        : 'Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.';
+        : undefined;
+      const message = 'Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.';
       Alert.alert(
         'Ticket no preparado',
-        `Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.${message ? `\n\nDetalle: ${message}` : ''}`,
+        `${message}${detail ? `\n\nDetalle: ${detail}` : ''}`,
       );
       router.replace({
         pathname: '/checkin/[stopId]',

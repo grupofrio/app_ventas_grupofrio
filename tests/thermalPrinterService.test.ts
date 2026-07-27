@@ -347,20 +347,20 @@ test('ticket job preserves exchange ticket metadata when sanitizing before nativ
       },
     ],
   };
-  let receivedDocument: ThermalTicketDocument | null = null;
+  type ReceivedDocument = ThermalTicketDocument;
+  let resolveReceived!: (value: ReceivedDocument) => void;
+  const receivedDocument = new Promise<ReceivedDocument>((resolve) => {
+    resolveReceived = resolve;
+  });
   const subject = service(nativeModule({
     printTicket: async (_address, value) => {
-      receivedDocument = value;
+      resolveReceived(value);
       return EMPTY_PROGRESS;
     },
   }));
 
   await subject.printTicket(document);
-
-  if (receivedDocument === null) {
-    assert.fail('expected the native module to receive a sanitized document');
-  }
-  const received = receivedDocument;
+  const received = await receivedDocument;
   assert.equal(received.ticketKind, 'exchange');
   assert.equal(received.exchangeNotes, 'Cambio por bolsa dañada');
   assert.equal(received.lines[0]?.sectionLabel, 'MERMA');

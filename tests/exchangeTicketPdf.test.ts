@@ -63,37 +63,37 @@ afterEach(() => {
 });
 
 test('createExchangeTicketPdf prints 58mm width, zero margins, and base height plus one line block per exchange row', async () => {
-  let received:
-    | {
-        html: string;
-        width: number;
-        height: number;
-        margins: { top: number; right: number; bottom: number; left: number };
-      }
-    | null = null;
+  type PrintOptions = {
+    html: string;
+    width: number;
+    height: number;
+    margins: { top: number; right: number; bottom: number; left: number };
+  };
+  let resolveReceived!: (value: PrintOptions) => void;
+  const received = new Promise<PrintOptions>((resolve) => {
+    resolveReceived = resolve;
+  });
   installExpoMocks({
     printToFileAsync: async (options) => {
-      received = options;
+      resolveReceived(options);
       return { uri: 'file:///tmp/base-ticket.pdf' };
     },
   });
 
   const { createExchangeTicketPdf } = await import('../src/services/exchangeTicketPdf.ts');
   const uri = await createExchangeTicketPdf(buildSnapshot());
+  const receivedOptions = await received;
 
   assert.equal(uri, 'file:///tmp/base-ticket.pdf');
-  if (received === null) {
-    assert.fail('expected printToFileAsync to be called');
-  }
-  assert.equal(received.width, 164);
-  assert.equal(received.height, 364);
-  assert.deepEqual(received.margins, {
+  assert.equal(receivedOptions.width, 164);
+  assert.equal(receivedOptions.height, 364);
+  assert.deepEqual(receivedOptions.margins, {
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
   });
-  assert.match(received.html, /TICKET DE CAMBIO/);
+  assert.match(receivedOptions.html, /TICKET DE CAMBIO/);
 });
 
 test('createExchangeTicketPdf adds note height based on wrapped note length', async () => {

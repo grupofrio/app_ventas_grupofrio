@@ -365,6 +365,17 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
+  fun `record rejects blank ticket kind instead of defaulting it to sale`() {
+    listOf("", "   ", "\n\t").forEach { ticketKind ->
+      val record = validRecord().apply { setRecordField("ticketKind", ticketKind) }
+
+      val error = assertThrows(ThermalPrinterException::class.java) { record.toDomain() }
+
+      assertEquals("invalid_ticket", error.code)
+    }
+  }
+
+  @Test
   fun `record rejects unknown ticket kind`() {
     val record = validRecord().apply { setRecordField("ticketKind", "refund") }
 

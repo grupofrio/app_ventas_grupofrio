@@ -264,7 +264,12 @@ private fun requiredTicketKind(value: String, field: String): String =
   validateTicketKind(requiredDisplayText(value, field, MAX_SHORT_TEXT_CHARS), field)
 
 private fun optionalTicketKind(value: String?, field: String): String? {
-  val normalized = optionalDisplayText(value, field, MAX_SHORT_TEXT_CHARS) ?: return null
+  if (value == null) return null
+  if (!validateRawDisplayText(value, field, MAX_SHORT_TEXT_CHARS)) {
+    invalidTicket("$field must not be blank")
+  }
+  val normalized = normalizeDisplayText(value)
+  if (normalized.isEmpty()) invalidTicket("$field must not be blank")
   return validateTicketKind(normalized, field)
 }
 

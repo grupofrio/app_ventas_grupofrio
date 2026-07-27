@@ -295,6 +295,38 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
+  fun `exchange layout contains title customer grouped sections quantities and notes`() {
+    val layout = subject.layout(exchangeRecord().toDomain())
+    val textCommands = layout.commands.filterIsInstance<DrawCommand.Text>()
+    val renderedText = textCommands.joinToString(" ") { it.text }
+
+    listOf(
+      "NOTA DE CAMBIO",
+      "Cliente:",
+      "Cliente intercambio",
+      "ENTREGA",
+      "MERMA",
+      "3 x 20 kg",
+      "1 x 10 kg",
+      "Cambio autorizado por calidad",
+    ).forEach { expected ->
+      assertTrue("Missing exchange text: $expected", renderedText.contains(expected))
+    }
+  }
+
+  @Test
+  fun `exchange layout omits sale payment and totals rows`() {
+    val renderedText = subject.layout(exchangeRecord().toDomain())
+      .commands
+      .filterIsInstance<DrawCommand.Text>()
+      .joinToString(" ") { it.text }
+
+    listOf("Pago:", "Subtotal:", "Kilogramos:", "Total:").forEach { forbidden ->
+      assertFalse("Exchange layout must omit $forbidden", renderedText.contains(forbidden))
+    }
+  }
+
+  @Test
   fun `content beyond 6000 pixels fails before a renderer could reserve a bitmap`() {
     val huge = ticket(
       lines = List(260) { index ->
@@ -330,6 +362,36 @@ class ThermalTicketLayoutTest {
       "invalid_ticket",
       assertThrows(ThermalPrinterException::class.java) { nonPositiveProduct.toDomain() }.code,
     )
+  }
+
+  @Test
+  fun `record rejects unknown ticket kind`() {
+    val record = validRecord().apply { setRecordField("ticketKind", "refund") }
+
+    val error = assertThrows(ThermalPrinterException::class.java) { record.toDomain() }
+
+    assertEquals("invalid_ticket", error.code)
+  }
+
+  @Test
+  fun `record rejects exchange lines without valid section labels`() {
+    val missingLabel = exchangeRecord().apply {
+      lines = mutableListOf(
+        validLineRecord(1).apply { setRecordField("sectionLabel", "ENTREGA") },
+        validLineRecord(2),
+      )
+    }
+    val invalidLabel = exchangeRecord().apply {
+      lines = mutableListOf(
+        validLineRecord(1).apply { setRecordField("sectionLabel", "ENTREGA") },
+        validLineRecord(2).apply { setRecordField("sectionLabel", "DEVOLUCIÓN") },
+      )
+    }
+
+    listOf(missingLabel, invalidLabel).forEach { record ->
+      val error = assertThrows(ThermalPrinterException::class.java) { record.toDomain() }
+      assertEquals("invalid_ticket", error.code)
+    }
   }
 
   @Test
@@ -776,6 +838,40 @@ class ThermalTicketLayoutTest {
     productName = "Hielo"
     quantityAndUnitPrice = "1 x $10.00"
     lineTotal = "$10.00"
+  }
+
+  private fun exchangeRecord(): ThermalTicketDocumentRecord = validRecord().apply {
+    branding!!.title = "NOTA DE CAMBIO"
+    customerName = "Cliente intercambio"
+    paymentLabel = "N/A"
+    subtotal = "$0.00"
+    totalKg = "0 kg"
+    total = "$0.00"
+    lines = mutableListOf(
+      validLineRecord(1).apply {
+        productName = "Hielo entregado"
+        quantityAndUnitPrice = "3 x 20 kg"
+        lineTotal = "60 kg"
+        setRecordField("sectionLabel", "ENTREGA")
+      },
+      validLineRecord(2).apply {
+        productName = "Hielo merma"
+        quantityAndUnitPrice = "1 x 10 kg"
+        lineTotal = "10 kg"
+        setRecordField("sectionLabel", "MERMA")
+      },
+    )
+    setRecordField("ticketKind", "exchange")
+    setRecordField(
+      "exchangeNotes",
+      "Cambio autorizado por calidad con revisión de almacén.",
+    )
+  }
+
+  private fun Any.setRecordField(name: String, value: Any?) {
+    val field = javaClass.getDeclaredField(name)
+    field.isAccessible = true
+    field.set(this, value)
   }
 
   private fun ticket(

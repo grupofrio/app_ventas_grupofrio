@@ -72,6 +72,19 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     builder.addWrapped(safeTicket.branding.title, TOTAL_BOLD_CENTER)
     builder.addDivider()
 
+    when (safeTicket.ticketKind) {
+      "sale" -> layoutSale(builder, safeTicket)
+      "exchange" -> layoutExchange(builder, safeTicket)
+      else -> invalidTicket("Unsupported ticketKind")
+    }
+
+    builder.addGap(SECTION_GAP_PX)
+    builder.addWrapped(safeTicket.branding.footer, SMALL_CENTER)
+    builder.addGap(BOTTOM_PADDING_PX)
+    return builder.build()
+  }
+
+  private fun layoutSale(builder: LayoutBuilder, safeTicket: ThermalTicket) {
     builder.addLabelValue("Folio Odoo:", safeTicket.folio, BODY_STYLE)
     safeTicket.localReference?.let { reference ->
       builder.addLabelValue("Referencia local:", reference, BODY_STYLE)
@@ -99,11 +112,31 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       builder.addDivider()
       builder.addWrapped(note, BODY_STYLE)
     }
+  }
 
-    builder.addGap(SECTION_GAP_PX)
-    builder.addWrapped(safeTicket.branding.footer, SMALL_CENTER)
-    builder.addGap(BOTTOM_PADDING_PX)
-    return builder.build()
+  private fun layoutExchange(builder: LayoutBuilder, safeTicket: ThermalTicket) {
+    builder.addLabelValue("Folio:", safeTicket.folio, BODY_STYLE)
+    builder.addLabelValue("Fecha:", safeTicket.formattedDate, BODY_STYLE)
+    builder.addLabelValue("Cliente:", safeTicket.customerName, BODY_STYLE)
+    builder.addDivider()
+
+    var currentSectionLabel: String? = null
+    safeTicket.lines.forEach { line ->
+      if (line.sectionLabel != currentSectionLabel) {
+        if (currentSectionLabel != null) builder.addGap(SECTION_GAP_PX)
+        builder.addWrapped(requireNotNull(line.sectionLabel), BODY_BOLD)
+        currentSectionLabel = line.sectionLabel
+      }
+      builder.addWrapped(line.productName, BODY_BOLD)
+      builder.addWrapped(line.quantityAndUnitPrice, SMALL_STYLE)
+      builder.addGap(PRODUCT_GAP_PX)
+    }
+
+    safeTicket.exchangeNotes?.let { notes ->
+      builder.addDivider()
+      builder.addWrapped("Notas:", BODY_BOLD)
+      builder.addWrapped(notes, BODY_STYLE)
+    }
   }
 
   internal fun wrapText(text: String, style: TextStyle, maxWidth: Float): List<String> {

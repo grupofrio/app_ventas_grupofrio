@@ -40,6 +40,47 @@ class ThermalPrinterModuleTest {
   }
 
   @Test
+  fun `valid exchange ticket is rendered and sent with exchange metadata preserved`() {
+    val raster = MonochromeRaster(384, 1, ByteArray(48))
+    val expected = NativePrintResult(2_048, 2_000, 1, true)
+    val renderer = RecordingRenderer(raster)
+    val transport = RecordingTransport(result = expected)
+    val subject = coordinator(renderer = renderer, transport = transport)
+    val document = validRecord().apply {
+      branding!!.title = "NOTA DE CAMBIO"
+      customerName = "Cliente intercambio"
+      paymentLabel = "N/A"
+      subtotal = "$0.00"
+      totalKg = "0 kg"
+      total = "$0.00"
+      lines = mutableListOf(
+        validLineRecord(1, "ENTREGA", "Hielo cristalino", "3 x 20 kg", "60 kg"),
+        validLineRecord(2, "MERMA", "Hielo derretido", "1 x 10 kg", "10 kg"),
+      )
+      setRecordField("ticketKind", "exchange")
+      setRecordField(
+        "exchangeNotes",
+        "Cambio autorizado por calidad con revisión de almacén.",
+      )
+    }
+
+    val actual = subject.printTicket(ADDRESS, document)
+
+    assertSame(expected, actual)
+    assertEquals(listOf(ADDRESS), transport.jobs.map { it.first })
+    val rendered = renderer.tickets.single()
+    assertEquals("exchange", rendered.stringField("ticketKind"))
+    assertEquals(
+      "Cambio autorizado por calidad con revisión de almacén.",
+      rendered.stringField("exchangeNotes"),
+    )
+    assertEquals(
+      listOf("ENTREGA", "MERMA"),
+      rendered.lines.map { line -> line.stringField("sectionLabel") },
+    )
+  }
+
+  @Test
   fun `unbonded address fails before invalid record conversion or resource-heavy work`() {
     val verifier = RecordingBondVerifier(
       error = ThermalPrinterException(PRINTER_NOT_BONDED_CODE, "Printer is not bonded"),
@@ -205,6 +246,32 @@ class ThermalPrinterModuleTest {
     subtotal = "$10.00"
     totalKg = "1 kg"
     total = "$10.00"
+  }
+
+  private fun validLineRecord(
+    id: Int,
+    sectionLabel: String? = null,
+    productName: String = "Producto",
+    quantityAndUnitPrice: String = "1 kg x $10.00",
+    lineTotal: String = "$10.00",
+  ) = ThermalTicketLineRecord().apply {
+    productId = id.toDouble()
+    this.productName = productName
+    this.quantityAndUnitPrice = quantityAndUnitPrice
+    this.lineTotal = lineTotal
+    if (sectionLabel != null) setRecordField("sectionLabel", sectionLabel)
+  }
+
+  private fun Any.setRecordField(name: String, value: Any?) {
+    val field = javaClass.getDeclaredField(name)
+    field.isAccessible = true
+    field.set(this, value)
+  }
+
+  private fun Any.stringField(name: String): String? {
+    val field = javaClass.getDeclaredField(name)
+    field.isAccessible = true
+    return field.get(this) as String?
   }
 
   private class RecordingBondVerifier(

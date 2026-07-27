@@ -7,6 +7,7 @@ import kotlin.math.floor
 
 class ThermalTicketDocumentRecord : Record {
   @Field var schemaVersion: Int? = null
+  @Field var ticketKind: String? = null
   @Field var branding: ThermalTicketBrandingRecord? = null
   @Field var folio: String? = null
   @Field var localReference: String? = null
@@ -19,6 +20,7 @@ class ThermalTicketDocumentRecord : Record {
   @Field var totalKg: String? = null
   @Field var total: String? = null
   @Field var creditNote: String? = null
+  @Field var exchangeNotes: String? = null
 }
 
 class ThermalTicketBrandingRecord : Record {
@@ -35,6 +37,7 @@ class ThermalTicketLineRecord : Record {
   @Field var productName: String? = null
   @Field var quantityAndUnitPrice: String? = null
   @Field var lineTotal: String? = null
+  @Field var sectionLabel: String? = null
 }
 
 data class ThermalTicket(
@@ -51,6 +54,8 @@ data class ThermalTicket(
   val total: String,
   val creditNote: String?,
   val localReference: String? = null,
+  val ticketKind: String = "sale",
+  val exchangeNotes: String? = null,
   /** Internal-only diagnostic seam; never exposed by the Expo Record or sale DTO. */
   internal val diagnosticCalibrationText16: String? = null,
 )
@@ -69,6 +74,7 @@ data class TicketLine(
   val productName: String,
   val quantityAndUnitPrice: String,
   val lineTotal: String,
+  val sectionLabel: String? = null,
 )
 
 fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
@@ -84,6 +90,7 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   }
 
   // Reject hostile raw input before normalizing strings or copying the mutable record list.
+  val safeTicketKind = optionalTicketKind(ticketKind, "ticketKind") ?: TICKET_KIND_SALE
   val budget = DisplayTextBudget()
   preflightBranding(safeBranding, budget)
   budget.required(folio, "folio", MAX_SHORT_TEXT_CHARS)
@@ -97,11 +104,13 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   budget.required(totalKg, "totalKg", MAX_AMOUNT_CHARS)
   budget.required(total, "total", MAX_AMOUNT_CHARS)
   budget.optional(creditNote, "creditNote", MAX_LONG_TEXT_CHARS)
+  budget.optional(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS)
 
   val domainLines = ArrayList<TicketLine>(safeLines.size)
   safeLines.forEachIndexed { index, line -> domainLines += line.toRawDomain(index) }
   return ThermalTicket(
     schemaVersion = safeSchemaVersion,
+    ticketKind = safeTicketKind,
     branding = safeBranding.toRawDomain(),
     folio = requiredRawText(folio, "folio"),
     localReference = localReference,
@@ -114,6 +123,7 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
     totalKg = requiredRawText(totalKg, "totalKg"),
     total = requiredRawText(total, "total"),
     creditNote = creditNote,
+    exchangeNotes = exchangeNotes,
   ).validatedAndNormalized()
 }
 
@@ -166,6 +176,7 @@ private fun preflightLine(record: ThermalTicketLineRecord, index: Int, budget: D
     MAX_TEXT_CHARS,
   )
   budget.required(record.lineTotal, "lines[$index].lineTotal", MAX_AMOUNT_CHARS)
+  budget.optional(record.sectionLabel, "lines[$index].sectionLabel", MAX_SHORT_TEXT_CHARS)
 }
 
 private fun ThermalTicketLineRecord.validProductId(index: Int): Long {
@@ -186,6 +197,7 @@ private fun ThermalTicketLineRecord.toRawDomain(index: Int): TicketLine = Ticket
     "lines[$index].quantityAndUnitPrice",
   ),
   lineTotal = requiredRawText(lineTotal, "lines[$index].lineTotal"),
+  sectionLabel = sectionLabel,
 )
 
 /**
@@ -245,6 +257,27 @@ private fun validateDisplayText(value: String, field: String, maxChars: Int) {
     if (codePoint != ASCII_SPACE && isDisplaySeparator(codePoint)) {
       invalidTicket("$field contains non-canonical display separators")
     }
+  }
+}
+
+private fun requiredTicketKind(value: String, field: String): String =
+  validateTicketKind(requiredDisplayText(value, field, MAX_SHORT_TEXT_CHARS), field)
+
+private fun optionalTicketKind(value: String?, field: String): String? {
+  val normalized = optionalDisplayText(value, field, MAX_SHORT_TEXT_CHARS) ?: return null
+  return validateTicketKind(normalized, field)
+}
+
+private fun validateTicketKind(value: String, field: String): String = when (value) {
+  TICKET_KIND_SALE, TICKET_KIND_EXCHANGE -> value
+  else -> invalidTicket("$field must be sale or exchange")
+}
+
+private fun optionalSectionLabel(value: String?, field: String): String? {
+  val normalized = optionalDisplayText(value, field, MAX_SHORT_TEXT_CHARS) ?: return null
+  return when (normalized) {
+    SECTION_LABEL_ENTREGA, SECTION_LABEL_MERMA -> normalized
+    else -> invalidTicket("$field must be ENTREGA or MERMA")
   }
 }
 
@@ -328,6 +361,7 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
     invalidTicket("lines must contain between 1 and $MAX_TICKET_LINES items")
   }
 
+  val normalizedTicketKind = requiredTicketKind(ticketKind, "ticketKind")
   val budget = DisplayTextBudget()
   requiredOpaqueText(
     branding.logoPngBase64,
@@ -361,6 +395,7 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
   budget.required(totalKg, "totalKg", MAX_AMOUNT_CHARS)
   budget.required(total, "total", MAX_AMOUNT_CHARS)
   budget.optional(creditNote, "creditNote", MAX_LONG_TEXT_CHARS)
+  budget.optional(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS)
   budget.optional(
     diagnosticCalibrationText16,
     "diagnosticCalibrationText16",
@@ -385,10 +420,22 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
         "lines[$index].lineTotal",
         MAX_AMOUNT_CHARS,
       ),
+      sectionLabel = optionalSectionLabel(
+        line.sectionLabel,
+        "lines[$index].sectionLabel",
+      ),
     )
+  }
+  if (normalizedTicketKind == TICKET_KIND_EXCHANGE) {
+    normalizedLines.forEachIndexed { index, line ->
+      if (line.sectionLabel == null) {
+        invalidTicket("lines[$index].sectionLabel is required for exchange tickets")
+      }
+    }
   }
 
   return copy(
+    ticketKind = normalizedTicketKind,
     branding = branding.copy(
       logoPngBase64 = requiredOpaqueText(
         branding.logoPngBase64,
@@ -420,6 +467,7 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
     totalKg = requiredDisplayText(totalKg, "totalKg", MAX_AMOUNT_CHARS),
     total = requiredDisplayText(total, "total", MAX_AMOUNT_CHARS),
     creditNote = optionalDisplayText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
+    exchangeNotes = optionalDisplayText(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS),
     diagnosticCalibrationText16 = optionalDisplayText(
       diagnosticCalibrationText16,
       "diagnosticCalibrationText16",
@@ -442,3 +490,7 @@ private const val MAX_AGGREGATE_DISPLAY_TEXT_CHARS = 32_768L
 internal const val MAX_LOGO_BASE64_CHARS = 2_800_000
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991.0
 private const val ASCII_SPACE = 0x20
+private const val TICKET_KIND_SALE = "sale"
+private const val TICKET_KIND_EXCHANGE = "exchange"
+private const val SECTION_LABEL_ENTREGA = "ENTREGA"
+private const val SECTION_LABEL_MERMA = "MERMA"

@@ -7,7 +7,7 @@ import { loadExchangeTicketSnapshot } from '../../src/services/exchangeTicketSto
 import { openExchangeTicketPdf } from '../../src/services/exchangeTicketPdf';
 import { buildExchangeThermalTicketDocument } from '../../src/services/exchangeThermalTicketDocument';
 import { SALE_TICKET_LEGAL_NAME, SALE_TICKET_RFC } from '../../src/services/saleTicket';
-import { formatTicketDate } from '../../src/services/saleTicketFormatting';
+import { formatQuantity, formatTicketDate } from '../../src/services/saleTicketFormatting';
 import { spacing, radii } from '../../src/theme/tokens';
 
 const EXCHANGE_TITLE = 'TICKET DE CAMBIO';
@@ -25,7 +25,7 @@ function renderSection(
       {lines.map((line, index) => (
         <View key={`${title}-${line.productId}-${index}`} style={styles.ticketLine}>
           <Text style={styles.productName}>{line.productName}</Text>
-          <Text style={styles.productMeta}>{line.qty}</Text>
+          <Text style={styles.productMeta}>{formatQuantity(line.qty)}</Text>
         </View>
       ))}
     </>
@@ -67,8 +67,8 @@ export default function PrintExchangeTicketScreen() {
             <Text style={styles.ticketLabel}>Fecha</Text>
             <Text style={styles.ticketValue}>{formatTicketDate(ticket.createdAt)}</Text>
           </View>
-          {renderSection('Entrega', ticket.deliveryLines)}
-          {renderSection('Merma', ticket.mermaLines)}
+          {renderSection('PRODUCTO ENTREGADO', ticket.deliveryLines)}
+          {renderSection('PRODUCTO RECOGIDO / MERMA', ticket.mermaLines)}
           {ticket.notes ? (
             <>
               <View style={styles.divider} />
@@ -76,6 +76,8 @@ export default function PrintExchangeTicketScreen() {
               <Text style={styles.notesValue}>{ticket.notes}</Text>
             </>
           ) : null}
+          <View style={styles.divider} />
+          <Text style={styles.confirmationText}>Cambio registrado correctamente</Text>
         </View>
       )}
     />
@@ -164,6 +166,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#1A1A1A',
     lineHeight: 18,
+  },
+  confirmationText: {
+    fontSize: 12,
+    color: '#1A1A1A',
+    fontWeight: '700',
+    textAlign: 'center',
   },
   noticeText: {
     fontSize: 13,

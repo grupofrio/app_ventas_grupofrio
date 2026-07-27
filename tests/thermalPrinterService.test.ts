@@ -366,6 +366,39 @@ test('ticket job preserves exchange ticket metadata when sanitizing before nativ
   assert.equal(received.lines[0]?.sectionLabel, 'MERMA');
 });
 
+test('exchange ticket lines without sectionLabel are rejected before native dispatch', async () => {
+  let nativeCalls = 0;
+  const document: ThermalTicketDocument = {
+    ...ticketDocument(),
+    ticketKind: 'exchange',
+    exchangeNotes: 'Cambio por bolsa dañada',
+    lines: [
+      {
+        productId: 1,
+        productName: 'Producto',
+        quantityAndUnitPrice: '1.50',
+        lineTotal: 'No aplica',
+      },
+    ],
+  };
+  const subject = service(nativeModule({
+    printTicket: async () => {
+      nativeCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }));
+
+  await assert.rejects(subject.printTicket(document), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'invalid_ticket');
+    assert.equal(error.phase, null);
+    assert.deepEqual(error.progress, EMPTY_PROGRESS);
+    assert.equal(error.requiresManualReprint, false);
+    return true;
+  });
+  assert.equal(nativeCalls, 0);
+});
+
 test('invalid runtime ticketKind is rejected before native dispatch', async () => {
   let nativeCalls = 0;
   const document = {

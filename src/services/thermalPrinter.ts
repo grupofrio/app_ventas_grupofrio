@@ -518,6 +518,17 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
     }
     const localReference = optionalNonBlankTicketString(value, 'localReference');
     const ticketKind: ThermalTicketKind | undefined = rawTicketKind;
+    const lines = snapshotTicketLines(ownDataValue(value, 'lines'));
+    if (
+      ticketKind === 'exchange' &&
+      lines.some(
+        (line) =>
+          line.sectionLabel === undefined ||
+          !isThermalTicketSectionLabel(line.sectionLabel),
+      )
+    ) {
+      throw new ThermalPrinterError('invalid_ticket');
+    }
 
     return Object.freeze({
       schemaVersion: 1,
@@ -529,7 +540,7 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
       customerName: requiredTicketString(value, 'customerName'),
       sellerName: requiredTicketString(value, 'sellerName'),
       paymentLabel: requiredTicketString(value, 'paymentLabel'),
-      lines: snapshotTicketLines(ownDataValue(value, 'lines')),
+      lines,
       subtotal: requiredTicketString(value, 'subtotal'),
       totalKg: requiredTicketString(value, 'totalKg'),
       total: requiredTicketString(value, 'total'),

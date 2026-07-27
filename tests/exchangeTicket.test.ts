@@ -137,6 +137,25 @@ test('buildExchangeTicketHtml escapes customer, product, and notes content and f
   assert.doesNotMatch(html, /Cliente <script>/);
 });
 
+test('buildExchangeTicketHtml omits empty delivery, merma, and notes sections', () => {
+  const snapshot = buildExchangeTicketSnapshot({
+    snapshotId: 'idempotency-123',
+    exchangeName: '',
+    exchangeId: null,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [],
+    mermaLines: [],
+    notes: '',
+  });
+
+  const html = buildExchangeTicketHtml(snapshot);
+
+  assert.doesNotMatch(html, /PRODUCTO ENTREGADO/);
+  assert.doesNotMatch(html, /PRODUCTO RECOGIDO \/ MERMA/);
+  assert.doesNotMatch(html, /Notas:/);
+});
+
 test('getExchangeTicketStorageKey namespaces exchange tickets by snapshot id', () => {
   assert.equal(getExchangeTicketStorageKey('idempotency-123'), 'exchange-ticket:idempotency-123');
 });

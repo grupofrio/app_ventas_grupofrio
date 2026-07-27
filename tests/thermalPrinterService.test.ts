@@ -357,9 +357,66 @@ test('ticket job preserves exchange ticket metadata when sanitizing before nativ
 
   await subject.printTicket(document);
 
-  assert.equal(receivedDocument?.ticketKind, 'exchange');
-  assert.equal(receivedDocument?.exchangeNotes, 'Cambio por bolsa dañada');
-  assert.equal(receivedDocument?.lines[0]?.sectionLabel, 'MERMA');
+  if (receivedDocument === null) {
+    assert.fail('expected the native module to receive a sanitized document');
+  }
+  const received = receivedDocument;
+  assert.equal(received.ticketKind, 'exchange');
+  assert.equal(received.exchangeNotes, 'Cambio por bolsa dañada');
+  assert.equal(received.lines[0]?.sectionLabel, 'MERMA');
+});
+
+test('invalid runtime ticketKind is rejected before native dispatch', async () => {
+  let nativeCalls = 0;
+  const document = {
+    ...ticketDocument(),
+    ticketKind: 'refund',
+  } as ThermalTicketDocument & { ticketKind: 'refund' };
+  const subject = service(nativeModule({
+    printTicket: async () => {
+      nativeCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }));
+
+  await assert.rejects(subject.printTicket(document), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'invalid_ticket');
+    assert.equal(error.phase, null);
+    assert.deepEqual(error.progress, EMPTY_PROGRESS);
+    assert.equal(error.requiresManualReprint, false);
+    return true;
+  });
+  assert.equal(nativeCalls, 0);
+});
+
+test('invalid runtime sectionLabel is rejected before native dispatch', async () => {
+  let nativeCalls = 0;
+  const document = {
+    ...ticketDocument(),
+    lines: [{
+      ...ticketDocument().lines[0]!,
+      sectionLabel: 'DEVOLUCION',
+    }],
+  } as ThermalTicketDocument & {
+    lines: Array<ThermalTicketDocument['lines'][number] & { sectionLabel: 'DEVOLUCION' }>;
+  };
+  const subject = service(nativeModule({
+    printTicket: async () => {
+      nativeCalls += 1;
+      return EMPTY_PROGRESS;
+    },
+  }));
+
+  await assert.rejects(subject.printTicket(document), (error: unknown) => {
+    assert.ok(error instanceof ThermalPrinterError);
+    assert.equal(error.code, 'invalid_ticket');
+    assert.equal(error.phase, null);
+    assert.deepEqual(error.progress, EMPTY_PROGRESS);
+    assert.equal(error.requiresManualReprint, false);
+    return true;
+  });
+  assert.equal(nativeCalls, 0);
 });
 
 test('ticket job snapshots every nested DTO layer synchronously before persistence awaits', async () => {

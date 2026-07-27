@@ -158,6 +158,8 @@ const VALID_SECTION_LABELS = new Set<NonNullable<ThermalTicketDocument['lines'][
   'ENTREGA',
   'MERMA',
 ]);
+type ThermalTicketKind = NonNullable<ThermalTicketDocument['ticketKind']>;
+type ThermalTicketSectionLabel = NonNullable<ThermalTicketDocument['lines'][number]['sectionLabel']>;
 
 let thermalPrintJobInFlight = false;
 
@@ -434,6 +436,14 @@ function optionalTicketString(object: object, key: string): string | undefined {
   return descriptor.value;
 }
 
+function isThermalTicketKind(value: string): value is ThermalTicketKind {
+  return VALID_TICKET_KINDS.has(value as ThermalTicketKind);
+}
+
+function isThermalTicketSectionLabel(value: string): value is ThermalTicketSectionLabel {
+  return VALID_SECTION_LABELS.has(value as ThermalTicketSectionLabel);
+}
+
 function snapshotTicketBranding(value: unknown): ThermalTicketBranding {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new ThermalPrinterError('invalid_ticket');
@@ -456,10 +466,11 @@ function snapshotTicketLine(value: unknown): ThermalTicketDocument['lines'][numb
   if (typeof productId !== 'number' || !Number.isFinite(productId)) {
     throw new ThermalPrinterError('invalid_ticket');
   }
-  const sectionLabel = optionalTicketString(value, 'sectionLabel');
-  if (sectionLabel !== undefined && !VALID_SECTION_LABELS.has(sectionLabel)) {
+  const rawSectionLabel = optionalTicketString(value, 'sectionLabel');
+  if (rawSectionLabel !== undefined && !isThermalTicketSectionLabel(rawSectionLabel)) {
     throw new ThermalPrinterError('invalid_ticket');
   }
+  const sectionLabel: ThermalTicketSectionLabel | undefined = rawSectionLabel;
 
   return Object.freeze({
     productId,
@@ -501,11 +512,12 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
 
     const creditNoteValue = optionalTicketString(value, 'creditNote');
     const exchangeNotes = optionalTicketString(value, 'exchangeNotes');
-    const ticketKind = optionalTicketString(value, 'ticketKind');
-    if (ticketKind !== undefined && !VALID_TICKET_KINDS.has(ticketKind)) {
+    const rawTicketKind = optionalTicketString(value, 'ticketKind');
+    if (rawTicketKind !== undefined && !isThermalTicketKind(rawTicketKind)) {
       throw new ThermalPrinterError('invalid_ticket');
     }
     const localReference = optionalNonBlankTicketString(value, 'localReference');
+    const ticketKind: ThermalTicketKind | undefined = rawTicketKind;
 
     return Object.freeze({
       schemaVersion: 1,

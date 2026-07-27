@@ -22,8 +22,8 @@ function renderSection(
     <>
       <View style={styles.divider} />
       <Text style={styles.sectionTitle}>{title}</Text>
-      {lines.map((line) => (
-        <View key={`${title}-${line.productId}`} style={styles.ticketLine}>
+      {lines.map((line, index) => (
+        <View key={`${title}-${line.productId}-${index}`} style={styles.ticketLine}>
           <Text style={styles.productName}>{line.productName}</Text>
           <Text style={styles.productMeta}>{line.qty}</Text>
         </View>

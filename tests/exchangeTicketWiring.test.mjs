@@ -46,6 +46,12 @@ test('exchange print route wires snapshot loading, PDF opening, thermal builder,
   assert.doesNotMatch(source, /Pago|paymentLabel|formatCurrency|totalKg|Total/);
 });
 
+test('exchange line preview keys remain unique when a product appears more than once', () => {
+  const source = read('app/print-exchange/[snapshotId].tsx');
+  assert.match(source, /lines\.map\(\(line, index\) =>/);
+  assert.match(source, /key=\{`\$\{title\}-\$\{line\.productId\}-\$\{index\}`\}/);
+});
+
 test('sale print route becomes a wrapper over the shared output screen without changing sale wiring', () => {
   const source = read('app/print/[orderId].tsx');
   assert.match(source, /TicketOutputScreen/);

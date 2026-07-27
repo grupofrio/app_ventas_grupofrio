@@ -64,3 +64,34 @@ test('sale print route becomes a wrapper over the shared output screen without c
   assert.match(source, /Abrir PDF/);
   assert.match(source, /Imprimir en MP210/);
 });
+
+test('exchange submit wires local snapshot creation, strict save, and exchange ticket navigation', () => {
+  const source = read('app/exchange/[stopId].tsx');
+
+  assert.match(source, /buildExchangeTicketSnapshot/);
+  assert.match(source, /saveExchangeTicketSnapshot/);
+  assert.match(source, /const idempotencyKey = makeIdempotencyKey\(\);/);
+  assert.match(source, /let registeredMessage = 'Cambio procesado';/);
+  assert.match(source, /idempotency_key:\s*idempotencyKey/);
+  assert.match(source, /registeredMessage = response\.user_message \|\| registeredMessage/);
+  assert.match(source, /response\.data\.exchange_name/);
+  assert.match(source, /response\.data\.exchange_id/);
+  assert.match(source, /customerName:\s*currentStop\.customer_name/);
+  assert.match(source, /createdAt:\s*new Date\(\)\.toISOString\(\)/);
+  assert.match(source, /const deliverySnapshotLines:[\s\S]*deliveryPayloadLines\.map\(\(line\) => \(\{/);
+  assert.match(source, /const mermaSnapshotLines:[\s\S]*mermaPayloadLines\.map\(\(line\) => \(\{/);
+  assert.match(source, /deliveryLines:\s*deliverySnapshotLines/);
+  assert.match(source, /mermaLines:\s*mermaSnapshotLines/);
+  assert.match(source, /productName:\s*productMap\.get\(line\.product_id\)\?\.name/);
+  assert.match(source, /await saveExchangeTicketSnapshot\(snapshot\)/);
+  assert.match(source, /pathname:\s*'\/print-exchange\/\[snapshotId\]'/);
+  assert.match(source, /snapshotId:\s*snapshot\.snapshotId/);
+
+  const createExchangeIndex = source.indexOf('response = await createExchange({');
+  const saveSnapshotIndex = source.indexOf('await saveExchangeTicketSnapshot(snapshot);');
+  const printRouteIndex = source.indexOf("pathname: '/print-exchange/[snapshotId]'");
+
+  assert.ok(createExchangeIndex >= 0, 'debe existir la llamada createExchange');
+  assert.ok(saveSnapshotIndex > createExchangeIndex, 'el snapshot solo debe guardarse tras exito backend');
+  assert.ok(printRouteIndex > saveSnapshotIndex, 'la navegacion al ticket debe ocurrir despues del guardado');
+});

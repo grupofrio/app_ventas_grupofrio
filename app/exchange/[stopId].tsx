@@ -15,6 +15,8 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { CatalogProductPicker } from '../../src/components/domain/CatalogProductPicker';
+import { buildExchangeTicketSnapshot } from '../../src/services/exchangeTicket';
+import { saveExchangeTicketSnapshot } from '../../src/services/exchangeTicketStorage';
 import { createExchange } from '../../src/services/gfLogistics';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -35,6 +37,12 @@ interface DraftLine {
 interface PickerState {
   section: ExchangeSection;
   lineId: string;
+}
+
+interface ExchangeSnapshotSourceLine {
+  productId: number;
+  productName?: string;
+  qty: number;
 }
 
 function makeDraftId(): string {
@@ -191,10 +199,13 @@ export default function CambioProductoScreen() {
     }
 
     setSaving(true);
+    const idempotencyKey = makeIdempotencyKey();
+    let registeredMessage = 'Cambio procesado';
+    let response;
     try {
-      const response = await createExchange({
+      response = await createExchange({
         analytic_account_id: employeeAnalyticPlazaId,
-        idempotency_key: makeIdempotencyKey(),
+        idempotency_key: idempotencyKey,
         mobile_location_id: resolvedMobileLocationId,
         partner_id: partnerId,
         visit_line_id: currentStop.visit_line_id ?? null,
@@ -203,19 +214,7 @@ export default function CambioProductoScreen() {
         notes,
         validate: true,
       });
-
-      // Delivery: producto sale de la van → resta stock local.
-      deliveryPayloadLines.forEach((line) => updateLocalStock(line.product_id, -line.qty));
-      // Merma: producto dañado regresa a la van → suma stock local.
-      mermaPayloadLines.forEach((line) => updateLocalStock(line.product_id, +line.qty));
-
-      router.replace({
-        pathname: '/checkin/[stopId]',
-        params: {
-          stopId: String(currentStop.id),
-          exchangeMessage: response.user_message || 'Cambio procesado',
-        },
-      } as never);
+      registeredMessage = response.user_message || registeredMessage;
     } catch (error) {
       const code = (error as { code?: string }).code;
       let message: string;
@@ -237,7 +236,61 @@ export default function CambioProductoScreen() {
       }
       Alert.alert('Cambio no registrado', message);
       setSaving(false);
+      return;
     }
+
+    // Delivery: producto sale de la van → resta stock local.
+    deliveryPayloadLines.forEach((line) => updateLocalStock(line.product_id, -line.qty));
+    // Merma: producto dañado regresa a la van → suma stock local.
+    mermaPayloadLines.forEach((line) => updateLocalStock(line.product_id, +line.qty));
+
+    const deliverySnapshotLines: ExchangeSnapshotSourceLine[] = deliveryPayloadLines.map((line) => ({
+      productId: line.product_id,
+      productName: productMap.get(line.product_id)?.name,
+      qty: line.qty,
+    }));
+    const mermaSnapshotLines: ExchangeSnapshotSourceLine[] = mermaPayloadLines.map((line) => ({
+      productId: line.product_id,
+      productName: productMap.get(line.product_id)?.name,
+      qty: line.qty,
+    }));
+    const snapshot = buildExchangeTicketSnapshot({
+      snapshotId: idempotencyKey,
+      exchangeName: response.data.exchange_name,
+      exchangeId: response.data.exchange_id,
+      customerName: currentStop.customer_name,
+      createdAt: new Date().toISOString(),
+      deliveryLines: deliverySnapshotLines,
+      mermaLines: mermaSnapshotLines,
+      notes,
+    });
+
+    try {
+      await saveExchangeTicketSnapshot(snapshot);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.';
+      Alert.alert(
+        'Ticket no preparado',
+        `Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.${message ? `\n\nDetalle: ${message}` : ''}`,
+      );
+      router.replace({
+        pathname: '/checkin/[stopId]',
+        params: {
+          stopId: String(currentStop.id),
+          exchangeMessage: registeredMessage,
+        },
+      } as never);
+      return;
+    }
+
+    router.replace({
+      pathname: '/print-exchange/[snapshotId]',
+      params: {
+        snapshotId: snapshot.snapshotId,
+      },
+    } as never);
   }
 
   function renderSection(

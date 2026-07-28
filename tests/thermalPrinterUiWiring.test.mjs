@@ -7,6 +7,10 @@ const screenSource = readFileSync(
   resolve(process.cwd(), 'src/components/domain/TicketOutputScreen.tsx'),
   'utf8',
 );
+const saleScreenSource = readFileSync(
+  resolve(process.cwd(), 'app/print/[orderId].tsx'),
+  'utf8',
+);
 
 test('button composes the real MP210 service without asking permission on mount', () => {
   assert.match(screenSource, /import\s+ThermalPrinterModule\s+from\s+['"]\.\.\/\.\.\/\.\.\/modules\/thermal-printer/);
@@ -62,28 +66,22 @@ test('success and PDF states use sent copy and disable both output actions durin
   assert.match(screenSource, /buildThermalDocument\(ticket/);
 });
 
-test('preview uses the shared Odoo folio presentation without gating either output', () => {
-  assert.match(screenSource, /getSaleTicketFolioPresentation\(ticket\)/);
-  assert.match(screenSource, />Folio Odoo<\/Text>/);
-  assert.match(screenSource, /\{folioPresentation\??\.odooFolio\}/);
-  assert.match(screenSource, />Referencia local<\/Text>/);
-  assert.match(screenSource, /\{folioPresentation\??\.localReference\}/);
-  assert.doesNotMatch(screenSource, />Pedido<\/Text>/);
-  assert.doesNotMatch(screenSource, />#\{ticket\.saleId\}<\/Text>/);
+test('sale preview uses Odoo folio presentation and shared output gates', () => {
+  assert.match(saleScreenSource, /getSaleTicketFolioPresentation\(ticket\)/);
+  assert.match(saleScreenSource, />Folio Odoo<\/Text>/);
+  assert.match(saleScreenSource, /\{folioPresentation\??\.odooFolio\}/);
+  assert.match(saleScreenSource, />Referencia local<\/Text>/);
+  assert.match(saleScreenSource, /\{folioPresentation\??\.localReference\}/);
+  assert.doesNotMatch(saleScreenSource, />Pedido<\/Text>/);
+  assert.doesNotMatch(saleScreenSource, />#\{ticket\.saleId\}<\/Text>/);
 
-  const mp210Button = screenSource.match(
-    /<Button\s+label="Imprimir en MP210"([\s\S]*?)\/>/,
-  )?.[1] ?? '';
-  const pdfButton = screenSource.match(
-    /<Button\s+label="Abrir PDF"([\s\S]*?)\/>/,
-  )?.[1] ?? '';
+  assert.match(screenSource, /label=\{printActionLabel\}/);
   assert.match(
-    mp210Button,
-    /disabled=\{isPrintJobActive \|\| isOpening \|\| isSelectionLoading\}/,
+    screenSource,
+    /disabled=\{ticket === null \|\| isPrintJobActive \|\| isOpening \|\| isSelectionLoading\}/,
   );
-  assert.match(pdfButton, /disabled=\{isPrintJobActive\}/);
-  assert.doesNotMatch(mp210Button, /odooFolio|folioPresentation|localReference/);
-  assert.doesNotMatch(pdfButton, /odooFolio|folioPresentation|localReference/);
+  assert.match(screenSource, /label=\{pdfActionLabel\}/);
+  assert.match(screenSource, /disabled=\{ticket === null \|\| isPrintJobActive\}/);
 });
 
 test('access failures keep PDF useful and permanent denial offers Android settings', () => {

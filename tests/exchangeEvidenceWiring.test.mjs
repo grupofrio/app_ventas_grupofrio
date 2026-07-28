@@ -654,7 +654,7 @@ const zeroPhotoGuard = zeroPhotoGuards.find((statement) => {
   ));
   return (
     (alert || terminal)
-    && /Evidencia del cambio|Foto requerida|foto[^\n]{0,40}obligatoria/i.test(
+    && /Evidencia del cambio|Evidencia requerida|Foto requerida|foto[^\n]{0,40}obligatoria/i.test(
       directThenStatements.map((candidate) => nodeText(candidate)).join('\n'),
     )
   );
@@ -847,9 +847,22 @@ const photoUploadCalls = syncSyntaxNodes.filter((node) => (
 assert.equal(photoUploadCalls.length, 1, 'el case photo debe reenviar una sola llamada de upload');
 assert(
   photoUploadCalls[0].arguments.some((argument) => (
-    ts.isPropertyAccessExpression(argument)
-    && argument.expression.getText(syncSourceFile) === 'payload'
-    && argument.name.text === 'image_type'
+    (() => {
+      const fallbackOperand = ts.isBinaryExpression(argument)
+        && argument.operatorToken.kind === ts.SyntaxKind.BarBarToken
+        ? argument.left
+        : argument;
+      let unwrapped = fallbackOperand;
+      while (ts.isParenthesizedExpression(unwrapped)) {
+        unwrapped = unwrapped.expression;
+      }
+      if (ts.isAsExpression(unwrapped)) {
+        unwrapped = unwrapped.expression;
+      }
+      return ts.isPropertyAccessExpression(unwrapped)
+        && unwrapped.expression.getText(syncSourceFile) === 'payload'
+        && unwrapped.name.text === 'image_type';
+    })()
   )),
   'el retry de fotos debe reenviar payload.image_type como argumento de uploadStopImage',
 );

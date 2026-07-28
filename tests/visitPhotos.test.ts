@@ -102,6 +102,48 @@ function testEnqueueAllowsSaleEvidenceImageType(module: VisitPhotosModule) {
   assert.deepEqual(calls.map((call) => call.opts), [undefined, undefined]);
 }
 
+function testEnqueueCreatesIndependentExchangeEvidenceItems(module: VisitPhotosModule) {
+  const calls: Array<{
+    type: 'photo';
+    payload: Record<string, unknown>;
+    opts?: SyncEnqueueOptions;
+  }> = [];
+
+  const ids = module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://exchange-photo-1.jpg', 'file://exchange-photo-2.jpg'],
+    imageType: 'exchange',
+    enqueue: (type, payload, opts) => {
+      calls.push({ type, payload, opts });
+      return `exchange-photo-${calls.length}`;
+    },
+  });
+
+  assert.deepEqual(ids, ['exchange-photo-1', 'exchange-photo-2']);
+  assert.notEqual(ids[0], ids[1], 'each exchange photo must get its own queue id');
+  assert.equal(calls.length, 2);
+  assert.notEqual(
+    calls[0].payload,
+    calls[1].payload,
+    'each exchange photo must be represented by an independent queue payload',
+  );
+  assert.deepEqual(calls.map((call) => call.type), ['photo', 'photo']);
+  assert.deepEqual(calls.map((call) => call.payload.stop_id), [44, 44]);
+  assert.deepEqual(calls.map((call) => call.payload.localUri), [
+    'file://exchange-photo-1.jpg',
+    'file://exchange-photo-2.jpg',
+  ]);
+  assert.deepEqual(calls.map((call) => call.payload.image_type), ['exchange', 'exchange']);
+  for (const call of calls) {
+    assert.deepEqual(Object.keys(call.payload), ['stop_id', 'localUri', 'image_type']);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(call.payload, 'image_base64'),
+      false,
+      'exchange photo queue payloads must not include image_base64',
+    );
+  }
+}
+
 function testEnqueueKeepsDependsOnOnlyOptionsExact(module: VisitPhotosModule) {
   const options: Array<SyncEnqueueOptions | undefined> = [];
 
@@ -162,6 +204,7 @@ async function main() {
   testAppendKeepsEveryCapturedPhoto(module);
   testEnqueueCreatesOneUploadPerPhoto(module);
   testEnqueueAllowsSaleEvidenceImageType(module);
+  testEnqueueCreatesIndependentExchangeEvidenceItems(module);
   testEnqueueKeepsDependsOnOnlyOptionsExact(module);
   testEnqueueIsolatesPhotoOptionsFromMutatingConsumers(module);
   console.log('visit photos tests: ok');

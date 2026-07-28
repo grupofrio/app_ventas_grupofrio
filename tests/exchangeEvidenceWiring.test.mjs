@@ -494,10 +494,16 @@ assert(
     && ts.isIfStatement(captureFirstStatement)
     && /\bsaving\b/.test(captureFirstStatement.expression.getText(sourceFile))
     && /\bcapturingPhoto\b/.test(captureFirstStatement.expression.getText(sourceFile))
+    && /\bcapturingPhotoRef\.current\b/.test(captureFirstStatement.expression.getText(sourceFile))
     && directStatements(captureFirstStatement.thenStatement).some((statement) => (
       ts.isReturnStatement(statement)
     )),
-  'handleAddExchangePhoto debe ignorar capturas durante submit o una captura en vuelo',
+  'handleAddExchangePhoto debe ignorar capturas durante submit o una captura en vuelo, incluso antes del rerender',
+);
+assert.match(
+  captureHandler.body,
+  /capturingPhotoRef\.current\s*=\s*true[\s\S]*takePhoto\(\s*\)[\s\S]*finally\s*\{[\s\S]*capturingPhotoRef\.current\s*=\s*false/,
+  'handleAddExchangePhoto debe mantener un lock inmediato de captura hasta que takePhoto termine',
 );
 assert.match(
   captureHandler.body,

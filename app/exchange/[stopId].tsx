@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -103,6 +103,7 @@ export default function CambioProductoScreen() {
   const [pickerState, setPickerState] = useState<PickerState | null>(null);
   const [saving, setSaving] = useState(false);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
+  const capturingPhotoRef = useRef(false);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
 
   useFocusEffect(
@@ -184,7 +185,8 @@ export default function CambioProductoScreen() {
   }
 
   async function handleAddExchangePhoto() {
-    if (saving || capturingPhoto) return;
+    if (saving || capturingPhoto || capturingPhotoRef.current) return;
+    capturingPhotoRef.current = true;
     setCapturingPhoto(true);
     try {
       const photo = await takePhoto();
@@ -194,6 +196,7 @@ export default function CambioProductoScreen() {
       }
       setPhotoUris((previous) => [...previous, photo.localUri]);
     } finally {
+      capturingPhotoRef.current = false;
       setCapturingPhoto(false);
     }
   }

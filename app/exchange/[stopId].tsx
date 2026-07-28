@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,13 +16,16 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { CatalogProductPicker } from '../../src/components/domain/CatalogProductPicker';
+import { deletePhoto, takePhoto } from '../../src/services/camera';
 import { buildExchangeTicketSnapshot } from '../../src/services/exchangeTicket';
 import { saveExchangeTicketSnapshot } from '../../src/services/exchangeTicketStorage';
 import { createExchange } from '../../src/services/gfLogistics';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
+import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
 import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
@@ -90,12 +94,15 @@ export default function CambioProductoScreen() {
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
   const updateLocalStock = useProductStore((s) => s.updateLocalStock);
+  const enqueue = useSyncStore((s) => s.enqueue);
+  const persistQueue = useSyncStore((s) => s.persistQueue);
 
   const [deliveryLines, setDeliveryLines] = useState<DraftLine[]>([]);
   const [mermaLines, setMermaLines] = useState<DraftLine[]>([]);
   const [notes, setNotes] = useState('');
   const [pickerState, setPickerState] = useState<PickerState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -175,8 +182,26 @@ export default function CambioProductoScreen() {
     setPickerState(null);
   }
 
+  async function handleAddExchangePhoto() {
+    const photo = await takePhoto();
+    if (!photo) {
+      Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
+      return;
+    }
+    setPhotoUris((previous) => [...previous, photo.localUri]);
+  }
+
+  async function handleRemoveExchangePhoto(uri: string) {
+    await deletePhoto(uri);
+    setPhotoUris((current) => current.filter((photoUri) => photoUri !== uri));
+  }
+
   async function handleSubmit() {
     if (saving) return;
+    if (photoUris.length === 0) {
+      Alert.alert('Evidencia requerida', 'Toma al menos una foto antes de registrar el cambio.');
+      return;
+    }
     if (!employeeAnalyticPlazaId) {
       Alert.alert('Sucursal faltante', 'No hay sucursal activa configurada para este chofer.');
       return;
@@ -237,6 +262,22 @@ export default function CambioProductoScreen() {
       Alert.alert('Cambio no registrado', message);
       setSaving(false);
       return;
+    }
+
+    try {
+      enqueueVisitPhotos({
+        stopId: currentStop.id,
+        photoUris,
+        enqueue,
+        imageType: 'exchange',
+      });
+      await persistQueue();
+    } catch (error) {
+      const detail = error instanceof Error ? `\n\nDetalle: ${error.message}` : '';
+      Alert.alert(
+        'Evidencia pendiente',
+        `Cambio registrado, pero la evidencia quedó pendiente de guardar. No repitas el cambio.${detail}`,
+      );
     }
 
     // Delivery: producto sale de la van → resta stock local.
@@ -429,12 +470,55 @@ export default function CambioProductoScreen() {
           numberOfLines={3}
         />
 
+        <Card style={styles.evidenceCard}>
+          <View style={styles.evidenceHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.evidenceTitle}>Evidencia del cambio (obligatoria)</Text>
+              <Text style={styles.evidenceCopy}>
+                Mínimo 1 foto. Puedes agregar varias fotos para documentar el cambio.
+              </Text>
+            </View>
+            {photoUris.length > 0 ? (
+              <Text style={styles.photoCount}>{photoUris.length} foto{photoUris.length === 1 ? '' : 's'}</Text>
+            ) : null}
+          </View>
+
+          {photoUris.length === 0 ? (
+            <Button
+              label="Tomar foto"
+              variant="secondary"
+              onPress={() => void handleAddExchangePhoto()}
+            />
+          ) : (
+            <>
+              <Button
+                label="Agregar otra foto"
+                variant="secondary"
+                onPress={() => void handleAddExchangePhoto()}
+              />
+              <View style={styles.photoGrid}>
+                {photoUris.map((uri) => (
+                  <View key={uri} style={styles.photoItem}>
+                    <Image source={{ uri }} style={styles.photoThumbnail} />
+                    <Button
+                      label="Eliminar"
+                      variant="danger"
+                      small
+                      onPress={() => void handleRemoveExchangePhoto(uri)}
+                    />
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </Card>
+
         <Button
           label="Registrar Cambio"
           onPress={() => void handleSubmit()}
           fullWidth
           loading={saving}
-          disabled={saving}
+          disabled={saving || photoUris.length === 0}
           style={styles.submitButton}
         />
       </ScrollView>
@@ -587,6 +671,44 @@ const styles = StyleSheet.create({
     fontSize: 15,
     minHeight: 90,
     textAlignVertical: 'top',
+  },
+  evidenceCard: {
+    gap: 12,
+  },
+  evidenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  evidenceTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  evidenceCopy: {
+    fontSize: 12,
+    color: colors.textDim,
+    marginTop: 4,
+  },
+  photoCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  photoItem: {
+    width: '31%',
+    gap: 6,
+  },
+  photoThumbnail: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radii.button,
+    backgroundColor: colors.surface,
   },
   submitButton: {
     marginTop: 8,

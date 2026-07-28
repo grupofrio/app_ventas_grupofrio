@@ -102,6 +102,7 @@ export default function CambioProductoScreen() {
   const [notes, setNotes] = useState('');
   const [pickerState, setPickerState] = useState<PickerState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
 
   useFocusEffect(
@@ -183,21 +184,28 @@ export default function CambioProductoScreen() {
   }
 
   async function handleAddExchangePhoto() {
-    const photo = await takePhoto();
-    if (!photo) {
-      Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
-      return;
+    if (saving || capturingPhoto) return;
+    setCapturingPhoto(true);
+    try {
+      const photo = await takePhoto();
+      if (!photo) {
+        Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
+        return;
+      }
+      setPhotoUris((previous) => [...previous, photo.localUri]);
+    } finally {
+      setCapturingPhoto(false);
     }
-    setPhotoUris((previous) => [...previous, photo.localUri]);
   }
 
   async function handleRemoveExchangePhoto(uri: string) {
+    if (saving || capturingPhoto) return;
     await deletePhoto(uri);
     setPhotoUris((current) => current.filter((photoUri) => photoUri !== uri));
   }
 
   async function handleSubmit() {
-    if (saving) return;
+    if (saving || capturingPhoto) return;
     if (photoUris.length === 0) {
       Alert.alert('Evidencia requerida', 'Toma al menos una foto antes de registrar el cambio.');
       return;
@@ -488,6 +496,7 @@ export default function CambioProductoScreen() {
               label="Tomar foto"
               variant="secondary"
               onPress={() => void handleAddExchangePhoto()}
+              disabled={saving || capturingPhoto}
             />
           ) : (
             <>
@@ -495,6 +504,7 @@ export default function CambioProductoScreen() {
                 label="Agregar otra foto"
                 variant="secondary"
                 onPress={() => void handleAddExchangePhoto()}
+                disabled={saving || capturingPhoto}
               />
               <View style={styles.photoGrid}>
                 {photoUris.map((uri) => (
@@ -505,6 +515,7 @@ export default function CambioProductoScreen() {
                       variant="danger"
                       small
                       onPress={() => void handleRemoveExchangePhoto(uri)}
+                      disabled={saving || capturingPhoto}
                     />
                   </View>
                 ))}
@@ -518,7 +529,7 @@ export default function CambioProductoScreen() {
           onPress={() => void handleSubmit()}
           fullWidth
           loading={saving}
-          disabled={saving || photoUris.length === 0}
+          disabled={saving || capturingPhoto || photoUris.length === 0}
           style={styles.submitButton}
         />
       </ScrollView>

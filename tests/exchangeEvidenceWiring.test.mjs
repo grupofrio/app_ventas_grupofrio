@@ -429,15 +429,30 @@ function isSavingReference(expression) {
   return unwrapParentheses(expression).getText(sourceFile) === 'saving';
 }
 
-function isSavingOrExactlyZeroPhotos(expression) {
+function disjunctionOperands(expression) {
   const unwrapped = unwrapParentheses(expression);
   if (
-    !ts.isBinaryExpression(unwrapped)
-    || unwrapped.operatorToken.kind !== ts.SyntaxKind.BarBarToken
-  ) return false;
+    ts.isBinaryExpression(unwrapped)
+    && unwrapped.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  ) {
+    return [
+      ...disjunctionOperands(unwrapped.left),
+      ...disjunctionOperands(unwrapped.right),
+    ];
+  }
+  return [unwrapped];
+}
+
+function isCapturingPhotoReference(expression) {
+  return unwrapParentheses(expression).getText(sourceFile) === 'capturingPhoto';
+}
+
+function isSavingCapturingOrExactlyZeroPhotos(expression) {
+  const operands = disjunctionOperands(expression);
   return (
-    (isSavingReference(unwrapped.left) && isExactZeroPhotoPredicate(unwrapped.right))
-    || (isExactZeroPhotoPredicate(unwrapped.left) && isSavingReference(unwrapped.right))
+    operands.some((operand) => isSavingReference(operand))
+    && operands.some((operand) => isCapturingPhotoReference(operand))
+    && operands.some((operand) => isExactZeroPhotoPredicate(operand))
   );
 }
 
@@ -473,6 +488,22 @@ function escapeRegExp(value) {
 const captureHandler = namedFunctionBodies()
   .find(({ name }) => name === 'handleAddExchangePhoto');
 assert(captureHandler, 'debe existir el handler nombrado handleAddExchangePhoto');
+const captureFirstStatement = captureHandler.bodyNode.statements[0];
+assert(
+  captureFirstStatement
+    && ts.isIfStatement(captureFirstStatement)
+    && /\bsaving\b/.test(captureFirstStatement.expression.getText(sourceFile))
+    && /\bcapturingPhoto\b/.test(captureFirstStatement.expression.getText(sourceFile))
+    && directStatements(captureFirstStatement.thenStatement).some((statement) => (
+      ts.isReturnStatement(statement)
+    )),
+  'handleAddExchangePhoto debe ignorar capturas durante submit o una captura en vuelo',
+);
+assert.match(
+  captureHandler.body,
+  /setCapturingPhoto\(\s*true\s*\)[\s\S]*takePhoto\(\s*\)[\s\S]*finally\s*\{[\s\S]*setCapturingPhoto\(\s*false\s*\)/,
+  'handleAddExchangePhoto debe liberar capturingPhoto en finally',
+);
 const captureTakePhotoCalls = directCallsInBody(captureHandler.bodyNode, 'takePhoto');
 const captureSetterCalls = directCallsInBody(captureHandler.bodyNode, 'setPhotoUris');
 const captureResultChecks = directNodesInBody(captureHandler.bodyNode, ts.isIfStatement).filter((statement) => (
@@ -532,15 +563,22 @@ assert.match(
   /import\s*\{[^}]*\btakePhoto\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/src\/services\/camera['"]/,
   'la pantalla debe usar la cámara existente',
 );
-const captureWiring = onPressAttributesForTag(['Button', 'TouchableOpacity'])
-  .find(({ attribute, owner }) => (
+const captureControls = onPressAttributesForTag(['Button', 'TouchableOpacity'])
+  .filter(({ attribute, owner }) => (
     new RegExp(`\\b${escapeRegExp(captureHandler.name)}\\b`).test(nodeText(attribute))
     && /Tomar foto|Agregar otra foto/.test(nodeText(owner))
   ));
 assert(
-  captureWiring,
+  captureControls.length > 0,
   'handleAddExchangePhoto debe estar en el onPress del CTA Tomar foto o Agregar otra foto',
 );
+captureControls.forEach(({ owner }) => {
+  assert.match(
+    nodeText(owner),
+    /disabled=\{saving\s*\|\|\s*capturingPhoto\}/,
+    'los CTA de evidencia deben bloquearse durante submit o captura',
+  );
+});
 
 const removalHandler = namedFunctionBodies()
   .filter(({ name }) => /photo/i.test(name))
@@ -560,6 +598,17 @@ assert(
   directCallsInBody(removalHandler.bodyNode, 'setPhotoUris')
     .some((call) => isPhotoRemovalSetterCall(call)),
   'el setter debe filtrar la misma URI seleccionada desde el arreglo actual',
+);
+const removalFirstStatement = removalHandler.bodyNode.statements[0];
+assert(
+  removalFirstStatement
+    && ts.isIfStatement(removalFirstStatement)
+    && /\bsaving\b/.test(removalFirstStatement.expression.getText(sourceFile))
+    && /\bcapturingPhoto\b/.test(removalFirstStatement.expression.getText(sourceFile))
+    && directStatements(removalFirstStatement.thenStatement).some((statement) => (
+      ts.isReturnStatement(statement)
+    )),
+  'handleRemoveExchangePhoto debe ignorar eliminaciones durante submit o una captura en vuelo',
 );
 assert.match(
   exchange,
@@ -587,6 +636,11 @@ assert(
     && /(?:label\s*=\s*['"]Eliminar['"]|>\s*Eliminar\s*<)/.test(nodeText(photoMapBody)),
   'la UI de photoUris debe mostrar Eliminar y pasar la URI seleccionada al handler fotográfico',
 );
+assert.match(
+  nodeText(photoMapBody),
+  /disabled=\{saving\s*\|\|\s*capturingPhoto\}/,
+  'Eliminar debe bloquearse durante submit o captura',
+);
 
 assert.match(
   exchange,
@@ -599,9 +653,10 @@ const submitHandler = namedFunctionBodies().find(({ name }) => name === 'handleS
 assert(submitHandler, 'la pantalla debe tener un handler nombrado handleSubmit');
 const firstSubmitStatement = submitHandler.bodyNode.statements[0];
 assert(
-  firstSubmitStatement
+    firstSubmitStatement
     && ts.isIfStatement(firstSubmitStatement)
     && /\bsaving\b/.test(firstSubmitStatement.expression.getText(sourceFile))
+    && /\bcapturingPhoto\b/.test(firstSubmitStatement.expression.getText(sourceFile))
     && directStatements(firstSubmitStatement.thenStatement).some((statement) => (
       ts.isReturnStatement(statement)
     )),
@@ -665,8 +720,8 @@ const registrationDisabledExpression = registrationDisabled
   && registrationDisabled.initializer
   && ts.isJsxExpression(registrationDisabled.initializer)
   && registrationDisabled.initializer.expression;
-const registrationDisabledHasSavingAndExactZeroPredicate = registrationDisabledExpression
-  && isSavingOrExactlyZeroPhotos(registrationDisabledExpression);
+const registrationDisabledHasSavingCapturingAndExactZeroPredicate = registrationDisabledExpression
+  && isSavingCapturingOrExactlyZeroPhotos(registrationDisabledExpression);
 assert(
   zeroPhotoGuard,
   'handleSubmit debe validar las fotos con un predicado real de cero fotos',
@@ -676,8 +731,8 @@ assert(
   'el guard de cero fotos debe ocurrir antes de llamar a createExchange',
 );
 assert(
-  registrationDisabledHasSavingAndExactZeroPredicate,
-  'el Button real de Registrar Cambio debe deshabilitarse con saving || photoUris.length === 0',
+  registrationDisabledHasSavingCapturingAndExactZeroPredicate,
+  'el Button real de Registrar Cambio debe deshabilitarse con saving || capturingPhoto || photoUris.length === 0',
 );
 const directThenStatements = directStatements(zeroPhotoGuard.thenStatement);
 assert(

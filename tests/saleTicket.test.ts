@@ -10,6 +10,26 @@ import {
   mergeSaleTicketFromOrder,
   withSaleTicketOdooFolio,
 } from '../src/services/saleTicket.ts';
+import { formatTicketDate } from '../src/services/saleTicketFormatting.ts';
+
+test('formatTicketDate renders UTC timestamps in Mexico City time', () => {
+  const environment = process.env as Record<string, string | undefined>;
+  const originalTimeZone = environment.TZ;
+  environment.TZ = 'UTC';
+
+  try {
+    assert.equal(
+      formatTicketDate('2026-07-21T16:30:00.000Z'),
+      '21/07/2026, 10:30 a.m.',
+    );
+  } finally {
+    if (originalTimeZone === undefined) {
+      delete environment.TZ;
+    } else {
+      environment.TZ = originalTimeZone;
+    }
+  }
+});
 
 test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () => {
   const snapshot = buildSaleTicketSnapshot({

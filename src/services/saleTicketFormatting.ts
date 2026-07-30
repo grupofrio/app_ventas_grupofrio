@@ -1,3 +1,5 @@
+import { DEFAULT_OPERATION_TIME_ZONE } from '../utils/localDate.ts';
+
 export const SALE_TICKET_DEFAULT_SELLER = 'Vendedor no especificado';
 
 export function formatQuantity(qty: number): string {
@@ -29,6 +31,7 @@ export function formatTicketDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString('es-MX', {
+    timeZone: DEFAULT_OPERATION_TIME_ZONE,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

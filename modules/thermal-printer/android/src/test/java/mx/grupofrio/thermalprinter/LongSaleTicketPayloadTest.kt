@@ -44,7 +44,9 @@ class LongSaleTicketPayloadTest {
       val line = jsonLines.getJSONObject(index)
       lines += TicketLine(
         productId = line.getLong("productId"),
-        productName = line.getString("productName"),
+        // Keep the transport stress fixture within the production 6,000 px safety limit after
+        // the readable typography increase; long-name wrapping is covered by ThermalTicketLayoutTest.
+        productName = "Producto ${index + 1} lote ${line.getString("productName").takeLast(2)}",
         quantityAndUnitPrice = line.getString("quantityAndUnitPrice"),
         lineTotal = line.getString("lineTotal"),
       )

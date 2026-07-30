@@ -74,7 +74,9 @@ internal class DiagnosticTicketFactory {
   }
 
   private companion object {
-    const val CALIBRATION_LINE_COUNT = 34
+    // Keep the diagnostic ticket below the production 6,000 px safety limit after the readable
+    // typography increase while still producing multiple raster bands (>64 KiB).
+    const val CALIBRATION_LINE_COUNT = 20
     const val BITS_PER_BYTE = 8
     const val LEFT_EDGE_MASK = 0x80
     const val RIGHT_EDGE_MASK = 0x01

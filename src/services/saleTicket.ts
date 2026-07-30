@@ -222,11 +222,13 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
   const folioPresentation = getSaleTicketFolioPresentation(snapshot);
   const rows = snapshot.lines.map((line) => `
     <tr>
-      <td class="item">
+      <td class="product" colspan="2">
         <div class="name">${escapeHtml(line.productName)}</div>
-        <div class="meta">${formatQuantityAndUnitPrice(line.qty, line.unitPrice)}</div>
+        <div class="product-detail">
+          <span class="meta">${formatQuantityAndUnitPrice(line.qty, line.unitPrice)}</span>
+          <span class="amount">${formatTicketCurrency(line.lineTotal)}</span>
+        </div>
       </td>
-      <td class="amount">${formatTicketCurrency(line.lineTotal)}</td>
     </tr>
   `).join('');
 
@@ -245,12 +247,12 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     body {
       width: 58mm;
       margin: 0;
-      padding: 4mm 0;
+      padding: 8px 0;
       color: #111111;
       background: #ffffff;
-      font-family: monospace;
-      font-size: 10px;
-      line-height: 1.3;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 14px;
+      line-height: 19px;
     }
     .center {
       text-align: center;
@@ -260,64 +262,105 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
       width: 38mm;
       max-width: 100%;
       height: auto;
-      margin: 0 auto 3px;
+      margin: 0 auto 8px;
     }
     .muted {
       color: #444444;
     }
     .legal-name {
-      font-size: 9px;
+      font-size: 12px;
       font-weight: 700;
-      line-height: 1.2;
-      margin-top: 2px;
+      line-height: 17px;
     }
     .tax-id {
-      font-size: 9px;
-      line-height: 1.2;
-      margin-top: 1px;
+      font-size: 12px;
+      line-height: 17px;
+      margin-top: 2px;
+    }
+    .ticket-title {
+      font-size: 14px;
+      line-height: 19px;
+      margin-top: 4px;
     }
     .credit-note {
-      font-size: 8px;
-      line-height: 1.25;
+      font-size: 12px;
+      line-height: 17px;
       text-align: justify;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .divider {
       border-top: 1px dashed #111111;
-      margin: 6px 0;
+      margin: 8px 0;
     }
     .row {
       display: flex;
       justify-content: space-between;
-      gap: 6px;
-      margin: 2px 0;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    .row > span:first-child {
+      font-size: 12px;
+      line-height: 17px;
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+    .row > span:last-child {
+      font-size: 14px;
+      line-height: 19px;
+      text-align: right;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     table {
       width: 100%;
       border-collapse: collapse;
     }
     td {
-      padding: 3px 0;
+      padding: 5px 0;
       vertical-align: top;
     }
-    .item {
-      width: 70%;
-      padding-right: 4px;
+    .product {
+      width: 100%;
     }
     .name {
+      font-size: 15px;
+      line-height: 20px;
       font-weight: 700;
       word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .product-detail {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 3px;
     }
     .meta {
       color: #444444;
-      font-size: 9px;
+      font-size: 12px;
+      line-height: 17px;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .amount {
+      font-size: 15px;
+      line-height: 20px;
       text-align: right;
-      white-space: nowrap;
-      width: 30%;
+      flex: 0 0 35%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .total {
-      font-size: 13px;
+      font-size: 20px;
+      line-height: 26px;
+      font-weight: 700;
+    }
+    .total > span {
+      font-size: 20px;
+      line-height: 26px;
       font-weight: 700;
     }
   </style>
@@ -327,7 +370,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     <img class="brand-logo" src="${escapeHtml(SALE_TICKET_LOGO_DATA_URI)}" alt="Grupo Frio" />
     <div class="legal-name">${escapeHtml(SALE_TICKET_BRANDING.legalName)}</div>
     <div class="tax-id">${escapeHtml(SALE_TICKET_BRANDING.rfcLabel)}</div>
-    <div class="muted">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
+    <div class="ticket-title">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
   </div>
   <div class="divider"></div>
   <div class="row"><span>Folio Odoo</span><span>${escapeHtml(folioPresentation.odooFolio)}</span></div>
@@ -335,8 +378,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     ? ''
     : `<div class="row"><span>Referencia local</span><span>${escapeHtml(folioPresentation.localReference)}</span></div>`}
   <div class="row"><span>Fecha</span><span>${escapeHtml(formatTicketDate(snapshot.createdAt))}</span></div>
-  <div>Cliente:</div>
-  <div><strong>${escapeHtml(snapshot.customerName)}</strong></div>
+  <div class="row"><span>Cliente</span><span><strong>${escapeHtml(snapshot.customerName)}</strong></span></div>
   <div class="row"><span>Vendedor</span><span>${escapeHtml(normalizeSellerName(snapshot.sellerName))}</span></div>
   <div class="row"><span>Pago</span><span>${escapeHtml(snapshot.paymentLabel)}</span></div>
   <div class="divider"></div>

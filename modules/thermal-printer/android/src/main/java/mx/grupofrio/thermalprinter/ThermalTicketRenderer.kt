@@ -25,17 +25,16 @@ internal interface FontProvider {
 
 internal class PackagedFontProvider(private val assets: AssetManager) : FontProvider {
   private val regular by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-    Typeface.createFromAsset(assets, REGULAR_ASSET)
+    Typeface.create(FAMILY_NAME, Typeface.NORMAL)
   }
   private val bold by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-    Typeface.createFromAsset(assets, BOLD_ASSET)
+    Typeface.create(FAMILY_NAME, Typeface.BOLD)
   }
 
   override fun typeface(bold: Boolean): Typeface = if (bold) this.bold else regular
 
   private companion object {
-    const val REGULAR_ASSET = "fonts/SpaceMono-Regular.ttf"
-    const val BOLD_ASSET = "fonts/SpaceMono-Bold.ttf"
+    const val FAMILY_NAME = "sans-serif"
   }
 }
 

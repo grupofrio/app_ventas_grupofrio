@@ -3,6 +3,7 @@ package mx.grupofrio.thermalprinter
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Typeface
 import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import java.io.ByteArrayOutputStream
@@ -282,21 +283,11 @@ class ThermalTicketRendererTest {
   }
 
   @Test
-  fun `renderer loads the exact packaged Space Mono assets`() {
-    val regularBytes = context.assets.open("fonts/SpaceMono-Regular.ttf").use { it.readBytes() }
-    val boldBytes = context.assets.open("fonts/SpaceMono-Bold.ttf").use { it.readBytes() }
+  fun `renderer uses the system sans-serif family with distinct weights`() {
     val fonts = PackagedFontProvider(context.assets)
 
-    assertEquals(98_320, regularBytes.size)
-    assertEquals(
-      "508a2a382b46a55be24d9edb70ce7d59be695cd5808e641fda24c40864b0d5d2",
-      regularBytes.sha256(),
-    )
-    assertEquals(97_256, boldBytes.size)
-    assertEquals(
-      "35da133403a96d2972f91744f4e8dd3f3d0155e6b9aedbaf14266efa58c12d2d",
-      boldBytes.sha256(),
-    )
+    assertEquals(Typeface.create("sans-serif", Typeface.NORMAL), fonts.typeface(bold = false))
+    assertEquals(Typeface.create("sans-serif", Typeface.BOLD), fonts.typeface(bold = true))
     assertNotSame(fonts.typeface(bold = false), fonts.typeface(bold = true))
   }
 

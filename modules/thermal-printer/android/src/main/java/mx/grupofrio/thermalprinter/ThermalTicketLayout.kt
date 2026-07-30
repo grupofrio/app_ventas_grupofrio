@@ -67,27 +67,28 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     val builder = LayoutBuilder()
 
     logoDimensions?.let(builder::addLogo)
-    builder.addWrapped(safeTicket.branding.legalName, BODY_BOLD_CENTER)
+    builder.addWrapped(safeTicket.branding.legalName, SMALL_BOLD_CENTER)
     builder.addWrapped(safeTicket.branding.rfcLabel, SMALL_CENTER)
     builder.addWrapped(safeTicket.branding.title, TOTAL_BOLD_CENTER)
     builder.addDivider()
 
-    builder.addLabelValue("Folio:", safeTicket.folio, BODY_STYLE)
-    builder.addLabelValue("Fecha:", safeTicket.formattedDate, BODY_STYLE)
-    builder.addLabelValue("Cliente:", safeTicket.customerName, BODY_STYLE)
-    builder.addLabelValue("Vendedor:", safeTicket.sellerName, BODY_STYLE)
-    builder.addLabelValue("Pago:", safeTicket.paymentLabel, BODY_STYLE)
+    builder.addLabelValue("Folio:", safeTicket.folio, LABEL_STYLE, BODY_STYLE)
+    builder.addLabelValue("Fecha:", safeTicket.formattedDate, LABEL_STYLE, BODY_STYLE)
+    builder.addLabelValue("Cliente:", safeTicket.customerName, LABEL_STYLE, BODY_STYLE)
+    builder.addLabelValue("Vendedor:", safeTicket.sellerName, LABEL_STYLE, BODY_STYLE)
+    builder.addLabelValue("Pago:", safeTicket.paymentLabel, LABEL_STYLE, BODY_STYLE)
     builder.addDivider()
 
     safeTicket.lines.forEach { line ->
       builder.addWrapped(line.productName, BODY_BOLD)
-      builder.addAmountRow(line.quantityAndUnitPrice, line.lineTotal, SMALL_STYLE)
+      builder.addProductRow(line.quantityAndUnitPrice, line.lineTotal)
       builder.addGap(PRODUCT_GAP_PX)
     }
 
     builder.addDivider()
     builder.addAmountRow("Subtotal:", safeTicket.subtotal, BODY_STYLE)
     builder.addAmountRow("Kilogramos:", safeTicket.totalKg, BODY_STYLE)
+    builder.addGap(TOTAL_TOP_GAP_PX)
     builder.addAmountRow("Total:", safeTicket.total, TOTAL_BOLD)
 
     safeTicket.diagnosticCalibrationText16?.let(builder::addDiagnosticCalibrationText16)
@@ -211,9 +212,12 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       wrapText(text, style, AVAILABLE_WIDTH_PX.toFloat()).forEach { line -> addTextLine(line, style) }
     }
 
-    fun addLabelValue(label: String, value: String, style: TextStyle) {
-      val labelStyle = style.copy(bold = true, alignment = TextAlignment.LEFT)
-      val valueStyle = style.copy(alignment = TextAlignment.LEFT)
+    fun addLabelValue(
+      label: String,
+      value: String,
+      labelStyle: TextStyle,
+      valueStyle: TextStyle,
+    ) {
       val labelWidth = measuredWidth(label, labelStyle)
       val sameLineWidth = labelWidth + LABEL_GAP_PX + measuredWidth(value, valueStyle)
       if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
@@ -234,6 +238,29 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
       }
     }
 
+    fun addProductRow(quantityAndUnitPrice: String, amount: String) {
+      val amountStyle = fitAmount(amount, TOTAL_BOLD)
+      val quantityStyle = SMALL_STYLE
+      val sameLineWidth = measuredWidth(quantityAndUnitPrice, quantityStyle) + PRODUCT_AMOUNT_GAP_PX +
+        measuredWidth(amount, amountStyle)
+      if (sameLineWidth <= AVAILABLE_WIDTH_PX) {
+        val row = rowGeometry(quantityStyle, amountStyle)
+        appendText(quantityAndUnitPrice, INSET_PX.toFloat(), row, quantityStyle)
+        appendText(
+          amount,
+          (WIDTH_PX - INSET_PX).toFloat(),
+          row,
+          amountStyle.copy(alignment = TextAlignment.RIGHT),
+        )
+        y = row.bottomExclusive
+      } else {
+        wrapText(quantityAndUnitPrice, quantityStyle, AVAILABLE_WIDTH_PX.toFloat())
+          .forEach { line -> addTextLine(line, quantityStyle) }
+        wrapText(amount, amountStyle.copy(alignment = TextAlignment.RIGHT), AVAILABLE_WIDTH_PX.toFloat())
+          .forEach { line -> addTextLine(line, amountStyle.copy(alignment = TextAlignment.RIGHT)) }
+      }
+    }
+
     fun addAmountRow(label: String, amount: String, requestedStyle: TextStyle) {
       val amountStyle = fitAmount(amount, requestedStyle)
       val labelStyle = requestedStyle.copy(bold = true, alignment = TextAlignment.LEFT)
@@ -251,7 +278,8 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
         y = row.bottomExclusive
       } else {
         addWrapped(label, labelStyle)
-        addTextLine(amount, amountStyle.copy(alignment = TextAlignment.RIGHT))
+        wrapText(amount, amountStyle.copy(alignment = TextAlignment.RIGHT), AVAILABLE_WIDTH_PX.toFloat())
+          .forEach { line -> addTextLine(line, amountStyle.copy(alignment = TextAlignment.RIGHT)) }
       }
     }
 
@@ -265,7 +293,7 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
 
     /**
      * Diagnostic-only fixed-size command. Android font hinting can make adjacent fitted sizes share
-     * a rounded advance, so this calibration line must exercise the 16 px ticket minimum directly.
+     * a rounded advance, so this calibration line must exercise the minimum amount size directly.
      */
     fun addDiagnosticCalibrationText16(text: String) {
       addTextLine(text, DIAGNOSTIC_MINIMUM_BOLD_RIGHT)
@@ -314,12 +342,16 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
 
     private fun fitAmount(amount: String, style: TextStyle): TextStyle {
       val startSize = max(style.sizePx, MIN_AMOUNT_SIZE_PX)
-      for (size in startSize downTo MIN_AMOUNT_SIZE_PX) {
+      for (size in startSize downTo MIN_AMOUNT_SIZE_PX step AMOUNT_SIZE_STEP_PX) {
         val lineHeight = max(size + MIN_TEXT_LEADING_PX, style.lineHeightPx - (style.sizePx - size))
         val candidate = style.copy(sizePx = size, lineHeightPx = lineHeight)
         if (measuredWidth(amount, candidate) <= AVAILABLE_WIDTH_PX) return candidate
       }
-      invalidTicket("Amount does not fit at minimum size")
+      return style.copy(
+        sizePx = MIN_AMOUNT_SIZE_PX,
+        lineHeightPx = max(MIN_AMOUNT_SIZE_PX + MIN_TEXT_LEADING_PX, style.lineHeightPx -
+          (style.sizePx - MIN_AMOUNT_SIZE_PX)),
+      )
     }
 
     private fun rowGeometry(vararg styles: TextStyle): RowGeometry {
@@ -358,30 +390,35 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     const val MAX_HEIGHT_PX = 6_000
     const val INSET_PX = 8
     const val MAX_LOGO_PX = 256
-    const val BODY_SIZE_PX = 20
-    const val BODY_LINE_HEIGHT_PX = 26
-    const val SMALL_SIZE_PX = 18
-    const val SMALL_LINE_HEIGHT_PX = 23
-    const val TOTAL_SIZE_PX = 28
-    const val TOTAL_LINE_HEIGHT_PX = 34
-    const val MIN_AMOUNT_SIZE_PX = 16
+    const val BODY_SIZE_PX = 32
+    const val BODY_LINE_HEIGHT_PX = 40
+    const val SMALL_SIZE_PX = 26
+    const val SMALL_LINE_HEIGHT_PX = 34
+    const val TOTAL_SIZE_PX = 44
+    const val TOTAL_LINE_HEIGHT_PX = 54
+    const val MIN_AMOUNT_SIZE_PX = 24
 
     private const val AVAILABLE_WIDTH_PX = WIDTH_PX - 2 * INSET_PX
     private const val TOP_PADDING_PX = 8
     private const val BOTTOM_PADDING_PX = 8
     private const val LABEL_GAP_PX = 8
-    private const val SECTION_GAP_PX = 8
-    private const val PRODUCT_GAP_PX = 4
-    private const val DIVIDER_TOP_GAP_PX = 5
-    private const val DIVIDER_BOTTOM_GAP_PX = 7
+    private const val SECTION_GAP_PX = 12
+    private const val PRODUCT_GAP_PX = 6
+    private const val PRODUCT_AMOUNT_GAP_PX = 12
+    private const val TOTAL_TOP_GAP_PX = 12
+    private const val DIVIDER_TOP_GAP_PX = 7
+    private const val DIVIDER_BOTTOM_GAP_PX = 9
     private const val DIVIDER_THICKNESS_PX = 1L
     private const val MIN_TEXT_LEADING_PX = 4
+    private const val AMOUNT_SIZE_STEP_PX = 2
 
     private val BODY_STYLE = TextStyle(BODY_SIZE_PX, BODY_LINE_HEIGHT_PX)
     private val BODY_BOLD = BODY_STYLE.copy(bold = true)
     private val BODY_BOLD_CENTER = BODY_BOLD.copy(alignment = TextAlignment.CENTER)
     private val SMALL_STYLE = TextStyle(SMALL_SIZE_PX, SMALL_LINE_HEIGHT_PX)
+    private val SMALL_BOLD_CENTER = SMALL_STYLE.copy(bold = true, alignment = TextAlignment.CENTER)
     private val SMALL_CENTER = SMALL_STYLE.copy(alignment = TextAlignment.CENTER)
+    private val LABEL_STYLE = SMALL_STYLE.copy(bold = true)
     private val TOTAL_BOLD = TextStyle(TOTAL_SIZE_PX, TOTAL_LINE_HEIGHT_PX, bold = true)
     private val TOTAL_BOLD_CENTER = TOTAL_BOLD.copy(alignment = TextAlignment.CENTER)
     private val DIAGNOSTIC_MINIMUM_BOLD_RIGHT = TextStyle(

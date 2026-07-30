@@ -103,7 +103,7 @@ Se conservarán sin transformación adicional:
 - Los importes se mantienen alineados y no bajan del mínimo definido.
 - El ticket de crédito es más alto que el de efectivo y conserva la nota legal.
 - El ticket sigue siendo válido para el contrato nativo: `schemaVersion`, branding, folio, fecha, cliente, vendedor, pago, líneas, subtotal, kilogramos, total y `creditNote` conservan sus nombres, tipos y valores.
-- La salida conserva el bitmap monocromático, el ancho 384 y la capacidad de imprimir mediante el mismo comando Bluetooth existente.
+- La salida conserva el `MonochromeRaster` de bits empacados, el ancho 384 y la capacidad de imprimir mediante el mismo comando Bluetooth existente. El renderer puede seguir usando un bitmap intermedio `ARGB_8888`; `ALPHA_8` no forma parte del contrato actual.
 
 ### PDF y app
 
@@ -114,7 +114,7 @@ Se conservarán sin transformación adicional:
 - Casos mínimos: ticket en efectivo, ticket a crédito con nota, nombre de cliente largo, producto con nombre largo o token sin espacios y ticket que alcanza el límite de 6,000 px.
 - Las pruebas existentes de branding, crédito, fecha CDMX, wrapping y typecheck siguen pasando.
 
-Las pruebas deberán comprobar explícitamente que: (a) `buildSaleTicketHtml` declara `Arial` como primera familia, no contiene `monospace`, incluye los tamaños de la tabla, permite wrapping y conserva ancho 58 mm/márgenes cero; (b) el documento térmico conserva una comparación profunda del snapshot de entrada, incluidos branding (`logoPngBase64`, versión, razón social, RFC, título y pie), folio, fecha, cliente, vendedor, pago, líneas, subtotal, kilogramos, total y `creditNote`; (c) el renderer usa `Typeface.create("sans-serif", ...)`, entrega bitmap `ALPHA_8` de ancho 384 y conserva el límite de 6,000 px; y (d) PDF y vista previa contienen exactamente esos mismos campos y valores, incluyendo crédito/efectivo, nota legal, wrapping de nombres largos y crecimiento de altura.
+Las pruebas deberán comprobar explícitamente que: (a) `buildSaleTicketHtml` declara `Arial` como primera familia, no contiene `monospace`, incluye los tamaños de la tabla, permite wrapping y conserva ancho 58 mm/márgenes cero; (b) el documento térmico conserva una comparación profunda del snapshot de entrada, incluidos branding (`logoPngBase64`, versión, razón social, RFC, título y pie), folio, fecha, cliente, vendedor, pago, líneas, subtotal, kilogramos, total y `creditNote`; (c) el renderer usa `Typeface.create("sans-serif", ...)`, entrega `MonochromeRaster` empacado de ancho 384 y conserva el límite de 6,000 px; y (d) PDF y vista previa contienen exactamente esos mismos campos y valores, incluyendo crédito/efectivo, nota legal, wrapping de nombres largos y crecimiento de altura.
 
 ## Archivos previstos
 

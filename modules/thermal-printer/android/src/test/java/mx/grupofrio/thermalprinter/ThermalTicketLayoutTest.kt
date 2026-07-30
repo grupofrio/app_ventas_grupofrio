@@ -22,13 +22,13 @@ class ThermalTicketLayoutTest {
     assertEquals(6_000, ThermalTicketLayout.MAX_HEIGHT_PX)
     assertEquals(8, ThermalTicketLayout.INSET_PX)
     assertEquals(256, ThermalTicketLayout.MAX_LOGO_PX)
-    assertEquals(20, ThermalTicketLayout.BODY_SIZE_PX)
-    assertEquals(26, ThermalTicketLayout.BODY_LINE_HEIGHT_PX)
-    assertEquals(18, ThermalTicketLayout.SMALL_SIZE_PX)
-    assertEquals(23, ThermalTicketLayout.SMALL_LINE_HEIGHT_PX)
-    assertEquals(28, ThermalTicketLayout.TOTAL_SIZE_PX)
-    assertEquals(34, ThermalTicketLayout.TOTAL_LINE_HEIGHT_PX)
-    assertEquals(16, ThermalTicketLayout.MIN_AMOUNT_SIZE_PX)
+    assertEquals(32, ThermalTicketLayout.BODY_SIZE_PX)
+    assertEquals(40, ThermalTicketLayout.BODY_LINE_HEIGHT_PX)
+    assertEquals(26, ThermalTicketLayout.SMALL_SIZE_PX)
+    assertEquals(34, ThermalTicketLayout.SMALL_LINE_HEIGHT_PX)
+    assertEquals(44, ThermalTicketLayout.TOTAL_SIZE_PX)
+    assertEquals(54, ThermalTicketLayout.TOTAL_LINE_HEIGHT_PX)
+    assertEquals(24, ThermalTicketLayout.MIN_AMOUNT_SIZE_PX)
   }
 
   @Test
@@ -93,7 +93,6 @@ class ThermalTicketLayoutTest {
     assertTrue("Expected multiple product-name commands", chunks.size > 1)
     chunks.map { it.text }.forEach(::assertCanonicalDisplayText)
     assertEquals(word, chunks.joinToString(separator = "") { it.text })
-    assertEquals("A" + iceCube.repeat(17), chunks.first().text)
     assertTrue(chunks.all { measurer.measure(it.text, productStyle).width <= availableWidth })
   }
 
@@ -169,6 +168,20 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
+  fun `primary field label and value use separate readable styles`() {
+    val layout = subject.layout(ticket(customerName = "Ana"))
+    val label = layout.text("Cliente:")
+    val value = layout.text("Ana")
+
+    assertEquals(26, label.style.sizePx)
+    assertEquals(34, label.style.lineHeightPx)
+    assertTrue(label.style.bold)
+    assertEquals(32, value.style.sizePx)
+    assertEquals(40, value.style.lineHeightPx)
+    assertFalse(value.style.bold)
+  }
+
+  @Test
   fun `value moves below and wraps when label and value do not fit`() {
     val customer = "Comercializadora de Refrigeración del Sureste Número Ciento Veintitrés"
     val layout = subject.layout(ticket(customerName = customer))
@@ -184,24 +197,50 @@ class ThermalTicketLayoutTest {
   }
 
   @Test
-  fun `amount stays unbroken right aligned and shrinks no lower than 16`() {
+  fun `long amount wraps right aligned and shrinks no lower than 24`() {
     val total = "$" + "9".repeat(43)
     val layout = subject.layout(ticket(total = total))
-    val command = layout.text(total)
+    val commands = layout.commands.filterIsInstance<DrawCommand.Text>()
+      .filter { it.style.alignment == TextAlignment.RIGHT && it.text.all { char -> char == '$' || char.isDigit() } }
 
-    assertEquals(TextAlignment.RIGHT, command.style.alignment)
-    assertEquals(376f, command.x)
-    assertEquals(16, command.style.sizePx)
-    assertEquals(1, layout.commands.filterIsInstance<DrawCommand.Text>().count { it.text == total })
+    assertTrue(commands.size > 1)
+    assertEquals(total, commands.joinToString(separator = "") { it.text })
+    assertEquals(376f, commands.first().x)
+    assertEquals(24, commands.minOf { it.style.sizePx })
   }
 
   @Test
-  fun `amount that cannot fit at 16 is invalid and never truncates or wraps`() {
-    val error = assertThrows(ThermalPrinterException::class.java) {
-      subject.layout(ticket(total = "$" + "9".repeat(47)))
-    }
+  fun `product amount uses readable total style and falls below quantity when pair does not fit`() {
+    val quantity = "Cantidad 1234567890 x Precio $1234567890.00"
+    val amount = "$100.00"
+    val layout = subject.layout(
+      ticket(lines = listOf(TicketLine(1, "Producto legible", quantity, amount))),
+    )
+    val dividerIndices = layout.commands.withIndex()
+      .filter { it.value is DrawCommand.Divider }
+      .map { it.index }
+    val productCommands = layout.commands.subList(dividerIndices[1] + 1, dividerIndices[2])
+      .filterIsInstance<DrawCommand.Text>()
+    val quantityLines = productCommands.filter { it.text != quantity && it.text.contains("Cantidad") }
+    val amountCommand = productCommands.single { it.text == amount }
 
-    assertEquals("invalid_ticket", error.code)
+    assertTrue(quantityLines.isNotEmpty())
+    assertEquals(TextAlignment.RIGHT, amountCommand.style.alignment)
+    assertEquals(44, amountCommand.style.sizePx)
+    assertEquals(54, amountCommand.style.lineHeightPx)
+    assertTrue(amountCommand.x == (ThermalTicketLayout.WIDTH_PX - ThermalTicketLayout.INSET_PX).toFloat())
+    assertTrue(layout.commands.filterIsInstance<DrawCommand.Text>().all { it.bottomExclusive <= layout.height })
+  }
+
+  @Test
+  fun `amount that cannot fit at minimum still preserves every character`() {
+    val total = "$" + "9".repeat(47)
+    val layout = subject.layout(ticket(total = total))
+    val chunks = layout.commands.filterIsInstance<DrawCommand.Text>()
+      .filter { it.style.alignment == TextAlignment.RIGHT && it.text.all { char -> char == '$' || char.isDigit() } }
+
+    assertTrue(chunks.size > 1)
+    assertEquals(total, chunks.joinToString(separator = "") { it.text })
   }
 
   @Test

@@ -13,6 +13,10 @@ function main() {
     'utf8',
   );
   const saleTicketPdfService = readFileSync(resolve(REPO_ROOT, 'src/services/saleTicketPdf.ts'), 'utf8');
+  const saleTicketPdfHeightService = readFileSync(
+    resolve(REPO_ROOT, 'src/services/saleTicketPdfHeight.ts'),
+    'utf8',
+  );
 
   assert.match(
     saleScreen,
@@ -80,9 +84,39 @@ function main() {
     'La vista previa del ticket debe renderizar el RFC',
   );
   assert.match(
+    printScreen,
+    /formatTicketDate\(ticket\.createdAt\)/,
+    'La vista previa del ticket debe renderizar la fecha CDMX formateada',
+  );
+  assert.match(
+    printScreen,
+    /formatTicketCurrency\(ticket\.subtotal\)/,
+    'La vista previa del ticket debe renderizar el subtotal con el helper compartido',
+  );
+  assert.match(
+    printScreen,
+    /SALE_TICKET_BRANDING\.title/,
+    'La vista previa del ticket debe renderizar el titulo compartido',
+  );
+  assert.match(
+    printScreen,
+    /SALE_TICKET_BRANDING\.footer/,
+    'La vista previa del ticket debe renderizar el pie compartido',
+  );
+  assert.match(
+    printScreen,
+    /formatQuantityAndUnitPrice\(line\.qty, line\.unitPrice\)/,
+    'La vista previa debe usar la misma cantidad/precio que el ticket impreso',
+  );
+  assert.match(
     saleTicketPdfService,
-    /paymentMethod === 'credit'/,
+    /getSaleTicketPdfHeight\(snapshot\)/,
     'El PDF debe aumentar altura cuando el ticket incluye leyenda de credito',
+  );
+  assert.match(
+    saleTicketPdfHeightService,
+    /paymentMethod === 'credit'/,
+    'La reserva de altura debe contemplar tickets a credito',
   );
   assert.doesNotMatch(
     printScreen,

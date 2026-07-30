@@ -30,6 +30,7 @@ import {
   SALE_TICKET_RFC,
   SaleTicketSnapshot,
 } from '../../src/services/saleTicket';
+import { SALE_TICKET_BRANDING } from '../../src/services/saleTicketBranding';
 import { openSaleTicketPdf } from '../../src/services/saleTicketPdf';
 import {
   createThermalPrinterService,
@@ -55,7 +56,12 @@ import type {
   PrinterJobState,
 } from '../../src/services/thermalPrinterScreenFlow';
 import { buildThermalTicketDocument } from '../../src/services/thermalTicketDocument';
-import { formatCurrency } from '../../src/utils/time';
+import {
+  formatQuantityAndUnitPrice,
+  formatTicketCurrency,
+  formatTicketDate,
+  formatTotalKg,
+} from '../../src/services/saleTicketFormatting';
 
 const selectionStore = createThermalPrinterSelectionStore();
 const androidApiLevel = typeof Platform.Version === 'number'
@@ -429,10 +435,15 @@ export default function PrintTicketScreen() {
               <Text style={styles.ticketHeader}>GRUPO FRIO</Text>
               <Text style={styles.ticketLegalName}>{SALE_TICKET_LEGAL_NAME}</Text>
               <Text style={styles.ticketTaxId}>RFC: {SALE_TICKET_RFC}</Text>
+              <Text style={styles.ticketTitle}>{SALE_TICKET_BRANDING.title}</Text>
               <View style={styles.divider} />
               <View style={styles.ticketRow}>
                 <Text style={styles.ticketLabel}>Pedido</Text>
                 <Text style={styles.ticketValue}>#{ticket.saleId}</Text>
+              </View>
+              <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Fecha</Text>
+                <Text style={styles.ticketValue}>{formatTicketDate(ticket.createdAt)}</Text>
               </View>
               <View style={styles.ticketRow}>
                 <Text style={styles.ticketLabel}>Cliente</Text>
@@ -449,23 +460,29 @@ export default function PrintTicketScreen() {
               <View style={styles.divider} />
               {ticket.lines.map((line) => (
                 <View key={line.productId} style={styles.ticketLine}>
-                  <View style={{ flex: 1 }}>
+                  <View style={styles.ticketProductBlock}>
                     <Text style={styles.productName}>{line.productName}</Text>
-                    <Text style={styles.productMeta}>
-                      {line.qty} x {formatCurrency(line.unitPrice)}
-                    </Text>
+                    <View style={styles.ticketProductMetaRow}>
+                      <Text style={styles.productMeta}>
+                        {formatQuantityAndUnitPrice(line.qty, line.unitPrice)}
+                      </Text>
+                      <Text style={styles.ticketAmount}>{formatTicketCurrency(line.lineTotal)}</Text>
+                    </View>
                   </View>
-                  <Text style={styles.ticketValue}>{formatCurrency(line.lineTotal)}</Text>
                 </View>
               ))}
               <View style={styles.divider} />
               <View style={styles.ticketRow}>
+                <Text style={styles.ticketLabel}>Subtotal</Text>
+                <Text style={styles.ticketValue}>{formatTicketCurrency(ticket.subtotal)}</Text>
+              </View>
+              <View style={styles.ticketRow}>
                 <Text style={styles.ticketLabel}>Kg</Text>
-                <Text style={styles.ticketValue}>{ticket.totalKg.toFixed(1)} kg</Text>
+                <Text style={styles.ticketValue}>{formatTotalKg(ticket.totalKg)}</Text>
               </View>
               <View style={styles.ticketRow}>
                 <Text style={styles.ticketLabel}>Total</Text>
-                <Text style={styles.ticketTotal}>{formatCurrency(ticket.total)}</Text>
+                <Text style={styles.ticketTotal}>{formatTicketCurrency(ticket.total)}</Text>
               </View>
               {ticket.paymentMethod === 'credit' ? (
                 <>
@@ -473,6 +490,8 @@ export default function PrintTicketScreen() {
                   <Text style={styles.creditNote}>{SALE_TICKET_CREDIT_NOTE}</Text>
                 </>
               ) : null}
+              <View style={styles.divider} />
+              <Text style={styles.ticketFooter}>{SALE_TICKET_BRANDING.footer}</Text>
             </View>
 
             <Button
@@ -589,24 +608,34 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   ticketHeader: {
-    fontSize: 18,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '700',
     color: '#1A1A1A',
     textAlign: 'center',
     marginBottom: 4,
   },
   ticketLegalName: {
-    fontSize: 11,
+    fontSize: 14,
+    lineHeight: 19,
     fontWeight: '700',
     color: '#1A1A1A',
     textAlign: 'center',
   },
   ticketTaxId: {
-    fontSize: 11,
+    fontSize: 14,
+    lineHeight: 19,
     color: '#666',
     textAlign: 'center',
     marginTop: 2,
     marginBottom: spacing.sm,
+  },
+  ticketTitle: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#1A1A1A',
+    textAlign: 'center',
+    marginTop: 4,
   },
   divider: {
     height: 1,
@@ -617,41 +646,74 @@ const styles = StyleSheet.create({
   ticketRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    gap: spacing.sm,
+    paddingVertical: 6,
   },
   ticketLabel: {
-    fontSize: 13,
+    fontSize: 14,
+    lineHeight: 19,
     color: '#666',
+    fontWeight: '700',
   },
   ticketValue: {
-    fontSize: 13,
+    flexShrink: 1,
+    fontSize: 16,
+    lineHeight: 22,
     color: '#1A1A1A',
     fontWeight: '500',
+    textAlign: 'right',
   },
   ticketTotal: {
-    fontSize: 16,
+    fontSize: 22,
+    lineHeight: 28,
     color: '#1A1A1A',
     fontWeight: '700',
   },
   ticketLine: {
+    paddingVertical: 8,
+  },
+  ticketProductBlock: {
+    width: '100%',
+  },
+  ticketProductMetaRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     gap: spacing.sm,
-    paddingVertical: 5,
+    marginTop: 4,
+  },
+  ticketAmount: {
+    flex: 0.35,
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#1A1A1A',
+    textAlign: 'right',
+    flexWrap: 'wrap',
   },
   creditNote: {
-    fontSize: 11,
+    fontSize: 14,
+    lineHeight: 19,
     color: '#1A1A1A',
-    lineHeight: 16,
     textAlign: 'justify',
   },
   productName: {
-    fontSize: 12,
+    fontSize: 16,
+    lineHeight: 21,
     color: '#1A1A1A',
     fontWeight: '600',
+    flexWrap: 'wrap',
   },
   productMeta: {
-    fontSize: 11,
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 19,
     color: '#666',
+    flexWrap: 'wrap',
+  },
+  ticketFooter: {
+    fontSize: 14,
+    lineHeight: 19,
+    color: '#666',
+    textAlign: 'center',
   },
   printerStatus: {
     flexDirection: 'row',

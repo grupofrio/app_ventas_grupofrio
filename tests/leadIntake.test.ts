@@ -27,6 +27,8 @@ function testGiroMappingCoversRealChannels() {
 
 function testCanalHint() {
   assert.equal(canalHint('abarrotes_miscelanea'), 'Canal: Tradicional');
+  assert.equal(canalHint('eventos'), 'Canal: Centros de Consumo (HORECA)');
+  assert.equal(canalHint('industria'), 'Canal: Distribuidor');
   assert.equal(canalHint('otro'), 'Se enviará a revisión de canal');
   assert.equal(canalHint(''), '');
 }
@@ -47,6 +49,8 @@ function testPayloadWithGiro() {
     { latitude: 19.7, longitude: -101.19 },
   );
   assert.equal(p.contact_name, 'Abarrotes Lupita');
+  assert.equal(p.customer_name, 'Abarrotes Lupita');
+  assert.equal(p.phone, '+527333320269');
   assert.equal(p.mobile, '+527333320269');
   assert.equal(p.street, 'Calle 5');
   assert.deepEqual(p.tag_ids, []);
@@ -62,9 +66,18 @@ function testPayloadWithGiro() {
   assert.equal(p.longitude, -101.19);
   assert.equal(p._source, 'nuevo_lead_ruta');
 
-  for (const field of ['stop_id', 'stage_id', 'customer_name', 'operation_id', '_operationId']) {
+  for (const field of ['stop_id', 'stage_id', 'partner_id', 'operation_id', '_operationId']) {
     assert.equal(field in p, false, `el payload de creación no debe incluir ${field}`);
   }
+}
+
+function testPayloadPreservesZeroCoordinates() {
+  const p = buildProspectionPayload(
+    { nombre: 'Punto cero', telefono: '', direccion: '', giro: '', notas: '' },
+    { latitude: 0, longitude: 0 },
+  );
+  assert.equal(p.latitude, 0);
+  assert.equal(p.longitude, 0);
 }
 
 function testPayloadUsesCanonicalChannelsForEventosEIndustria() {
@@ -91,6 +104,7 @@ function testPayloadNoSeFallback() {
   assert.equal(p.x_canal, undefined);
   assert.equal(p.giro, 'otro');
   assert.match(String(p.description), /Canal: requiere revisión/);
+  assert.equal(p.phone, undefined);
   assert.equal(p.mobile, undefined);
   assert.equal(p.latitude, undefined);
 }
@@ -119,6 +133,7 @@ function main() {
   testPhoneSoftNormalization();
   testPayloadWithGiro();
   testPayloadUsesCanonicalChannelsForEventosEIndustria();
+  testPayloadPreservesZeroCoordinates();
   testPayloadNoSeFallback();
   testPayloadSinGiroSeleccionado();
   testNuncaTocaWaPhone();

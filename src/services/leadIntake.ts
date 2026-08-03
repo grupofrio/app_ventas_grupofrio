@@ -87,6 +87,7 @@ export function buildProspectionPayload(
 ): Record<string, unknown> {
   const giroOpt = GIRO_OPTIONS.find((g) => g.slug === form.giro) ?? null;
   const canal = giroOpt?.canal ?? null;
+  const normalizedPhone = normalizeMxPhoneSoft(form.telefono) || undefined;
 
   const descParts = [
     giroOpt ? `Giro: ${giroOpt.label}` : '',
@@ -96,7 +97,9 @@ export function buildProspectionPayload(
 
   return {
     contact_name: form.nombre.trim(),
-    mobile: normalizeMxPhoneSoft(form.telefono) || undefined,
+    customer_name: form.nombre.trim(),
+    phone: normalizedPhone,
+    mobile: normalizedPhone,
     street: form.direccion.trim() || undefined,
     tag_ids: [],
     // Estructurados — el backend puede ignorarlos sin romper nada:

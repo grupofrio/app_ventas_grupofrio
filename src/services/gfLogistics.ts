@@ -34,6 +34,7 @@ import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
 import { validateSaleCreateResult } from './saleCreateResult';
 import type { SaleCreateResultData } from './saleCreateResult';
+import { buildFieldLeadCreatePayload } from './fieldLeadCreatePayload';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -983,6 +984,19 @@ export async function upsertLeadData(
 ): Promise<Record<string, unknown> | null> {
   const body = attachClientMetaToRestPayload(payload, meta ?? null);
   const result = await postRest<any>(`${GF_BASE}/lead/upsert`, body);
+  if (!result || typeof result !== 'object') return null;
+  const data = result.data !== undefined ? result.data : result;
+  const lead = data?.lead ?? data;
+  return lead && typeof lead === 'object' ? lead : null;
+}
+
+/** Creates an independent field lead; route-stop lead updates stay in upsertLeadData. */
+export async function createFieldLeadData(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<Record<string, unknown> | null> {
+  const body = attachClientMetaToRestPayload(buildFieldLeadCreatePayload(payload), meta ?? null);
+  const result = await postRest<any>(`${GF_BASE}/lead/create`, body);
   if (!result || typeof result !== 'object') return null;
   const data = result.data !== undefined ? result.data : result;
   const lead = data?.lead ?? data;

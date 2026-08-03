@@ -18,10 +18,17 @@ function main() {
   assert.match(gfLogistics, /\$\{GF_BASE\}\/lead\/stages/);
   assert.match(gfLogistics, /export async function upsertLeadData\(/);
   assert.match(gfLogistics, /\$\{GF_BASE\}\/lead\/upsert/);
+  assert.match(gfLogistics, /export async function createFieldLeadData\(/);
+  assert.match(gfLogistics, /\$\{GF_BASE\}\/lead\/create/);
+  assert.match(
+    gfLogistics,
+    /buildFieldLeadCreatePayload\(payload\)/,
+    'field lead creation must derive operation_id from the persisted queue payload',
+  );
   assert.match(
     syncStore,
-    /case 'prospection':[\s\S]*?upsertLeadData\(/,
-    'prospection sync branch must use dedicated lead upsert endpoint',
+    /case 'prospection':[\s\S]*?_source === 'nuevo_lead_ruta'[\s\S]*?createFieldLeadData\([\s\S]*?else[\s\S]*?upsertLeadData\(/,
+    'field lead prospections must use create while route lead updates keep upsert',
   );
 
   const prospectionBlock = syncStore.match(/case 'prospection':[\s\S]*?break;/)?.[0] ?? '';

@@ -47,6 +47,7 @@ import {
   uploadStopImage,
   createSale,
   createPayment,
+  createFieldLeadData,
   upsertLeadData,
   closeOffrouteVisit,
 } from '../services/gfLogistics';
@@ -1305,7 +1306,11 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'prospection':
-      await upsertLeadData(payload as Record<string, unknown>, meta);
+      if (payload._source === 'nuevo_lead_ruta') {
+        await createFieldLeadData(payload as Record<string, unknown>, meta);
+      } else {
+        await upsertLeadData(payload as Record<string, unknown>, meta);
+      }
       break;
 
     case 'offroute_visit_close':

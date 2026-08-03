@@ -48,8 +48,8 @@ export default function NewCustomerScreen() {
 
     setSaved(true);
     Alert.alert(
-      'Lead guardado',
-      `"${form.nombre.trim()}" se sincronizará con el servidor. Puedes continuar la ruta.`,
+      'Lead guardado localmente',
+      `"${form.nombre.trim()}" está pendiente de sincronización con Odoo. Puedes continuar la ruta.`,
       [{ text: 'OK', onPress: () => router.back() }],
     );
   }

@@ -78,12 +78,17 @@ El backend resolverá `x_canal` a través de `gf.sales.channel` y escribirá sol
 `channel_id`. El catálogo vigente no contiene `INDUSTRIAL`: tanto la app como
 el normalizador del backend lo tratarán como el alias histórico de
 `DISTRIBUIDOR`, para que los leads de giro Industria no sean rechazados.
+Como `channel_id` es definido por `gf_prospector`, `gf_logistics_ops` declarará
+esa dependencia antes de usar el campo; el endpoint no dependerá de módulos
+instalados incidentalmente.
 
 ## Cambios en app
 
 `buildProspectionPayload` conservará las claves actuales de interfaz, pero
 agregará los nombres del contrato canónico: `customer_name` y `phone`.
 La opción de giro Industria emitirá el canal vigente `DISTRIBUIDOR`.
+La opción Eventos / Banquetes emitirá `CENTROS_CONSUMO`, el canal vigente
+confirmado para esa clasificación comercial.
 `upsertLeadData` se dividirá en una llamada `createFieldLeadData`, destinada
 solo a `Nuevo Lead`; el flujo de post-visita continuará usando `lead/upsert`.
 El dispatcher de `prospection` seleccionará el endpoint de alta cuando
@@ -119,6 +124,8 @@ muestra en Sincronización.
    sincronice.
 6. Un giro Industria se guarda como `channel_id.code == 'DISTRIBUIDOR'`, sin
    intentar escribir el campo legacy `x_canal`.
+7. Un giro Eventos / Banquetes se guarda como
+   `channel_id.code == 'CENTROS_CONSUMO'`.
 
 ## Fuera de alcance
 

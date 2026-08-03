@@ -13,13 +13,13 @@ function testGiroMappingCoversRealChannels() {
   assert.equal(giroToCanal('restaurante_fonda'), 'CENTROS_CONSUMO');
   assert.equal(giroToCanal('bar_micheladas'), 'CENTROS_CONSUMO');
   assert.equal(giroToCanal('super_conveniencia'), 'RETAIL');
-  assert.equal(giroToCanal('eventos'), 'EVENTOS');
-  assert.equal(giroToCanal('industria'), 'INDUSTRIAL');
+  assert.equal(giroToCanal('eventos'), 'CENTROS_CONSUMO');
+  assert.equal(giroToCanal('industria'), 'DISTRIBUIDOR');
   assert.equal(giroToCanal('hogar'), 'HOGAR');
   assert.equal(giroToCanal('otro'), null);
   assert.equal(giroToCanal('inexistente'), null);
   // todos los giros con canal usan códigos reales de gf.sales.channel
-  const validos = new Set(['TRADICIONAL', 'CENTROS_CONSUMO', 'RETAIL', 'EVENTOS', 'INDUSTRIAL', 'HOGAR', 'DISTRIBUIDOR']);
+  const validos = new Set(['TRADICIONAL', 'CENTROS_CONSUMO', 'RETAIL', 'HOGAR', 'DISTRIBUIDOR']);
   for (const g of GIRO_OPTIONS) {
     if (g.canal !== null) assert.ok(validos.has(g.canal), `canal inválido en ${g.slug}: ${g.canal}`);
   }
@@ -49,6 +49,7 @@ function testPayloadWithGiro() {
   assert.equal(p.contact_name, 'Abarrotes Lupita');
   assert.equal(p.mobile, '+527333320269');
   assert.equal(p.street, 'Calle 5');
+  assert.deepEqual(p.tag_ids, []);
   assert.equal(p.giro, 'abarrotes_miscelanea');
   assert.equal(p.x_canal, 'TRADICIONAL');
   assert.equal(p.x_source_channel, 'xvan');
@@ -58,7 +59,28 @@ function testPayloadWithGiro() {
   assert.match(String(p.description), /Canal: TRADICIONAL/);
   assert.match(String(p.description), /frente a la plaza/);
   assert.equal(p.latitude, 19.7);
+  assert.equal(p.longitude, -101.19);
   assert.equal(p._source, 'nuevo_lead_ruta');
+
+  for (const field of ['stop_id', 'stage_id', 'customer_name', 'operation_id', '_operationId']) {
+    assert.equal(field in p, false, `el payload de creación no debe incluir ${field}`);
+  }
+}
+
+function testPayloadUsesCanonicalChannelsForEventosEIndustria() {
+  const eventos = buildProspectionPayload(
+    { nombre: 'Banquetes Roma', telefono: '', direccion: '', giro: 'eventos', notas: '' },
+    {},
+  );
+  assert.equal(eventos.x_canal, 'CENTROS_CONSUMO');
+  assert.match(String(eventos.description), /Canal: CENTROS_CONSUMO/);
+
+  const industria = buildProspectionPayload(
+    { nombre: 'Procesos del Sur', telefono: '', direccion: '', giro: 'industria', notas: '' },
+    {},
+  );
+  assert.equal(industria.x_canal, 'DISTRIBUIDOR');
+  assert.match(String(industria.description), /Canal: DISTRIBUIDOR/);
 }
 
 function testPayloadNoSeFallback() {
@@ -96,6 +118,7 @@ function main() {
   testCanalHint();
   testPhoneSoftNormalization();
   testPayloadWithGiro();
+  testPayloadUsesCanonicalChannelsForEventosEIndustria();
   testPayloadNoSeFallback();
   testPayloadSinGiroSeleccionado();
   testNuncaTocaWaPhone();

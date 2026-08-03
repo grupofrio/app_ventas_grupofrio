@@ -25,8 +25,8 @@ export const GIRO_OPTIONS: GiroOption[] = [
   { slug: 'hotel', label: 'Hotel / Motel', canal: 'CENTROS_CONSUMO' },
   { slug: 'escuela_deportivo', label: 'Escuela / Club deportivo', canal: 'CENTROS_CONSUMO' },
   { slug: 'super_conveniencia', label: 'Súper / Farmacia / Conveniencia', canal: 'RETAIL' },
-  { slug: 'eventos', label: 'Eventos / Banquetes', canal: 'EVENTOS' },
-  { slug: 'industria', label: 'Industria / Proceso', canal: 'INDUSTRIAL' },
+  { slug: 'eventos', label: 'Eventos / Banquetes', canal: 'CENTROS_CONSUMO' },
+  { slug: 'industria', label: 'Industria / Proceso', canal: 'DISTRIBUIDOR' },
   { slug: 'hogar', label: 'Hogar / Persona', canal: 'HOGAR' },
   { slug: 'otro', label: 'Otro / No sé', canal: null },
 ];
@@ -35,8 +35,7 @@ const CANAL_LABELS: Record<string, string> = {
   TRADICIONAL: 'Tradicional',
   CENTROS_CONSUMO: 'Centros de Consumo (HORECA)',
   RETAIL: 'Retail / Moderno',
-  EVENTOS: 'Eventos',
-  INDUSTRIAL: 'Industrial',
+  DISTRIBUIDOR: 'Distribuidor',
   HOGAR: 'Hogar',
 };
 
@@ -106,8 +105,8 @@ export function buildProspectionPayload(
     x_source_channel: 'xvan',
     x_prospect_source: 'vendedor_campo',
     description: descParts.join('\n') || undefined,
-    latitude: gps.latitude || undefined,
-    longitude: gps.longitude || undefined,
+    latitude: gps.latitude ?? undefined,
+    longitude: gps.longitude ?? undefined,
     _source: 'nuevo_lead_ruta',
   };
 }

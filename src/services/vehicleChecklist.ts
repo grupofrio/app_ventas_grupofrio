@@ -2,8 +2,10 @@
  * Vehicle checklist service — Sprint A.
  *
  * Wraps the 6 /pwa-ruta/vehicle-* endpoints already in production (used by
- * the PWA Colaboradores). Online-first: these run at the CEDIS with WiFi
- * before leaving, so we do NOT enqueue them — failures surface to the UI.
+ * the PWA Colaboradores). Online-first con respaldo offline: la pantalla
+ * encola respuestas/cierre en la cola de sync cuando no hay señal (tipos
+ * 'vehicle_check' / 'vehicle_checklist_complete'); el contrato es idempotente
+ * (vehicle-check sobreescribe por check_id, complete tolera already_completed).
  *
  * Contract notes (from PWA api.js, backend QA 32/32 PASS):
  *  - All endpoints return HTTP 200 always; functional errors are in the

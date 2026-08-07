@@ -224,6 +224,7 @@ interface SyncState {
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
   clearDead: () => number;
+  removeDeadQueueItems: (ids: string[]) => number;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -491,6 +492,23 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_purged', { removed });
+    }
+    return removed;
+  },
+
+  // Una reparación exitosa puede resolver sólo algunos residuos terminales.
+  // Revisa el estado actual al quitar, para que IDs recibidos de una lectura
+  // anterior jamás borren una operación que ya volvió a estar viva.
+  removeDeadQueueItems: (ids) => {
+    const before = get().queue.length;
+    const newQueue = get().queue.filter(
+      (i) => i.status !== 'dead' || !ids.includes(i.id),
+    );
+    const removed = before - newQueue.length;
+    if (removed > 0) {
+      set({ queue: newQueue, ...computeCounts(newQueue) });
+      schedulePersist();
+      logInfo('sync', 'dead_items_selectively_removed', { removed });
     }
     return removed;
   },

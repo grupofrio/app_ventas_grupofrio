@@ -167,6 +167,23 @@ export function collectDeadChecklistAnswerCheckIds(
     .filter((id) => id > 0);
 }
 
+/**
+ * IDs terminales de una respuesta concreta. Tras reparar ese punto online se
+ * eliminan de forma selectiva, sin tocar otras respuestas ni items vivos.
+ */
+export function collectDeadChecklistAnswerOpIds(
+  queue: Array<{ id: string } & ChecklistAnswerQueueItem>,
+  checklistId: number,
+  checkId: number,
+): string[] {
+  return queue
+    .filter((item) => item.type === 'vehicle_check'
+      && item.status === 'dead'
+      && item.payload?.checklist_id === checklistId
+      && item.payload?.check_id === checkId)
+    .map((item) => item.id);
+}
+
 /** ¿Hay un cierre de este checklist ya encolado y no terminado? */
 export function hasQueuedChecklistComplete(
   queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,

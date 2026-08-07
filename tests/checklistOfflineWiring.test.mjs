@@ -30,6 +30,18 @@ function main() {
     'el cierre encolado reusa el servicio tolerante a already_completed',
   );
 
+  // Una respuesta reparada online borra exclusivamente sus residuos terminales.
+  assert.match(
+    syncStore,
+    /removeDeadQueueItems:\s*\(ids\)\s*=>\s*\{[\s\S]{0,900}i\.status !== 'dead' \|\| !ids\.includes\(i\.id\)/,
+    'el store expone eliminación selectiva que nunca borra IDs vivos',
+  );
+  assert.match(
+    syncStore,
+    /removeDeadQueueItems:[\s\S]{0,1200}computeCounts\(newQueue\)[\s\S]{0,300}schedulePersist\(\)/,
+    'la eliminación selectiva recompone contadores y persiste',
+  );
+
   // Pantalla: borradores persistidos por plan (sobreviven reinicio).
   assert.match(
     screen,
@@ -62,6 +74,11 @@ function main() {
     screen,
     /if \(isRetryableSyncErrorMessage\(msg\)\) \{\s*\n\s*\/\/ Red degradada a media petición: mismo camino que offline\./,
     'un fallo de red a media petición encola en vez de perder la respuesta',
+  );
+  assert.match(
+    screen,
+    /await submitVehicleCheck\(check\.id, payload\);[\s\S]{0,500}collectDeadChecklistAnswerOpIds\([\s\S]{0,250}header\?\.id \?\? 0,[\s\S]{0,150}check\.id[\s\S]{0,300}removeDeadQueueItems\([\s\S]{0,500}await reloadChecks\(\)/,
+    'un envío online exitoso elimina los dead del mismo check antes de recargar',
   );
 
   // Pantalla: cierre offline con dependsOn de las respuestas encoladas y

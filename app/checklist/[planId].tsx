@@ -53,6 +53,7 @@ import {
   checklistDraftsStorageKey,
   checklistSnapshotStorageKey,
   collectDeadChecklistAnswerCheckIds,
+  collectDeadChecklistAnswerOpIds,
   collectQueuedChecklistAnswerOps,
   hasQueuedChecklistComplete,
 } from '../../src/services/vehicleChecklistOffline';
@@ -101,6 +102,7 @@ export default function ChecklistScreen() {
   const [usingCachedSnapshot, setUsingCachedSnapshot] = useState(false);
   const isOnline = useSyncStore((s) => s.isOnline);
   const enqueue = useSyncStore((s) => s.enqueue);
+  const removeDeadQueueItems = useSyncStore((s) => s.removeDeadQueueItems);
   const syncQueue = useSyncStore((s) => s.queue);
   // P1 Codex: el guardado se ABRE hasta que la carga durable terminó — sin
   // este gate, el primer render persistía {} y borraba el borrador que
@@ -336,6 +338,12 @@ export default function ChecklistScreen() {
       }
       await submitVehicleCheck(check.id, payload);
       if (!isCurrentPlan(capturedPlanId)) return;
+      const deadAnswerOpIds = collectDeadChecklistAnswerOpIds(
+        useSyncStore.getState().queue,
+        header?.id ?? 0,
+        check.id,
+      );
+      removeDeadQueueItems(deadAnswerOpIds);
       // clear the local photo draft after a successful send
       setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: undefined, queued: false } }));
       await reloadChecks();

@@ -10,6 +10,7 @@ async function main() {
   const {
     collectQueuedChecklistAnswerOps,
     collectDeadChecklistAnswerCheckIds,
+    collectDeadChecklistAnswerOpIds,
     hasQueuedChecklistComplete,
     buildVehicleCheckQueuePayload,
     applyLocalCheckAnswer,
@@ -136,6 +137,19 @@ async function main() {
     'check-35-pending-t2',
   ]);
   assert.deepEqual(collectDeadChecklistAnswerCheckIds(opsQueue, 3), [13, 34]);
+  assert.deepEqual(
+    collectDeadChecklistAnswerOpIds([
+      { id: 'dead-target-first', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 3, check_id: 11 } },
+      { id: 'pending-target', type: 'vehicle_check', status: 'pending', payload: { checklist_id: 3, check_id: 11 } },
+      { id: 'dead-other-check', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 3, check_id: 12 } },
+      { id: 'dead-other-checklist', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 9, check_id: 11 } },
+      { id: 'dead-other-type', type: 'vehicle_checklist_complete', status: 'dead', payload: { checklist_id: 3, check_id: 11 } },
+      { id: 'dead-target-second', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 3, check_id: 11 } },
+      { id: 'syncing-target', type: 'vehicle_check', status: 'syncing', payload: { checklist_id: 3, check_id: 11 } },
+    ], 3, 11),
+    ['dead-target-first', 'dead-target-second'],
+    'la limpieza online conserva el orden y sólo selecciona respuestas dead del mismo checklist/check',
+  );
   assert.equal(hasQueuedChecklistComplete(opsQueue, 3), false, 'un cierre dead permite reintentar');
   assert.equal(hasQueuedChecklistComplete(
     [...opsQueue, { id: 'c2', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3 } }],

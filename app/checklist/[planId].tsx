@@ -40,6 +40,7 @@ import {
 import { buildYesNoVehicleCheckAnswer } from '../../src/services/vehicleChecklistLogic';
 import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
+import type { SyncQueueItem } from '../../src/types/sync';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -376,14 +377,20 @@ export default function ChecklistScreen() {
   // ni se borran borradores hasta confirmación del SERVIDOR — si una
   // respuesta muere en la cola, el plan no queda falsamente completo. El
   // dependsOn se deriva de la COLA (durable: sobrevive salir/volver).
-  function completeOffline(capturedPlanId: number): boolean {
-    const queue = useSyncStore.getState().queue;
+  function hasRequiredDeadChecklistAnswers(queue: SyncQueueItem[]): boolean {
     const deadCheckIds = collectDeadChecklistAnswerCheckIds(queue, header?.id ?? 0);
     const requiredDeadCheckIds = checks
       .filter((check) => check.required && deadCheckIds.includes(check.id))
       .map((check) => check.id);
     if (requiredDeadCheckIds.length > 0) {
       Alert.alert('Respuestas por reparar', CHECKLIST_DEAD_REPAIR_COPY);
+      return true;
+    }
+    return false;
+  }
+
+  function completeOffline(capturedPlanId: number, queue: SyncQueueItem[]): boolean {
+    if (hasRequiredDeadChecklistAnswers(queue)) {
       return false;
     }
     if (!areRequiredChecksAnswered(checks)) {
@@ -410,22 +417,24 @@ export default function ChecklistScreen() {
   async function handleComplete() {
     if (completing) return;
     const capturedPlanId = planIdNum;
+    const queue = useSyncStore.getState().queue;
     setCompleting(true);
     try {
       if (!isCurrentPlan(capturedPlanId)) {
         showRouteChangedAlert();
         return;
       }
-      if (hasQueuedChecklistComplete(useSyncStore.getState().queue, header?.id ?? 0)) {
+      if (hasQueuedChecklistComplete(queue, header?.id ?? 0)) {
         Alert.alert('Cierre ya encolado', 'Ya hay un cierre pendiente de envío; se completará al sincronizar.');
         return;
       }
+      if (hasRequiredDeadChecklistAnswers(queue)) return;
       const hasQueuedAnswers = collectQueuedChecklistAnswerOps(
-        useSyncStore.getState().queue,
+        queue,
         header?.id ?? 0,
       ).length > 0;
       if (!isOnline || hasQueuedAnswers) {
-        completeOffline(capturedPlanId);
+        completeOffline(capturedPlanId, queue);
         return;
       }
       await completeVehicleChecklist(header?.id ?? 0);
@@ -460,7 +469,7 @@ export default function ChecklistScreen() {
       if (isRetryableSyncErrorMessage(msg)) {
         // Red degradada a media petición: mismo camino que offline (el
         // backend trata already_completed como éxito si el POST sí llegó).
-        completeOffline(capturedPlanId);
+        completeOffline(capturedPlanId, queue);
         return;
       }
       if (/checks_pending|pendiente/i.test(msg)) {

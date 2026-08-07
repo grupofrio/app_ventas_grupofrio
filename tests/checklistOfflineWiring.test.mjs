@@ -86,7 +86,7 @@ function main() {
   assert.match(screen, /enqueue\(\s*'vehicle_checklist_complete',/, 'el cierre offline se encola');
   assert.match(
     screen,
-    /collectQueuedChecklistAnswerOps\(\s*useSyncStore\.getState\(\)\.queue,/,
+    /function completeOffline\(capturedPlanId: number, queue: SyncQueueItem\[\]\): boolean \{[\s\S]{0,1200}collectQueuedChecklistAnswerOps\(\s*queue,/,
     'el dependsOn del cierre se deriva de la COLA (durable), no de refs en memoria',
   );
   assert.match(screen, /dependsOn: pendingAnswerOps/, 'el cierre depende de las respuestas encoladas');
@@ -125,13 +125,23 @@ function main() {
   );
   assert.match(
     screen,
-    /function completeOffline\(capturedPlanId: number\): boolean \{[\s\S]{0,900}const queue = useSyncStore\.getState\(\)\.queue;[\s\S]{0,500}collectDeadChecklistAnswerCheckIds\(\s*queue,\s*header\?\.id \?\? 0\s*\)/,
-    'completeOffline lee la cola una vez y deriva los IDs dead vigentes',
+    /function hasRequiredDeadChecklistAnswers\(queue: SyncQueueItem\[\]\): boolean \{[\s\S]{0,500}collectDeadChecklistAnswerCheckIds\(queue, header\?\.id \?\? 0\)/,
+    'el guard compartido deriva los IDs dead vigentes de la cola recibida',
   );
   assert.match(
     screen,
-    /const requiredDeadCheckIds = checks[\s\S]{0,220}\.filter\(\(check\) => check\.required && deadCheckIds\.includes\(check\.id\)\)[\s\S]{0,220}if \(requiredDeadCheckIds\.length > 0\) \{[\s\S]{0,300}CHECKLIST_DEAD_REPAIR_COPY[\s\S]{0,180}return false;[\s\S]{0,650}collectQueuedChecklistAnswerOps\(\s*queue,/,
-    'sólo los dead de checks requeridos bloquean antes de derivar dependencies',
+    /const requiredDeadCheckIds = checks[\s\S]{0,220}\.filter\(\(check\) => check\.required && deadCheckIds\.includes\(check\.id\)\)[\s\S]{0,220}if \(requiredDeadCheckIds\.length > 0\) \{[\s\S]{0,300}CHECKLIST_DEAD_REPAIR_COPY[\s\S]{0,180}return true;/,
+    'sólo los dead de checks requeridos activan el guard compartido',
+  );
+  assert.match(
+    screen,
+    /function completeOffline\(capturedPlanId: number, queue: SyncQueueItem\[\]\): boolean \{[\s\S]{0,300}hasRequiredDeadChecklistAnswers\(queue\)[\s\S]{0,180}return false;[\s\S]{0,650}collectQueuedChecklistAnswerOps\(\s*queue,/,
+    'completeOffline reutiliza el guard antes de derivar dependencies o encolar',
+  );
+  assert.match(
+    screen,
+    /async function handleComplete\(\) \{[\s\S]{0,700}const queue = useSyncStore\.getState\(\)\.queue;[\s\S]{0,500}hasQueuedChecklistComplete\(queue,[\s\S]{0,500}hasRequiredDeadChecklistAnswers\(queue\)[\s\S]{0,180}return;[\s\S]{0,600}collectQueuedChecklistAnswerOps\(\s*queue,[\s\S]{0,700}completeVehicleChecklist\(/,
+    'handleComplete bloquea dead requeridos antes de elegir cierre offline o llamar al servidor',
   );
   assert.match(
     screen,

@@ -67,6 +67,8 @@ interface CheckDraft {
   queued?: boolean; // respuesta encolada offline, pendiente de envío
 }
 
+const CHECKLIST_DEAD_REPAIR_COPY = 'Vuelve a responder los puntos obligatorios que fallaron antes de cerrar.';
+
 function isCurrentPlan(capturedPlanId: number): boolean {
   const currentPlan = useRouteStore.getState().plan;
   const currentStartPlanId = useRouteStartStore.getState().planId;
@@ -375,12 +377,21 @@ export default function ChecklistScreen() {
   // respuesta muere en la cola, el plan no queda falsamente completo. El
   // dependsOn se deriva de la COLA (durable: sobrevive salir/volver).
   function completeOffline(capturedPlanId: number): boolean {
+    const queue = useSyncStore.getState().queue;
+    const deadCheckIds = collectDeadChecklistAnswerCheckIds(queue, header?.id ?? 0);
+    const requiredDeadCheckIds = checks
+      .filter((check) => check.required && deadCheckIds.includes(check.id))
+      .map((check) => check.id);
+    if (requiredDeadCheckIds.length > 0) {
+      Alert.alert('Respuestas por reparar', CHECKLIST_DEAD_REPAIR_COPY);
+      return false;
+    }
     if (!areRequiredChecksAnswered(checks)) {
       Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
       return false;
     }
     const pendingAnswerOps = collectQueuedChecklistAnswerOps(
-      useSyncStore.getState().queue,
+      queue,
       header?.id ?? 0,
     );
     enqueue(
@@ -529,7 +540,7 @@ export default function ChecklistScreen() {
         {deadCheckIds.length > 0 && (
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineBannerText}>
-              {deadCheckIds.length} {deadCheckIds.length === 1 ? 'respuesta falló' : 'respuestas fallaron'} definitivamente: vuelve a responder esos puntos para poder cerrar.
+              {deadCheckIds.length} {deadCheckIds.length === 1 ? 'respuesta falló' : 'respuestas fallaron'} definitivamente. {CHECKLIST_DEAD_REPAIR_COPY}
             </Text>
           </View>
         )}

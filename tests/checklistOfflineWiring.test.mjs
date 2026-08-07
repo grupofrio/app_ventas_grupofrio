@@ -114,6 +114,31 @@ function main() {
     'el copy comunica la política: documenta, no detiene',
   );
 
+  // Un dead que aún es la última respuesta de un check OBLIGATORIO debe
+  // detener el nuevo cierre offline antes de derivar dependsOn/enviar la
+  // operación. El mensaje de reparación es el mismo que ve el usuario en el
+  // banner; un check opcional dead sigue siendo sólo informativo.
+  assert.match(
+    screen,
+    /const CHECKLIST_DEAD_REPAIR_COPY\s*=/,
+    'la pantalla define un copy de reparación compartido para respuestas dead',
+  );
+  assert.match(
+    screen,
+    /function completeOffline\(capturedPlanId: number\): boolean \{[\s\S]{0,900}const queue = useSyncStore\.getState\(\)\.queue;[\s\S]{0,500}collectDeadChecklistAnswerCheckIds\(\s*queue,\s*header\?\.id \?\? 0\s*\)/,
+    'completeOffline lee la cola una vez y deriva los IDs dead vigentes',
+  );
+  assert.match(
+    screen,
+    /const requiredDeadCheckIds = checks[\s\S]{0,220}\.filter\(\(check\) => check\.required && deadCheckIds\.includes\(check\.id\)\)[\s\S]{0,220}if \(requiredDeadCheckIds\.length > 0\) \{[\s\S]{0,300}CHECKLIST_DEAD_REPAIR_COPY[\s\S]{0,180}return false;[\s\S]{0,650}collectQueuedChecklistAnswerOps\(\s*queue,/,
+    'sólo los dead de checks requeridos bloquean antes de derivar dependencies',
+  );
+  assert.match(
+    screen,
+    /deadCheckIds\.length > 0[\s\S]{0,500}CHECKLIST_DEAD_REPAIR_COPY/,
+    'el banner de respuestas dead reutiliza el copy de reparación del gate',
+  );
+
   console.log('checklist offline wiring tests: ok');
 }
 

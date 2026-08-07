@@ -9,6 +9,14 @@
  *   shouldRefreshSalesAfterQueueChange (venta que alcanza `done`).
  * - Si el remoto falla, las tarjetas locales permanecen (el store conserva
  *   además el último summary/orders conocidos).
+ *
+ * El rastreo de transiciones (estados previos + completadas-en-sesión) se
+ * deriva DURANTE EL RENDER (patrón oficial de React de estado derivado con
+ * setState en fase de render): el mismo render que trae la transición a
+ * `done` ya proyecta la tarjeta "Actualizando" — sin ventana visual entre
+ * render y efecto (P2 Codex #62). React re-renderiza antes de pintar y la
+ * derivación es idempotente (segunda pasada: firma igual ⇒ no re-deriva),
+ * seguro también bajo StrictMode.
  */
 
 import React from 'react';
@@ -55,6 +63,21 @@ function buildSaleStatusMap(
   return map;
 }
 
+interface ProjectionTracking {
+  /** Última firma de cola procesada; null = aún sin observación (mount). */
+  signature: string | null;
+  /** Estado por operation_id de los sale_order en la última observación. */
+  statuses: Map<string, ObservedSaleStatus>;
+  /**
+   * Operaciones cuya llegada a `done` se observó EN ESTA SESIÓN: solo esas
+   * proyectan la tarjeta transitoria "Actualizando". Un done rehidratado de
+   * una sesión anterior nunca proyecta ni dispara refresh (P1 Codex #62).
+   */
+  sessionCompleted: ReadonlySet<string>;
+  /** Se incrementa por cada transición observada a done ⇒ refresh forzado. */
+  refreshToken: number;
+}
+
 export interface SalesListProjection {
   entries: SalesListEntry[];
   localSummary: LocalSalesSummary;
@@ -72,25 +95,46 @@ export function useSalesListProjection(): SalesListProjection {
   const [ticketsLoading, setTicketsLoading] = React.useState(false);
 
   const queueSignature = buildSaleQueueSignature(queue);
-  const previousStatusesRef = React.useRef<Map<string, ObservedSaleStatus> | null>(null);
-  // Operaciones cuya llegada a `done` se observó EN ESTA SESIÓN: solo esas
-  // proyectan la tarjeta transitoria "Actualizando". Un done rehidratado de
-  // una sesión anterior nunca proyecta ni dispara refresh (P1 Codex #62).
-  const sessionCompletedRef = React.useRef<ReadonlySet<string>>(new Set());
+
+  const [tracking, setTracking] = React.useState<ProjectionTracking>({
+    signature: null,
+    statuses: new Map(),
+    sessionCompleted: new Set(),
+    refreshToken: 0,
+  });
+
+  // Derivación en render: este render YA usa el set actualizado.
+  let sessionCompleted = tracking.sessionCompleted;
+  if (tracking.signature !== queueSignature) {
+    const current = buildSaleStatusMap(queue);
+    const hadPrevious = tracking.signature !== null;
+    const previous = hadPrevious ? tracking.statuses : new Map<string, ObservedSaleStatus>();
+    sessionCompleted = collectSessionCompletedSales(
+      { previous, current },
+      tracking.sessionCompleted,
+    );
+    // El refresh es un side effect: aquí solo se DECIDE (token); el efecto de
+    // abajo lo ejecuta tras el commit. Nunca en la primera observación
+    // (mount/rehydrate): hadPrevious lo bloquea y el token arranca en 0.
+    const shouldRefresh = hadPrevious
+      && shouldRefreshSalesAfterQueueChange({ previous, current });
+    setTracking({
+      signature: queueSignature,
+      statuses: current,
+      sessionCompleted,
+      refreshToken: tracking.refreshToken + (shouldRefresh ? 1 : 0),
+    });
+  }
+
+  React.useEffect(() => {
+    if (tracking.refreshToken === 0) return;
+    void loadTodaySales({ force: true });
+  }, [tracking.refreshToken, loadTodaySales]);
 
   React.useEffect(() => {
     let cancelled = false;
 
-    const current = buildSaleStatusMap(queue);
-    const previous = previousStatusesRef.current ?? new Map<string, ObservedSaleStatus>();
-    const hadPrevious = previousStatusesRef.current !== null;
-    previousStatusesRef.current = current;
-    sessionCompletedRef.current = collectSessionCompletedSales(
-      { previous, current },
-      sessionCompletedRef.current,
-    );
-
-    const projectable = selectProjectableSaleItems(queue, sessionCompletedRef.current);
+    const projectable = selectProjectableSaleItems(queue, sessionCompleted);
     const operationIds = collectLocalSaleOperationIds(projectable);
     setTicketsLoading(true);
     void loadSaleTicketSnapshots(operationIds)
@@ -107,22 +151,20 @@ export function useSalesListProjection(): SalesListProjection {
         });
       });
 
-    if (hadPrevious && shouldRefreshSalesAfterQueueChange({ previous, current })) {
-      void loadTodaySales({ force: true });
-    }
-
     return () => {
       cancelled = true;
     };
     // queueSignature captura id/status/error/created_at de los sale_order:
     // cambios de otros tipos de ítem (gps, foto) no disparan este efecto.
+    // sessionCompleted deriva de la misma firma, así que la clausura del
+    // último render de la pasada siempre ve el set final.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueSignature, loadTodaySales]);
+  }, [queueSignature]);
 
   const localDay = localDayOf(Date.now());
 
   const entries = React.useMemo(() => {
-    const localEntries = selectProjectableSaleItems(queue, sessionCompletedRef.current)
+    const localEntries = selectProjectableSaleItems(queue, sessionCompleted)
       .map((item) => projectLocalSale(item, tickets.get(item.id) ?? null))
       .filter((entry): entry is SalesListEntry => entry !== null);
     return mergeSalesListEntries({
@@ -130,9 +172,9 @@ export function useSalesListProjection(): SalesListProjection {
       localEntries,
       localDay,
     });
-    // La cola participa vía queueSignature (mismos campos que alteran la
-    // proyección, y el efecto de arriba ya actualizó sessionCompletedRef);
-    // orders/tickets son estados propios.
+    // La cola y el set de completadas participan vía queueSignature (el set
+    // solo cambia cuando cambia la firma, y la derivación en render garantiza
+    // que esta pasada ya usa el valor nuevo); orders/tickets son estados.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueSignature, tickets, orders, localDay]);
 

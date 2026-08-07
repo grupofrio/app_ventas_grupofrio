@@ -51,13 +51,41 @@ function main() {
   );
   assert.match(
     hook,
-    /selectProjectableSaleItems\(queue, sessionCompletedRef\.current\)/,
+    /selectProjectableSaleItems\(queue, sessionCompleted\)/,
     'la proyección debe filtrar los done no observados en sesión',
   );
   assert.match(
     hook,
-    /const hadPrevious = previousStatusesRef\.current !== null/,
+    /const hadPrevious = tracking\.signature !== null/,
     'el primer run (mount/rehydrate) no debe disparar refresh',
+  );
+
+  // P2 Codex #62: la derivación ocurre EN RENDER (setState en fase de render,
+  // idempotente por comparación de firma) — el mismo render que trae la
+  // transición a done ya proyecta la tarjeta, sin ventana visual entre render
+  // y efecto. Nada del rastreo vive en refs.
+  assert.match(
+    hook,
+    /if \(tracking\.signature !== queueSignature\) \{/,
+    'el rastreo de transiciones debe derivarse en render, gated por firma',
+  );
+  assert.doesNotMatch(
+    hook,
+    /useRef/,
+    'el rastreo no debe vivir en refs: un ref no re-renderiza y deja hueco visual',
+  );
+
+  // El refresh es side effect: se decide en render (token) y se ejecuta en un
+  // efecto tras el commit; token 0 = mount, nunca refresca.
+  assert.match(
+    hook,
+    /refreshToken: tracking\.refreshToken \+ \(shouldRefresh \? 1 : 0\)/,
+    'la decisión de refresh debe acumularse como token en render',
+  );
+  assert.match(
+    hook,
+    /if \(tracking\.refreshToken === 0\) return;/,
+    'el token inicial (mount/rehydrate) nunca dispara refresh',
   );
 
   // Carga de tickets en lote a partir de los IDs proyectables.

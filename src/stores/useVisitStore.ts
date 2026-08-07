@@ -203,7 +203,9 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     saleLines: qty <= 0
       ? get().saleLines.filter((l) => l.productId !== productId)
       : get().saleLines.map((l) =>
-          l.productId === productId ? { ...l, qty: Math.min(qty, l.stock) } : l
+          // Stock referencial: sin tope por stock capturado (que puede estar
+          // obsoleto); el backend valida el stock real al confirmar.
+          l.productId === productId ? { ...l, qty } : l
         ),
   }),
 

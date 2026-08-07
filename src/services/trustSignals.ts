@@ -221,15 +221,15 @@ export function describeGeoStatus(input: {
 /** Razón por la que "Confirmar venta" está bloqueado, o null si se puede. */
 export function describeSaleConfirmBlock(input: {
   hasLines: boolean;
-  hasStock: boolean;
   photoTaken: boolean;
   paymentSelected: boolean;
   hasPlaza: boolean;
   hasWarehouse: boolean;
   routeLoadAccepted: boolean;
 }): string | null {
+  // Stock referencial (2026-08-06): exceder la referencia local ya no
+  // bloquea confirmar — se avisa en el flujo y el backend valida el real.
   if (!input.hasLines) return null; // sin líneas no se muestra hint (igual que hoy)
-  if (!input.hasStock) return '⚠️ Ajusta cantidades al stock disponible';
   if (!input.photoTaken) return '📸 Toma la foto de entrega';
   if (!input.paymentSelected) return '💰 Selecciona método de pago';
   if (!input.hasPlaza) return '📍 Configura la plaza del empleado';

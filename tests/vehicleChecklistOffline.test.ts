@@ -95,18 +95,47 @@ async function main() {
     'un requerido REPROBADO pero respondido cuenta como listo: documenta, no detiene',
   );
 
-  // ── dead NO es accionable (P1 Codex): fuera de dependsOn, banner aparte,
-  // y un cierre dead permite reintentar con cierre nuevo ────────────────────
+  // ── La última respuesta por check reemplaza a sus predecesoras. `created_at`
+  // manda incluso si la cola está desordenada; a igual fecha, gana el último
+  // registro de la cola. Sólo una última respuesta dead va al banner. ───────
   const opsQueue = [
-    { id: 'a1', type: 'vehicle_check', status: 'pending', payload: { checklist_id: 3, check_id: 11 } },
-    { id: 'a2', type: 'vehicle_check', status: 'error', payload: { checklist_id: 3, check_id: 12 } },
-    { id: 'a3', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 3, check_id: 13 } },
-    { id: 'a4', type: 'vehicle_check', status: 'done', payload: { checklist_id: 3, check_id: 14 } },
-    { id: 'b1', type: 'vehicle_check', status: 'pending', payload: { checklist_id: 9, check_id: 21 } },
-    { id: 'c1', type: 'vehicle_checklist_complete', status: 'dead', payload: { checklist_id: 3 } },
+    { id: 'a1', type: 'vehicle_check', status: 'pending', created_at: 10, payload: { checklist_id: 3, check_id: 11 } },
+    { id: 'a2', type: 'vehicle_check', status: 'error', created_at: 20, payload: { checklist_id: 3, check_id: 12 } },
+    { id: 'a3', type: 'vehicle_check', status: 'dead', created_at: 30, payload: { checklist_id: 3, check_id: 13 } },
+    { id: 'a4', type: 'vehicle_check', status: 'done', created_at: 40, payload: { checklist_id: 3, check_id: 14 } },
+    { id: 'b1', type: 'vehicle_check', status: 'pending', created_at: 50, payload: { checklist_id: 9, check_id: 21 } },
+
+    // El orden de la cola contradice el temporal: dead(t1) -> error(t2),
+    // syncing(t2) y done(t2) deben ocultar sus dead(t1).
+    { id: 'check-31-error-t2', type: 'vehicle_check', status: 'error', created_at: 200, payload: { checklist_id: 3, check_id: 31 } },
+    { id: 'check-31-dead-t1', type: 'vehicle_check', status: 'dead', created_at: 100, payload: { checklist_id: 3, check_id: 31 } },
+    { id: 'check-32-syncing-t2', type: 'vehicle_check', status: 'syncing', created_at: 400, payload: { checklist_id: 3, check_id: 32 } },
+    { id: 'check-32-dead-t1', type: 'vehicle_check', status: 'dead', created_at: 300, payload: { checklist_id: 3, check_id: 32 } },
+    { id: 'check-33-done-t2', type: 'vehicle_check', status: 'done', created_at: 600, payload: { checklist_id: 3, check_id: 33 } },
+    { id: 'check-33-dead-t1', type: 'vehicle_check', status: 'dead', created_at: 500, payload: { checklist_id: 3, check_id: 33 } },
+
+    // dead(t1) -> dead(t2): sólo hay un check_id terminal, aunque existan
+    // dos registros dead para el mismo check.
+    { id: 'check-34-dead-t2', type: 'vehicle_check', status: 'dead', created_at: 800, payload: { checklist_id: 3, check_id: 34 } },
+    { id: 'check-34-dead-t1', type: 'vehicle_check', status: 'dead', created_at: 700, payload: { checklist_id: 3, check_id: 34 } },
+    // La misma respuesta de otro checklist no comparte historial.
+    { id: 'other-checklist-dead', type: 'vehicle_check', status: 'dead', created_at: 900, payload: { checklist_id: 9, check_id: 34 } },
+
+    // Empates temporales se resuelven por el índice original: t2 está después.
+    { id: 'check-35-error-t1', type: 'vehicle_check', status: 'error', created_at: 1_000, payload: { checklist_id: 3, check_id: 35 } },
+    { id: 'check-35-pending-t2', type: 'vehicle_check', status: 'pending', created_at: 1_000, payload: { checklist_id: 3, check_id: 35 } },
+    { id: 'check-36-error-t1', type: 'vehicle_check', status: 'error', created_at: 1_100, payload: { checklist_id: 3, check_id: 36 } },
+    { id: 'check-36-done-t2', type: 'vehicle_check', status: 'done', created_at: 1_100, payload: { checklist_id: 3, check_id: 36 } },
+    { id: 'c1', type: 'vehicle_checklist_complete', status: 'dead', created_at: 1_200, payload: { checklist_id: 3 } },
   ];
-  assert.deepEqual(collectQueuedChecklistAnswerOps(opsQueue, 3), ['a1', 'a2']);
-  assert.deepEqual(collectDeadChecklistAnswerCheckIds(opsQueue, 3), [13]);
+  assert.deepEqual(collectQueuedChecklistAnswerOps(opsQueue, 3), [
+    'a1',
+    'a2',
+    'check-31-error-t2',
+    'check-32-syncing-t2',
+    'check-35-pending-t2',
+  ]);
+  assert.deepEqual(collectDeadChecklistAnswerCheckIds(opsQueue, 3), [13, 34]);
   assert.equal(hasQueuedChecklistComplete(opsQueue, 3), false, 'un cierre dead permite reintentar');
   assert.equal(hasQueuedChecklistComplete(
     [...opsQueue, { id: 'c2', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3 } }],

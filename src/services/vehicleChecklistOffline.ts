@@ -104,33 +104,66 @@ export function applyLocalCheckAnswer(
   });
 }
 
+type ChecklistAnswerQueueItem = {
+  type: string;
+  status: string;
+  created_at?: number;
+  payload?: Record<string, unknown>;
+};
+
+type LatestChecklistAnswer<T> = { item: T; originalIndex: number; createdAt: number };
+
+/**
+ * Una nueva respuesta para el mismo check reemplaza a la anterior, incluso
+ * cuando la cola no conserva orden cronológico. A igual created_at gana la
+ * aparición posterior en la cola, por lo que el orden es (created_at, índice).
+ */
+function selectLatestChecklistAnswerOps<T extends ChecklistAnswerQueueItem>(queue: T[]): T[] {
+  const latestByCheck = new Map<string, LatestChecklistAnswer<T>>();
+
+  queue.forEach((item, originalIndex) => {
+    if (item.type !== 'vehicle_check') return;
+    const payload = item.payload as { checklist_id?: unknown; check_id?: unknown } | undefined;
+    const key = `${String(payload?.checklist_id)}:${String(payload?.check_id)}`;
+    const createdAt = typeof item.created_at === 'number' && Number.isFinite(item.created_at)
+      ? item.created_at
+      : Number.NEGATIVE_INFINITY;
+    const current = latestByCheck.get(key);
+    if (!current || createdAt > current.createdAt
+      || (createdAt === current.createdAt && originalIndex > current.originalIndex)) {
+      latestByCheck.set(key, { item, originalIndex, createdAt });
+    }
+  });
+
+  return [...latestByCheck.values()]
+    .sort((a, b) => a.originalIndex - b.originalIndex)
+    .map(({ item }) => item);
+}
+
 /**
  * IDs de operaciones de respuesta ENCOLADAS de un checklist, derivados de la
  * COLA (durables: sobreviven salir/volver a la pantalla). El cierre offline
  * depende de esto, no de refs en memoria de la pantalla.
  */
 export function collectQueuedChecklistAnswerOps(
-  queue: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> }>,
+  queue: Array<{ id: string } & ChecklistAnswerQueueItem>,
   checklistId: number,
 ): string[] {
-  return queue
-    .filter((item) => item.type === 'vehicle_check'
-      // dead NO es accionable: un cierre que dependa de un id muerto jamás
-      // sería elegible. Los muertos se reportan aparte para re-responder.
-      && item.status !== 'done' && item.status !== 'dead'
-      && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId)
+  return selectLatestChecklistAnswerOps(queue)
+    .filter((item) => item.payload?.checklist_id === checklistId
+      // Sólo estas tres respuestas vigentes pueden completar el cierre.
+      && (item.status === 'pending' || item.status === 'syncing' || item.status === 'error'))
     .map((item) => item.id);
 }
 
-/** check_ids cuyas respuestas murieron en la cola: exigen re-responder. */
+/** check_ids cuya última respuesta murió en la cola: exigen re-responder. */
 export function collectDeadChecklistAnswerCheckIds(
-  queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
+  queue: ChecklistAnswerQueueItem[],
   checklistId: number,
 ): number[] {
-  return queue
-    .filter((item) => item.type === 'vehicle_check' && item.status === 'dead'
-      && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId)
-    .map((item) => Number((item.payload as { check_id?: number } | undefined)?.check_id) || 0)
+  return selectLatestChecklistAnswerOps(queue)
+    .filter((item) => item.status === 'dead' && item.payload?.checklist_id === checklistId)
+    .map((item) => Number(item.payload?.check_id) || 0)
     .filter((id) => id > 0);
 }
 

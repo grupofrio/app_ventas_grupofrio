@@ -89,7 +89,7 @@ function main() {
   );
   assert.match(
     salesTab,
-    /openTicketForOrder/,
+    /openTicketForEntry/,
     'la tab Ventas debe tener un handler para abrir el ticket de una venta',
   );
   assert.match(

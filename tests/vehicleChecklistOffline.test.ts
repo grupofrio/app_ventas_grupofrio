@@ -8,6 +8,9 @@ async function main() {
   );
 
   const {
+    collectQueuedChecklistAnswerOps,
+    collectDeadChecklistAnswerCheckIds,
+    hasQueuedChecklistComplete,
     buildVehicleCheckQueuePayload,
     applyLocalCheckAnswer,
     areRequiredChecksAnswered,
@@ -91,6 +94,24 @@ async function main() {
     true,
     'un requerido REPROBADO pero respondido cuenta como listo: documenta, no detiene',
   );
+
+  // ── dead NO es accionable (P1 Codex): fuera de dependsOn, banner aparte,
+  // y un cierre dead permite reintentar con cierre nuevo ────────────────────
+  const opsQueue = [
+    { id: 'a1', type: 'vehicle_check', status: 'pending', payload: { checklist_id: 3, check_id: 11 } },
+    { id: 'a2', type: 'vehicle_check', status: 'error', payload: { checklist_id: 3, check_id: 12 } },
+    { id: 'a3', type: 'vehicle_check', status: 'dead', payload: { checklist_id: 3, check_id: 13 } },
+    { id: 'a4', type: 'vehicle_check', status: 'done', payload: { checklist_id: 3, check_id: 14 } },
+    { id: 'b1', type: 'vehicle_check', status: 'pending', payload: { checklist_id: 9, check_id: 21 } },
+    { id: 'c1', type: 'vehicle_checklist_complete', status: 'dead', payload: { checklist_id: 3 } },
+  ];
+  assert.deepEqual(collectQueuedChecklistAnswerOps(opsQueue, 3), ['a1', 'a2']);
+  assert.deepEqual(collectDeadChecklistAnswerCheckIds(opsQueue, 3), [13]);
+  assert.equal(hasQueuedChecklistComplete(opsQueue, 3), false, 'un cierre dead permite reintentar');
+  assert.equal(hasQueuedChecklistComplete(
+    [...opsQueue, { id: 'c2', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3 } }],
+    3,
+  ), true);
 
   console.log('vehicle checklist offline tests: ok');
 }

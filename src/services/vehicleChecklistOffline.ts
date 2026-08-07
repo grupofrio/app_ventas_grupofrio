@@ -115,9 +115,23 @@ export function collectQueuedChecklistAnswerOps(
 ): string[] {
   return queue
     .filter((item) => item.type === 'vehicle_check'
-      && item.status !== 'done'
+      // dead NO es accionable: un cierre que dependa de un id muerto jamás
+      // sería elegible. Los muertos se reportan aparte para re-responder.
+      && item.status !== 'done' && item.status !== 'dead'
       && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId)
     .map((item) => item.id);
+}
+
+/** check_ids cuyas respuestas murieron en la cola: exigen re-responder. */
+export function collectDeadChecklistAnswerCheckIds(
+  queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
+  checklistId: number,
+): number[] {
+  return queue
+    .filter((item) => item.type === 'vehicle_check' && item.status === 'dead'
+      && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId)
+    .map((item) => Number((item.payload as { check_id?: number } | undefined)?.check_id) || 0)
+    .filter((id) => id > 0);
 }
 
 /** ¿Hay un cierre de este checklist ya encolado y no terminado? */
@@ -125,8 +139,10 @@ export function hasQueuedChecklistComplete(
   queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
   checklistId: number,
 ): boolean {
+  // Un cierre dead NO cuenta: debe poder reintentarse con un cierre nuevo
+  // tras reparar las respuestas.
   return queue.some((item) => item.type === 'vehicle_checklist_complete'
-    && item.status !== 'done'
+    && item.status !== 'done' && item.status !== 'dead'
     && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId);
 }
 

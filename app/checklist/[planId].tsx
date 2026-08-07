@@ -52,6 +52,7 @@ import {
   buildVehicleCheckQueuePayload,
   checklistDraftsStorageKey,
   checklistSnapshotStorageKey,
+  collectDeadChecklistAnswerCheckIds,
   collectQueuedChecklistAnswerOps,
   hasQueuedChecklistComplete,
 } from '../../src/services/vehicleChecklistOffline';
@@ -396,6 +397,10 @@ export default function ChecklistScreen() {
         showRouteChangedAlert();
         return;
       }
+      if (hasQueuedChecklistComplete(useSyncStore.getState().queue, header?.id ?? 0)) {
+        Alert.alert('Cierre ya encolado', 'Ya hay un cierre pendiente de envío; se completará al sincronizar.');
+        return;
+      }
       const hasQueuedAnswers = collectQueuedChecklistAnswerOps(
         useSyncStore.getState().queue,
         header?.id ?? 0,
@@ -498,6 +503,7 @@ export default function ChecklistScreen() {
   const answered = checks.filter((c) => c.answered).length;
   const queuedCount = Object.values(drafts).filter((d) => d.queued).length;
   const closeQueued = hasQueuedChecklistComplete(syncQueue, header?.id ?? 0);
+  const deadCheckIds = collectDeadChecklistAnswerCheckIds(syncQueue, header?.id ?? 0);
   const completed = header?.state === 'completed';
 
   return (
@@ -509,6 +515,13 @@ export default function ChecklistScreen() {
             <Text style={styles.offlineBannerText}>
               Sin conexión: checklist de la última carga. Tus respuestas se
               guardan y se enviarán al recuperar señal.
+            </Text>
+          </View>
+        )}
+        {deadCheckIds.length > 0 && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>
+              {deadCheckIds.length} {deadCheckIds.length === 1 ? 'respuesta falló' : 'respuestas fallaron'} definitivamente: vuelve a responder esos puntos para poder cerrar.
             </Text>
           </View>
         )}

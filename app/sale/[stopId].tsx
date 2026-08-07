@@ -161,8 +161,11 @@ function SaleScreenInner() {
 
   // V1.2: Stock validation + anti-duplicate
   const saleConfirmed = useVisitStore((s) => s.saleConfirmed);
-  const hasStockIssues = useVisitStore((s) => s.hasStockIssues);
   const getStockIssues = useVisitStore((s) => s.getStockIssues);
+  // Stock referencial: el vendedor puede confirmar por encima de la
+  // referencia local tras un aviso explícito; este ref evita re-preguntar
+  // en el re-intento inmediato disparado por "Enviar de todos modos".
+  const overStockAckRef = React.useRef(false);
   const lockSaleConfirm = useVisitStore((s) => s.lockSaleConfirm);
   const unlockSaleConfirm = useVisitStore((s) => s.unlockSaleConfirm);
   const persistSaleConfirmationLock = useVisitStore((s) => s.persistSaleConfirmationLock);
@@ -175,7 +178,6 @@ function SaleScreenInner() {
     (s) => s.setSaleRecoveryPersistenceFailed,
   );
   const stockIssues = getStockIssues();
-  const hasStock = !hasStockIssues();
   const implicitAnalytics = resolveImplicitSaleAnalytics({
     employeeAnalyticPlazaId,
   });
@@ -185,7 +187,7 @@ function SaleScreenInner() {
   const canStartSale = canStartSaleWithRouteLoad(plan);
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasAnalyticSelection && hasWarehouse
-                     && hasStock && canStartSale && !saleConfirmed;
+                     && canStartSale && !saleConfirmed;
   const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
   // Aviso offline + estado del pedido. Con pedido offline pendiente (S1), el
   // pedido se encola como sale_order y su estado se rastrea por saleOperationId.
@@ -273,31 +275,43 @@ function SaleScreenInner() {
       return;
     }
 
-    if (!hasStock) {
+    // Stock REFERENCIAL (auditoría julio, cerrado 2026-08-06): el inventario
+    // local/cacheado ya no es tope duro. Cantidades incoherentes (0/NaN)
+    // siguen bloqueando; exceder el stock de referencia solo pide
+    // confirmación — el backend valida el stock real (insufficient_stock ya
+    // refresca inventario y conserva el carrito).
+    const freshIssues = findFreshStockIssues(saleLines, useProductStore.getState().products);
+    const invalidIssues = freshIssues.filter((i) => i.kind === 'invalid_qty');
+    if (invalidIssues.length > 0) {
       Alert.alert(
-        'Stock insuficiente',
-        stockIssues.map((i) =>
-          `${i.name}: pides ${i.requested}, disponible ${i.available}`
-        ).join('\n'),
+        'Cantidad inválida',
+        invalidIssues.map((i) => `${i.name}: cantidad inválida`).join('\n'),
       );
       return;
     }
-
-    // P0-1 (frontend-safe): revalidar contra stock FRESCO al confirmar (el tope
-    // del carrito usa el stock capturado al agregar, que pudo quedar obsoleto).
-    // Bloquea qty inválida (0/NaN) y qty > disponible actual. No descuenta nada
-    // localmente ni reemplaza la validación backend.
-    const freshIssues = findFreshStockIssues(saleLines, useProductStore.getState().products);
-    if (freshIssues.length > 0) {
+    const overStockIssues = freshIssues.filter((i) => i.kind === 'over_stock');
+    if (overStockIssues.length > 0 && !overStockAckRef.current) {
       Alert.alert(
-        'Stock insuficiente',
-        freshIssues.map((i) =>
-          i.kind === 'invalid_qty'
-            ? `${i.name}: cantidad inválida`
-            : `${i.name}: pides ${i.requested}, disponible ${i.available}`
-        ).join('\n'),
+        'Stock de referencia excedido',
+        overStockIssues
+          .map((i) => `${i.name}: pides ${i.requested}, referencia ${i.available}`)
+          .join('\n')
+          + '\n\nEl inventario local es referencial. El servidor validará el stock real al confirmar.',
+        [
+          { text: 'Revisar', style: 'cancel' },
+          {
+            text: 'Enviar de todos modos',
+            onPress: () => {
+              overStockAckRef.current = true;
+              void handleConfirm();
+            },
+          },
+        ],
       );
       return;
+    }
+    if (overStockIssues.length > 0) {
+      overStockAckRef.current = false;
     }
 
     if (!canConfirm) {
@@ -903,15 +917,18 @@ function SaleScreenInner() {
           </View>
         )}
 
-        {/* V1.2: Stock issues warning */}
+        {/* Stock referencial: aviso, no bloqueo — el backend valida el real */}
         {stockIssues.length > 0 && (
           <View style={styles.stockWarning}>
-            <Text style={styles.stockWarningTitle}>⚠️ Stock insuficiente</Text>
+            <Text style={styles.stockWarningTitle}>⚠️ Sobre stock de referencia</Text>
             {stockIssues.map((issue) => (
               <Text key={issue.productId} style={styles.stockWarningLine}>
-                {issue.name}: pides {issue.requested}, disponible {issue.available}
+                {issue.name}: pides {issue.requested}, referencia {issue.available}
               </Text>
             ))}
+            <Text style={styles.stockWarningLine}>
+              El servidor validará el stock real al confirmar.
+            </Text>
           </View>
         )}
 
@@ -962,7 +979,6 @@ function SaleScreenInner() {
         {!saleConfirmed && (() => {
           const reason = describeSaleConfirmBlock({
             hasLines: saleLines.length > 0,
-            hasStock,
             photoTaken: salePhotoTaken,
             paymentSelected: !!salePaymentMethod,
             hasPlaza: !!implicitAnalytics.analytic_plaza_id,

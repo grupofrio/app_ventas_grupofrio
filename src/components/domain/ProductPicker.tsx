@@ -265,7 +265,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       // Ocultar agotados solo en modo normal (truck_stock con stock real).
       // En modo referencia o fallback global, dejamos pasar para no dejar
       // al vendedor con pantalla en blanco.
-      if (!isGlobalFallback && !showOutOfStockAsReference && p.qty_display <= 0) return false;
+      // Stock referencial: los agotados se MUESTRAN (etiquetados y al final
+      // por el sort) y se pueden vender; el backend valida el stock real.
       return true;
     }).sort((a, b) => {
       if (a.isRecommended && !b.isRecommended) return -1;
@@ -285,17 +286,19 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     return counts;
   }, [enrichedProducts]);
 
-  const setQty = useCallback((productId: number, delta: number, maxStock: number) => {
+  // Stock referencial: el stepper ya no topa contra el stock cacheado (puede
+  // estar obsoleto); tope sano anti-error de dedo. Backend valida el real.
+  const REFERENTIAL_MAX_QTY = 999;
+  const setQty = useCallback((productId: number, delta: number, _maxStock: number) => {
     setQuantities((prev) => {
       const current = prev[productId] || 1;
-      const next = Math.max(1, Math.min(maxStock, current + delta));
+      const next = Math.max(1, Math.min(REFERENTIAL_MAX_QTY, current + delta));
       return { ...prev, [productId]: next };
     });
   }, []);
 
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
-    if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
@@ -307,7 +310,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       productId: product.id,
       productName: product.name,
       price: normalizeSaleLineBasePrice(rawPrice),
-      qty: Math.min(qty, product.qty_display),
+      qty,
       stock: product.qty_display,
       weight: product.weight || 5,
     };
@@ -360,7 +363,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = outOfStock || alreadyAdded;
+    const disabled = alreadyAdded;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -399,9 +402,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
-              style={[styles.qtyBtn, qty >= p.qty_display && styles.qtyBtnOff]}
+              style={styles.qtyBtn}
               onPress={() => setQty(p.id, 1, p.qty_display)}
-              disabled={qty >= p.qty_display}
             >
               <Text style={styles.qtyBtnText}>+</Text>
             </TouchableOpacity>
@@ -416,7 +418,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = outOfStock || alreadyAdded;
+    const disabled = alreadyAdded;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -464,9 +466,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
-              style={[styles.qtyBtnSm, qty >= p.qty_display && styles.qtyBtnOff]}
+              style={styles.qtyBtnSm}
               onPress={() => setQty(p.id, 1, p.qty_display)}
-              disabled={qty >= p.qty_display}
             >
               <Text style={styles.qtyBtnText}>+</Text>
             </TouchableOpacity>

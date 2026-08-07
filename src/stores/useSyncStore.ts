@@ -1271,6 +1271,11 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.latitude as number,
         payload.longitude as number,
         payload.result_status as CheckoutResultStatus,
+        {
+          no_sale_reason_code: payload.no_sale_reason_code as string | undefined,
+          no_sale_notes: payload.no_sale_notes as string | undefined,
+          no_sale_competitor: payload.no_sale_competitor as string | undefined,
+        },
         meta,
       );
       break;

@@ -65,7 +65,8 @@ export default function NoSaleScreen() {
   // Antes del refactor de Sebastián el cálculo estaba aquí; el guard se
   // intercaló más abajo y rompió tanto el tipo como la seguridad runtime.
   const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
-  const showCompetitor = selectedReasonId === 5; // competitor reason
+  const COMPETITOR_REASON_ID = 5;
+  const showCompetitor = selectedReasonId === COMPETITOR_REASON_ID;
   const canSave = selectedReasonId != null && noSalePhotoTaken;
   const isOffrouteVisit = !!stop._isOffroute;
 
@@ -174,12 +175,18 @@ export default function NoSaleScreen() {
       return;
     }
 
+    // El motivo estructurado viaja EN EL CHECKOUT: es el único camino que el
+    // backend persiste en gf.route.stop (no_sale_*). El endpoint de incidentes
+    // ignora estas claves (solo postea al chatter de leads).
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
       latitude: latitude || 0,
       longitude: longitude || 0,
       saleTotal: 0,
       noSaleReasonId: selectedReasonId,
+      noSaleReasonCode: reason?.code,
+      noSaleNotes: notes,
+      noSaleCompetitor: selectedReasonId === COMPETITOR_REASON_ID ? selectedCompetitor : null,
     });
 
     const enqueueNoSaleAndCheckout = () => {
@@ -248,6 +255,11 @@ export default function NoSaleScreen() {
         checkoutPayload.latitude,
         checkoutPayload.longitude,
         checkoutPayload.result_status,
+        {
+          no_sale_reason_code: checkoutPayload.no_sale_reason_code,
+          no_sale_notes: checkoutPayload.no_sale_notes,
+          no_sale_competitor: checkoutPayload.no_sale_competitor,
+        },
       );
       finalizeNoSaleLocally();
     } catch (error) {

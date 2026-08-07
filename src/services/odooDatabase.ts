@@ -60,13 +60,21 @@ export async function fetchOdooDatabaseNames(baseUrl: string): Promise<string[]>
   }
 }
 
+/**
+ * Contrato de prioridad (idéntico al de candidateOdooDatabases):
+ * explícita → lista del servidor → DEFAULT_ODOO_DB → subdominio.
+ * Una DB explícita del caller gana SIEMPRE y evita la llamada de red:
+ * la resolución queda determinista aun sin conectividad.
+ */
 export async function resolveOdooDatabase(
   baseUrl: string,
   configuredDb?: string | null,
   fetcher: (baseUrl: string) => Promise<string[]> = fetchOdooDatabaseNames,
 ): Promise<string | null> {
+  const explicit = typeof configuredDb === 'string' ? configuredDb.trim() : '';
+  if (explicit) return explicit;
   const listedDbs = await fetcher(baseUrl);
   const [listedDb] = listedDbs;
   if (listedDb) return listedDb;
-  return candidateOdooDatabases(baseUrl, configuredDb, [])[0] ?? null;
+  return candidateOdooDatabases(baseUrl, null, [])[0] ?? null;
 }

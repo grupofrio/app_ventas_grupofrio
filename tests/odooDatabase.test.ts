@@ -50,12 +50,28 @@ async function main() {
     ['grupofrio-gf-main-34980678'],
   );
 
-  // La lista del servidor sigue ganando: sobrevive renombres de DB en Odoo.sh
-  // sin recompilar el APK.
+  // Una DB explícita del caller gana SIEMPRE (contrato: explícita → lista →
+  // default → subdominio) y no toca la red.
+  let fetcherCalls = 0;
   assert.equal(
     await module.resolveOdooDatabase(
       'https://grupofrio-gf.odoo.com',
       'grupofrio-gf-configured',
+      async () => {
+        fetcherCalls += 1;
+        return ['grupofrio-gf-renamed-99999999'];
+      },
+    ),
+    'grupofrio-gf-configured',
+  );
+  assert.equal(fetcherCalls, 0, 'con DB explícita no debe consultarse el servidor');
+
+  // Sin explícita, la lista del servidor gana: sobrevive renombres de DB en
+  // Odoo.sh sin recompilar el APK.
+  assert.equal(
+    await module.resolveOdooDatabase(
+      'https://grupofrio-gf.odoo.com',
+      null,
       async () => ['grupofrio-gf-renamed-99999999'],
     ),
     'grupofrio-gf-renamed-99999999',
@@ -72,14 +88,14 @@ async function main() {
     'grupofrio-gf-main-34980678',
   );
 
-  // Una DB explícita del caller conserva la máxima prioridad en el fallback.
+  // Explícita solo-espacios cuenta como ausente.
   assert.equal(
     await module.resolveOdooDatabase(
       'https://grupofrio-gf.odoo.com',
-      'grupofrio-gf-configured',
+      '   ',
       async () => [],
     ),
-    'grupofrio-gf-configured',
+    'grupofrio-gf-main-34980678',
   );
 
   console.log('odoo database tests: ok');

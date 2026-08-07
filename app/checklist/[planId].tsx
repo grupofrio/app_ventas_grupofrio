@@ -469,7 +469,7 @@ export default function ChecklistScreen() {
       if (isRetryableSyncErrorMessage(msg)) {
         // Red degradada a media petición: mismo camino que offline (el
         // backend trata already_completed como éxito si el POST sí llegó).
-        completeOffline(capturedPlanId, queue);
+        completeOffline(capturedPlanId, useSyncStore.getState().queue);
         return;
       }
       if (/checks_pending|pendiente/i.test(msg)) {

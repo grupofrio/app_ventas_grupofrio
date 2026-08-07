@@ -145,6 +145,11 @@ function main() {
   );
   assert.match(
     screen,
+    /await completeVehicleChecklist\([\s\S]{0,1800}catch \(err\) \{[\s\S]{0,500}isRetryableSyncErrorMessage\(msg\)[\s\S]{0,500}completeOffline\(capturedPlanId, useSyncStore\.getState\(\)\.queue\)/,
+    'el fallback reintentable relee la cola actual después del await antes de aplicar guard/dependencies',
+  );
+  assert.match(
+    screen,
     /deadCheckIds\.length > 0[\s\S]{0,500}CHECKLIST_DEAD_REPAIR_COPY/,
     'el banner de respuestas dead reutiliza el copy de reparación del gate',
   );

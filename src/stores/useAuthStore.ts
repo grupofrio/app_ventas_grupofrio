@@ -8,7 +8,13 @@
 
 import { create } from 'zustand';
 import NetInfo from '@react-native-community/netinfo';
-import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
+import {
+  setAuthTokens,
+  clearAuthTokens,
+  setBaseUrl,
+  fetchWithTimeout,
+  AUTH_TIMEOUT_MS,
+} from '../services/api';
 import { signOut } from '../services/gfLogistics';
 import { clearOdooSession } from '../services/odooSession';
 import { resolveOdooDatabase } from '../services/odooDatabase';
@@ -279,14 +285,16 @@ export const useAuthStore = create<AuthState>((set) => ({
       // use fetch for the same reason — login must too.
       let response: Response;
       try {
-        response = await fetch(loginUrl, {
+        // AUTH_TIMEOUT_MS: el login corría con fetch SIN timeout — colgado
+        // indefinido en red degradada (pendiente de auditoría julio).
+        response = await fetchWithTimeout(loginUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0',
             params: { barcode, pin, db: dbName },
           }),
-        });
+        }, AUTH_TIMEOUT_MS);
       } catch (netErr) {
         const msg = netErr instanceof Error ? netErr.message : 'Error de red';
         console.warn('[login] Network error:', {

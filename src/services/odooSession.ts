@@ -16,7 +16,10 @@
  * Credentials are loaded from a service account configured via setServiceCredentials().
  */
 
-import { getBaseUrl } from './api';
+// fetchWithTimeout: los 4 POST de sesión corrían con fetch SIN timeout — en
+// red degradada colgaban indefinidamente (pendiente de auditoría julio).
+// Usa el timeout conservador por defecto (45s, mismo que las mutaciones REST).
+import { getBaseUrl, fetchWithTimeout } from './api';
 import { candidateOdooDatabases, fetchOdooDatabaseNames } from './odooDatabase';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { logError, logInfo, logWarn } from '../utils/logger';
@@ -108,7 +111,7 @@ async function authenticate(): Promise<boolean> {
           requestBody,
         }));
 
-        const response = await fetch(`${baseUrl}/web/session/authenticate`, {
+        const response = await fetchWithTimeout(`${baseUrl}/web/session/authenticate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include', // ← tells RN to store & send cookies
@@ -229,7 +232,7 @@ export async function sessionRpc<T = unknown>(
       requestBody,
     }));
 
-    const response = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+    const response = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include', // ← RN sends session cookie automatically
@@ -262,7 +265,7 @@ export async function sessionRpc<T = unknown>(
       const reAuth = await authenticate();
       if (reAuth) {
         // Retry with fresh session cookie
-        const retryResp = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+        const retryResp = await fetchWithTimeout(`${baseUrl}/web/dataset/call_kw`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -369,7 +372,7 @@ export async function sessionRpc<T = unknown>(
         requestBody,
       }));
 
-      const response = await fetch(`${baseUrl}/jsonrpc`, {
+      const response = await fetchWithTimeout(`${baseUrl}/jsonrpc`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),

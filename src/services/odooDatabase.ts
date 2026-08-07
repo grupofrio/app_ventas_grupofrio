@@ -46,17 +46,28 @@ export function candidateOdooDatabases(
   return candidates;
 }
 
+// Timeout de LECTURA local (este módulo se mantiene PURO/RN-free — no importa
+// api.ts, que arrastra axios/SecureStore y rompería los tests de Node).
+const DB_LIST_TIMEOUT_MS = 10_000;
+
 export async function fetchOdooDatabaseNames(baseUrl: string): Promise<string[]> {
+  // Sin timeout, el login quedaba colgado resolviendo la DB en red degradada
+  // antes de siquiera intentar autenticar (pendiente de auditoría julio).
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DB_LIST_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/web/database/list`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', params: {} }),
+      signal: controller.signal,
     });
     const payload = await response.json();
     return extractOdooDatabaseNames(payload);
   } catch {
     return [];
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

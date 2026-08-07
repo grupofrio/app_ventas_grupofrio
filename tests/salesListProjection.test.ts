@@ -167,6 +167,28 @@ async function main() {
     needsAttentionCount: 1,
   });
 
+  // ── Escenario P1 (Codex #62): reinicio con done resucitado + fallo remoto ──
+  // Un sale_order en done rehidratado de una sesión anterior no está en el set
+  // de completadas-en-sesión ⇒ no proyecta; con el remoto caído (orders=[]) la
+  // lista queda VACÍA — sin tarjeta "Actualizando" fantasma.
+  // @ts-ignore -- módulo hermano cargado igual que el principal.
+  const ticketsModule = await import(
+    // @ts-ignore -- import.meta solo existe en el runtime de test.
+    new URL('../src/services/localSaleTickets.ts', import.meta.url).pathname
+  );
+  const rehydratedQueue = [
+    { ...baseItem, id: 'op-resucitado', status: 'done' },
+  ];
+  const projectable = ticketsModule.selectProjectableSaleItems(rehydratedQueue, new Set());
+  const phantomCheck = mergeSalesListEntries({
+    remoteOrders: [],
+    localEntries: projectable
+      .map((item: typeof baseItem) => projectLocalSale(item, null))
+      .filter((entry: unknown) => entry !== null),
+    localDay,
+  });
+  assert.equal(phantomCheck.length, 0, 'un done rehidratado no debe dejar tarjeta fantasma');
+
   console.log('sales list projection tests: ok');
 }
 

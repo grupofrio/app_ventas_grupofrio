@@ -16,7 +16,10 @@ import { useSyncStore } from '../stores/useSyncStore';
 import { useSalesStore } from '../stores/useSalesStore';
 import type { SaleTicketSnapshot } from '../services/saleTicket';
 import { loadSaleTicketSnapshots } from '../services/saleTicketStorage';
-import { collectLocalSaleOperationIds } from '../services/localSaleTickets';
+import {
+  collectLocalSaleOperationIds,
+  selectProjectableSaleItems,
+} from '../services/localSaleTickets';
 import {
   mergeSalesListEntries,
   projectLocalSale,
@@ -26,6 +29,7 @@ import {
   type SalesListEntry,
 } from '../services/salesListProjection';
 import {
+  collectSessionCompletedSales,
   shouldRefreshSalesAfterQueueChange,
   type ObservedSaleStatus,
 } from '../services/salesRefreshPolicy';
@@ -69,11 +73,25 @@ export function useSalesListProjection(): SalesListProjection {
 
   const queueSignature = buildSaleQueueSignature(queue);
   const previousStatusesRef = React.useRef<Map<string, ObservedSaleStatus> | null>(null);
+  // Operaciones cuya llegada a `done` se observó EN ESTA SESIÓN: solo esas
+  // proyectan la tarjeta transitoria "Actualizando". Un done rehidratado de
+  // una sesión anterior nunca proyecta ni dispara refresh (P1 Codex #62).
+  const sessionCompletedRef = React.useRef<ReadonlySet<string>>(new Set());
 
   React.useEffect(() => {
     let cancelled = false;
 
-    const operationIds = collectLocalSaleOperationIds(queue);
+    const current = buildSaleStatusMap(queue);
+    const previous = previousStatusesRef.current ?? new Map<string, ObservedSaleStatus>();
+    const hadPrevious = previousStatusesRef.current !== null;
+    previousStatusesRef.current = current;
+    sessionCompletedRef.current = collectSessionCompletedSales(
+      { previous, current },
+      sessionCompletedRef.current,
+    );
+
+    const projectable = selectProjectableSaleItems(queue, sessionCompletedRef.current);
+    const operationIds = collectLocalSaleOperationIds(projectable);
     setTicketsLoading(true);
     void loadSaleTicketSnapshots(operationIds)
       .then((loaded) => {
@@ -89,10 +107,7 @@ export function useSalesListProjection(): SalesListProjection {
         });
       });
 
-    const current = buildSaleStatusMap(queue);
-    const previous = previousStatusesRef.current;
-    previousStatusesRef.current = current;
-    if (previous && shouldRefreshSalesAfterQueueChange({ previous, current })) {
+    if (hadPrevious && shouldRefreshSalesAfterQueueChange({ previous, current })) {
       void loadTodaySales({ force: true });
     }
 
@@ -107,7 +122,7 @@ export function useSalesListProjection(): SalesListProjection {
   const localDay = localDayOf(Date.now());
 
   const entries = React.useMemo(() => {
-    const localEntries = queue
+    const localEntries = selectProjectableSaleItems(queue, sessionCompletedRef.current)
       .map((item) => projectLocalSale(item, tickets.get(item.id) ?? null))
       .filter((entry): entry is SalesListEntry => entry !== null);
     return mergeSalesListEntries({
@@ -116,7 +131,8 @@ export function useSalesListProjection(): SalesListProjection {
       localDay,
     });
     // La cola participa vía queueSignature (mismos campos que alteran la
-    // proyección); orders/tickets son estados propios.
+    // proyección, y el efecto de arriba ya actualizó sessionCompletedRef);
+    // orders/tickets son estados propios.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueSignature, tickets, orders, localDay]);
 

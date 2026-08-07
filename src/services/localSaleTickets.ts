@@ -6,9 +6,26 @@
 import type { SyncQueueItem } from '../types/sync';
 
 /**
- * IDs de operación de los `sale_order` de la cola que aún proyectan tarjeta
- * (incluye `done` transitorio para la tarjeta "Actualizando"), deduplicados en
+ * Ítems `sale_order` de la cola que proyectan tarjeta en Ventas. Un `done`
+ * solo proyecta (tarjeta transitoria "Actualizando") si su transición se
+ * observó en esta sesión: un done REHIDRATADO de una sesión anterior nunca
+ * proyecta — quedaría como tarjeta fantasma permanente si el refresco remoto
+ * falla (P1 Codex #62).
+ */
+export function selectProjectableSaleItems<
+  T extends Pick<SyncQueueItem, 'id' | 'type' | 'status'>,
+>(queue: T[], sessionCompletedOps: ReadonlySet<string>): T[] {
+  return queue.filter((item) => {
+    if (item.type !== 'sale_order') return false;
+    if (item.status === 'done') return sessionCompletedOps.has(item.id);
+    return true;
+  });
+}
+
+/**
+ * IDs de operación de los `sale_order` que proyectan tarjeta, deduplicados en
  * orden de cola. Otros tipos (foto, GPS, visita, pago) nunca cargan tickets.
+ * Pasar la cola YA filtrada por selectProjectableSaleItems.
  */
 export function collectLocalSaleOperationIds(
   queue: Array<Pick<SyncQueueItem, 'id' | 'type' | 'status'>>,

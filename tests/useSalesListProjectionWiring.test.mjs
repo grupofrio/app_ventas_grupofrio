@@ -43,11 +43,28 @@ function main() {
     'la firma debe cubrir id/status/error_message/created_at',
   );
 
-  // Carga de tickets en lote a partir de los IDs de venta de la cola.
+  // Gating de sesión: un done rehidratado nunca proyecta ni carga tickets.
   assert.match(
     hook,
-    /collectLocalSaleOperationIds\(queue\)/,
-    'el hook debe recolectar los IDs de venta de la cola',
+    /collectSessionCompletedSales\(/,
+    'el hook debe rastrear los done observados en esta sesión',
+  );
+  assert.match(
+    hook,
+    /selectProjectableSaleItems\(queue, sessionCompletedRef\.current\)/,
+    'la proyección debe filtrar los done no observados en sesión',
+  );
+  assert.match(
+    hook,
+    /const hadPrevious = previousStatusesRef\.current !== null/,
+    'el primer run (mount/rehydrate) no debe disparar refresh',
+  );
+
+  // Carga de tickets en lote a partir de los IDs proyectables.
+  assert.match(
+    hook,
+    /collectLocalSaleOperationIds\(projectable\)/,
+    'los tickets deben cargarse solo para ítems proyectables',
   );
   assert.match(
     hook,

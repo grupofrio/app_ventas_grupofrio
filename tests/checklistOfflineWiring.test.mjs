@@ -67,7 +67,29 @@ function main() {
   // Pantalla: cierre offline con dependsOn de las respuestas encoladas y
   // requeridos completos (contando encolados).
   assert.match(screen, /enqueue\(\s*'vehicle_checklist_complete',/, 'el cierre offline se encola');
-  assert.match(screen, /dependsOn: \[\.\.\.queuedAnswerOpsRef\.current\]/, 'el cierre depende de las respuestas encoladas');
+  assert.match(
+    screen,
+    /collectQueuedChecklistAnswerOps\(\s*useSyncStore\.getState\(\)\.queue,/,
+    'el dependsOn del cierre se deriva de la COLA (durable), no de refs en memoria',
+  );
+  assert.match(screen, /dependsOn: pendingAnswerOps/, 'el cierre depende de las respuestas encoladas');
+  // P1: sin completado local prematuro ni borrado de borradores en el cierre offline.
+  assert.match(screen, /Cierre pendiente de envío/, 'el cierre offline se comunica como pendiente, no completo');
+  assert.doesNotMatch(
+    screen,
+    /pendingAnswerOps[\s\S]{0,600}setChecklistCompleteForPlan\(capturedPlanId, true\)/,
+    'el cierre offline no debe marcar el checklist como completo localmente',
+  );
+  // P1: gate de hidratación — no persistir antes de cargar.
+  assert.match(screen, /!draftsHydrated\) return;/, 'el guardado de borradores espera la hidratación');
+  // P1: el snapshot cacheado re-proyecta respuestas encoladas.
+  assert.match(screen, /usingCachedSnapshot \|\| !draftsHydrated/, 'la re-proyección corre tras snapshot+hidratación');
+  // Los borradores solo se limpian cuando el SERVIDOR confirma completed.
+  assert.match(
+    screen,
+    /state === 'completed'[\s\S]{0,300}storeRemove\(checklistDraftsStorageKey/,
+    'la limpieza de borradores exige confirmación del servidor',
+  );
   assert.match(screen, /areRequiredChecksAnswered\(checks\)/, 'el cierre offline valida requeridos localmente');
   assert.match(
     screen,

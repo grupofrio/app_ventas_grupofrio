@@ -104,6 +104,32 @@ export function applyLocalCheckAnswer(
   });
 }
 
+/**
+ * IDs de operaciones de respuesta ENCOLADAS de un checklist, derivados de la
+ * COLA (durables: sobreviven salir/volver a la pantalla). El cierre offline
+ * depende de esto, no de refs en memoria de la pantalla.
+ */
+export function collectQueuedChecklistAnswerOps(
+  queue: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> }>,
+  checklistId: number,
+): string[] {
+  return queue
+    .filter((item) => item.type === 'vehicle_check'
+      && item.status !== 'done'
+      && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId)
+    .map((item) => item.id);
+}
+
+/** ¿Hay un cierre de este checklist ya encolado y no terminado? */
+export function hasQueuedChecklistComplete(
+  queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
+  checklistId: number,
+): boolean {
+  return queue.some((item) => item.type === 'vehicle_checklist_complete'
+    && item.status !== 'done'
+    && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId);
+}
+
 /** ¿Todos los puntos requeridos están respondidos (contando encolados)? */
 export function areRequiredChecksAnswered(checks: GFVehicleCheck[]): boolean {
   return checks.every((check) => !check.required || check.answered);

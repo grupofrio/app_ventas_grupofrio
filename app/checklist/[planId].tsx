@@ -52,6 +52,8 @@ import {
   buildVehicleCheckQueuePayload,
   checklistDraftsStorageKey,
   checklistSnapshotStorageKey,
+  collectQueuedChecklistAnswerOps,
+  hasQueuedChecklistComplete,
 } from '../../src/services/vehicleChecklistOffline';
 
 interface CheckDraft {
@@ -98,9 +100,11 @@ export default function ChecklistScreen() {
   const [usingCachedSnapshot, setUsingCachedSnapshot] = useState(false);
   const isOnline = useSyncStore((s) => s.isOnline);
   const enqueue = useSyncStore((s) => s.enqueue);
-  // IDs de operaciones de respuesta encoladas en esta pantalla: el cierre
-  // offline viaja con dependsOn de todas ellas.
-  const queuedAnswerOpsRef = React.useRef<string[]>([]);
+  const syncQueue = useSyncStore((s) => s.queue);
+  // P1 Codex: el guardado se ABRE hasta que la carga durable terminó — sin
+  // este gate, el primer render persistía {} y borraba el borrador que
+  // veníamos a restaurar.
+  const [draftsHydrated, setDraftsHydrated] = useState(false);
 
   // Borradores persistidos por plan: sobreviven desmontaje y reinicio de la
   // app (queja de campo: "el avance no enviado se pierde").
@@ -109,8 +113,12 @@ export default function ChecklistScreen() {
     let cancelled = false;
     void storeLoad<Record<number, CheckDraft>>(checklistDraftsStorageKey(planIdNum))
       .then((saved) => {
-        if (cancelled || !saved) return;
-        setDrafts((current) => ({ ...saved, ...current }));
+        if (cancelled) return;
+        if (saved) setDrafts((current) => ({ ...saved, ...current }));
+        setDraftsHydrated(true);
+      })
+      .catch(() => {
+        if (!cancelled) setDraftsHydrated(true);
       });
     return () => {
       cancelled = true;
@@ -118,9 +126,38 @@ export default function ChecklistScreen() {
   }, [planIdNum]);
 
   React.useEffect(() => {
-    if (!planIdNum || planIdNum <= 0) return;
+    if (!planIdNum || planIdNum <= 0 || !draftsHydrated) return;
     void storeSave(checklistDraftsStorageKey(planIdNum), drafts);
-  }, [drafts, planIdNum]);
+  }, [drafts, planIdNum, draftsHydrated]);
+
+  // P1 Codex: al restaurar el snapshot cacheado, las respuestas ENCOLADAS se
+  // re-proyectan sobre los checks (optimista) — sin esto, tras reinicio la
+  // pantalla mostraba los puntos como sin responder.
+  React.useEffect(() => {
+    if (!usingCachedSnapshot || !draftsHydrated) return;
+    setChecks((current) => {
+      let next = current;
+      for (const [checkIdStr, draft] of Object.entries(drafts)) {
+        if (!draft?.queued) continue;
+        const checkId = Number(checkIdStr);
+        const check = next.find((c) => c.id === checkId);
+        if (!check || check.answered) continue;
+        if (check.check_type === 'yes_no' && draft.bool != null) {
+          next = applyLocalCheckAnswer(next, checkId, {
+            result_bool: draft.bool, not_passed_reason: draft.reason,
+          });
+        } else if (check.check_type === 'numeric' && draft.numeric != null) {
+          next = applyLocalCheckAnswer(next, checkId, { result_numeric: parseFloat(draft.numeric) });
+        } else if (check.check_type === 'text' && draft.text) {
+          next = applyLocalCheckAnswer(next, checkId, { result_text: draft.text });
+        } else if (check.check_type === 'photo' && draft.photoUri) {
+          next = applyLocalCheckAnswer(next, checkId, { result_photo: '' });
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingCachedSnapshot, draftsHydrated]);
 
   const bootstrap = useCallback(async () => {
     if (!planIdNum || planIdNum <= 0) {
@@ -136,6 +173,8 @@ export default function ChecklistScreen() {
       const { header: h, checks: c } = await ensureChecklistReady(capturedPlanId);
       if (h.state === 'completed') {
         setChecklistCompleteForPlan(capturedPlanId, true);
+        // Confirmado por el SERVIDOR: ahora sí, borradores y snapshot fuera.
+        void storeRemove(checklistDraftsStorageKey(capturedPlanId));
       }
       if (!isCurrentPlan(capturedPlanId)) return;
       setHeader(h);
@@ -272,14 +311,13 @@ export default function ChecklistScreen() {
     // reglas de passed que el backend) y se envía al recuperar señal.
     // Idempotente: el backend sobreescribe por check_id.
     const enqueueAnswer = () => {
-      const opId = enqueue('vehicle_check', buildVehicleCheckQueuePayload({
+      enqueue('vehicle_check', buildVehicleCheckQueuePayload({
         check,
         checklistId: header?.id ?? 0,
         planId: capturedPlanId,
         answer: payload,
         photoUri: check.check_type === 'photo' ? draft.photoUri : null,
       }) as unknown as Record<string, unknown>);
-      queuedAnswerOpsRef.current.push(opId);
       setChecks((cs) => applyLocalCheckAnswer(cs, check.id, payload));
       setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], queued: true } }));
     };
@@ -323,26 +361,27 @@ export default function ChecklistScreen() {
     }
   }
 
-  // Cierre offline: exige requeridos respondidos (contando encolados) y
-  // encola el complete con dependsOn de TODAS las respuestas pendientes —
-  // al recuperar señal, la cola drena respuestas y luego cierra.
+  // Cierre offline (P1 Codex): el checklist NO se marca completo localmente
+  // ni se borran borradores hasta confirmación del SERVIDOR — si una
+  // respuesta muere en la cola, el plan no queda falsamente completo. El
+  // dependsOn se deriva de la COLA (durable: sobrevive salir/volver).
   function completeOffline(capturedPlanId: number): boolean {
     if (!areRequiredChecksAnswered(checks)) {
       Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
       return false;
     }
+    const pendingAnswerOps = collectQueuedChecklistAnswerOps(
+      useSyncStore.getState().queue,
+      header?.id ?? 0,
+    );
     enqueue(
       'vehicle_checklist_complete',
       { checklist_id: header?.id ?? 0, plan_id: capturedPlanId },
-      queuedAnswerOpsRef.current.length
-        ? { dependsOn: [...queuedAnswerOpsRef.current] }
-        : undefined,
+      pendingAnswerOps.length ? { dependsOn: pendingAnswerOps } : undefined,
     );
-    setChecklistCompleteForPlan(capturedPlanId, true);
-    void storeRemove(checklistDraftsStorageKey(capturedPlanId));
     Alert.alert(
-      'Checklist guardado',
-      'Sin conexión: la inspección se enviará automáticamente al recuperar señal. Los puntos no aprobados quedan documentados y no detienen la salida.',
+      'Cierre pendiente de envío',
+      'Sin conexión: la inspección se enviará automáticamente al recuperar señal. El checklist quedará completado cuando el servidor lo confirme. Los puntos no aprobados quedan documentados y no detienen la salida.',
       [{ text: 'OK', onPress: () => router.back() }],
     );
     return true;
@@ -357,7 +396,10 @@ export default function ChecklistScreen() {
         showRouteChangedAlert();
         return;
       }
-      const hasQueuedAnswers = queuedAnswerOpsRef.current.length > 0;
+      const hasQueuedAnswers = collectQueuedChecklistAnswerOps(
+        useSyncStore.getState().queue,
+        header?.id ?? 0,
+      ).length > 0;
       if (!isOnline || hasQueuedAnswers) {
         completeOffline(capturedPlanId);
         return;
@@ -455,6 +497,7 @@ export default function ChecklistScreen() {
 
   const answered = checks.filter((c) => c.answered).length;
   const queuedCount = Object.values(drafts).filter((d) => d.queued).length;
+  const closeQueued = hasQueuedChecklistComplete(syncQueue, header?.id ?? 0);
   const completed = header?.state === 'completed';
 
   return (
@@ -466,6 +509,13 @@ export default function ChecklistScreen() {
             <Text style={styles.offlineBannerText}>
               Sin conexión: checklist de la última carga. Tus respuestas se
               guardan y se enviarán al recuperar señal.
+            </Text>
+          </View>
+        )}
+        {closeQueued && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>
+              Cierre pendiente de envío: se completará al sincronizar.
             </Text>
           </View>
         )}

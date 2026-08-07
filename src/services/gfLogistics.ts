@@ -488,15 +488,38 @@ export async function checkIn(
   return !!result;
 }
 
+export interface CheckOutNoSaleDetail {
+  no_sale_reason_code?: string;
+  no_sale_notes?: string;
+  no_sale_competitor?: string;
+}
+
 export async function checkOut(
   stopId: number,
   latitude: number,
   longitude: number,
   resultStatus: CheckoutResultStatus,
+  noSaleDetail?: CheckOutNoSaleDetail | null,
   meta?: ClientEventMeta | null,
 ): Promise<boolean> {
   const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, latitude, longitude, result_status: resultStatus },
+    {
+      stop_id: stopId,
+      latitude,
+      longitude,
+      result_status: resultStatus,
+      // Detalle de no-venta (gf.route.stop.no_sale_*). El backend viejo lo
+      // ignora; el nuevo lo persiste. Solo claves con contenido.
+      ...(noSaleDetail?.no_sale_reason_code
+        ? { no_sale_reason_code: noSaleDetail.no_sale_reason_code }
+        : {}),
+      ...(noSaleDetail?.no_sale_notes
+        ? { no_sale_notes: noSaleDetail.no_sale_notes }
+        : {}),
+      ...(noSaleDetail?.no_sale_competitor
+        ? { no_sale_competitor: noSaleDetail.no_sale_competitor }
+        : {}),
+    },
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);

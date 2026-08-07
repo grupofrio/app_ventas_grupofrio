@@ -11,7 +11,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BUILD_PROFILE": "development"
+        "EXPO_PUBLIC_BUILD_PROFILE": "development",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
       }
     },
     "preview": {
@@ -20,7 +22,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BUILD_PROFILE": "preview"
+        "EXPO_PUBLIC_BUILD_PROFILE": "preview",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
       }
     },
     "production": {
@@ -28,7 +32,9 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_BUILD_PROFILE": "production"
+        "EXPO_PUBLIC_BUILD_PROFILE": "production",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
       }
     }
   },

@@ -1,6 +1,6 @@
 # KOLD Field
 
-App móvil de ventas para vendedores de Grupo Frío. Stack: Expo SDK 52 + React Native 0.76 + expo-router + zustand. Backend: Odoo (`grupofrio.odoo.com`) vía REST y JSON-RPC.
+App móvil de ventas para vendedores de Grupo Frío. Stack: Expo SDK 52 + React Native 0.76 + expo-router + zustand. Backend: Odoo (`grupofrio-gf.odoo.com`, DB `grupofrio-gf-main-34980678`) vía REST y JSON-RPC.
 
 ## Requisitos
 

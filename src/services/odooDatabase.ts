@@ -1,3 +1,15 @@
+const PUBLIC_DEFAULT_ODOO_DB = (process.env as Record<string, string | undefined>)[
+  'EXPO_PUBLIC_KF_ODOO_DB'
+]?.trim();
+
+// DB de producción de la instancia grupofrio-gf. Es el fallback DETERMINISTA
+// cuando `/web/database/list` no responde (list_db deshabilitado o red caída
+// a media resolución): sin él, el único fallback sería el subdominio
+// ("grupofrio-gf"), que NO es un nombre de DB válido en Odoo.sh. La lista del
+// servidor sigue teniendo prioridad para sobrevivir renombres de DB sin
+// recompilar el APK.
+export const DEFAULT_ODOO_DB = PUBLIC_DEFAULT_ODOO_DB || 'grupofrio-gf-main-34980678';
+
 function addUnique(candidates: string[], db?: string | null): void {
   const normalized = typeof db === 'string' ? db.trim() : '';
   if (normalized && !candidates.includes(normalized)) {
@@ -21,6 +33,7 @@ export function candidateOdooDatabases(
   const candidates: string[] = [];
   addUnique(candidates, configuredDb);
   listedDbs.forEach((db) => addUnique(candidates, db));
+  addUnique(candidates, DEFAULT_ODOO_DB);
 
   try {
     const host = new URL(baseUrl).hostname;

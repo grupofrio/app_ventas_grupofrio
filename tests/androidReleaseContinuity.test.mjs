@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const repoRoot = process.cwd();
-const expectedVersionCode = 3;
+const expectedVersionCode = 4;
 
 const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
 assert.equal(
@@ -22,8 +22,8 @@ assert.equal(
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
 assert.match(
   verifierSource,
-  /versionCode:\s*'3'/,
-  'release verification must require Android versionCode 3',
+  /versionCode:\s*'4'/,
+  'release verification must require Android versionCode 4',
 );
 
 const nativeBuildGradle = resolve(repoRoot, 'android/app/build.gradle');
@@ -31,8 +31,8 @@ if (existsSync(nativeBuildGradle)) {
   const nativeSource = readFileSync(nativeBuildGradle, 'utf8');
   assert.match(
     nativeSource,
-    /defaultConfig\s*\{[\s\S]*?versionCode\s+3\b/,
-    'the generated native Android project must use versionCode 3 when present',
+    /defaultConfig\s*\{[\s\S]*?versionCode\s+4\b/,
+    'the generated native Android project must use versionCode 4 when present',
   );
 }
 

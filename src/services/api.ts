@@ -39,6 +39,12 @@ export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
  * lanzando y el llamador lo maneja.
  */
 export const DEFAULT_READ_TIMEOUT_MS = 10_000;
+/**
+ * Timeout para handshakes de autenticacion (login, /web/session/authenticate).
+ * Antes corrian con fetch SIN timeout: en red degradada el login colgaba
+ * indefinidamente (pendiente de auditoria julio).
+ */
+export const AUTH_TIMEOUT_MS = 15_000;
 
 let _baseUrl = DEFAULT_BASE_URL;
 
@@ -74,7 +80,7 @@ function makeTimeoutError(timeoutMs: number): Error & { code: 'timeout' } {
   return error;
 }
 
-async function fetchWithTimeout(
+export async function fetchWithTimeout(
   input: Parameters<typeof fetch>[0],
   init: Parameters<typeof fetch>[1] = {},
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
@@ -92,13 +98,18 @@ async function fetchWithTimeout(
       signal: controller.signal,
     });
   } catch (error) {
+    // Solo en error se desarma el timer: la petición ya terminó.
+    clearTimeout(timeoutId);
     if (timedOut) {
       throw makeTimeoutError(timeoutMs);
     }
     throw error;
-  } finally {
-    clearTimeout(timeoutId);
   }
+  // P2 Codex #66: el timer NO se desarma al resolver fetch — los headers
+  // pueden llegar y el BODY quedarse colgado (response.json()/text() leían
+  // sin límite). El timer queda armado el timeoutMs completo: si el body
+  // sigue abierto al vencer, abort() corta el stream y la lectura rechaza;
+  // si ya se consumió, abortar una petición terminada es un no-op inocuo.
 }
 
 async function buildAbsoluteUrl(url: string): Promise<string> {

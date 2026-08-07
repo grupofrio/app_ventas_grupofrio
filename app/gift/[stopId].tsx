@@ -117,7 +117,11 @@ export default function GiftScreen() {
     return stop.customer_id;
   }, [stop]);
 
-  const mobileLocationId = plan?.mobile_location_id ?? null;
+  // Fallback de auditoría julio: Auth también conserva la ubicación móvil del
+  // empleado — un plan rehidratado sin mobile_location_id ya no bloquea el
+  // regalo sin explicación.
+  const authMobileLocationId = useAuthStore((s) => s.mobileLocationId);
+  const mobileLocationId = plan?.mobile_location_id ?? authMobileLocationId ?? null;
   const draftLines = useMemo<GiftDraftLine[]>(
     () => lines.map(({ key, productId, qtyText }) => ({ key, productId, qtyText })),
     [lines],

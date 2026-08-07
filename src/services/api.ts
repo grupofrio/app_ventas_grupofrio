@@ -29,7 +29,7 @@ const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefine
   'EXPO_PUBLIC_KF_DEFAULT_BASE_URL'
 ]?.trim().replace(/\/+$/, '');
 
-export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio.odoo.com';
+export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio-gf.odoo.com';
 export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
 /**
  * Perf Fase 1B: timeout corto para LECTURAS (getRest). En red muerta, una

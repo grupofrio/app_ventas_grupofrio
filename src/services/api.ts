@@ -98,13 +98,18 @@ export async function fetchWithTimeout(
       signal: controller.signal,
     });
   } catch (error) {
+    // Solo en error se desarma el timer: la petición ya terminó.
+    clearTimeout(timeoutId);
     if (timedOut) {
       throw makeTimeoutError(timeoutMs);
     }
     throw error;
-  } finally {
-    clearTimeout(timeoutId);
   }
+  // P2 Codex #66: el timer NO se desarma al resolver fetch — los headers
+  // pueden llegar y el BODY quedarse colgado (response.json()/text() leían
+  // sin límite). El timer queda armado el timeoutMs completo: si el body
+  // sigue abierto al vencer, abort() corta el stream y la lectura rechaza;
+  // si ya se consumió, abortar una petición terminada es un no-op inocuo.
 }
 
 async function buildAbsoluteUrl(url: string): Promise<string> {

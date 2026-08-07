@@ -52,6 +52,10 @@ import {
   closeOffrouteVisit,
 } from '../services/gfLogistics';
 import { createGift } from '../services/gfSalesOps';
+import {
+  submitVehicleCheck,
+  completeVehicleChecklist,
+} from '../services/vehicleChecklist';
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
@@ -220,6 +224,7 @@ interface SyncState {
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
   clearDead: () => number;
+  removeDeadQueueItems: (ids: string[]) => number;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -487,6 +492,23 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_purged', { removed });
+    }
+    return removed;
+  },
+
+  // Una reparación exitosa puede resolver sólo algunos residuos terminales.
+  // Revisa el estado actual al quitar, para que IDs recibidos de una lectura
+  // anterior jamás borren una operación que ya volvió a estar viva.
+  removeDeadQueueItems: (ids) => {
+    const before = get().queue.length;
+    const newQueue = get().queue.filter(
+      (i) => i.status !== 'dead' || !ids.includes(i.id),
+    );
+    const removed = before - newQueue.length;
+    if (removed > 0) {
+      set({ queue: newQueue, ...computeCounts(newQueue) });
+      schedulePersist();
+      logInfo('sync', 'dead_items_selectively_removed', { removed });
     }
     return removed;
   },
@@ -1250,6 +1272,37 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.longitude as number,
         payload.result_status as CheckoutResultStatus,
         meta,
+      );
+      break;
+
+    case 'vehicle_check': {
+      // Respuesta de checklist encolada offline. Idempotente por contrato:
+      // /pwa-ruta/vehicle-check sobreescribe la respuesta del mismo check_id.
+      // La foto se lee del disco AL ENVIAR (la cola no serializa base64).
+      const answer = { ...(payload.answer as Record<string, unknown>) };
+      const photoUri = payload.photo_uri as string | undefined;
+      if (photoUri) {
+        const base64 = await readPhotoAsBase64(photoUri);
+        if (!base64) {
+          throw new Error('checklist_photo_unreadable: la foto local ya no existe');
+        }
+        answer.result_photo = base64;
+        answer.result_photo_filename =
+          (payload.photo_filename as string | undefined) || 'check_photo.jpg';
+      }
+      await submitVehicleCheck(
+        payload.check_id as number,
+        answer as Parameters<typeof submitVehicleCheck>[1],
+      );
+      break;
+    }
+
+    case 'vehicle_checklist_complete':
+      // Viaja con dependsOn de todas las respuestas encoladas del checklist.
+      // El servicio ya trata already_completed como éxito (idempotente).
+      await completeVehicleChecklist(
+        payload.checklist_id as number,
+        (payload.notes as string | undefined) || '',
       );
       break;
 

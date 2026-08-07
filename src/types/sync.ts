@@ -21,6 +21,9 @@ export type SyncItemType =
   | 'offroute_visit_close'
   | 'gps'
   | 'gift'
+  // Checklist de unidad offline (política 2026-08-06: documenta, no detiene):
+  | 'vehicle_check'
+  | 'vehicle_checklist_complete'
   // V2 additions:
   | 'collection'
   | 'transfer'
@@ -57,6 +60,8 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   prospection: 1,
   offroute_visit_close: 1,
   gift: 1,
+  vehicle_check: 1,
+  vehicle_checklist_complete: 1,
   photo: 2,
   gps: 3,
 };

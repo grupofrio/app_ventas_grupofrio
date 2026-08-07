@@ -141,16 +141,23 @@ function main() {
     'Ventas no debe usar la lectura tolerante en el flujo read-modify-write',
   );
 
+  // Proyección de pendientes (2026-07-23): el handler ahora recibe una entrada
+  // unificada; la rama remota conserva el flujo autoritativo intacto.
   const openTicketMatch = salesScreen.match(
-    /function openTicketForOrder\(order: GFSalesOrder\) \{([\s\S]*?)\n  \}/,
+    /function openTicketForEntry\(entry: SalesListEntry\) \{([\s\S]*?)\n  \}/,
   );
-  assert.ok(openTicketMatch, 'Ventas debe definir openTicketForOrder');
+  assert.ok(openTicketMatch, 'Ventas debe definir openTicketForEntry');
   const openTicketBody = openTicketMatch[1];
 
   assert.match(
     openTicketBody,
-    /return\s+openSaleTicketForOrder\(order,\s*\{/,
-    'Ventas debe retornar el resultado seguro del flujo de apertura',
+    /return\s+openSaleTicketForOrder\(entry\.remoteOrder,\s*\{/,
+    'La rama remota debe retornar el resultado seguro del flujo de apertura',
+  );
+  assert.match(
+    openTicketBody,
+    /router\.push\(`\/print\/\$\{entry\.operationId\}`/,
+    'La rama local debe navegar al ticket persistido por operationId',
   );
   assert.match(
     openTicketBody,

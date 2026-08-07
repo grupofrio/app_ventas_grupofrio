@@ -108,6 +108,34 @@ export async function promoteStoredSaleTicketOdooFolio(
   });
 }
 
+/**
+ * Carga en lote los snapshots de ticket de varias operaciones. Un ID sin
+ * ticket o con lectura fallida simplemente no aparece en el mapa: una lectura
+ * rota nunca tira las demás. El mapa se indexa por el ID ORIGINAL de la cola.
+ */
+export async function loadSaleTicketSnapshots(
+  saleIds: string[],
+  loader: (saleId: string) => Promise<SaleTicketSnapshot | null> = loadSaleTicketSnapshot,
+): Promise<Map<string, SaleTicketSnapshot>> {
+  const uniqueIds: string[] = [];
+  const seen = new Set<string>();
+  for (const saleId of saleIds) {
+    const trimmed = typeof saleId === 'string' ? saleId.trim() : '';
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    uniqueIds.push(saleId);
+  }
+
+  const results = await Promise.allSettled(uniqueIds.map((saleId) => loader(saleId)));
+  const map = new Map<string, SaleTicketSnapshot>();
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled' && result.value !== null) {
+      map.set(uniqueIds[index], result.value);
+    }
+  });
+  return map;
+}
+
 export async function loadSaleTicketSnapshot(saleId: string): Promise<SaleTicketSnapshot | null> {
   const snapshot = await storeLoad<StoredSaleTicketSnapshot>(getSaleTicketStorageKey(saleId));
   if (!snapshot) return null;

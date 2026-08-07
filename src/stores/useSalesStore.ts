@@ -28,9 +28,13 @@ interface SalesState {
   isLoading: boolean;
   error: string | null;
   lastLoadedAt: number | null;
-  loadTodaySales: () => Promise<void>;
+  loadTodaySales: (options?: { force?: boolean }) => Promise<void>;
   reset: () => void;
 }
+
+// force=true no lanza cargas concurrentes: se adhiere (coalesce) a la petición
+// activa si existe.
+let activeLoad: Promise<void> | null = null;
 
 export const useSalesStore = create<SalesState>((set, get) => ({
   summary: EMPTY_SUMMARY,
@@ -40,30 +44,42 @@ export const useSalesStore = create<SalesState>((set, get) => ({
   error: null,
   lastLoadedAt: null,
 
-  loadTodaySales: async () => {
-    if (get().isLoading) return;
+  loadTodaySales: async (options) => {
+    if (get().isLoading) {
+      if (options?.force && activeLoad) return activeLoad;
+      return;
+    }
     set({ isLoading: true, error: null });
 
-    try {
-      const [summary, list]: [GFSalesSummary, GFSalesListResult] = await Promise.all([
-        fetchSalesSummary(),
-        fetchSalesList(),
-      ]);
+    const load = (async () => {
+      try {
+        const [summary, list]: [GFSalesSummary, GFSalesListResult] = await Promise.all([
+          fetchSalesSummary(),
+          fetchSalesList(),
+        ]);
 
-      set({
-        summary,
-        orders: list.orders,
-        count: list.count,
-        isLoading: false,
-        error: null,
-        lastLoadedAt: Date.now(),
-      });
-    } catch (error) {
-      set({
-        isLoading: false,
-        error: error instanceof Error ? error.message : 'No se pudieron cargar las ventas.',
-      });
-    }
+        set({
+          summary,
+          orders: list.orders,
+          count: list.count,
+          isLoading: false,
+          error: null,
+          lastLoadedAt: Date.now(),
+        });
+      } catch (error) {
+        // Un fallo remoto NO borra summary/orders previos: offline la pantalla
+        // conserva lo último conocido y las tarjetas locales siguen visibles.
+        set({
+          isLoading: false,
+          error: error instanceof Error ? error.message : 'No se pudieron cargar las ventas.',
+        });
+      } finally {
+        activeLoad = null;
+      }
+    })();
+
+    activeLoad = load;
+    return load;
   },
 
   reset: () => set({

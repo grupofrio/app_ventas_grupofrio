@@ -98,14 +98,59 @@ export function buildCustomerTextDomain(query: string): unknown[] {
   return [...prefix, ...groups.flat()];
 }
 
-export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
+export function buildCustomerSearchDomain(
+  query: string,
+  analyticPlazaId?: number | null,
+  companyId?: number | null,
+): unknown[] {
   const textDomain = buildCustomerTextDomain(query);
 
-  if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
-    return textDomain;
+  const filters: unknown[][] = [];
+  if (typeof analyticPlazaId === 'number' && analyticPlazaId > 0) {
+    filters.push(['x_analytic_un_id', '=', analyticPlazaId]);
+  }
+  if (typeof companyId === 'number' && companyId > 0) {
+    // Cliente de la compañía del vendedor o COMPARTIDO (company_id=false). La RPC
+    // corre como cuenta de servicio (odooSession.ts), no como el vendedor, así que
+    // este acotado por compañía es la única barrera contra exponer clientes de otra
+    // empresa cuando NO hay filtro de plaza.
+    filters.push(['company_id', 'in', [false, companyId]]);
   }
 
-  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...textDomain];
+  if (filters.length === 0) {
+    return textDomain;
+  }
+  // AND de N filtros + 1 grupo de texto ⇒ N conectores '&' (notación polaca).
+  const prefix: unknown[] = new Array(filters.length).fill('&');
+  return [...prefix, ...filters, ...textDomain];
+}
+
+/**
+ * Resuelve los clientes de la venta especial con RED DE SEGURIDAD: primero acotado
+ * a la plaza del vendedor; si NO hay resultados, reintenta SIN el filtro de plaza
+ * pero SIEMPRE acotado por compañía — nunca sin scope, para no exponer clientes de
+ * otra empresa vía la cuenta de servicio del RPC (P1 Codex). Sin compañía conocida
+ * NO hay fallback. Puro/inyectable (`runSearch`) para poder probar el fallback.
+ */
+export async function resolveCustomersWithFallback(opts: {
+  query: string;
+  analyticPlazaId?: number | null;
+  companyId?: number | null;
+  runSearch: (domain: unknown[]) => Promise<OffrouteCustomerRecord[]>;
+}): Promise<OffrouteCustomerRecord[]> {
+  const { query, analyticPlazaId, companyId, runSearch } = opts;
+  const hasPlaza = typeof analyticPlazaId === 'number' && analyticPlazaId > 0;
+  const hasCompany = typeof companyId === 'number' && companyId > 0;
+
+  const scoped = await runSearch(buildCustomerSearchDomain(query, analyticPlazaId, companyId));
+  if (!(hasPlaza && hasCompany) || scoped.length > 0) {
+    return scoped;
+  }
+  try {
+    return await runSearch(buildCustomerSearchDomain(query, null, companyId));
+  } catch {
+    return scoped; // scoped es [] aquí; el fallo del fallback no rompe la búsqueda
+  }
 }
 
 export async function readCustomersWithFieldFallback(

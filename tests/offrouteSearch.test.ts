@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 interface OffrouteSearchModule {
   BASIC_CUSTOMER_FIELDS: string[];
   CUSTOMER_FIELDS: string[];
-  buildCustomerSearchDomain: (query: string, analyticPlazaId?: number | null) => unknown[];
+  buildCustomerSearchDomain: (query: string, analyticPlazaId?: number | null, companyId?: number | null) => unknown[];
+  resolveCustomersWithFallback: (opts: {
+    query: string;
+    analyticPlazaId?: number | null;
+    companyId?: number | null;
+    runSearch: (domain: unknown[]) => Promise<Array<{ id: number; name: string }>>;
+  }) => Promise<Array<{ id: number; name: string }>>;
   readCustomersWithFieldFallback: (
     readers: {
       rpc: (fields: string[]) => Promise<Array<{
@@ -198,6 +204,63 @@ function testCustomerDomainTokenizesMultiWord(module: OffrouteSearchModule) {
   ]);
 }
 
+function testCustomerDomainScopesByCompany(module: OffrouteSearchModule) {
+  // Con companyId, el dominio AND-a plaza + compañía(propia o compartida) + texto.
+  const domain = module.buildCustomerSearchDomain('demo', 820, 34);
+  assert.deepEqual(domain, [
+    '&', '&',
+    ['x_analytic_un_id', '=', 820],
+    ['company_id', 'in', [false, 34]],
+    '|', '|', '|', '|',
+    ['name', 'ilike', 'demo'],
+    ['phone', 'ilike', 'demo'],
+    ['mobile', 'ilike', 'demo'],
+    ['vat', 'ilike', 'demo'],
+    ['email', 'ilike', 'demo'],
+  ]);
+}
+
+async function testFallbackRetriesWithoutPlazaKeepsCompany(module: OffrouteSearchModule) {
+  const calls: unknown[][] = [];
+  const runSearch = async (domain: unknown[]) => {
+    calls.push(domain);
+    return calls.length === 1 ? [] : [{ id: 1, name: 'Cliente fuera de plaza' }];
+  };
+  const rows = await module.resolveCustomersWithFallback({ query: 'x', analyticPlazaId: 931, companyId: 34, runSearch });
+
+  assert.equal(rows.length, 1);
+  assert.equal(calls.length, 2, 'debe reintentar sin plaza');
+  assert.deepEqual(calls[0], module.buildCustomerSearchDomain('x', 931, 34)); // plaza + compañía
+  assert.deepEqual(calls[1], module.buildCustomerSearchDomain('x', null, 34)); // sin plaza pero CON compañía
+}
+
+async function testNoFallbackWhenScopedHasResults(module: OffrouteSearchModule) {
+  let n = 0;
+  const runSearch = async () => { n += 1; return [{ id: 9, name: 'En plaza' }]; };
+  const rows = await module.resolveCustomersWithFallback({ query: 'y', analyticPlazaId: 931, companyId: 34, runSearch });
+
+  assert.equal(rows.length, 1);
+  assert.equal(n, 1, 'con resultados en plaza NO debe hacer una segunda consulta');
+}
+
+async function testNoFallbackWithoutCompany(module: OffrouteSearchModule) {
+  let n = 0;
+  const runSearch = async () => { n += 1; return []; };
+  const rows = await module.resolveCustomersWithFallback({ query: 'z', analyticPlazaId: 931, companyId: null, runSearch });
+
+  assert.deepEqual(rows, []);
+  assert.equal(n, 1, 'sin compañía conocida NO hace fallback (no expone otra empresa)');
+}
+
+async function testFallbackFailureReturnsEmpty(module: OffrouteSearchModule) {
+  let n = 0;
+  const runSearch = async () => { n += 1; if (n === 1) return []; throw new Error('boom'); };
+  const rows = await module.resolveCustomersWithFallback({ query: 'w', analyticPlazaId: 931, companyId: 34, runSearch });
+
+  assert.deepEqual(rows, []);
+  assert.equal(n, 2, 'intentó el fallback y su fallo degrada a vacío, sin romper');
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -213,6 +276,11 @@ async function main() {
   await testCustomerFieldFallbackKeepsResults(module);
   testCustomerDomainSearchesMobileAndEmail(module);
   testCustomerDomainTokenizesMultiWord(module);
+  testCustomerDomainScopesByCompany(module);
+  await testFallbackRetriesWithoutPlazaKeepsCompany(module);
+  await testNoFallbackWhenScopedHasResults(module);
+  await testNoFallbackWithoutCompany(module);
+  await testFallbackFailureReturnsEmpty(module);
   console.log('offroute search tests: ok');
 }
 

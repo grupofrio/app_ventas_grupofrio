@@ -3,8 +3,13 @@ import {
   buildOffrouteResults,
   buildCustomerSearchDomain,
   readCustomersWithFieldFallback,
+  resolveCustomersWithFallback,
 } from './offrouteSearchLogic';
-import type { OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
+import type {
+  OffrouteCustomerRecord,
+  OffrouteLeadRecord,
+  OffrouteSearchResult,
+} from './offrouteSearchLogic';
 
 const LEAD_FIELDS = ['id', 'name', 'partner_name', 'phone', 'mobile', 'email_from', 'street', 'city', 'partner_id'];
 
@@ -13,6 +18,7 @@ export { buildOffrouteResults, buildCustomerSearchDomain };
 
 type OffrouteSearchOptions = {
   analyticPlazaId?: number | null;
+  companyId?: number | null;
 };
 
 /**
@@ -57,10 +63,6 @@ export async function searchOffrouteEntities(
   const q = query.trim();
   if (q.length < 3) return [];
 
-  const plazaId = options.analyticPlazaId;
-  const hasPlazaFilter = typeof plazaId === 'number' && plazaId > 0;
-  const customerDomain = buildCustomerSearchDomain(q, plazaId);
-
   // crm.lead does NOT have x_analytic_un_id — no analytic filter applied.
   const leadDomain = [
     '|', '|', '|', '|',
@@ -71,27 +73,18 @@ export async function searchOffrouteEntities(
     ['email_from', 'ilike', q],
   ];
 
-  const [customersResult, leadsResult] = await Promise.allSettled([
-    searchCustomers(customerDomain),
-    searchLeads(leadDomain),
+  // Clientes con RED DE SEGURIDAD (fallback sin plaza pero SIEMPRE acotado por
+  // compañía — ver resolveCustomersWithFallback) y leads en paralelo. Un fallo de
+  // cualquiera degrada a lista vacía sin romper el otro.
+  const [customers, leads] = await Promise.all([
+    resolveCustomersWithFallback({
+      query: q,
+      analyticPlazaId: options.analyticPlazaId,
+      companyId: options.companyId,
+      runSearch: searchCustomers,
+    }).catch(() => [] as OffrouteCustomerRecord[]),
+    searchLeads(leadDomain).catch(() => [] as OffrouteLeadRecord[]),
   ]);
-
-  let customers = customersResult.status === 'fulfilled' ? customersResult.value : [];
-  const leads = leadsResult.status === 'fulfilled' ? leadsResult.value : [];
-
-  // Red de seguridad para la VENTA ESPECIAL: si la búsqueda acotada a la plaza del
-  // vendedor no encontró clientes, reintentar SIN el filtro de plaza. Una venta
-  // especial es justamente la excepción para alcanzar clientes fuera del alcance
-  // normal (sin plaza asignada, de otra plaza, o cuando la plaza del vendedor llegó
-  // desfasada/nula a la app). Las reglas de registro de Odoo siguen acotando a la
-  // compañía del vendedor, así que esto no filtra clientes de otra empresa.
-  if (hasPlazaFilter && customers.length === 0) {
-    try {
-      customers = await searchCustomers(buildCustomerSearchDomain(q, null));
-    } catch {
-      customers = [];
-    }
-  }
 
   return buildOffrouteResults(customers, leads);
 }

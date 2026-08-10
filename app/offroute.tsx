@@ -76,6 +76,7 @@ export default function OffRouteScreen() {
     try {
       const searchResults = await searchOffrouteEntities(q, {
         analyticPlazaId: employeeAnalyticPlazaId,
+        companyId,
       });
       setResults(searchResults);
     } catch (error) {
@@ -84,7 +85,7 @@ export default function OffRouteScreen() {
     } finally {
       setIsSearching(false);
     }
-  }, [employeeAnalyticPlazaId, search]);
+  }, [employeeAnalyticPlazaId, companyId, search]);
   const refreshSearch = useCallback(async () => {
     const q = search.trim();
     if (!hasSearched || q.length < 3) return;

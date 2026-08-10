@@ -174,6 +174,30 @@ function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) 
   ]);
 }
 
+function testCustomerDomainTokenizesMultiWord(module: OffrouteSearchModule) {
+  // "wings city" debe encontrar "WINGS CITY": cada palabra en ALGÚN campo (AND de
+  // tokens, cada uno OR sobre los campos), además del filtro de plaza.
+  const domain = module.buildCustomerSearchDomain('wings city', 931);
+
+  assert.deepEqual(domain, [
+    '&',
+    ['x_analytic_un_id', '=', 931],
+    '&',
+    '|', '|', '|', '|',
+    ['name', 'ilike', 'wings'],
+    ['phone', 'ilike', 'wings'],
+    ['mobile', 'ilike', 'wings'],
+    ['vat', 'ilike', 'wings'],
+    ['email', 'ilike', 'wings'],
+    '|', '|', '|', '|',
+    ['name', 'ilike', 'city'],
+    ['phone', 'ilike', 'city'],
+    ['mobile', 'ilike', 'city'],
+    ['vat', 'ilike', 'city'],
+    ['email', 'ilike', 'city'],
+  ]);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -188,6 +212,7 @@ async function main() {
   testMixedResultsKeepTypes(module);
   await testCustomerFieldFallbackKeepsResults(module);
   testCustomerDomainSearchesMobileAndEmail(module);
+  testCustomerDomainTokenizesMultiWord(module);
   console.log('offroute search tests: ok');
 }
 

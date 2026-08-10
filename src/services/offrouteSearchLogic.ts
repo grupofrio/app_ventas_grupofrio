@@ -72,22 +72,40 @@ export const CUSTOMER_FIELDS = [
   ...CUSTOMER_LOCATION_FIELDS,
 ];
 
+const CUSTOMER_TEXT_FIELDS = ['name', 'phone', 'mobile', 'vat', 'email'];
+
+/** OR de `ilike term` sobre los campos de texto del cliente (notación polaca). */
+function orOverTextFields(term: string): unknown[] {
+  const leaves = CUSTOMER_TEXT_FIELDS.map((field) => [field, 'ilike', term]);
+  const prefix: unknown[] = new Array(Math.max(0, leaves.length - 1)).fill('|');
+  return [...prefix, ...leaves];
+}
+
+/**
+ * Dominio de texto para clientes. Parte la consulta en palabras y exige que CADA
+ * palabra aparezca en ALGÚN campo (AND de tokens, cada token OR sobre los campos).
+ * Así "wings city" encuentra "WINGS CITY" aunque haya otras palabras de por medio,
+ * y una búsqueda de varias palabras no depende del orden. Con una sola palabra
+ * conserva EXACTAMENTE la forma previa (OR plano sobre los campos).
+ */
+export function buildCustomerTextDomain(query: string): unknown[] {
+  const tokens = query.trim().split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length <= 1) {
+    return orOverTextFields(query.trim());
+  }
+  const groups = tokens.map(orOverTextFields);
+  const prefix: unknown[] = new Array(groups.length - 1).fill('&');
+  return [...prefix, ...groups.flat()];
+}
+
 export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
-  const q = query.trim();
-  const domain: unknown[] = [
-    '|', '|', '|', '|',
-    ['name', 'ilike', q],
-    ['phone', 'ilike', q],
-    ['mobile', 'ilike', q],
-    ['vat', 'ilike', q],
-    ['email', 'ilike', q],
-  ];
+  const textDomain = buildCustomerTextDomain(query);
 
   if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
-    return domain;
+    return textDomain;
   }
 
-  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...domain];
+  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...textDomain];
 }
 
 export async function readCustomersWithFieldFallback(

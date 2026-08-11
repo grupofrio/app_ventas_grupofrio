@@ -9,7 +9,7 @@ interface RoutePresentationModule {
 }
 
 function testPlanTypeLabel(module: RoutePresentationModule) {
-  assert.equal(module.getPlanTypeLabel('lead_route'), 'Ruta de leads');
+  assert.equal(module.getPlanTypeLabel('lead_route'), 'Ruta de prospectos');
   assert.equal(module.getPlanTypeLabel('customer_daily'), 'Ruta de clientes');
   assert.equal(module.getPlanTypeLabel(undefined), null);
 }
@@ -17,7 +17,7 @@ function testPlanTypeLabel(module: RoutePresentationModule) {
 function testStopTypeLabel(module: RoutePresentationModule) {
   assert.equal(
     module.getStopTypeLabel({ _entityType: 'lead', _isOffroute: true }),
-    'Lead especial',
+    'Prospecto especial',
   );
   assert.equal(
     module.getStopTypeLabel({ _entityType: 'customer', _isOffroute: true }),
@@ -25,7 +25,7 @@ function testStopTypeLabel(module: RoutePresentationModule) {
   );
   assert.equal(
     module.getStopTypeLabel({ _entityType: 'lead', _isOffroute: false }),
-    'Lead',
+    'Prospecto',
   );
 }
 

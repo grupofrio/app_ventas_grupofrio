@@ -13,6 +13,7 @@ interface SaleSyncStateModule {
   ) => {
     status: 'none' | 'pending' | 'done' | 'failed';
     message: string | null;
+    isDefinitive: boolean;
   };
 }
 
@@ -29,6 +30,7 @@ function testPendingSaleBlocksCheckout(module: SaleSyncStateModule) {
   assert.deepEqual(actual, {
     status: 'pending',
     message: null,
+    isDefinitive: false,
   });
 }
 
@@ -45,6 +47,24 @@ function testDeadSaleSurfacesFailure(module: SaleSyncStateModule) {
   assert.deepEqual(actual, {
     status: 'failed',
     message: 'Venta rechazada por backend',
+    isDefinitive: true,
+  });
+}
+
+function testErrorSaleIsFailedButNotYetDefinitive(module: SaleSyncStateModule) {
+  const actual = module.getSaleSyncState('sale-sync-4', [
+    {
+      id: 'sale-sync-4',
+      type: 'sale_order',
+      status: 'error',
+      error_message: 'Timeout de red',
+    },
+  ]);
+
+  assert.deepEqual(actual, {
+    status: 'failed',
+    message: 'Timeout de red',
+    isDefinitive: false,
   });
 }
 
@@ -61,6 +81,7 @@ function testDoneSaleAllowsCheckout(module: SaleSyncStateModule) {
   assert.deepEqual(actual, {
     status: 'done',
     message: null,
+    isDefinitive: false,
   });
 }
 
@@ -72,6 +93,7 @@ async function main() {
 
   testPendingSaleBlocksCheckout(module);
   testDeadSaleSurfacesFailure(module);
+  testErrorSaleIsFailedButNotYetDefinitive(module);
   testDoneSaleAllowsCheckout(module);
   console.log('sale sync state tests: ok');
 }

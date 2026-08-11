@@ -28,6 +28,8 @@ import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
 import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
+import { useAuthStore } from '../../src/stores/useAuthStore';
+import { createIncident } from '../../src/services/routeIncidents';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -55,10 +57,13 @@ function CheckoutScreenInner() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
   const processQueue = useSyncStore((s) => s.processQueue);
+  const employeeId = useAuthStore((s) => s.employeeId);
+  const companyId = useAuthStore((s) => s.companyId);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
   const [retryingSale, setRetryingSale] = React.useState(false);
+  const [markingForReview, setMarkingForReview] = React.useState(false);
 
   // BLD-20260506-CHECKOUT-SALE-RETRY: live snapshot of the sale-order
   // sync state for THIS visit. Recomputed on every queue change so the
@@ -262,6 +267,65 @@ function CheckoutScreenInner() {
     }
   }
 
+  // F1.10: ruta de escape cuando la venta de esta visita murió en la cola
+  // (reintentos agotados, liveSaleSyncState.isDefinitive). El vendedor ya
+  // no puede desatorarla solo — se marca para revisión del supervisor
+  // (incidente con el error real) y se permite cerrar la visita igual: la
+  // venta queda registrada localmente y en el incidente, no se pierde.
+  async function handleMarkForSupervisorReview() {
+    if (!stop) return;
+    if (markingForReview || checkingOut) return;
+    setMarkingForReview(true);
+    try {
+      if (employeeId && companyId) {
+        try {
+          await createIncident(
+            {
+              incident_type: 'operation',
+              severity: 'high',
+              name: `Venta no sincronizada · parada ${stop.customer_name} (#${stop.id}) · operation_id=${saleOperationId ?? 'desconocido'} · ${liveSaleSyncState.message ?? 'sin detalle'}`,
+            },
+            employeeId,
+            companyId,
+          );
+        } catch (incidentError) {
+          // Best-effort: si el incidente no se pudo crear (ACL, offline),
+          // no debe bloquear la salida del vendedor — ya está atrapado por
+          // el problema original. Se avisa pero se continúa.
+          console.warn('[checkout] No se pudo crear el incidente de revisión:', incidentError);
+        }
+      }
+
+      const lat = latitude || 0;
+      const lon = longitude || 0;
+      const checkoutPayload = buildCheckoutPayload({
+        stopId: stop.id,
+        latitude: lat,
+        longitude: lon,
+        saleTotal: total,
+        noSaleReasonId,
+      });
+
+      if (shouldSkipStopCheckout(checkoutPayload.stop_id)) {
+        removeStop(stop.id);
+        finalizeCheckout(sendEnCamino);
+        return;
+      }
+
+      enqueue('checkout', {
+        ...checkoutPayload,
+        timestamp: Date.now(),
+      });
+      Alert.alert(
+        'Marcado para revisión',
+        'La venta quedó reportada para que tu supervisor la revise. Puedes continuar tu ruta.',
+        [{ text: 'OK', onPress: () => finalizeCheckout(sendEnCamino) }],
+      );
+    } finally {
+      setMarkingForReview(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)/route' as never)} />
@@ -351,8 +415,9 @@ function CheckoutScreenInner() {
               {liveSaleSyncState.message || 'La venta no se pudo enviar a Odoo.'}
             </Text>
             <Text style={styles.saleErrorHint}>
-              No puedes cerrar la visita hasta que la venta llegue al servidor.
-              Reintenta cuando tengas mejor señal.
+              {liveSaleSyncState.isDefinitive
+                ? 'Los reintentos automáticos se agotaron. Márcala para revisión del supervisor y continúa tu ruta, o inténtalo una vez más aquí.'
+                : 'No puedes cerrar la visita hasta que la venta llegue al servidor. Reintenta cuando tengas mejor señal.'}
             </Text>
             <Button
               label={retryingSale ? 'Reintentando…' : '🔄 Reintentar sincronización'}
@@ -363,6 +428,17 @@ function CheckoutScreenInner() {
               loading={retryingSale}
               style={{ marginTop: 8 }}
             />
+            {liveSaleSyncState.isDefinitive && (
+              <Button
+                label={markingForReview ? 'Marcando…' : '🚩 Marcar para revisión del supervisor y continuar'}
+                variant="secondary"
+                onPress={() => { void handleMarkForSupervisorReview(); }}
+                fullWidth
+                disabled={markingForReview || retryingSale}
+                loading={markingForReview}
+                style={{ marginTop: 8 }}
+              />
+            )}
           </View>
         )}
 

@@ -317,7 +317,7 @@ function SaleScreenInner() {
     if (!canConfirm) {
       const missing = [];
       if (saleLines.length === 0) missing.push('productos');
-      if (!salePhotoTaken) missing.push('foto de entrega');
+      if (!salePhotoTaken) missing.push('foto del congelador');
       if (!salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       if (!hasWarehouse) missing.push('almacén del empleado');
@@ -880,7 +880,7 @@ function SaleScreenInner() {
         </View>
 
         {/* Mandatory photo */}
-        <Text style={styles.sectionTitle}>📸 Foto de entrega (obligatoria)</Text>
+        <Text style={styles.sectionTitle}>📸 Foto del congelador (obligatoria)</Text>
         {salePhotoTaken ? (
           <View style={styles.photoDone}>
             <Text style={{ fontSize: 28 }}>📸</Text>
@@ -898,10 +898,10 @@ function SaleScreenInner() {
           >
             <Text style={{ fontSize: 32 }}>📸</Text>
             <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
-              Tomar foto de entrega
+              Tomar foto del congelador
             </Text>
             <Text style={{ fontSize: 10, color: colors.textDim }}>
-              Requerida para confirmar el pedido
+              Encuadra el congelador con el producto acomodado
             </Text>
           </TouchableOpacity>
         )}

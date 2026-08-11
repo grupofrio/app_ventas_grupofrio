@@ -230,7 +230,7 @@ export function describeSaleConfirmBlock(input: {
   // Stock referencial (2026-08-06): exceder la referencia local ya no
   // bloquea confirmar — se avisa en el flujo y el backend valida el real.
   if (!input.hasLines) return null; // sin líneas no se muestra hint (igual que hoy)
-  if (!input.photoTaken) return '📸 Toma la foto de entrega';
+  if (!input.photoTaken) return '📸 Toma la foto del congelador';
   if (!input.paymentSelected) return '💰 Selecciona método de pago';
   if (!input.hasPlaza) return '📍 Configura la plaza del empleado';
   if (!input.hasWarehouse) return '🏬 Configura el almacén del empleado';

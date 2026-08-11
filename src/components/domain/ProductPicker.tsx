@@ -664,7 +664,10 @@ const styles = StyleSheet.create({
     borderRadius: radii.button, paddingHorizontal: 14, paddingVertical: 11,
     paddingRight: 40, color: colors.text, fontSize: 14,
   },
-  clearBtn: { position: 'absolute', right: spacing.screenPadding + 10, top: 9, padding: 4 },
+  clearBtn: {
+    position: 'absolute', right: spacing.screenPadding - 6, top: -1,
+    width: 44, height: 44, alignItems: 'center', justifyContent: 'center',
+  },
   clearBtnText: { color: colors.textDim, fontSize: 16, fontWeight: '700' },
 
   catList: { maxHeight: 44, flexGrow: 0 },
@@ -762,16 +765,16 @@ const styles = StyleSheet.create({
 
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 8 },
   qtyBtn: {
-    width: 32, height: 32, borderRadius: 16,
+    width: 46, height: 46, borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center', justifyContent: 'center',
   },
   qtyBtnSm: {
-    width: 28, height: 28, borderRadius: 14,
+    width: 44, height: 44, borderRadius: 15,
     backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center', justifyContent: 'center',
   },
-  qtyBtnText: { fontSize: 17, color: colors.text, fontWeight: '600' },
+  qtyBtnText: { fontSize: 19, color: colors.text, fontWeight: '700' },
   qtyVal: {
     fontSize: 15, fontWeight: '700', color: colors.text,
     minWidth: 24, textAlign: 'center',

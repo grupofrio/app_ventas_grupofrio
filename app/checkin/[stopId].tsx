@@ -492,7 +492,8 @@ export default function CheckinScreen() {
           </View>
         ) : null}
 
-        {/* Action grid 2x3 */}
+        {/* Action grid — hasta 7 acciones: Venta, Regalo, No venta, Datos,
+            Cobrar, Cambio, Consignación (+ Preventa, siempre visible). */}
         <View style={styles.actionGrid}>
           {actionVisibility.showSale ? (
             <TouchableOpacity
@@ -555,6 +556,24 @@ export default function CheckinScreen() {
               <Text style={styles.actionLabel}>Registrar Cambio</Text>
             </TouchableOpacity>
           ) : null}
+
+          {showCollect ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push(`/consignment/${stop.id}` as never)}
+            >
+              <Text style={styles.actionIcon}>📦</Text>
+              <Text style={styles.actionLabel}>Consignación</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity
+            style={styles.actionBtn}
+            onPress={() => router.push(`/presale?stopId=${stop.id}` as never)}
+          >
+            <Text style={styles.actionIcon}>📅</Text>
+            <Text style={styles.actionLabel}>Preventa</Text>
+          </TouchableOpacity>
         </View>
 
         <Button
@@ -580,19 +599,19 @@ export default function CheckinScreen() {
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Forecast hoy</Text>
             <Text style={[styles.metricValue, { color: colors.primary }]}>
-              {forecast ? `${forecast.predicted_kg.toFixed(0)} kg` : '--'}
+              {forecast ? `${forecast.predicted_kg.toFixed(0)} kg` : 'Sin dato'}
             </Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Prob. compra</Text>
             <Text style={styles.metricValue}>
-              {forecast ? `${(forecast.probability_of_purchase * 100).toFixed(0)}%` : '--'}
+              {forecast ? `${(forecast.probability_of_purchase * 100).toFixed(0)}%` : 'Sin dato'}
             </Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Confianza</Text>
             <Badge
-              label={forecast?.confidence_level || '--'}
+              label={forecast?.confidence_level || 'Sin dato'}
               variant={forecast?.confidence_level === 'high' ? 'green' : forecast?.confidence_level === 'medium' ? 'yellow' : 'red'}
             />
           </View>

@@ -21,7 +21,7 @@ import {
   KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
@@ -53,10 +53,12 @@ function makeOperationId(): string {
 
 export default function PresaleScreen() {
   const router = useRouter();
+  const { stopId } = useLocalSearchParams<{ stopId?: string }>();
   const employeeId = useAuthStore((s) => s.employeeId);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
+  const stops = useRouteStore((s) => s.stops);
   const isOnline = useSyncStore((s) => s.isOnline);
   const products = useProductStore((s) => s.products);
   const loadProducts = useProductStore((s) => s.loadProducts);
@@ -65,6 +67,37 @@ export default function PresaleScreen() {
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<OffrouteSearchResult[]>([]);
   const [selected, setSelected] = useState<OffrouteSearchResult | null>(null);
+
+  // F1.9: entrada directa desde la rejilla de check-in — precarga el
+  // cliente/prospecto de la parada actual y salta la búsqueda.
+  React.useEffect(() => {
+    if (!stopId || selected) return;
+    const stop = stops.find((s) => s.id === Number(stopId));
+    if (!stop) return;
+    if (stop._entityType === 'lead' && !PRESALE_LEAD_SUPPORTED) {
+      Alert.alert(
+        'Prospecto no permitido',
+        'Este prospecto debe convertirse a cliente antes de hacer preventa.',
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+      return;
+    }
+    setSelected({
+      id: stop._entityType === 'lead' ? stop.id : (stop._partnerId ?? stop.customer_id),
+      entityType: stop._entityType === 'lead' ? 'lead' : 'customer',
+      name: stop.customer_name,
+      subtitle: '',
+      contact: stop.phone || stop.mobile || '',
+      partnerId: stop._entityType === 'lead' ? stop._partnerId ?? null : (stop._partnerId ?? stop.customer_id),
+      pricelistId: stop._pricelistId ?? null,
+      pricelistName: stop._pricelistName ?? null,
+      customerLatitude: stop.customer_latitude ?? null,
+      customerLongitude: stop.customer_longitude ?? null,
+      googleMapsUrl: null,
+      street: stop.street ?? null,
+      city: stop.city ?? null,
+    });
+  }, [stopId, stops, selected]);
 
   const [cart, setCart] = useState<SaleLineItem[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);

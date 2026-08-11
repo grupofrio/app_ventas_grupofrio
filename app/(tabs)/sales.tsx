@@ -105,12 +105,12 @@ export default function SalesScreen() {
 
         {/* KPIs — solo datos oficiales de Odoo */}
         <View style={styles.kpiGrid}>
-          <KPICard label="VENDIDO" value={formatCurrency(todaySales)}
+          <KPICard style={styles.kpiCard} label="VENDIDO" value={formatCurrency(todaySales)}
                    valueColor={colors.success} />
-          <KPICard label="META" value={monthlyTarget > 0 ? `$${(monthlyTarget/1000).toFixed(1)}k` : '--'}
+          <KPICard style={styles.kpiCard} label="META" value={monthlyTarget > 0 ? `$${(monthlyTarget/1000).toFixed(1)}k` : 'Sin dato'}
                    subtitle={`${progressPct}%`} />
-          <KPICard label="PEDIDOS" value={`${todayOrders}`} />
-          <KPICard label="KG" value={`${todayKg}`} />
+          <KPICard style={styles.kpiCard} label="PEDIDOS" value={`${todayOrders}`} />
+          <KPICard style={styles.kpiCard} label="KG" value={`${todayKg}`} />
         </View>
 
         {/* Progress bar */}
@@ -225,6 +225,7 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  kpiCard: { flexBasis: '48%' },
   progressBar: {
     height: 8, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden',
   },

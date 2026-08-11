@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
 import { typography } from '../../theme/typography';
 
@@ -12,11 +12,12 @@ interface KPICardProps {
   value: string;
   subtitle?: string;
   valueColor?: string;
+  style?: StyleProp<ViewStyle>;
 }
 
-export function KPICard({ label, value, subtitle, valueColor }: KPICardProps) {
+export function KPICard({ label, value, subtitle, valueColor, style }: KPICardProps) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, style]}>
       <Text style={styles.label}>{label}</Text>
       <Text style={[typography.kpiValue, valueColor ? { color: valueColor } : undefined]}>
         {value}

@@ -322,22 +322,26 @@ export default function HomeScreen() {
             {/* KPI Grid 2x2 */}
             <View style={styles.kpiGrid}>
               <KPICard
+                style={styles.kpiCard}
                 label="PARADAS"
                 value={`${stopsTotal}`}
                 subtitle={`${stopsCompleted} de ${stopsTotal}`}
               />
               <KPICard
+                style={styles.kpiCard}
                 label="CARGAR"
                 value="Sin dato"
                 subtitle="kg estimados"
               />
               <KPICard
+                style={styles.kpiCard}
                 label="VENTA HOY"
                 value={formatCurrency(salesSummary.sales_amount_total)}
                 subtitle={`${todaySales} pedidos`}
                 valueColor={colors.success}
               />
               <KPICard
+                style={styles.kpiCard}
                 label="FORECAST"
                 value="Sin dato"
                 subtitle="F5: KoldDemand"
@@ -514,6 +518,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 14,
+  },
+  kpiCard: {
+    flexBasis: '48%',
   },
   sectionTitle: {
     fontSize: 12,

@@ -38,12 +38,12 @@ export default function AnalyticsScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Text style={styles.sectionTitle}>HOY</Text>
         <View style={styles.kpiGrid}>
-          <KPICard label="VISITAS" value={`${stopsCompleted}/${stopsTotal}`}
+          <KPICard style={styles.kpiCard} label="VISITAS" value={`${stopsCompleted}/${stopsTotal}`}
                    subtitle={`${visitPct}% completado`} />
-          <KPICard label="VENTAS" value={formatCurrency(summary.sales_amount_total)} subtitle={`${summary.orders_count} pedidos`}
+          <KPICard style={styles.kpiCard} label="VENTAS" value={formatCurrency(summary.sales_amount_total)} subtitle={`${summary.orders_count} pedidos`}
                    valueColor={colors.success} />
-          <KPICard label="COBRADO" value={formatCurrency(summary.cash_amount_total + summary.credit_amount_total)} subtitle="corte del dia" />
-          <KPICard label="SYNC" value={`${pendingOps}`} subtitle="pendientes"
+          <KPICard style={styles.kpiCard} label="COBRADO" value={formatCurrency(summary.cash_amount_total + summary.credit_amount_total)} subtitle="corte del dia" />
+          <KPICard style={styles.kpiCard} label="SYNC" value={`${pendingOps}`} subtitle="pendientes"
                    valueColor={pendingOps > 0 ? colors.warning : colors.success} />
         </View>
 
@@ -51,7 +51,7 @@ export default function AnalyticsScreen() {
         <Card>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Tasa de venta</Text>
-            <Text style={styles.metricValue}>--</Text>
+            <Text style={styles.metricValue}>Sin dato</Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Ticket promedio</Text>
@@ -59,11 +59,11 @@ export default function AnalyticsScreen() {
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>kg promedio/visita</Text>
-            <Text style={styles.metricValue}>{summary.orders_count > 0 ? `${(summary.kg_total / summary.orders_count).toFixed(1)} kg` : '--'}</Text>
+            <Text style={styles.metricValue}>{summary.orders_count > 0 ? `${(summary.kg_total / summary.orders_count).toFixed(1)} kg` : 'Sin dato'}</Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Tiempo promedio/visita</Text>
-            <Text style={styles.metricValue}>--</Text>
+            <Text style={styles.metricValue}>Sin dato</Text>
           </View>
           <Text style={[typography.dimSmall, { marginTop: 8, fontStyle: 'italic' }]}>
             V1: Metricas se calculan con datos acumulados de ventas reales.
@@ -82,6 +82,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
   },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  kpiCard: { flexBasis: '48%' },
   metricRow: {
     flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7,
     borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)',

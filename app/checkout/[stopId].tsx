@@ -379,8 +379,8 @@ function CheckoutScreenInner() {
         <View style={{ marginTop: 10 }}>
           <Button
             label={nextStop
-              ? '✓ Confirmar Check-out y Navegar al Siguiente'
-              : '✓ Confirmar Check-out'}
+              ? '✓ Próxima visita'
+              : '✓ Terminar visita'}
             variant="success"
             onPress={() => handleCheckout(sendEnCamino)}
             fullWidth

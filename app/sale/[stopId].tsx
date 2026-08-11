@@ -943,7 +943,7 @@ function SaleScreenInner() {
               />
             ) : null}
             <Button
-              label={afterSaleAction === 'route' ? 'Volver a ruta' : 'Continuar a checkout'}
+              label={afterSaleAction === 'route' ? 'Volver a ruta' : 'Próxima visita'}
               onPress={handleContinueAfterSale}
               fullWidth
             />

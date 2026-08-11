@@ -16,6 +16,9 @@ export function GlobalRefreshButton() {
   const loadPlan = useRouteStore((s) => s.loadPlan);
   const inAuthGroup = segments[0] === '(auth)';
   const inTabsGroup = segments[0] === '(tabs)';
+  // BLD F1.5: Venta tiene su propia barra fija de acción — el FAB flotante
+  // encima tapaba el botón de confirmar.
+  const inSaleScreen = segments[0] === 'sale';
   const [refreshing, setRefreshing] = useState(false);
 
   const refreshOperationalData = useCallback(async () => {
@@ -32,7 +35,7 @@ export function GlobalRefreshButton() {
     }
   }, [loadPlan, loadProducts, refreshing, warehouseId]);
 
-  if (!isAuthenticated || inAuthGroup) {
+  if (!isAuthenticated || inAuthGroup || inSaleScreen) {
     return null;
   }
 

@@ -207,7 +207,7 @@ function SaleScreenInner() {
   // P0-2 (hardening): si la venta ya estaba confirmada (p.ej. restaurada tras
   // un crash entre confirmar y checkout), reanuda el estado post-venta para que
   // el vendedor continúe al cobro/checkout en vez de re-confirmar (evita venta
-  // duplicada). No crea nada: solo reabre la guía "Continuar a checkout".
+  // duplicada). No crea nada: solo reabre la guía "Próxima visita".
   React.useEffect(() => {
     if (shouldResumeAfterSale({
       saleConfirmed,
@@ -731,7 +731,7 @@ function SaleScreenInner() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <TopBar title="Nueva Venta" showBack />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
@@ -932,14 +932,27 @@ function SaleScreenInner() {
           </View>
         )}
 
-        {saleConfirmed && afterSaleAction && (
-          <View style={styles.postSaleActions}>
+      </ScrollView>
+
+      {/* Barra fija de acción: total siempre visible + CTA. Reemplaza el
+          patrón anterior de "botón al fondo del scroll con FABs encima". */}
+      <View style={styles.fixedBar}>
+        <View style={styles.fixedBarTotal}>
+          <Text style={styles.fixedBarTotalLabel}>
+            TOTAL{saleLines.length > 0 ? ` · ${saleLines.reduce((sum, l) => sum + l.qty, 0)} piezas` : ''}
+          </Text>
+          <Text style={styles.fixedBarTotalValue}>{formatCurrency(total)}</Text>
+        </View>
+
+        {saleConfirmed && afterSaleAction ? (
+          <>
             {lastSaleTicketId ? (
               <Button
                 label="Ver ticket PDF"
                 variant="secondary"
                 onPress={handleOpenTicket}
                 fullWidth
+                style={{ marginBottom: 8 }}
               />
             ) : null}
             <Button
@@ -947,47 +960,48 @@ function SaleScreenInner() {
               onPress={handleContinueAfterSale}
               fullWidth
             />
-          </View>
+          </>
+        ) : (
+          <>
+            {/* Etiqueta refleja: pendiente de envío / enviado / error (pedido
+                offline) · guardar pendiente (offline pre-confirm) ·
+                confirmado (venta online directa) · confirmar. */}
+            <Button
+              label={saleConfirmButtonLabel({
+                saleSyncStatus: saleSync.status,
+                isOnline,
+                saleConfirmed,
+                saleRecoveryPersistenceFailed,
+                hasRecoveryIntent: saleRecoveryIntent !== null,
+              })}
+              onPress={handleConfirm}
+              fullWidth
+              disabled={saleConfirmed}
+              loading={false}
+            />
+
+            {/* Aviso offline bajo el botón (no se deshabilita: conectividad
+                intermitente; el guard de confirmación cubre el caso offline). */}
+            {saleOffline.buttonHint && (
+              <Text style={styles.validationHint}>{saleOffline.buttonHint}</Text>
+            )}
+
+            {/* Validation feedback — razón única y clara de por qué está
+                bloqueado (helper puro describeSaleConfirmBlock, testeable). */}
+            {(() => {
+              const reason = describeSaleConfirmBlock({
+                hasLines: saleLines.length > 0,
+                photoTaken: salePhotoTaken,
+                paymentSelected: !!salePaymentMethod,
+                hasPlaza: !!implicitAnalytics.analytic_plaza_id,
+                hasWarehouse,
+                routeLoadAccepted: canStartSale,
+              });
+              return reason ? <Text style={styles.validationHint}>{reason}</Text> : null;
+            })()}
+          </>
         )}
-
-        {/* Confirm button. Etiqueta refleja: pendiente de envío / enviado /
-            error (pedido offline) · guardar pendiente (offline pre-confirm) ·
-            confirmado (venta online directa) · confirmar. */}
-        <Button
-          label={saleConfirmButtonLabel({
-            saleSyncStatus: saleSync.status,
-            isOnline,
-            saleConfirmed,
-            saleRecoveryPersistenceFailed,
-            hasRecoveryIntent: saleRecoveryIntent !== null,
-          })}
-          onPress={handleConfirm}
-          fullWidth
-          disabled={saleConfirmed}
-          loading={false}
-          style={{ marginTop: saleConfirmed ? 0 : 14 }}
-        />
-
-        {/* Aviso offline bajo el botón (no se deshabilita: conectividad
-            intermitente; el guard de confirmación cubre el caso offline). */}
-        {saleOffline.buttonHint && !saleConfirmed && (
-          <Text style={styles.validationHint}>{saleOffline.buttonHint}</Text>
-        )}
-
-        {/* Validation feedback — razón única y clara de por qué está bloqueado
-            (helper puro describeSaleConfirmBlock, testeable). */}
-        {!saleConfirmed && (() => {
-          const reason = describeSaleConfirmBlock({
-            hasLines: saleLines.length > 0,
-            photoTaken: salePhotoTaken,
-            paymentSelected: !!salePaymentMethod,
-            hasPlaza: !!implicitAnalytics.analytic_plaza_id,
-            hasWarehouse,
-            routeLoadAccepted: canStartSale,
-          });
-          return reason ? <Text style={styles.validationHint}>{reason}</Text> : null;
-        })()}
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -1005,7 +1019,7 @@ export default function SaleScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
+  content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 16 },
   customerName: { fontSize: 12, color: colors.textDim, marginBottom: 2 },
   forecastHint: { fontSize: 11, color: colors.primary, marginBottom: 14 },
   emptyProducts: {
@@ -1109,9 +1123,25 @@ const styles = StyleSheet.create({
   validationHint: {
     fontSize: 11, color: colors.warning, textAlign: 'center', marginTop: 8,
   },
-  postSaleActions: {
-    gap: 8,
-    marginTop: 12,
+  fixedBar: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 12,
+    paddingBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+    backgroundColor: colors.bg,
+  },
+  fixedBarTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 10,
+  },
+  fixedBarTotalLabel: {
+    fontSize: 12, fontWeight: '700', color: colors.textDim,
+  },
+  fixedBarTotalValue: {
+    fontSize: 22, fontWeight: '800', color: colors.success,
   },
   loadWarning: {
     backgroundColor: colors.warningAlpha08,

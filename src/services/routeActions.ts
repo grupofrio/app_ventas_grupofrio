@@ -20,7 +20,7 @@ export const ROUTE_GENERAL_ACTIONS: RouteGeneralAction[] = [
   // Ventas que NO son de un cliente del plan
   { key: 'offroute', label: '🔍 Venta especial / fuera de ruta', route: '/offroute', group: 'venta' },
   { key: 'presale', label: '📅 Preventa', route: '/presale', group: 'venta' },
-  { key: 'newlead', label: '📋 Nuevo Lead', route: '/newcustomer', group: 'venta' },
+  { key: 'newlead', label: '📋 Nuevo Prospecto', route: '/newcustomer', group: 'venta' },
   // Operación de la unidad / jornada
   { key: 'refill', label: '🔄 Recarga', route: '/refill-accept', group: 'operacion' },
   { key: 'incident', label: '🚩 Incidente', route: '/incident', group: 'operacion' },

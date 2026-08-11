@@ -80,7 +80,7 @@ export default function OffRouteScreen() {
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
-      Alert.alert('Error', 'No se pudo buscar clientes o leads. Verifica tu conexion.');
+      Alert.alert('Error', 'No se pudo buscar clientes o prospectos. Verifica tu conexion.');
     } finally {
       setIsSearching(false);
     }
@@ -256,7 +256,7 @@ export default function OffRouteScreen() {
   }
 
   function renderCustomer({ item }: { item: OffrouteSearchResult }) {
-    const badgeLabel = item.entityType === 'lead' ? 'Lead' : 'Cliente';
+    const badgeLabel = item.entityType === 'lead' ? 'Prospecto' : 'Cliente';
     const itemKey = offrouteEntityKey(item);
     const isSelecting = selectingKey === itemKey;
 
@@ -302,7 +302,7 @@ export default function OffRouteScreen() {
         <View style={styles.searchRow}>
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar cliente o lead por nombre, teléfono, RFC o correo..."
+            placeholder="Buscar cliente o prospecto por nombre, teléfono, RFC o correo..."
             placeholderTextColor={colors.textDim}
             value={search}
             onChangeText={setSearch}
@@ -324,7 +324,7 @@ export default function OffRouteScreen() {
 
         {/* Info */}
         <Text style={styles.infoText}>
-          Busca clientes o leads fuera de tu ruta. Cliente permite ubicacion o venta; lead abre prospección.
+          Busca clientes o prospectos fuera de tu ruta. Cliente permite ubicacion o venta; prospecto abre prospección.
         </Text>
         {employeeAnalyticPlazaName ? (
           <Text style={styles.scopeText}>

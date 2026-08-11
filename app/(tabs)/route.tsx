@@ -460,7 +460,7 @@ export default function RouteScreen() {
             style={{ flex: 1 }}
           />
           <Button
-            label="📋 Nuevo Lead"
+            label="📋 Nuevo Prospecto"
             variant="secondary"
             small
             onPress={() => router.push('/newcustomer' as never)}

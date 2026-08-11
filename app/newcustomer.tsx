@@ -48,7 +48,7 @@ export default function NewCustomerScreen() {
 
     setSaved(true);
     Alert.alert(
-      'Lead guardado localmente',
+      'Prospecto guardado localmente',
       `"${form.nombre.trim()}" está pendiente de sincronización con Odoo. Puedes continuar la ruta.`,
       [{ text: 'OK', onPress: () => router.back() }],
     );
@@ -56,10 +56,10 @@ export default function NewCustomerScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <TopBar title="Nuevo Lead" showBack />
+      <TopBar title="Nuevo Prospecto" showBack />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.subtitle}>
-          Registra un prospecto que no está en el sistema. Se creará como lead en Odoo al sincronizar.
+          Registra un prospecto que no está en el sistema. Se creará como prospecto en Odoo al sincronizar.
         </Text>
 
         <View style={styles.fieldGroup}>
@@ -133,7 +133,7 @@ export default function NewCustomerScreen() {
         </View>
 
         <Button
-          label={saved ? '✓ Lead Guardado' : 'Guardar Lead'}
+          label={saved ? '✓ Prospecto Guardado' : 'Guardar Prospecto'}
           onPress={handleSave}
           fullWidth
           disabled={saved}

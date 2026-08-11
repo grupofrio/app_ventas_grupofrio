@@ -210,7 +210,7 @@ export default function ProspeccionScreen() {
       });
       Alert.alert(
         'Datos pendientes',
-        'No hay conexión. Los datos quedaron en cola y la venta se habilitará cuando el lead se sincronice.',
+        'No hay conexión. Los datos quedaron en cola y la venta se habilitará cuando el prospecto se sincronice.',
         [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
       );
       return;
@@ -260,7 +260,7 @@ export default function ProspeccionScreen() {
         <Card>
           <Text style={styles.headerTitle}>{currentStop.customer_name}</Text>
           <Text style={styles.headerSubtitle}>
-            {isLead ? 'Actualiza la información comercial del lead u oportunidad.' : 'Registra información comercial de la visita.'}
+            {isLead ? 'Actualiza la información comercial del prospecto u oportunidad.' : 'Registra información comercial de la visita.'}
           </Text>
         </Card>
 

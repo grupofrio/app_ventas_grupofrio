@@ -327,7 +327,7 @@ function SaleScreenInner() {
 
     if (!stop) return;
     if (stop._entityType === 'lead' && !getLeadPartnerId(stop)) {
-      Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
+      Alert.alert('Prospecto no vendible', 'Primero completa Datos para crear o enlazar el contacto del prospecto.');
       return;
     }
     const confirmedPaymentMethod = salePaymentMethod;

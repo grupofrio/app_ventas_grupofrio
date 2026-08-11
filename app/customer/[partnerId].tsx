@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TextInput, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TextInput, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -126,6 +126,7 @@ export default function CustomerEditScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Editar cliente" showBack />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Card>
           <Text style={styles.headerTitle}>{currentStop.customer_name}</Text>
@@ -191,6 +192,7 @@ export default function CustomerEditScreen() {
           style={{ marginTop: 18 }}
         />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

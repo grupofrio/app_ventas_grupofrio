@@ -16,6 +16,7 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -274,6 +275,7 @@ function RouteCloseScreenInner() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Cerrar ruta" showBack />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {!isOnline && (
           <View style={styles.offlineBanner}>
@@ -416,6 +418,7 @@ function RouteCloseScreenInner() {
           )}
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

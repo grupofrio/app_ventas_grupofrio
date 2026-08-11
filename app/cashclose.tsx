@@ -41,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -533,6 +533,10 @@ export default function CashCloseScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <TopBar title="Corte de Caja" showBack />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
 
         {/* Banner honesto */}
@@ -929,6 +933,7 @@ export default function CashCloseScreen() {
           /gf/logistics/api/employee/liquidacion/confirm.
         </Text>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

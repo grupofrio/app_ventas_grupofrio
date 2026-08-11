@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -288,6 +288,7 @@ export default function NoSaleScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="No Venta" showBack />
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Text style={styles.hint}>Alimenta KoldDemand para mejorar forecasts.</Text>
 
@@ -390,6 +391,7 @@ export default function NoSaleScreen() {
           style={{ marginTop: 14 }}
         />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

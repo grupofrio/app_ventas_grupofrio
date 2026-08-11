@@ -18,6 +18,7 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -189,6 +190,7 @@ export default function PresaleScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Preventa" showBack />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {!PRESALE_BACKEND_ENABLED && (
           <View style={styles.warnBanner}>
@@ -337,6 +339,7 @@ export default function PresaleScreen() {
           La preventa NO cobra, NO descuenta inventario de ruta y NO entra a liquidación.
         </Text>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {selected && (
         <ProductPicker

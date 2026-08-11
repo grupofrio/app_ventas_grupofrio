@@ -59,6 +59,21 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
   return { label: `${e.l}${kg ? ` · ${kg.toFixed(0)}kg` : ''}`, variant: e.v };
 }
 
+// F1.12: resultado por palabra de cada visita — estado honesto, no solo
+// color. stop.state es la fuente real (no hay monto/razón de venta a nivel
+// cliente en el contrato plan/stops; ver Ventas para el detalle por monto).
+function getStopResultLabel(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
+  switch (stop.state) {
+    case 'done': return { label: '✓ Visitada', variant: 'green' };
+    case 'closed': return { label: '✓ Cerrada', variant: 'green' };
+    case 'in_progress': return { label: '◈ En curso', variant: 'blue' };
+    case 'not_visited': return { label: '✓ No visitada', variant: 'dim' };
+    case 'no_stock': return { label: '⚠ Sin stock', variant: 'orange' };
+    case 'rejected': return { label: '✕ Rechazada', variant: 'red' };
+    default: return null;
+  }
+}
+
 type ViewMode = 'map' | 'list';
 
 function getRouteFreshnessBadge(status: RouteFreshness): { label: string; variant: 'green' | 'orange' | 'dim' } {
@@ -294,6 +309,12 @@ export default function RouteScreen() {
       const badge = getStopBadge(stop);
       const stopTypeLabel = getStopTypeLabel(stop);
       const orderStatus = stopOrderStatus[stop.id];
+      const resultLabel = getStopResultLabel(stop);
+      // F1.12: la siguiente parada pendiente/en curso se resalta con acceso
+      // directo "Ya llegué" — mismo criterio que el panel del mapa
+      // (selectNextStop: en_curso primero, si no la pendiente más próxima
+      // en secuencia).
+      const isNext = !!nextStop && stop.id === nextStop.id;
       return (
         <View
           style={[
@@ -301,6 +322,7 @@ export default function RouteScreen() {
             { borderLeftColor: stopStateColors[stop.state] || colors.textDim },
             isDone && { opacity: 0.65 },
             stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
+            isNext && styles.cardNext,
           ]}
         >
           <TouchableOpacity onPress={() => handleOpenClient(stop)} activeOpacity={0.7}>
@@ -312,17 +334,27 @@ export default function RouteScreen() {
               </Text>
               {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
             </View>
-            {(stopTypeLabel || orderStatus) && (
-              <View style={styles.cardBadgeRow}>
-                {stopTypeLabel && (
-                  <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
-                )}
-                {orderStatus === 'pending' && <Badge label="📦 Pedido pendiente" variant="orange" />}
-                {orderStatus === 'error' && <Badge label="📦 Pedido con error" variant="red" />}
-              </View>
-            )}
+            <View style={styles.cardBadgeRow}>
+              {isNext && <Badge label="◈ Siguiente" variant="blue" />}
+              {resultLabel && !isNext && <Badge label={resultLabel.label} variant={resultLabel.variant} />}
+              {stop._isOffroute && <Badge label="Especial" variant="orange" />}
+              {stopTypeLabel && (
+                <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+              )}
+              {orderStatus === 'pending' && <Badge label="📦 Pedido pendiente" variant="orange" />}
+              {orderStatus === 'error' && <Badge label="📦 Pedido con error" variant="red" />}
+            </View>
           </TouchableOpacity>
           <View style={styles.cardActions}>
+            {isNext ? (
+              <Button
+                label="Ya llegué"
+                variant="primary"
+                small
+                onPress={() => handleOpenClient(stop)}
+                style={{ flex: 1 }}
+              />
+            ) : null}
             <Button
               label="📍 Maps"
               variant="secondary"
@@ -334,7 +366,7 @@ export default function RouteScreen() {
         </View>
       );
     },
-    [handleOpenClient, handleOpenLocation, stopOrderStatus],
+    [handleOpenClient, handleOpenLocation, stopOrderStatus, nextStop],
   );
 
   return (
@@ -396,12 +428,6 @@ export default function RouteScreen() {
             onStartNavigation={handleStartNavigation}
             onStopNavigation={handleStopNavigation}
           />
-          <RouteActionsMenu
-            visible={actionsMenuOpen}
-            onClose={() => setActionsMenuOpen(false)}
-            onNavigateRoute={(route) => router.push(route as never)}
-            onShowList={() => setViewMode('list')}
-          />
         </View>
       ) : (
       <FlatList
@@ -440,72 +466,17 @@ export default function RouteScreen() {
             <Text style={styles.pendingOrdersText}>{pendingOrdersBanner} · toca para ver Sync</Text>
           </TouchableOpacity>
         )}
-        {/* Action buttons */}
-        <View style={styles.actionRow}>
-          <Button label="📈 Analiticas" variant="secondary" small
-                  onPress={() => router.push('/analytics' as never)} style={{ flex: 1 }} />
-          <Button label="🏆 Ranking" variant="secondary" small
-                  onPress={() => router.push('/ranking' as never)} style={{ flex: 1 }} />
-          <Button label="Actualizar" variant="secondary" small
-                  onPress={onRefresh} style={{ flex: 1 }} />
-        </View>
-
-        {/* BLD-20260408-P0: Off-route sale button */}
-        <View style={styles.offrouteRow}>
-          <Button
-            label="🔍 Visita especial"
-            variant="secondary"
-            small
-            onPress={() => router.push('/offroute' as never)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="📋 Nuevo Prospecto"
-            variant="secondary"
-            small
-            onPress={() => router.push('/newcustomer' as never)}
-            style={{ flex: 1 }}
-          />
-        </View>
-
-        {/* BLD-SPRINT-B: recarga mid-ruta + reporte de incidente */}
-        <View style={styles.offrouteRow}>
-          <Button
-            label="📅 Preventa"
-            variant="secondary"
-            small
-            onPress={() => router.push('/presale' as never)}
-            style={{ flex: 1 }}
-          />
-        </View>
-
-        <View style={styles.offrouteRow}>
-          <Button
-            label="🔄 Recarga"
-            variant="secondary"
-            small
-            onPress={() => router.push('/refill-accept' as never)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="🚩 Incidente"
-            variant="secondary"
-            small
-            onPress={() => router.push('/incident' as never)}
-            style={{ flex: 1 }}
-          />
-        </View>
-
-        {/* BLD-SPRINT-C: cierre / regreso (KM final, conciliación, liquidación, cerrar ruta) */}
-        <View style={styles.offrouteRow}>
-          <Button
-            label="🏁 Cerrar ruta"
-            variant="secondary"
-            small
-            onPress={() => router.push('/route-close' as never)}
-            style={{ flex: 1 }}
-          />
-        </View>
+        {/* F1.12: el header de 9 botones se reduce a un menú "☰"
+            jerarquizado — mismo RouteActionsMenu que ya usa el mapa,
+            catálogo compartido en ROUTE_GENERAL_ACTIONS. "Actualizar" se
+            quita: el RefreshControl de pull-to-refresh ya cubre eso. */}
+        <TouchableOpacity
+          style={styles.moreActionsBtn}
+          onPress={() => setActionsMenuOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.moreActionsText}>☰ Más acciones</Text>
+        </TouchableOpacity>
 
         {(planTypeLabel || freshnessBadge) && (
           <View style={styles.routeTypeRow}>
@@ -564,6 +535,12 @@ export default function RouteScreen() {
         )}
       />
       )}
+      <RouteActionsMenu
+        visible={actionsMenuOpen}
+        onClose={() => setActionsMenuOpen(false)}
+        onNavigateRoute={(route) => router.push(route as never)}
+        onShowList={() => setViewMode('list')}
+      />
     </SafeAreaView>
   );
 }
@@ -580,14 +557,24 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 4,
   },
   fabText: { fontSize: 20, color: colors.text },
-  actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  moreActionsBtn: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.button,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  moreActionsText: { fontSize: 13, fontWeight: '700', color: colors.text },
   pendingOrdersBanner: {
     backgroundColor: 'rgba(234,179,8,0.10)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
     borderRadius: radii.button, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10,
   },
   pendingOrdersText: { fontSize: 12, color: colors.text, fontWeight: '600' },
   cardBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
   statItem: { alignItems: 'center' },
@@ -624,6 +611,11 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 12, paddingHorizontal: 14, marginBottom: 8, borderLeftWidth: 4,
+  },
+  cardNext: {
+    backgroundColor: 'rgba(37,99,235,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.35)',
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardName: { flex: 1, fontWeight: '700', fontSize: 14, color: colors.text, marginRight: 8 },

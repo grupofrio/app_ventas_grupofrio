@@ -32,7 +32,12 @@ assert(!/route:\s*'\/unload'/.test(routeActions), '#3 el menú NO apunta a /unlo
 const routeScreen = read('app/(tabs)/route.tsx');
 assert(!/push\(\s*'\/refill'\s*/.test(routeScreen), '#1 route.tsx no navega a /refill legacy');
 assert(!/push\(\s*'\/unload'\s*/.test(routeScreen), '#3 route.tsx no navega a /unload');
-assert(/\/refill-accept/.test(routeScreen), '#2 route.tsx conserva la aceptación de recarga');
+// F1.12: el header de botones (incluida la recarga) se consolidó en
+// RouteActionsMenu, que navega dinámicamente vía ROUTE_GENERAL_ACTIONS
+// (ya verificado arriba que ese catálogo apunta a /refill-accept, no a
+// /refill legacy). route.tsx ya no navega con el string literal — monta
+// el menú que sí lo hace.
+assert(/<RouteActionsMenu/.test(routeScreen), '#2 route.tsx monta RouteActionsMenu, que expone la aceptación de recarga');
 
 // ── #4: Corte/cierre accesible ───────────────────────────────────────────────
 assert(/\/route-close/.test(routeScreen), '#4 el cierre/Corte sigue accesible desde la ruta');

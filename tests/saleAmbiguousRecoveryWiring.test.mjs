@@ -440,7 +440,7 @@ assert.doesNotMatch(
 
 const pricelistPhase = tryCatchContaining(
   sale,
-  'await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });',
+  'await getPartnerPricelistId(salePartnerId, saleProducts, { companyId: effectiveCompanyId });',
 );
 assert.match(pricelistPhase.catchBody, /safeUnknownErrorMessage\(\s*error,/);
 assert.match(

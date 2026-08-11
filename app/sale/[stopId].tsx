@@ -363,7 +363,10 @@ function SaleScreenInner() {
     let pricelistId = pricelistDecision.pricelistId;
     try {
       if (pricelistDecision.shouldResolvePartnerPricelist) {
-        await getPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
+        const saleProducts = saleLines
+          .map((line) => products.find((p) => p.id === line.productId))
+          .filter((p): p is NonNullable<typeof p> => !!p);
+        await getPartnerPricelistId(salePartnerId, saleProducts, { companyId: effectiveCompanyId });
         const resolvedPricelistId = peekResolvedPartnerPricelistId(
           salePartnerId,
           { companyId: effectiveCompanyId },

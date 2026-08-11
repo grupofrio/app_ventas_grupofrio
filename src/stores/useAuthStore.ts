@@ -16,7 +16,6 @@ import {
   AUTH_TIMEOUT_MS,
 } from '../services/api';
 import { signOut } from '../services/gfLogistics';
-import { clearOdooSession } from '../services/odooSession';
 import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
@@ -391,7 +390,6 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signOut();
     } finally {
-      clearOdooSession();
       await clearRouteCache();
       useSalesStore.getState().reset();
       await clearAuthTokens();

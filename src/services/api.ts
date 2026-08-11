@@ -40,7 +40,7 @@ export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
  */
 export const DEFAULT_READ_TIMEOUT_MS = 10_000;
 /**
- * Timeout para handshakes de autenticacion (login, /web/session/authenticate).
+ * Timeout para handshakes de autenticacion (login empleado).
  * Antes corrian con fetch SIN timeout: en red degradada el login colgaba
  * indefinidamente (pendiente de auditoria julio).
  */

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const REPO_ROOT = process.cwd();
 const logicPath = resolve(REPO_ROOT, 'src/services/employeeDataLogic.ts');
@@ -40,7 +41,7 @@ function createPostSpy(responses: unknown[]) {
 
 async function loadLogic(): Promise<EmployeeDataLogicModule> {
   assert.equal(existsSync(logicPath), true, 'el cliente ejecutable de datos de empleado debe existir');
-  return await import(logicPath) as EmployeeDataLogicModule;
+  return await import(pathToFileURL(logicPath).href) as EmployeeDataLogicModule;
 }
 
 async function testDirectoryExecutesScopedRequest(module: EmployeeDataLogicModule) {

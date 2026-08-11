@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const REPO_ROOT = process.cwd();
 const logicPath = resolve(REPO_ROOT, 'src/services/employeeDataLogic.ts');
@@ -58,7 +59,7 @@ interface EmployeeDataLogicModule {
 
 async function loadLogic(): Promise<EmployeeDataLogicModule> {
   assert.equal(existsSync(logicPath), true, 'el cliente REST de empleado debe existir');
-  return await import(logicPath) as EmployeeDataLogicModule;
+  return await import(pathToFileURL(logicPath).href) as EmployeeDataLogicModule;
 }
 
 async function testIncidentAdaptersUseOnlyScopedEmployeeRoutes(module: EmployeeDataLogicModule) {

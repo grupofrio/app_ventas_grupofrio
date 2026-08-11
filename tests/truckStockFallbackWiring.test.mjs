@@ -12,23 +12,38 @@ function main() {
 
   assert.match(
     productStore,
-    /scoped && scoped\.products\.length > 0\) \{/,
-    'truck_stock con productos debe poblar el store aunque hasStockData=false',
-  );
-  assert.doesNotMatch(
-    productStore,
-    /scoped\.hasStockData !== false/,
-    'hasStockData=false no debe descartar el catalogo REST ni forzar get_records',
-  );
-  assert.match(
-    productStore,
-    /\['location_id', 'child_of', mobileLocationId\]/,
-    'stock.quant debe consultar por la ubicacion movil y sus sububicaciones',
+    /if \(!scoped \|\| scoped\.products\.length === 0\) \{/,
+    'sin catalogo de truck_stock debe entrar al camino de degradacion explicita',
   );
   assert.match(
     productStore,
     /loaded_truck_stock_reference/,
     'debe quedar log claro cuando truck_stock responde catalogo sin stock real',
+  );
+  assert.match(
+    productStore,
+    /Sin catálogo de existencias para tu unidad/,
+    'sin datos de truck_stock el estado debe ser un error honesto, no un catalogo global',
+  );
+
+  // Security migration (2026-08): truck_stock es la UNICA fuente de
+  // catalogo/stock. No debe quedar ningun rastro del cliente ORM/RPC
+  // privilegiado (odooRpc, odooSession) ni de los fallbacks stock.quant /
+  // product.product leidos directo desde el movil.
+  assert.doesNotMatch(
+    productStore,
+    /from ['"]\.\.\/services\/odooRpc['"]/,
+    'useProductStore no debe importar el cliente Odoo privilegiado',
+  );
+  assert.doesNotMatch(
+    productStore,
+    /odooRead\(['"]stock\.quant['"]/,
+    'no debe quedar una lectura directa de stock.quant via ORM/API-key generico',
+  );
+  assert.doesNotMatch(
+    productStore,
+    /odooRead\(['"]product\.product['"]/,
+    'no debe quedar una lectura directa de product.product via ORM/API-key generico',
   );
 
   console.log('truck stock fallback wiring tests: ok');

@@ -57,6 +57,7 @@ export default function HomeScreen() {
   const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const products = useProductStore((s) => s.products);
   const productCount = useProductStore((s) => s.productCount);
+  const totalStockKg = useProductStore((s) => s.totalStockKg);
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productsLastSync = useProductStore((s) => s.lastSync);
   const productError = useProductStore((s) => s.error);
@@ -153,17 +154,21 @@ export default function HomeScreen() {
   // PR-2: criterio compartido con route-start (helper puro reusado).
   const isStandardNoPlan = isStandardNoPlanError(planError);
 
-  // BLD-SPRINT-A.1: CTA "Iniciar operación" con 3 estados para no confundir:
+  // F1.11: CTA "Iniciar operación" con 4 estados para no confundir:
+  //  - todas las paradas cerradas → "Cerrar visitas" (liquidación del día)
   //  - ruta ya en marcha (alguna parada en curso/hecha) → "Ver ruta"
   //  - operación lista (checklist+KM+carga) pero sin arrancar → "Continuar a ruta"
   //  - falta algo → "Iniciar operación"
   const routeUnderway = stops.some((s) => s.state === 'in_progress' || s.state === 'done');
+  const allStopsDone = stopsTotal > 0 && stopsCompleted >= stopsTotal;
   const opReady = routeStartReadiness.readyToStart;
-  const routeStartCta = routeUnderway
-    ? { title: 'Ver ruta', sub: 'Tu recorrido del día', icon: '🗺️', target: '/(tabs)/route' as const }
-    : opReady
-      ? { title: 'Continuar a ruta', sub: 'Operación lista · revisa tus paradas', icon: '✅', target: '/(tabs)/route' as const }
-      : { title: 'Iniciar operación', sub: 'Checklist · KM inicial · Aceptar carga', icon: '🚚', target: '/route-start' as const };
+  const routeStartCta = allStopsDone
+    ? { title: 'Cerrar visitas', sub: 'Inventario, liquidación y cierre del día', icon: '🏁', target: '/route-close' as const }
+    : routeUnderway
+      ? { title: 'Ver ruta', sub: 'Tu recorrido del día', icon: '🗺️', target: '/(tabs)/route' as const }
+      : opReady
+        ? { title: 'Continuar a ruta', sub: 'Operación lista · revisa tus paradas', icon: '✅', target: '/(tabs)/route' as const }
+        : { title: 'Iniciar operación', sub: 'Checklist · KM inicial · Aceptar carga', icon: '🚚', target: '/route-start' as const };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -329,9 +334,9 @@ export default function HomeScreen() {
               />
               <KPICard
                 style={styles.kpiCard}
-                label="CARGAR"
-                value="Sin dato"
-                subtitle="kg estimados"
+                label="EN CAMIONETA"
+                value={productCount > 0 ? `${totalStockKg} kg` : 'Sin dato'}
+                subtitle={productCount > 0 ? `${productCount} productos` : 'catálogo no cargado'}
               />
               <KPICard
                 style={styles.kpiCard}
@@ -346,6 +351,40 @@ export default function HomeScreen() {
                 value="Sin dato"
                 subtitle="F5: KoldDemand"
               />
+            </View>
+
+            {/* F1.11: accesos rápidos fuera de visita — no requieren estar
+                parados en un cliente. */}
+            <Text style={styles.sectionTitle}>FUERA DE VISITA</Text>
+            <View style={styles.quickGrid}>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/incident' as never)}
+              >
+                <Text style={styles.quickIcon}>🚩</Text>
+                <Text style={styles.quickLabel}>Reportar incidencia</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/refill-accept' as never)}
+              >
+                <Text style={styles.quickIcon}>🔄</Text>
+                <Text style={styles.quickLabel}>Pedir recarga</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/ranking' as never)}
+              >
+                <Text style={styles.quickIcon}>🏆</Text>
+                <Text style={styles.quickLabel}>Mi ranking</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/presale' as never)}
+              >
+                <Text style={styles.quickIcon}>📅</Text>
+                <Text style={styles.quickLabel}>Preventa</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Intelligence alerts */}
@@ -522,6 +561,22 @@ const styles = StyleSheet.create({
   kpiCard: {
     flexBasis: '48%',
   },
+  quickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  quickBtn: {
+    flexBasis: '48%',
+    backgroundColor: colors.card,
+    borderRadius: radii.button,
+    paddingVertical: 14,
+    alignItems: 'center',
+    gap: 4,
+  },
+  quickIcon: { fontSize: 20 },
+  quickLabel: { fontSize: 12, fontWeight: '600', color: colors.text, textAlign: 'center' },
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',

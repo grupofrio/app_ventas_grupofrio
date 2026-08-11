@@ -32,7 +32,16 @@ export interface SalesListEntry {
   localStatus?: LocalSaleStatus;
   errorMessage?: string | null;
   remoteOrder?: GFSalesOrder;
+  /** F1.13: chip de forma de pago en la tarjeta — 'Efectivo' / 'Crédito'. */
+  paymentMethodLabel?: string | null;
 }
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: 'Efectivo',
+  credit: 'Crédito',
+  efectivo: 'Efectivo',
+  transferencia: 'Crédito',
+};
 
 export interface LocalSalesSummary {
   count: number;
@@ -83,6 +92,7 @@ export function projectLocalSale(
   const payload = (item.payload ?? {}) as Record<string, unknown>;
   const payloadName = strOrNull(payload._clientCustomerName);
   const payloadTotal = numOrNull(payload._clientTotal);
+  const payloadPaymentMethod = strOrNull(payload.payment_method);
 
   return {
     key: `local:${item.id}`,
@@ -95,6 +105,9 @@ export function projectLocalSale(
     localStatus,
     errorMessage: localStatus === 'retrying' || localStatus === 'needs_attention'
       ? (strOrNull(item.error_message) ?? null)
+      : null,
+    paymentMethodLabel: payloadPaymentMethod
+      ? PAYMENT_METHOD_LABELS[payloadPaymentMethod.toLowerCase()] ?? null
       : null,
   };
 }
@@ -110,6 +123,8 @@ export function projectRemoteSale(order: GFSalesOrder): SalesListEntry {
     kgTotal: order.kg_total,
     createdAtMs: parseOdooDateMs(order.date_order),
     remoteOrder: order,
+    paymentMethodLabel: order.payment_method_label
+      || (order.payment_method ? PAYMENT_METHOD_LABELS[order.payment_method.toLowerCase()] ?? null : null),
   };
 }
 

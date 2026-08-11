@@ -103,6 +103,25 @@ export default function SalesScreen() {
             onPress={() => router.push('/analytics' as never)} style={{ flex: 1 }} />
         </View>
 
+        {/* F1.13: totales efectivo/crédito/total — espejo de la liquidación
+            (cashclose.tsx usa las mismas fuentes: cash_amount_total /
+            credit_amount_total / sales_amount_total). Así el vendedor sabe
+            qué va a entregar antes de llegar al CEDIS. */}
+        <View style={styles.totalsRow}>
+          <View style={styles.totalsCard}>
+            <Text style={styles.totalsLabel}>EFECTIVO</Text>
+            <Text style={styles.totalsValue}>{formatCurrency(summary.cash_amount_total)}</Text>
+          </View>
+          <View style={styles.totalsCard}>
+            <Text style={styles.totalsLabel}>CRÉDITO</Text>
+            <Text style={styles.totalsValue}>{formatCurrency(summary.credit_amount_total)}</Text>
+          </View>
+          <View style={styles.totalsCard}>
+            <Text style={styles.totalsLabel}>TOTAL</Text>
+            <Text style={[styles.totalsValue, { color: colors.success }]}>{formatCurrency(todaySales)}</Text>
+          </View>
+        </View>
+
         {/* KPIs — solo datos oficiales de Odoo */}
         <View style={styles.kpiGrid}>
           <KPICard style={styles.kpiCard} label="VENDIDO" value={formatCurrency(todaySales)}
@@ -197,13 +216,28 @@ export default function SalesScreen() {
                         ? `${entry.kgTotal.toFixed(0)} kg`
                         : 'Venta local'}
                   </Text>
-                  {statusCopy && toneColors && (
-                    <View style={[styles.statusBadge, { backgroundColor: toneColors.bg }]}>
-                      <Text style={[styles.statusBadgeText, { color: toneColors.text }]}>
-                        {statusCopy.label}
-                      </Text>
+                  <View style={styles.chipRow}>
+                    {/* F1.13: chip de tipo de movimiento. Hoy esta lista solo
+                        trae sale_order (Venta) — Regalo/Consignación/Cambio
+                        viven en flujos y modelos de Odoo separados que aún
+                        no se unifican en /sales/list (ver plan B2.2/B2.3/B2.6).
+                        No se inventa un chip para datos que no existen aquí. */}
+                    <View style={styles.typeChip}>
+                      <Text style={styles.typeChipText}>Venta</Text>
                     </View>
-                  )}
+                    {entry.paymentMethodLabel && (
+                      <View style={styles.typeChip}>
+                        <Text style={styles.typeChipText}>{entry.paymentMethodLabel}</Text>
+                      </View>
+                    )}
+                    {statusCopy && toneColors && (
+                      <View style={[styles.statusBadge, { backgroundColor: toneColors.bg }]}>
+                        <Text style={[styles.statusBadgeText, { color: toneColors.text }]}>
+                          {statusCopy.label}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                   {entry.errorMessage ? (
                     <Text style={styles.orderError}>{entry.errorMessage}</Text>
                   ) : null}
@@ -224,6 +258,19 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  totalsRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  totalsCard: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderRadius: radii.card,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  totalsLabel: {
+    fontSize: 10, fontWeight: '700', color: colors.textDim,
+    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4,
+  },
+  totalsValue: { fontSize: 15, fontWeight: '800', color: colors.text, fontFamily: fonts.monoBold },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
   kpiCard: { flexBasis: '48%' },
   progressBar: {
@@ -303,9 +350,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textDim,
   },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' },
+  typeChip: {
+    backgroundColor: colors.primaryAlpha12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  typeChipText: { fontSize: 11, fontWeight: '700', color: colors.primary },
   statusBadge: {
     alignSelf: 'flex-start',
-    marginTop: 8,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,

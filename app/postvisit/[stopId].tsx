@@ -23,7 +23,8 @@ import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { closeOffrouteVisit, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
-import { applyLeadUpsertToStop, LeadStageOption } from '../../src/services/leadVisit';
+import { applyLeadUpsertToStop, getLeadPartnerId, LeadStageOption } from '../../src/services/leadVisit';
+import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 
 const DEFAULT_LEAD_COMPANY_ID = 34;
@@ -74,6 +75,7 @@ export default function ProspeccionScreen() {
     return selectedStageId != null;
   }, [selectedStageId]);
 
+
   useEffect(() => {
     let cancelled = false;
 
@@ -121,6 +123,15 @@ export default function ProspeccionScreen() {
   }
 
   const currentStop = stop;
+
+  // F1.8: la conversión de prospecto a cliente ya sucedía implícita dentro
+  // de "Guardar Datos" (applyLeadUpsertToStop refleja el partner_id que
+  // regrese el backend). Aquí solo se hace explícita con nombre y
+  // requisitos visibles — el flujo/endpoint no cambia.
+  const alreadyCustomer = !isLead || getLeadPartnerId(currentStop) != null;
+  const hasPhoneReq = hasContactPhone(currentStop) || phone.trim().length > 0;
+  const hasLocationReq = typeof currentStop.customer_latitude === 'number' && typeof currentStop.customer_longitude === 'number';
+  const readyToConvert = isLead && !alreadyCustomer && hasPhoneReq && hasLocationReq;
 
   function finalizeAfterSave() {
     router.replace(`/checkin/${currentStop.id}` as never);
@@ -218,9 +229,11 @@ export default function ProspeccionScreen() {
 
     setSaving(true);
     try {
+      const wasCustomerBefore = getLeadPartnerId(currentStop) != null;
       const lead = await upsertLeadData(payload);
+      let nextStop = currentStop;
       if (lead) {
-        const nextStop = applyLeadUpsertToStop(currentStop, lead as any);
+        nextStop = applyLeadUpsertToStop(currentStop, lead as any);
         patchStop(currentStop.id, nextStop);
         const visitState = useVisitStore.getState();
         if (visitState.currentStopId === currentStop.id && visitState.currentStop) {
@@ -228,9 +241,14 @@ export default function ProspeccionScreen() {
         }
       }
 
+      const nowCustomer = getLeadPartnerId(nextStop) != null;
+      const justConverted = !wasCustomerBefore && nowCustomer;
+
       Alert.alert(
-        'Datos guardados',
-        'La oportunidad quedó actualizada. Si ya se creó el contacto, la venta se habilitó en esta misma visita.',
+        justConverted ? 'Prospecto convertido a cliente' : 'Datos guardados',
+        justConverted
+          ? 'Ya se creó el contacto en Odoo — la venta se habilitó en esta misma visita.'
+          : 'La oportunidad quedó actualizada.',
         [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
       );
     } catch (error) {
@@ -263,6 +281,32 @@ export default function ProspeccionScreen() {
             {isLead ? 'Actualiza la información comercial del prospecto u oportunidad.' : 'Registra información comercial de la visita.'}
           </Text>
         </Card>
+
+        {isLead && !alreadyCustomer && (
+          <>
+            <Text style={styles.inputLabel}>PARA CONVERTIR A CLIENTE</Text>
+            <Card>
+              <View style={styles.reqRow}>
+                <Text style={styles.reqLabel}>Teléfono</Text>
+                <Text style={[styles.reqStatus, hasPhoneReq ? styles.reqOk : styles.reqPending]}>
+                  {hasPhoneReq ? '✓ Completo' : '▢ Falta'}
+                </Text>
+              </View>
+              <View style={styles.reqRow}>
+                <Text style={styles.reqLabel}>Ubicación GPS</Text>
+                <Text style={[styles.reqStatus, hasLocationReq ? styles.reqOk : styles.reqPending]}>
+                  {hasLocationReq ? '✓ Completa' : '▢ Falta'}
+                </Text>
+              </View>
+              <View style={styles.reqRow}>
+                <Text style={styles.reqLabel}>Etapa seleccionada</Text>
+                <Text style={[styles.reqStatus, selectedStageId != null ? styles.reqOk : styles.reqPending]}>
+                  {selectedStageId != null ? '✓ Completa' : '▢ Falta'}
+                </Text>
+              </View>
+            </Card>
+          </>
+        )}
 
         <Text style={styles.inputLabel}>ETAPA</Text>
         {loadingStages ? (
@@ -372,7 +416,7 @@ export default function ProspeccionScreen() {
         />
 
         <Button
-          label="Guardar Datos"
+          label={readyToConvert ? 'Convertir a cliente y habilitar venta' : 'Guardar Datos'}
           onPress={() => { void handleSave(); }}
           fullWidth
           disabled={!canSave || saving || loadingStages}
@@ -466,4 +510,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.error,
   },
+  reqRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  reqLabel: { fontSize: 13, color: colors.text },
+  reqStatus: { fontSize: 12, fontWeight: '700' },
+  reqOk: { color: colors.success },
+  reqPending: { color: colors.textDim },
 });

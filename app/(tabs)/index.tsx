@@ -167,12 +167,6 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Status bar */}
-      <View style={styles.statusBar}>
-        <Text style={styles.clock}>9:41</Text>
-        <Text style={styles.statusIcons}>📶 🔋 📍</Text>
-      </View>
-
       {/* Sync bar */}
       <SyncBar />
 
@@ -334,7 +328,7 @@ export default function HomeScreen() {
               />
               <KPICard
                 label="CARGAR"
-                value="--"
+                value="Sin dato"
                 subtitle="kg estimados"
               />
               <KPICard
@@ -345,7 +339,7 @@ export default function HomeScreen() {
               />
               <KPICard
                 label="FORECAST"
-                value="--"
+                value="Sin dato"
                 subtitle="F5: KoldDemand"
               />
             </View>
@@ -431,23 +425,6 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  statusBar: {
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.screenPadding,
-  },
-  clock: {
-    fontFamily: fonts.monoBold,
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  statusIcons: {
-    fontSize: 11,
-    color: colors.textDim,
-  },
   greeting: {
     flexDirection: 'row',
     alignItems: 'center',

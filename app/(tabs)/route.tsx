@@ -519,8 +519,8 @@ export default function RouteScreen() {
           {[
             { label: 'Progreso', value: `${stopsCompleted}/${stopsTotal}` },
             { label: 'Vendido', value: formatCurrency(salesSummary.sales_amount_total), color: colors.success },
-            { label: 'Cargado', value: '--kg' },
-            { label: 'Restante', value: '--kg', color: colors.primary },
+            { label: 'Cargado', value: 'Sin dato' },
+            { label: 'Restante', value: 'Sin dato', color: colors.primary },
           ].map((s) => (
             <View key={s.label} style={styles.statItem}>
               <Text style={styles.statLabel}>{s.label}</Text>

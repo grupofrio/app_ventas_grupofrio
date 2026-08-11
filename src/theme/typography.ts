@@ -140,4 +140,18 @@ export const typography = {
     fontWeight: '700',
     color: colors.text,
   } as TextStyle,
+
+  // F2.3: glifo grande de estado (EmptyState/ErrorState) — mismo tamaño en
+  // ambos para que se lean como el mismo tipo de bloque visual.
+  stateIcon: {
+    fontSize: 30,
+  } as TextStyle,
+
+  // F2.3: glifo +/- del Stepper compartido.
+  stepperGlyph: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  } as TextStyle,
 } as const;

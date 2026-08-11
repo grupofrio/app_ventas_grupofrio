@@ -5,8 +5,8 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, TextInput, StyleSheet, KeyboardAvoidingView,
-  Platform, ScrollView, Alert,
+  View, Text, StyleSheet, KeyboardAvoidingView,
+  Platform, ScrollView,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { DEFAULT_BASE_URL } from '../../src/services/api';
 import { describeLoginOfflineNotice } from '../../src/services/authOffline';
 import { Button } from '../../src/components/ui/Button';
+import { Input } from '../../src/components/ui/Input';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 
@@ -21,6 +22,7 @@ export default function LoginScreen() {
   const [barcode, setBarcode] = useState('');
   const [pin, setPin] = useState('');
   const [isOnline, setIsOnline] = useState(true);
+  const [validationError, setValidationError] = useState('');
   const { login, isLoading, error } = useAuthStore();
 
   // Conectividad para el aviso offline (login nuevo requiere internet; una
@@ -36,9 +38,10 @@ export default function LoginScreen() {
 
   async function handleLogin() {
     if (!barcode.trim() || !pin.trim()) {
-      Alert.alert('Error', 'Ingresa codigo y PIN');
+      setValidationError('Ingresa código y PIN');
       return;
     }
+    setValidationError('');
     await login(DEFAULT_BASE_URL, barcode.trim(), pin.trim());
   }
 
@@ -52,50 +55,43 @@ export default function LoginScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Logo area */}
+          {/* Logo area — texto provisional; F2.5 lo reemplaza por el logo real */}
           <View style={styles.logoArea}>
-            <Text style={styles.logoText}>KOLD</Text>
-            <Text style={styles.logoSub}>Field</Text>
+            <Text style={typography.brandTitle}>KOLD</Text>
+            <Text style={typography.brandSubtitle}>Field</Text>
           </View>
 
           {/* Form */}
           <View style={styles.form}>
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>CODIGO DE EMPLEADO</Text>
-              <TextInput
-                style={styles.input}
-                value={barcode}
-                onChangeText={setBarcode}
-                placeholder="Ej: 1234"
-                placeholderTextColor={colors.textDim}
-                keyboardType="number-pad"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
+            <Input
+              label="CÓDIGO DE EMPLEADO"
+              value={barcode}
+              onChangeText={setBarcode}
+              placeholder="Ej: 1234"
+              keyboardType="number-pad"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>PIN</Text>
-              <TextInput
-                style={styles.input}
-                value={pin}
-                onChangeText={setPin}
-                placeholder="****"
-                placeholderTextColor={colors.textDim}
-                secureTextEntry
-                keyboardType="number-pad"
-              />
-            </View>
+            <Input
+              label="PIN"
+              value={pin}
+              onChangeText={setPin}
+              placeholder="****"
+              secureTextEntry
+              keyboardType="number-pad"
+              error={validationError || undefined}
+            />
 
             {offlineNotice ? (
               <View style={styles.offlineBox}>
-                <Text style={styles.offlineText}>📴 {offlineNotice}</Text>
+                <Text style={[typography.dim, styles.offlineText]}>📴 {offlineNotice}</Text>
               </View>
             ) : null}
 
             {error ? (
               <View style={styles.errorBox}>
-                <Text style={styles.errorText}>{error}</Text>
+                <Text style={[typography.dim, styles.errorText]}>{error}</Text>
               </View>
             ) : null}
 
@@ -107,7 +103,7 @@ export default function LoginScreen() {
             />
           </View>
 
-          <Text style={styles.version}>KOLD Field v1.0 · Grupo Frio</Text>
+          <Text style={[typography.dimSmall, styles.version]}>KOLD Field v1.0 · Grupo Frio</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -126,37 +122,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 40,
   },
-  logoText: {
-    fontSize: 48,
-    fontWeight: '700',
-    color: colors.primary,
-    letterSpacing: 4,
-  },
-  logoSub: {
-    fontSize: 18,
-    fontWeight: '300',
-    color: colors.textDim,
-    letterSpacing: 8,
-    marginTop: -4,
-  },
   form: {
     gap: 16,
-  },
-  inputGroup: {
-    gap: 5,
-  },
-  label: {
-    ...typography.inputLabel,
-  },
-  input: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.button,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: colors.text,
-    fontSize: 15,
   },
   offlineBox: {
     backgroundColor: colors.warningAlpha08,
@@ -167,7 +134,6 @@ const styles = StyleSheet.create({
   },
   offlineText: {
     color: colors.warning,
-    fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
   },
@@ -180,13 +146,10 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: colors.error,
-    fontSize: 12,
     textAlign: 'center',
   },
   version: {
     textAlign: 'center',
-    color: colors.textDim,
-    fontSize: 11,
     marginTop: 40,
   },
 });

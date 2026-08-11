@@ -154,4 +154,22 @@ export const typography = {
     fontWeight: '700',
     color: colors.text,
   } as TextStyle,
+
+  // F2.4: wordmark "KOLD Field" del login — provisional hasta que F2.5
+  // reemplace este bloque de texto por el logo real de Grupo Frío.
+  brandTitle: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 48,
+    fontWeight: '700',
+    color: colors.primary,
+    letterSpacing: 4,
+  } as TextStyle,
+
+  brandSubtitle: {
+    fontFamily: fonts.body,
+    fontSize: 18,
+    fontWeight: '300',
+    color: colors.textDim,
+    letterSpacing: 8,
+  } as TextStyle,
 } as const;

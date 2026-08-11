@@ -24,7 +24,6 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 
 const BASELINE = new Set([
-  'app/(auth)/login.tsx',
   'app/(tabs)/_layout.tsx',
   'app/(tabs)/alerts.tsx',
   'app/(tabs)/index.tsx',

@@ -25,7 +25,7 @@ import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
 import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { fonts } from '../src/theme/typography';
+import { typography } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
@@ -437,45 +437,46 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 14 },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100, gap: 12 },
-  emptyIcon: { fontSize: 52, marginBottom: 4 },
-  okIcon: { fontSize: 56, marginBottom: 4 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, textAlign: 'center' },
-  emptyBody: { fontSize: 13, color: colors.textDim, textAlign: 'center' },
+  emptyIcon: { ...typography.stateIcon, marginBottom: 4 },
+  okIcon: { ...typography.stateIcon, marginBottom: 4 },
+  emptyTitle: { ...typography.screenTitle, textAlign: 'center' },
+  emptyBody: { ...typography.bodySmall, color: colors.textDim, textAlign: 'center' },
   offlineBanner: {
     padding: 12, borderRadius: radii.button,
-    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.4)',
+    backgroundColor: colors.warningAlpha08, borderWidth: 1, borderColor: 'rgba(180,83,9,0.4)',
   },
-  offlineText: { fontSize: 12, color: colors.text },
+  offlineText: { ...typography.dim, color: colors.text },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  stepTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
-  stepBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 10 },
+  stepTitle: { ...typography.cardHeading },
+  stepBody: { ...typography.dim, lineHeight: 17, marginBottom: 10 },
   kmRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   kmInput: {
+    ...typography.scoreValue,
     flex: 1, height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
-    paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16, backgroundColor: colors.card,
+    paddingHorizontal: 14, backgroundColor: colors.card,
   },
   kmSummary: { gap: 6, marginBottom: 2 },
   kmSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  kmSummaryLabel: { fontSize: 12, color: colors.textDim },
-  kmSummaryValue: { fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text },
+  kmSummaryLabel: { ...typography.dim },
+  kmSummaryValue: { ...typography.metricValue },
   kmDrivenRow: {
     marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border,
   },
-  kmDrivenLabel: { fontSize: 13, fontWeight: '700', color: colors.text },
-  kmDrivenValue: { fontFamily: fonts.monoBold, fontSize: 15, fontWeight: '700', color: colors.primary },
+  kmDrivenLabel: { ...typography.bodySmall, fontWeight: '700' },
+  kmDrivenValue: { ...typography.scoreValue, color: colors.primary },
   kmWarn: {
-    fontSize: 12, color: '#EAB308', marginTop: 6, lineHeight: 16,
+    ...typography.dim, color: colors.warning, marginTop: 6, lineHeight: 16,
   },
   closeCard: {
     padding: 16, borderRadius: radii.card, borderWidth: 1,
-    borderColor: 'rgba(34,197,94,0.3)', backgroundColor: 'rgba(34,197,94,0.05)', marginTop: 4,
+    borderColor: 'rgba(22,101,52,0.3)', backgroundColor: colors.successAlpha08, marginTop: 4,
   },
-  closeTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 6 },
-  closeBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 12 },
-  closeHint: { fontSize: 11, color: colors.textDim, marginTop: 8, textAlign: 'center' },
+  closeTitle: { ...typography.body, fontWeight: '700', marginBottom: 6 },
+  closeBody: { ...typography.dim, lineHeight: 17, marginBottom: 12 },
+  closeHint: { ...typography.dimSmall, marginTop: 8, textAlign: 'center' },
   syncBlock: {
     padding: 12, borderRadius: radii.button, marginBottom: 12,
-    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+    backgroundColor: colors.warningAlpha08, borderWidth: 1, borderColor: 'rgba(180,83,9,0.45)',
   },
-  syncBlockText: { fontSize: 12, lineHeight: 17, color: colors.text },
+  syncBlockText: { ...typography.dim, color: colors.text, lineHeight: 17 },
 });

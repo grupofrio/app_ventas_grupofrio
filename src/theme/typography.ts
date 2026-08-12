@@ -172,4 +172,23 @@ export const typography = {
     color: colors.textDim,
     letterSpacing: 8,
   } as TextStyle,
+
+  // F2.4: encabezado de sección dentro de una Card (p.ej. "2 · Checklist de
+  // unidad") — distinto de sectionTitle (que es uppercase/tracking ancho
+  // para separadores de página).
+  cardHeading: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  } as TextStyle,
+
+  // F2.4: valor destacado dentro de una Card, texto (no numérico → no
+  // monoespaciado). Distinto de kpiValue/scoreValue, que son Space Mono.
+  cardValue: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  } as TextStyle,
 } as const;

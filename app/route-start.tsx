@@ -382,16 +382,16 @@ export default function RouteStartScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Iniciar operación" showBack />
         <View style={styles.center}>
-          <Text style={styles.emptyIcon}>{isError ? '⚠️' : '📭'}</Text>
-          <Text style={styles.emptyTitle}>{copy.title}</Text>
-          <Text style={styles.emptyBody}>{copy.body}</Text>
+          <Text style={typography.stateIcon}>{isError ? '⚠️' : '📭'}</Text>
+          <Text style={[typography.screenTitle, styles.emptyTitle]}>{copy.title}</Text>
+          <Text style={[typography.bodySmall, styles.emptyBody]}>{copy.body}</Text>
           {copy.showRetry && (
             <TouchableOpacity
               onPress={() => { void loadPlan({ force: true }); }}
               style={styles.retryBtn}
               disabled={!isOnline}
             >
-              <Text style={styles.retryBtnText}>
+              <Text style={typography.buttonSmall}>
                 {isOnline ? 'Reintentar' : 'Sin conexión'}
               </Text>
             </TouchableOpacity>
@@ -408,7 +408,7 @@ export default function RouteStartScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {!isOnline && (
           <View style={styles.offlineBanner}>
-            <Text style={styles.offlineText}>
+            <Text style={[typography.dim, styles.offlineText]}>
               📶 Sin conexión. El inicio de operación requiere WiFi del CEDIS.
             </Text>
           </View>
@@ -416,9 +416,9 @@ export default function RouteStartScreen() {
 
         {error && (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{error}</Text>
+            <Text style={[typography.dim, styles.errorText]}>{error}</Text>
             <TouchableOpacity onPress={() => void refresh()} style={styles.retryBtn}>
-              <Text style={styles.retryBtnText}>Reintentar</Text>
+              <Text style={typography.buttonSmall}>Reintentar</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -427,14 +427,14 @@ export default function RouteStartScreen() {
             surface el motivo real con retry, en vez de una ruta vacía silenciosa. */}
         {loadOutcome && isErrorStatus(loadOutcome.status) && (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{describeRouteLoad(loadOutcome).title}</Text>
-            <Text style={styles.errorBody}>{describeRouteLoad(loadOutcome).body}</Text>
+            <Text style={[typography.dim, styles.errorText]}>{describeRouteLoad(loadOutcome).title}</Text>
+            <Text style={[typography.dim, styles.errorBody]}>{describeRouteLoad(loadOutcome).body}</Text>
             <TouchableOpacity
               onPress={() => { void loadPlan({ force: true }); }}
               style={styles.retryBtn}
               disabled={!isOnline}
             >
-              <Text style={styles.retryBtnText}>{isOnline ? 'Reintentar' : 'Sin conexión'}</Text>
+              <Text style={typography.buttonSmall}>{isOnline ? 'Reintentar' : 'Sin conexión'}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -442,10 +442,10 @@ export default function RouteStartScreen() {
         {/* Step 1: unidad / ruta */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={styles.stepTitle}>1 · Unidad y ruta</Text>
+            <Text style={typography.cardHeading}>1 · Unidad y ruta</Text>
           </View>
-          <Text style={styles.unitName}>{plan?.route || plan?.name || 'Ruta del día'}</Text>
-          <Text style={styles.unitSub}>
+          <Text style={[typography.cardValue, styles.unitName]}>{plan?.route || plan?.name || 'Ruta del día'}</Text>
+          <Text style={[typography.dim, styles.unitSub]}>
             {plan?.driver_employee_name ? `Chofer: ${plan.driver_employee_name}` : 'Chofer asignado'}
           </Text>
         </Card>
@@ -453,10 +453,10 @@ export default function RouteStartScreen() {
         {/* Step 2: checklist */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={styles.stepTitle}>2 · Checklist de unidad</Text>
+            <Text style={typography.cardHeading}>2 · Checklist de unidad</Text>
             {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <StatusBadge status={checklistDisplayStatus} />}
           </View>
-          <Text style={styles.stepBody}>
+          <Text style={[typography.dim, styles.stepBody]}>
             Revisa el estado de la unidad antes de salir (llantas, gas, kit, etc.).
           </Text>
           <Button
@@ -474,23 +474,23 @@ export default function RouteStartScreen() {
             fallback para no depender del template del checklist. */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={styles.stepTitle}>3 · KM inicial</Text>
+            <Text style={typography.cardHeading}>3 · KM inicial</Text>
             <StatusBadge status={kmStatus} />
           </View>
           {kmInitial != null ? (
-            <Text style={styles.stepBody}>
+            <Text style={[typography.dim, styles.stepBody]}>
               Registrado en Odoo: <Text style={styles.kmValue}>{kmInitial} km</Text>
             </Text>
           ) : (
             <>
-              <Text style={styles.stepBody}>
+              <Text style={[typography.dim, styles.stepBody]}>
                 {checklistDisplayStatus === 'done'
                   ? 'El checklist no registró el KM. Captúralo manualmente para continuar.'
                   : 'Puede registrarse automáticamente al completar el checklist; si vas a operar ahora, captura el KM inicial aquí.'}
               </Text>
               <View style={styles.kmRow}>
                 <TextInput
-                  style={styles.kmInput}
+                  style={[typography.scoreValue, styles.kmInput]}
                   value={kmInput}
                   onChangeText={setKmInput}
                   placeholder="Ej. 123456"
@@ -513,16 +513,16 @@ export default function RouteStartScreen() {
         {/* Step 4: carga (reuse Sebas's acceptRouteLoad + plan-embedded load) */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={styles.stepTitle}>4 · Carga asignada</Text>
+            <Text style={typography.cardHeading}>4 · Carga asignada</Text>
             <StatusBadge status={loadStatus} />
           </View>
           {loadStatus === 'skip' ? (
-            <Text style={styles.stepBody}>No tienes carga pendiente de aceptar.</Text>
+            <Text style={[typography.dim, styles.stepBody]}>No tienes carga pendiente de aceptar.</Text>
           ) : loadStatus === 'done' ? (
-            <Text style={styles.stepBody}>✓ Tu carga ya fue aceptada.</Text>
+            <Text style={[typography.dim, styles.stepBody]}>✓ Tu carga ya fue aceptada.</Text>
           ) : (
             <>
-              <Text style={styles.stepBody}>
+              <Text style={[typography.dim, styles.stepBody]}>
                 Pendiente: {initialLoadState.nextPendingInitialLoad?.name || 'carga asignada'}
                 {initialLoadState.nextPendingInitialLoad?.lines?.length
                   ? `  ·  ${initialLoadState.nextPendingInitialLoad.lines.length} producto(s)`
@@ -545,10 +545,10 @@ export default function RouteStartScreen() {
             faltantes, errores por-cliente y reintentar. */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={styles.stepTitle}>5 · Preparar datos de ruta</Text>
+            <Text style={typography.cardHeading}>5 · Preparar datos de ruta</Text>
             <StatusBadge status={dataMinReady ? 'done' : 'pending'} />
           </View>
-          <Text style={styles.stepBody}>
+          <Text style={[typography.dim, styles.stepBody]}>
             Descarga clientes, productos y precios con WiFi para operar offline en ruta.
           </Text>
           <RoutePreparationCard />
@@ -556,19 +556,19 @@ export default function RouteStartScreen() {
 
         {/* Readiness summary (live-derived — see BLD-SPRINT-A-FIX) */}
         <View style={[styles.readyCard, canContinue ? styles.readyOk : styles.readyPending]}>
-          <Text style={styles.readyTitle}>
+          <Text style={[typography.screenTitle, styles.readyTitle]}>
             {serverStarted
               ? '✅ Ruta iniciada'
               : (canRequestStart ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar')}
           </Text>
-          <Text style={styles.readyChecklist}>
+          <Text style={[typography.scoreValueSmall, styles.readyChecklist]}>
             {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
           </Text>
           {!checklistDoneLive && (
-            <Text style={styles.readyWarn}>⚠️ Checklist de unidad pendiente. Responde todos los puntos para actualizar el estado del vehículo.</Text>
+            <Text style={[typography.dimSmall, styles.readyWarn]}>⚠️ Checklist de unidad pendiente. Responde todos los puntos para actualizar el estado del vehículo.</Text>
           )}
           {dataMinReady && dataReady.warnings.length > 0 && (
-            <Text style={styles.readyWarn}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
+            <Text style={[typography.dimSmall, styles.readyWarn]}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
           )}
           <Button
             label={serverStarted ? 'Continuar ruta' : 'Iniciar ruta'}
@@ -579,7 +579,7 @@ export default function RouteStartScreen() {
             loading={startingRoute}
           />
           {!canContinue && (
-            <Text style={styles.readyHint}>
+            <Text style={[typography.dimSmall, styles.readyHint]}>
               {!dataMinReady && dataReady.blockReason
                 ? dataReady.blockReason
                 : 'El botón se habilita cuando termines checklist, KM, carga y preparación de datos.'}
@@ -596,39 +596,35 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100, gap: 12 },
-  emptyIcon: { fontSize: 56, marginBottom: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, textAlign: 'center', marginBottom: 8 },
-  emptyBody: { fontSize: 13, lineHeight: 19, color: colors.textDim, textAlign: 'center' },
+  emptyTitle: { textAlign: 'center', marginBottom: 8 },
+  emptyBody: { color: colors.textDim, lineHeight: 19, textAlign: 'center' },
   offlineBanner: {
     padding: 12, borderRadius: radii.button,
-    backgroundColor: 'rgba(234,179,8,0.08)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.4)',
+    backgroundColor: colors.warningAlpha08, borderWidth: 1, borderColor: 'rgba(180,83,9,0.4)',
   },
-  offlineText: { fontSize: 12, color: colors.text },
+  offlineText: { color: colors.text },
   errorBanner: {
     padding: 12, borderRadius: radii.button,
-    backgroundColor: 'rgba(239,68,68,0.07)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)',
+    backgroundColor: colors.errorAlpha08, borderWidth: 1, borderColor: 'rgba(185,28,28,0.4)',
   },
-  errorText: { fontSize: 12, color: '#EF4444', marginBottom: 8 },
-  errorBody: { fontSize: 12, color: colors.textDim, marginBottom: 8 },
+  errorText: { color: colors.error, marginBottom: 8 },
+  errorBody: { color: colors.textDim, marginBottom: 8 },
   retryBtn: { alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 14, borderRadius: radii.button, backgroundColor: colors.primary },
-  retryBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  stepTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
-  stepBody: { fontSize: 12, lineHeight: 17, color: colors.textDim, marginBottom: 10 },
-  unitName: { fontSize: 16, fontWeight: '700', color: colors.primary, marginTop: 2 },
-  unitSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+  stepBody: { color: colors.textDim, lineHeight: 17, marginBottom: 10 },
+  unitName: { color: colors.primary, marginTop: 2 },
+  unitSub: { marginTop: 2 },
   kmRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   kmInput: {
     flex: 1, height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radii.button,
-    paddingHorizontal: 14, color: colors.text, fontFamily: fonts.monoBold, fontSize: 16,
-    backgroundColor: colors.card,
+    paddingHorizontal: 14, backgroundColor: colors.card,
   },
   kmValue: { fontFamily: fonts.monoBold, fontWeight: '700', color: colors.text },
   readyCard: { padding: 16, borderRadius: radii.card, borderWidth: 1, marginTop: 4 },
-  readyOk: { backgroundColor: 'rgba(34,197,94,0.06)', borderColor: 'rgba(34,197,94,0.35)' },
+  readyOk: { backgroundColor: colors.successAlpha08, borderColor: 'rgba(22,101,52,0.35)' },
   readyPending: { backgroundColor: colors.card, borderColor: colors.border },
-  readyTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 8 },
-  readyChecklist: { fontSize: 13, color: colors.textDim, marginBottom: 12, fontFamily: fonts.monoBold },
-  readyWarn: { fontSize: 11, color: '#B45309', marginBottom: 10, lineHeight: 16 },
-  readyHint: { fontSize: 11, color: colors.textDim, marginTop: 8, textAlign: 'center' },
+  readyTitle: { marginBottom: 8 },
+  readyChecklist: { color: colors.textDim, marginBottom: 12 },
+  readyWarn: { color: colors.warning, marginBottom: 10, lineHeight: 16 },
+  readyHint: { color: colors.textDim, marginTop: 8, textAlign: 'center' },
 });

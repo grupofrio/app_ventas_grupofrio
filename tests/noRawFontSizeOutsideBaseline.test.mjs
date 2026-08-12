@@ -27,7 +27,6 @@ const BASELINE = new Set([
   'app/(tabs)/_layout.tsx',
   'app/(tabs)/alerts.tsx',
   'app/(tabs)/inventory.tsx',
-  'app/(tabs)/sales.tsx',
   'app/(tabs)/tasks.tsx',
   'app/analytics.tsx',
   'app/checklist/[planId].tsx',

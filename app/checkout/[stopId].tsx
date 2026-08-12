@@ -12,7 +12,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { Badge } from '../../src/components/ui/Badge';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography, fonts } from '../../src/theme/typography';
+import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -333,9 +333,9 @@ function CheckoutScreenInner() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Success header */}
         <View style={styles.successHeader}>
-          <Text style={{ fontSize: 44 }}>✅</Text>
-          <Text style={styles.successTitle}>Visita completada</Text>
-          <Text style={styles.successSub}>
+          <Text style={typography.stateIcon}>✅</Text>
+          <Text style={typography.screenTitle}>Visita completada</Text>
+          <Text style={typography.dim}>
             {stop.customer_name} · {formatElapsed(elapsedSeconds)}
           </Text>
         </View>
@@ -343,19 +343,19 @@ function CheckoutScreenInner() {
         {/* Visit summary card */}
         <Card>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Venta realizada</Text>
-            <Text style={[styles.metricValue, { color: total > 0 ? colors.success : colors.textDim }]}>
+            <Text style={typography.dim}>Venta realizada</Text>
+            <Text style={[typography.metricValue, { color: total > 0 ? colors.success : colors.textDim }]}>
               {total > 0 ? formatCurrency(total) : 'Sin venta'}
             </Text>
           </View>
           {totalKg > 0 && (
             <View style={styles.metricRow}>
-              <Text style={styles.metricLabel}>kg entregados</Text>
-              <Text style={styles.metricValue}>{totalKg.toFixed(1)} kg</Text>
+              <Text style={typography.dim}>kg entregados</Text>
+              <Text style={typography.metricValue}>{totalKg.toFixed(1)} kg</Text>
             </View>
           )}
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Fotos de entrega</Text>
+            <Text style={typography.dim}>Fotos de entrega</Text>
             {salePhotoTaken ? (
               <Badge label={`${salePhotoUris.length} capturada${salePhotoUris.length === 1 ? '' : 's'}`} variant="green" />
             ) : (
@@ -363,7 +363,7 @@ function CheckoutScreenInner() {
             )}
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>GPS check-out</Text>
+            <Text style={typography.dim}>GPS check-out</Text>
             <Badge
               label={latitude ? `✓ ${latitude.toFixed(4)}` : 'Sin GPS'}
               variant={latitude ? 'green' : 'dim'}
@@ -374,17 +374,17 @@ function CheckoutScreenInner() {
         {/* Next stop */}
         {nextStop && (
           <>
-            <Text style={styles.sectionTitle}>📍 Siguiente parada</Text>
+            <Text style={typography.sectionTitle}>📍 Siguiente parada</Text>
             <Card style={styles.nextStopCard}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 }}>
                 <View style={styles.nextStopIcon}>
-                  <Text style={{ fontSize: 20 }}>📍</Text>
+                  <Text style={typography.stepperGlyph}>📍</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>
+                  <Text style={[typography.body, { fontWeight: '700' }]}>
                     {nextStop.customer_name}
                   </Text>
-                  <Text style={{ fontSize: 11, color: colors.textDim }}>
+                  <Text style={typography.dimSmall}>
                     Siguiente en ruta
                   </Text>
                 </View>
@@ -395,7 +395,7 @@ function CheckoutScreenInner() {
                   onValueChange={setSendEnCamino}
                   trackColor={{ true: colors.primary }}
                 />
-                <Text style={styles.toggleLabel}>
+                <Text style={typography.dim}>
                   Enviar "voy en camino" a {nextStop.customer_name.split(' ')[0]}
                 </Text>
               </View>
@@ -410,11 +410,11 @@ function CheckoutScreenInner() {
             reintento sin perder la venta local ni el operation_id. */}
         {liveSaleSyncState.status === 'failed' && (
           <View style={styles.saleErrorBanner}>
-            <Text style={styles.saleErrorTitle}>⚠️ Venta no sincronizada</Text>
-            <Text style={styles.saleErrorBody}>
+            <Text style={[typography.body, styles.saleErrorTitle]}>⚠️ Venta no sincronizada</Text>
+            <Text style={[typography.dim, styles.saleErrorBody]}>
               {liveSaleSyncState.message || 'La venta no se pudo enviar a Odoo.'}
             </Text>
-            <Text style={styles.saleErrorHint}>
+            <Text style={[typography.dimSmall, styles.saleErrorHint]}>
               {liveSaleSyncState.isDefinitive
                 ? 'Los reintentos automáticos se agotaron. Márcala para revisión del supervisor y continúa tu ruta, o inténtalo una vez más aquí.'
                 : 'No puedes cerrar la visita hasta que la venta llegue al servidor. Reintenta cuando tengas mejor señal.'}
@@ -444,7 +444,7 @@ function CheckoutScreenInner() {
 
         {liveSaleSyncState.status === 'pending' && (
           <View style={styles.salePendingBanner}>
-            <Text style={styles.salePendingText}>
+            <Text style={[typography.dim, styles.salePendingText]}>
               📦 Pedido pendiente de envío. Se enviará a Odoo al reconectar; puedes
               cerrar la visita y continuar.
             </Text>
@@ -494,31 +494,19 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   // Success header
   successHeader: { alignItems: 'center', paddingVertical: 16 },
-  successTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 10 },
-  successSub: { fontSize: 12, color: colors.textDim, marginTop: 3 },
   // Metric rows
   metricRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 7,
   },
-  metricLabel: { fontSize: 12, color: colors.textDim, flex: 1 },
-  metricValue: {
-    fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text,
-  },
-  // Section title
-  sectionTitle: {
-    fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
-    letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
-  },
   // Toggle
   toggleRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6,
   },
-  toggleLabel: { fontSize: 12, color: colors.textDim },
   // Next stop
   nextStopCard: {
-    borderWidth: 1, borderColor: 'rgba(37,99,235,0.2)',
-    backgroundColor: 'rgba(37,99,235,0.04)',
+    borderWidth: 1, borderColor: 'rgba(0,119,187,0.2)',
+    backgroundColor: colors.primaryAlpha04,
   },
   nextStopIcon: {
     width: 40, height: 40, borderRadius: 20,
@@ -531,24 +519,20 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: radii.button,
     borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.45)',
-    backgroundColor: 'rgba(239,68,68,0.07)',
+    borderColor: 'rgba(185,28,28,0.45)',
+    backgroundColor: colors.errorAlpha08,
   },
   saleErrorTitle: {
-    fontSize: 14,
     fontWeight: '700',
-    color: '#EF4444',
+    color: colors.error,
     marginBottom: 6,
   },
   saleErrorBody: {
-    fontSize: 12,
     color: colors.text,
     marginBottom: 6,
     lineHeight: 17,
   },
   saleErrorHint: {
-    fontSize: 11,
-    color: colors.textDim,
     lineHeight: 15,
   },
   salePendingBanner: {
@@ -556,14 +540,13 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: radii.button,
     borderWidth: 1,
-    borderColor: 'rgba(37,99,235,0.3)',
-    backgroundColor: 'rgba(37,99,235,0.05)',
+    borderColor: 'rgba(0,119,187,0.3)',
+    backgroundColor: colors.primaryAlpha04,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
   salePendingText: {
-    fontSize: 12,
     color: colors.text,
   },
 });

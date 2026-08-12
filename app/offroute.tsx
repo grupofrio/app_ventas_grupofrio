@@ -354,11 +354,11 @@ export default function OffRouteScreen() {
             ListEmptyComponent={
               hasSearched ? (
                 <View style={styles.emptyCard}>
-                  <Text style={{ fontSize: 32, marginBottom: 8 }}>🔍</Text>
+                  <Text style={[typography.stateIcon, { marginBottom: 8 }]}>🔍</Text>
                   <Text style={typography.dim}>
                     Sin resultados para "{search}"
                   </Text>
-                  <Text style={[typography.dim, { fontSize: 11, marginTop: 4 }]}>
+                  <Text style={[typography.dimSmall, { marginTop: 4 }]}>
                     Verifica el nombre o prueba con telefono, RFC o correo
                   </Text>
                 </View>
@@ -379,22 +379,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 4,
   },
   searchInput: {
+    ...typography.body,
     flex: 1,
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
     borderRadius: radii.button, paddingHorizontal: 14, paddingVertical: 12,
-    color: colors.text, fontSize: 14,
   },
   searchBtn: {
     backgroundColor: colors.primary, borderRadius: radii.button,
     paddingHorizontal: 18, justifyContent: 'center',
   },
-  searchBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
+  searchBtnText: { ...typography.button },
   infoText: {
-    fontSize: 11, color: colors.textDim, marginBottom: 12,
+    ...typography.dimSmall, marginBottom: 12,
     lineHeight: 16,
   },
   scopeText: {
-    fontSize: 11,
+    ...typography.dimSmall,
     color: colors.primary,
     marginBottom: 10,
     fontWeight: '600',
@@ -409,16 +409,15 @@ const styles = StyleSheet.create({
   customerCardDisabled: {
     opacity: 0.65,
   },
-  customerName: { fontSize: 14, fontWeight: '700', color: colors.text },
-  customerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-  customerContact: { fontSize: 11, color: colors.primary, marginTop: 2 },
+  customerName: { ...typography.body, fontWeight: '700' },
+  customerSubtitle: { ...typography.dim, marginTop: 2 },
+  customerContact: { ...typography.dimSmall, color: colors.primary, marginTop: 2 },
   resultMeta: { alignItems: 'flex-end', gap: 8, marginLeft: 8 },
   typeBadge: {
+    ...typography.badge,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
-    fontSize: 10,
-    fontWeight: '700',
     overflow: 'hidden',
   },
   typeBadgeCustomer: {
@@ -426,10 +425,10 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   typeBadgeLead: {
-    backgroundColor: 'rgba(245, 158, 11, 0.16)',
-    color: '#B45309',
+    backgroundColor: colors.warningAlpha12,
+    color: colors.warning,
   },
-  selectArrow: { fontSize: 18, color: colors.textDim, marginLeft: 8 },
+  selectArrow: { ...typography.stepperGlyph, fontWeight: '400', color: colors.textDim, marginLeft: 8 },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 30, alignItems: 'center', marginTop: 20,

@@ -380,10 +380,22 @@ export default function RouteScreen() {
             navigationRouteCoords={navigationRouteCoords}
           />
           <View style={styles.mapFabs} pointerEvents="box-none">
-            <TouchableOpacity style={styles.fab} onPress={() => setActionsMenuOpen(true)} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.fab}
+              onPress={() => setActionsMenuOpen(true)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Más acciones"
+            >
               <Text style={typography.stepperGlyph}>⋯</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.fab} onPress={() => mapRef.current?.fitAll()} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.fab}
+              onPress={() => mapRef.current?.fitAll()}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Ver toda la ruta en el mapa"
+            >
               <Text style={typography.stepperGlyph}>⤢</Text>
             </TouchableOpacity>
             {userLat != null && userLon != null && (
@@ -391,6 +403,8 @@ export default function RouteScreen() {
                 style={styles.fab}
                 onPress={() => mapRef.current?.centerOn(userLat, userLon)}
                 activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Centrar en mi ubicación"
               >
                 <Text style={typography.stepperGlyph}>◎</Text>
               </TouchableOpacity>

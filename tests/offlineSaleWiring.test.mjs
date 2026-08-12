@@ -22,9 +22,11 @@ function extractBracedBlockAfter(source, marker) {
 }
 
 /**
- * Wiring de venta offline (modelo "pedido pendiente de envío", S1):
+ * Wiring de venta offline (modelo "pedido pendiente de envío", S2 desde F3.2):
  *  #1 ProductPicker no cuelga sin red; #2 online sigue siendo createSale directo;
- *  #3 offline ENCOLA sale_order (+ foto) sin marcar confirmada; #5 insufficient_stock.
+ *  #3 offline ENCOLA sale_order (+ foto) sin marcar confirmada; #5 insufficient_stock;
+ *  #6 la venta descuenta inventario local optimistamente (S2), con rollback
+ *  automático vía `_localStockDelta` si el pedido muere en la cola.
  */
 const root = process.cwd();
 const picker = fs.readFileSync(path.join(root, 'src/components/domain/ProductPicker.tsx'), 'utf8');
@@ -68,7 +70,7 @@ assert(/if \(!isOnline\)/.test(picker), 'price effect debe cortar el fetch si !i
 // #2 ONLINE: venta sigue siendo online-first (createSale directo).
 assert(sale.includes('await createSale('), 'venta online usa createSale directo');
 
-// #3 OFFLINE (S1): el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
+// #3 OFFLINE: el pedido se ENCOLA como sale_order (+ foto) y NO se confirma
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
 assert.match(
   sale,
@@ -145,15 +147,20 @@ assert(/const saleResult = await createSale\(buildSalesCreatePayload\(payload\)\
 // No se confirma offline como venta: el rótulo se deriva del estado de sync.
 assert(sale.includes('saleConfirmButtonLabel') && sale.includes('getSaleSyncState'),
   'la etiqueta del botón refleja pendiente/enviado/error, no "confirmado" offline');
-// Pedido muerto NO restaura stock local (S1: no se descontó al encolar).
+// Fallback legacy: ítems pre-F3.2 sin `_localStockDelta` no restauran stock
+// (nunca se descontó al encolar bajo la política S1 anterior).
 const sync = fs.readFileSync(path.join(root, 'src/stores/useSyncStore.ts'), 'utf8');
 assert(sync.includes('sale_order_dead_no_stock_rollback'),
-  'rollback de sale_order debe ser no-op en S1 (no inflar stock)');
+  'rollback de sale_order sin delta debe seguir siendo no-op (legacy S1)');
 
-// S1: la venta NUNCA reserva/descuenta inventario localmente (ni online ni
-// offline) — el backend valida/descuenta al confirmar en Odoo.
-assert(!/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
-  'la venta no debe descontar inventario local (S1)');
+// #6 S2 (F3.2): la venta SÍ descuenta inventario local optimistamente, con
+// el delta viajando en el payload encolado para rollback automático.
+assert(sale.includes("from '../../src/services/stockRollback'") && sale.includes('buildLocalStockDelta'),
+  'venta debe construir el delta de stock local para el rollback genérico');
+assert(/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
+  'la venta debe descontar inventario local al confirmarse (S2)');
+assert(/_localStockDelta:\s*localStockDelta/.test(sale),
+  'el payload encolado debe llevar el delta de stock local para el rollback');
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
 assert.match(
   sale,

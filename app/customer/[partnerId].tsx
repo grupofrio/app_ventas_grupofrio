@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TextInput, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
-import { colors, spacing, radii } from '../../src/theme/tokens';
+import { Input } from '../../src/components/ui/Input';
+import { colors, spacing } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -129,60 +130,60 @@ export default function CustomerEditScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Card>
-          <Text style={styles.headerTitle}>{currentStop.customer_name}</Text>
+          <Text style={[typography.screenTitle, styles.headerTitle]}>{currentStop.customer_name}</Text>
           {currentStop.customer_ref ? (
-            <Text style={styles.headerSubtitle}>Ref: {currentStop.customer_ref}</Text>
+            <Text style={[typography.dim, styles.headerSubtitle]}>Ref: {currentStop.customer_ref}</Text>
           ) : null}
         </Card>
 
-        <Text style={styles.inputLabel}>NOMBRE DEL CLIENTE *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Nombre comercial"
-          placeholderTextColor={colors.textDim}
-          value={form.name}
-          onChangeText={(value) => updateField('name', value)}
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="NOMBRE DEL CLIENTE *"
+            placeholder="Nombre comercial"
+            value={form.name}
+            onChangeText={(value) => updateField('name', value)}
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>CONTACTO</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Nombre del contacto"
-          placeholderTextColor={colors.textDim}
-          value={form.contactName}
-          onChangeText={(value) => updateField('contactName', value)}
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="CONTACTO"
+            placeholder="Nombre del contacto"
+            value={form.contactName}
+            onChangeText={(value) => updateField('contactName', value)}
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>TELEFONO</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Telefono fijo"
-          placeholderTextColor={colors.textDim}
-          value={form.phone}
-          onChangeText={(value) => updateField('phone', value)}
-          keyboardType="phone-pad"
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="TELEFONO"
+            placeholder="Telefono fijo"
+            value={form.phone}
+            onChangeText={(value) => updateField('phone', value)}
+            keyboardType="phone-pad"
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>MOVIL</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Telefono movil"
-          placeholderTextColor={colors.textDim}
-          value={form.mobile}
-          onChangeText={(value) => updateField('mobile', value)}
-          keyboardType="phone-pad"
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="MOVIL"
+            placeholder="Telefono movil"
+            value={form.mobile}
+            onChangeText={(value) => updateField('mobile', value)}
+            keyboardType="phone-pad"
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>EMAIL</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="correo@ejemplo.com"
-          placeholderTextColor={colors.textDim}
-          value={form.email}
-          onChangeText={(value) => updateField('email', value)}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="EMAIL"
+            placeholder="correo@ejemplo.com"
+            value={form.email}
+            onChangeText={(value) => updateField('email', value)}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+        </View>
 
         <Button
           label="Guardar cambios"
@@ -201,25 +202,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.screenPadding },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
-  headerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 6 },
-  inputLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    color: colors.textDim,
-    marginTop: 16,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.button,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: colors.text,
-    fontSize: 14,
-  },
+  headerTitle: {},
+  headerSubtitle: { marginTop: 6 },
+  fieldGroup: { marginTop: 16 },
 });

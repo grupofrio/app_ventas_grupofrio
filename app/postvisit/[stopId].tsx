@@ -4,8 +4,6 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  TextInput,
-  TouchableOpacity,
   Alert,
   ActivityIndicator,
 } from 'react-native';
@@ -14,6 +12,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Card } from '../../src/components/ui/Card';
 import { Button } from '../../src/components/ui/Button';
+import { Input } from '../../src/components/ui/Input';
+import { Chip } from '../../src/components/ui/Chip';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
@@ -276,31 +276,31 @@ export default function ProspeccionScreen() {
       <TopBar title={title} showBack />
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Card>
-          <Text style={styles.headerTitle}>{currentStop.customer_name}</Text>
-          <Text style={styles.headerSubtitle}>
+          <Text style={[typography.screenTitle, styles.headerTitle]}>{currentStop.customer_name}</Text>
+          <Text style={[typography.dim, styles.headerSubtitle]}>
             {isLead ? 'Actualiza la información comercial del prospecto u oportunidad.' : 'Registra información comercial de la visita.'}
           </Text>
         </Card>
 
         {isLead && !alreadyCustomer && (
           <>
-            <Text style={styles.inputLabel}>PARA CONVERTIR A CLIENTE</Text>
+            <Text style={typography.inputLabel}>PARA CONVERTIR A CLIENTE</Text>
             <Card>
               <View style={styles.reqRow}>
-                <Text style={styles.reqLabel}>Teléfono</Text>
-                <Text style={[styles.reqStatus, hasPhoneReq ? styles.reqOk : styles.reqPending]}>
+                <Text style={typography.bodySmall}>Teléfono</Text>
+                <Text style={[typography.dim, styles.reqStatus, hasPhoneReq ? styles.reqOk : styles.reqPending]}>
                   {hasPhoneReq ? '✓ Completo' : '▢ Falta'}
                 </Text>
               </View>
               <View style={styles.reqRow}>
-                <Text style={styles.reqLabel}>Ubicación GPS</Text>
-                <Text style={[styles.reqStatus, hasLocationReq ? styles.reqOk : styles.reqPending]}>
+                <Text style={typography.bodySmall}>Ubicación GPS</Text>
+                <Text style={[typography.dim, styles.reqStatus, hasLocationReq ? styles.reqOk : styles.reqPending]}>
                   {hasLocationReq ? '✓ Completa' : '▢ Falta'}
                 </Text>
               </View>
               <View style={styles.reqRow}>
-                <Text style={styles.reqLabel}>Etapa seleccionada</Text>
-                <Text style={[styles.reqStatus, selectedStageId != null ? styles.reqOk : styles.reqPending]}>
+                <Text style={typography.bodySmall}>Etapa seleccionada</Text>
+                <Text style={[typography.dim, styles.reqStatus, selectedStageId != null ? styles.reqOk : styles.reqPending]}>
                   {selectedStageId != null ? '✓ Completa' : '▢ Falta'}
                 </Text>
               </View>
@@ -308,112 +308,104 @@ export default function ProspeccionScreen() {
           </>
         )}
 
-        <Text style={styles.inputLabel}>ETAPA</Text>
+        <Text style={typography.inputLabel}>ETAPA</Text>
         {loadingStages ? (
           <View style={styles.loadingStageCard}>
             <ActivityIndicator color={colors.primary} size="small" />
-            <Text style={styles.loadingStageText}>Cargando etapas...</Text>
+            <Text style={[typography.bodySmall, styles.loadingStageText]}>Cargando etapas...</Text>
           </View>
         ) : (
           <>
             <View style={styles.chipRow}>
               {stages.map((stage) => (
-                <TouchableOpacity
+                <Chip
                   key={stage.id}
-                  style={[styles.chip, selectedStageId === stage.id && styles.chipSelected]}
+                  label={stage.name}
+                  selected={selectedStageId === stage.id}
                   onPress={() => setSelectedStageId(stage.id)}
-                >
-                  <Text style={[styles.chipText, selectedStageId === stage.id && styles.chipTextSelected]}>
-                    {stage.name}
-                  </Text>
-                </TouchableOpacity>
+                />
               ))}
             </View>
             {stageError ? (
-              <Text style={styles.errorText}>{stageError}</Text>
+              <Text style={[typography.dim, styles.errorText]}>{stageError}</Text>
             ) : null}
           </>
         )}
 
-        <Text style={styles.inputLabel}>CONTACTO</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Nombre del contacto"
-          placeholderTextColor={colors.textDim}
-          value={contactName}
-          onChangeText={setContactName}
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="CONTACTO"
+            placeholder="Nombre del contacto"
+            value={contactName}
+            onChangeText={setContactName}
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>TELÉFONO</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Teléfono"
-          placeholderTextColor={colors.textDim}
-          value={phone}
-          onChangeText={setPhone}
-          keyboardType="phone-pad"
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="TELÉFONO"
+            placeholder="Teléfono"
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>EMAIL</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="correo@ejemplo.com"
-          placeholderTextColor={colors.textDim}
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="EMAIL"
+            placeholder="correo@ejemplo.com"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>COMPETIDOR</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Competidor detectado"
-          placeholderTextColor={colors.textDim}
-          value={competitor}
-          onChangeText={setCompetitor}
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="COMPETIDOR"
+            placeholder="Competidor detectado"
+            value={competitor}
+            onChangeText={setCompetitor}
+          />
+        </View>
 
-        <Text style={styles.inputLabel}>¿TIENE FREEZER?</Text>
+        <Text style={typography.inputLabel}>¿TIENE FREEZER?</Text>
         <View style={styles.chipRow}>
           {FREEZER_OPTIONS.map((option) => (
-            <TouchableOpacity
+            <Chip
               key={option.value}
-              style={[styles.chip, freezer === option.value && styles.chipSelected]}
+              label={option.label}
+              selected={freezer === option.value}
               onPress={() => setFreezer(option.value)}
-            >
-              <Text style={[styles.chipText, freezer === option.value && styles.chipTextSelected]}>
-                {option.label}
-              </Text>
-            </TouchableOpacity>
+            />
           ))}
         </View>
 
-        <Text style={styles.inputLabel}>NIVEL DE INTERÉS</Text>
+        <Text style={typography.inputLabel}>NIVEL DE INTERÉS</Text>
         <View style={styles.chipRow}>
           {INTEREST_OPTIONS.map((option) => (
-            <TouchableOpacity
+            <Chip
               key={option.value}
-              style={[styles.chip, interestLevel === option.value && styles.chipSelected]}
+              label={option.label}
+              selected={interestLevel === option.value}
               onPress={() => setInterestLevel(option.value)}
-            >
-              <Text style={[styles.chipText, interestLevel === option.value && styles.chipTextSelected]}>
-                {option.label}
-              </Text>
-            </TouchableOpacity>
+            />
           ))}
         </View>
 
-        <Text style={styles.inputLabel}>NOTAS</Text>
-        <TextInput
-          style={styles.textArea}
-          placeholder="Observaciones de la visita"
-          placeholderTextColor={colors.textDim}
-          value={notes}
-          onChangeText={setNotes}
-          multiline
-          numberOfLines={4}
-        />
+        <View style={styles.fieldGroup}>
+          <Input
+            label="NOTAS"
+            placeholder="Observaciones de la visita"
+            value={notes}
+            onChangeText={setNotes}
+            multiline
+            numberOfLines={4}
+            style={styles.textArea}
+          />
+        </View>
 
         <Button
           label={readyToConvert ? 'Convertir a cliente y habilitar venta' : 'Guardar Datos'}
@@ -442,36 +434,10 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
-  headerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 6 },
-  inputLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    color: colors.textDim,
-    marginTop: 16,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.button,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: colors.text,
-    fontSize: 14,
-  },
+  headerTitle: { marginBottom: 0 },
+  headerSubtitle: { marginTop: 6 },
+  fieldGroup: { marginTop: 16 },
   textArea: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.button,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: colors.text,
-    fontSize: 14,
     minHeight: 110,
     textAlignVertical: 'top',
   },
@@ -488,26 +454,10 @@ const styles = StyleSheet.create({
   },
   loadingStageText: {
     color: colors.textDim,
-    fontSize: 13,
   },
   chipRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 999,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  chipSelected: {
-    backgroundColor: colors.primaryAlpha12,
-    borderColor: colors.primary,
-  },
-  chipText: { color: colors.text, fontSize: 12, fontWeight: '600' },
-  chipTextSelected: { color: colors.primary },
   errorText: {
     marginTop: 8,
-    fontSize: 12,
     color: colors.error,
   },
   reqRow: {
@@ -516,8 +466,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
   },
-  reqLabel: { fontSize: 13, color: colors.text },
-  reqStatus: { fontSize: 12, fontWeight: '700' },
+  reqStatus: { fontWeight: '700' },
   reqOk: { color: colors.success },
   reqPending: { color: colors.textDim },
 });

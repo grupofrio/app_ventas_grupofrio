@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -23,7 +23,7 @@ import { formatElapsed } from '../../src/utils/time';
 import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
-import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { openStopNavigation } from '../../src/services/stopNavigationAction';
 import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
@@ -216,21 +216,7 @@ export default function CheckinScreen() {
     // closure. Guard explícito para mantener tipos limpios y evitar crash
     // en la rama imposible.
     if (!stop) return;
-    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
-    if (!primaryUrl) {
-      Alert.alert('Sin ubicación', 'Esta parada no tiene ubicación disponible.');
-      return;
-    }
-
-    Linking.openURL(primaryUrl).catch(() => {
-      if (fallbackUrl) {
-        Linking.openURL(fallbackUrl).catch(() => {
-          Alert.alert('Error', 'No se pudo abrir la ubicación.');
-        });
-        return;
-      }
-      Alert.alert('Error', 'No se pudo abrir la ubicación.');
-    });
+    void openStopNavigation(stop);
   }
 
   function handleCloseSpecialVisit() {

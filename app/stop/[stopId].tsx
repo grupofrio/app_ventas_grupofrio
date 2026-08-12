@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Linking } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -35,7 +35,7 @@ import { logInfo } from '../../src/utils/logger';
 import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
 import { getLeadActionVisibility, getLeadPartnerId } from '../../src/services/leadVisit';
 import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
-import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { openStopNavigation } from '../../src/services/stopNavigationAction';
 import {
   hasContactPhone,
   MISSING_PHONE_CTA_LABEL,
@@ -163,23 +163,7 @@ export default function StopDetailScreen() {
 
   function handleOpenLocation() {
     if (!stop) return;
-    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
-    if (!primaryUrl) {
-      Alert.alert(
-        'Sin ubicación',
-        'Este cliente no tiene dirección ni coordenadas registradas para navegar.',
-      );
-      return;
-    }
-    Linking.openURL(primaryUrl).catch(() => {
-      if (fallbackUrl) {
-        Linking.openURL(fallbackUrl).catch(() => {
-          Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
-        });
-      } else {
-        Alert.alert('No se pudo abrir', 'No se pudo abrir la ubicación en Maps.');
-      }
-    });
+    void openStopNavigation(stop);
   }
 
   return (

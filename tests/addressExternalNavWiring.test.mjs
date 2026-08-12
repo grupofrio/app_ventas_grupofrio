@@ -9,8 +9,11 @@ import assert from 'node:assert/strict';
  *  #3 checkin muestra dirección antes del check-in;
  *  #4 StopCard muestra dirección;
  *  #5 la cadena off-route conserva street/city hasta la parada virtual;
- *  #6 los mapas aclaran que la línea es orden de visita, no ruta por calles;
- *  #7 map.tsx usa el helper compartido (no duplica URIs nativas).
+ *  #6 el mapa aclara que la línea es orden de visita, no ruta por calles;
+ *  #7 el helper compartido (locationNavigation.ts) es el único punto con
+ *     URIs nativas de navegación — F2.6 eliminó app/map.tsx (duplicaba el
+ *     mapa) y portó su navegación turn-by-turn nativa al helper para que
+ *     route.tsx/checkin/stop/offroute la compartan.
  */
 const root = process.cwd();
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -24,8 +27,9 @@ const factory = read('src/services/virtualStopFactory.ts');
 const store = read('src/stores/useRouteStore.ts');
 const offroute = read('app/offroute.tsx');
 const routeMap = read('src/components/domain/RouteMap.tsx');
-const map = read('app/map.tsx');
 const nav = read('src/services/locationNavigation.ts');
+const action = read('src/services/stopNavigationAction.ts');
+const routeScreen = read('app/(tabs)/route.tsx');
 
 // #1 onNavigate ya NO es prop muerta: se invoca en el panel.
 assert(/onNavigate\(focus\)/.test(panel), 'RouteStopPanel debe llamar onNavigate(focus)');
@@ -33,7 +37,7 @@ assert(panel.includes('formatCustomerAddress'), 'el panel muestra la dirección 
 
 // #2 stop/[stopId]: dirección + botón Maps con el helper.
 assert(stop.includes('formatCustomerAddress'), 'stop debe formatear la dirección');
-assert(stop.includes('buildStopNavigationUrls'), 'stop debe construir URLs de navegación');
+assert(stop.includes('openStopNavigation'), 'stop debe usar el helper compartido de navegación');
 assert(/Abrir en Maps/.test(stop), 'stop debe exponer botón Abrir en Maps');
 
 // #3 checkin: dirección visible en pre-check-in.
@@ -51,15 +55,22 @@ assert(/street: input\.street/.test(factory), 'el factory setea street en la par
 assert(/street: opts\?\.street/.test(store), 'addVirtualStop pasa street al factory');
 assert(/street: result\.street/.test(offroute), 'offroute pasa street del resultado');
 
-// #6 leyenda "orden de visita, no ruta por calles" en ambos mapas.
+// #6 leyenda "orden de visita, no ruta por calles" en el mapa único.
 assert(/no es ruta por calles/.test(routeMap), 'RouteMap debe aclarar que la línea no es ruta');
-assert(/no es ruta por calles/.test(map), 'map.tsx debe aclarar que la línea no es ruta');
 assert(/showOrderLegend/.test(routeMap), 'RouteMap solo muestra la leyenda con línea recta visible');
 
-// #7 map.tsx usa el helper para web/dirección PERO conserva la navegación
-// nativa Android (P2 Codex): no perder google.navigation al reusar el helper.
-assert(map.includes('buildStopNavigationUrls'), 'map.tsx usa el helper para web/dirección');
-assert(/google\.navigation:q=/.test(map), 'map.tsx conserva navegación nativa Android');
+// #7 F2.6: stopNavigationAction.ts concentra la navegación — web/dirección
+// PERO conserva la navegación nativa Android/iOS (P2 Codex, portada desde el
+// app/map.tsx eliminado): no perder google.navigation al unificar el mapa.
+// Vive separado de locationNavigation.ts (que se mantiene sin imports de
+// react-native) porque tests/locationNavigation.test.ts importa ese módulo
+// directo en Node puro.
+assert(action.includes('buildStopNavigationUrls'), 'la acción reusa el resolver de URLs');
+assert(/google\.navigation:q=/.test(action), 'la acción conserva navegación nativa Android');
+assert(/maps:\/\/app\?daddr=/.test(action), 'la acción conserva navegación nativa iOS');
+assert(routeScreen.includes('openStopNavigation'), 'route.tsx usa el helper compartido de navegación');
+assert(checkin.includes('openStopNavigation'), 'checkin usa el helper compartido de navegación');
+assert(offroute.includes('openStopNavigation'), 'offroute usa el helper compartido de navegación');
 
 // #8 el helper: fallback por dirección REAL, sin place_id con nombre (P3).
 assert(nav.includes('formatCustomerAddress'), 'el helper usa la dirección para el fallback');

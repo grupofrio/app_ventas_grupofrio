@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { View, Text, ScrollView, FlatList, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert, Linking } from 'react-native';
+import { View, Text, ScrollView, FlatList, TouchableOpacity, StyleSheet, RefreshControl, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter, useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -21,7 +21,7 @@ import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePres
 import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatCurrency } from '../../src/utils/time';
 import { filterPlannedStopsBySearch } from '../../src/services/routeStops';
-import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { openStopNavigation } from '../../src/services/stopNavigationAction';
 import { RouteMap, RouteMapHandle } from '../../src/components/domain/RouteMap';
 import { RouteStopPanel } from '../../src/components/domain/RouteStopPanel';
 import { RouteActionsMenu } from '../../src/components/domain/RouteActionsMenu';
@@ -265,21 +265,7 @@ export default function RouteScreen() {
   }, [stopNavigation]);
 
   const handleOpenLocation = useCallback((stop: GFStop) => {
-    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
-    if (!primaryUrl) {
-      Alert.alert('Sin ubicación', 'Este cliente no tiene ubicación disponible.');
-      return;
-    }
-
-    Linking.openURL(primaryUrl).catch(() => {
-      if (fallbackUrl) {
-        Linking.openURL(fallbackUrl).catch(() => {
-          Alert.alert('Error', 'No se pudo abrir la ubicación.');
-        });
-        return;
-      }
-      Alert.alert('Error', 'No se pudo abrir la ubicación.');
-    });
+    void openStopNavigation(stop);
   }, []);
 
   const sorted = [...stops].sort((a, b) => {

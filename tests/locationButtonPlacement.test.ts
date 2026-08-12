@@ -30,8 +30,8 @@ function main() {
   );
   assert.match(
     routeScreen,
-    /buildStopNavigationUrls/,
-    'la lista de ruta debe reutilizar el helper de URLs de Maps',
+    /openStopNavigation/,
+    'la lista de ruta debe reutilizar el helper compartido de navegación',
   );
   assert.match(
     routeScreen,

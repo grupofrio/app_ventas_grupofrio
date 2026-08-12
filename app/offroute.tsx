@@ -14,7 +14,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, Alert, RefreshControl, Linking,
+  StyleSheet, ActivityIndicator, Alert, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -33,7 +33,7 @@ import { startOffrouteVisit } from '../src/services/gfLogistics';
 import { extractOffrouteVisitId } from '../src/services/offrouteVisit';
 import { warmOffrouteCustomerPrices } from '../src/services/offroutePricing';
 import { computeCustomerPrices } from '../src/services/pricelist';
-import { buildStopNavigationUrls } from '../src/services/locationNavigation';
+import { openStopNavigation } from '../src/services/stopNavigationAction';
 import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
 
 const DEFAULT_OFFROUTE_COMPANY_ID = 34;
@@ -93,7 +93,7 @@ export default function OffRouteScreen() {
   const { refreshing, onRefresh } = useAsyncRefresh(refreshSearch);
 
   async function openSpecialVisitLocation(result: OffrouteSearchResult) {
-    const urls = buildStopNavigationUrls({
+    await openStopNavigation({
       customer_name: result.name,
       google_maps_url: result.googleMapsUrl ?? undefined,
       customer_latitude: result.customerLatitude ?? undefined,
@@ -101,25 +101,6 @@ export default function OffRouteScreen() {
       street: result.street,
       city: result.city,
     });
-
-    if (!urls.primaryUrl) {
-      Alert.alert('Sin ubicacion', 'Este cliente no tiene ubicacion registrada.');
-      return;
-    }
-
-    try {
-      await Linking.openURL(urls.primaryUrl);
-    } catch {
-      if (urls.fallbackUrl) {
-        try {
-          await Linking.openURL(urls.fallbackUrl);
-          return;
-        } catch {
-          // Continue to the generic user-facing error below.
-        }
-      }
-      Alert.alert('Error', 'No se pudo abrir la ubicacion.');
-    }
   }
 
   async function handleSelect(result: OffrouteSearchResult) {

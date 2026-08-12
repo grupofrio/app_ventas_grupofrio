@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 
 const REPO_ROOT = process.cwd();
 
-const mapScreen = readFileSync(
-  resolve(REPO_ROOT, 'app/map.tsx'),
+const stopPanel = readFileSync(
+  resolve(REPO_ROOT, 'src/components/domain/RouteStopPanel.tsx'),
   'utf8',
 );
 const routeScreen = readFileSync(
@@ -43,25 +43,28 @@ function main() {
   // P0-4 (hardening): el mapa YA NO ofrece venta directa (saltaba check-in y
   // geocerca). Al tocar un pin abre el hub del cliente (/stop/[id]) que conserva
   // check-in + geocerca + guards de visita.
+  // F2.6: el mapa único ahora es RouteMap+RouteStopPanel (se eliminó el
+  // app/map.tsx duplicado) — el panel expone "Abrir cliente", y route.tsx
+  // enruta a /stop/[id] vía handleOpenClient (no a /sale directo).
   assert.match(
-    mapScreen,
+    stopPanel,
     /Abrir cliente/,
-    'el mapa debe abrir el hub del cliente (no venta directa) al tocar un pin',
+    'el panel del mapa debe abrir el hub del cliente (no venta directa) al tocar un pin',
   );
   assert.match(
-    mapScreen,
+    routeScreen,
     /\/stop\/\$\{stop\.id\}/,
     'el mapa debe enrutar al hub /stop/[id], no a /sale directo',
   );
   assert.doesNotMatch(
-    mapScreen,
+    routeScreen,
     /\/sale\/\$\{stop\.id\}/,
     'el mapa NO debe enrutar directo a /sale (salta check-in/geocerca)',
   );
   assert.match(
-    mapScreen,
-    /Abrir Maps/,
-    'el mapa debe seguir ofreciendo navegación a Maps al tocar un pin',
+    stopPanel,
+    /Maps/,
+    'el panel del mapa debe seguir ofreciendo navegación a Maps al tocar un pin',
   );
 
   assert.match(

@@ -403,7 +403,7 @@ export default function HomeScreen() {
             <Text style={styles.sectionTitle}>RUTA DEL DIA</Text>
             <TouchableOpacity
               style={styles.mapPreview}
-              onPress={() => router.push('/map' as never)}
+              onPress={() => router.push({ pathname: '/(tabs)/route', params: { view: 'map' } } as never)}
               activeOpacity={0.8}
             >
               <View style={styles.mapContent}>

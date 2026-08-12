@@ -9,8 +9,8 @@ function main() {
 
   assert.match(
     screen,
-    /buildStopNavigationUrls/,
-    'la visita especial debe reutilizar el helper de ubicacion de Maps',
+    /openStopNavigation/,
+    'la visita especial debe reutilizar el helper compartido de navegación',
   );
   assert.match(
     screen,

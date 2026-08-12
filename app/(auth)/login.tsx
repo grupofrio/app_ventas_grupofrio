@@ -15,6 +15,7 @@ import { DEFAULT_BASE_URL } from '../../src/services/api';
 import { describeLoginOfflineNotice } from '../../src/services/authOffline';
 import { Button } from '../../src/components/ui/Button';
 import { Input } from '../../src/components/ui/Input';
+import { GrupoFrioLogo } from '../../src/components/ui/GrupoFrioLogo';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 
@@ -55,10 +56,10 @@ export default function LoginScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Logo area — texto provisional; F2.5 lo reemplaza por el logo real */}
+          {/* Logo area — isotipo+wordmark real de Grupo Frío (F2.5) */}
           <View style={styles.logoArea}>
-            <Text style={typography.brandTitle}>KOLD</Text>
-            <Text style={typography.brandSubtitle}>Field</Text>
+            <GrupoFrioLogo size={64} />
+            <Text style={[typography.screenTitle, styles.appName]}>KOLD Field</Text>
           </View>
 
           {/* Form */}
@@ -120,7 +121,11 @@ const styles = StyleSheet.create({
   },
   logoArea: {
     alignItems: 'center',
+    gap: 14,
     marginBottom: 40,
+  },
+  appName: {
+    color: colors.textDim,
   },
   form: {
     gap: 16,

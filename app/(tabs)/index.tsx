@@ -14,6 +14,7 @@ import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { StopCard } from '../../src/components/domain/StopCard';
 import { RoutePreparationCard } from '../../src/components/domain/RoutePreparationCard';
 import { RouteLoadAcceptanceCard } from '../../src/components/domain/RouteLoadAcceptanceCard';
+import { GrupoFrioIcon } from '../../src/components/ui/GrupoFrioLogo';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
@@ -177,6 +178,7 @@ export default function HomeScreen() {
 
       {/* Greeting + settings */}
       <View style={styles.greeting}>
+        <GrupoFrioIcon size={30} />
         <View style={{ flex: 1 }}>
           <Text style={styles.greetLabel}>Buenos dias</Text>
           <Text style={styles.greetName}>{employeeName || 'Vendedor'}</Text>
@@ -471,6 +473,7 @@ const styles = StyleSheet.create({
   greeting: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: 6,
   },

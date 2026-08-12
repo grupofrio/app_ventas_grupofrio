@@ -8,6 +8,13 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
+// F2.5: react-native-svg 15.x rompe en web con el resolver de "package
+// exports" de Metro (falla resolviendo su import interno relativo
+// "../../lib/extract/extractTransform" pese a que el archivo existe en
+// disco) — mitigación conocida: volver a la resolución clásica por path.
+// No afecta Android/iOS (ahí no se usa el bundle web).
+config.resolver.unstable_enablePackageExports = false;
+
 const upstreamResolveRequest = config.resolver.resolveRequest;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {

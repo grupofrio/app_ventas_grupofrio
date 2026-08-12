@@ -23,6 +23,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
+import { GrupoFrioIcon } from '../src/components/ui/GrupoFrioLogo';
 import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
@@ -263,6 +264,7 @@ function RouteCloseScreenInner() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Cerrar ruta" showBack />
         <View style={styles.center}>
+          <GrupoFrioIcon size={40} />
           <Text style={styles.okIcon}>🏁</Text>
           <Text style={styles.emptyTitle}>Ruta cerrada</Text>
           <Text style={styles.emptyBody}>Tu operación del día quedó finalizada.</Text>

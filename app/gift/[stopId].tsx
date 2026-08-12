@@ -17,7 +17,7 @@ import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { GiftProductPicker } from '../../src/components/domain/GiftProductPicker';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography, fonts } from '../../src/theme/typography';
+import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -279,8 +279,8 @@ export default function GiftScreen() {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Card>
-          <Text style={styles.headerTitle}>{stop.customer_name}</Text>
-          <Text style={styles.headerSubtitle}>
+          <Text style={[typography.body, styles.headerTitle]}>{stop.customer_name}</Text>
+          <Text style={[typography.dim, styles.headerSubtitle]}>
             Registra producto entregado sin cobro. El movimiento sale de la unidad móvil y baja a merma de la van.
           </Text>
         </Card>
@@ -307,7 +307,7 @@ export default function GiftScreen() {
           />
         ) : null}
 
-        <Text style={styles.sectionTitle}>PRODUCTOS</Text>
+        <Text style={typography.sectionTitle}>PRODUCTOS</Text>
         {isLoadingProducts && products.length === 0 ? (
           <View style={styles.emptyState}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -323,29 +323,31 @@ export default function GiftScreen() {
         {lines.map((line, index) => (
           <View key={line.key} style={styles.lineCard}>
             <View style={styles.lineHeader}>
-              <Text style={styles.lineTitle}>Línea {index + 1}</Text>
+              <Text style={[typography.bodySmall, styles.lineTitle]}>Línea {index + 1}</Text>
               {lines.length > 1 ? (
                 <TouchableOpacity onPress={() => removeLine(line.key)} activeOpacity={0.8}>
-                  <Text style={styles.removeText}>Quitar</Text>
+                  <Text style={[typography.dim, styles.removeText]}>Quitar</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
 
-            <Text style={styles.inputLabel}>PRODUCTO</Text>
+            <Text style={typography.inputLabel}>PRODUCTO</Text>
             <TouchableOpacity
               style={styles.selector}
               activeOpacity={0.8}
               onPress={() => setPickerLineKey(line.key)}
               disabled={isLoadingProducts || (!!productError && products.length === 0)}
             >
-              <Text style={line.productName ? styles.selectorValue : styles.selectorPlaceholder}>
+              <Text style={line.productName
+                ? [typography.body, styles.selectorValue]
+                : [typography.body, styles.selectorPlaceholder]}>
                 {line.productName || 'Selecciona un producto'}
               </Text>
             </TouchableOpacity>
 
-            <Text style={styles.inputLabel}>CANTIDAD</Text>
+            <Text style={typography.inputLabel}>CANTIDAD</Text>
             <TextInput
-              style={styles.qtyInput}
+              style={[typography.scoreValue, styles.qtyInput]}
               value={line.qtyText}
               onChangeText={(qtyText) => updateLine(line.key, { qtyText })}
               placeholder="0"
@@ -364,9 +366,9 @@ export default function GiftScreen() {
           style={{ marginTop: 10 }}
         />
 
-        <Text style={styles.sectionTitle}>OBSERVACIONES</Text>
+        <Text style={typography.sectionTitle}>OBSERVACIONES</Text>
         <TextInput
-          style={styles.notesInput}
+          style={[typography.body, styles.notesInput]}
           value={notes}
           onChangeText={setNotes}
           placeholder="Notas opcionales..."
@@ -377,23 +379,23 @@ export default function GiftScreen() {
         />
 
         <View style={styles.analyticsInfo}>
-          <Text style={styles.analyticsTitle}>Sucursal activa</Text>
-          <Text style={styles.analyticsValue}>
+          <Text style={[typography.dim, styles.analyticsTitle]}>Sucursal activa</Text>
+          <Text style={[typography.bodySmall, styles.analyticsValue]}>
             {employeeAnalyticPlazaName || 'Sin plaza configurada'}
           </Text>
-          <Text style={styles.analyticsMeta}>
+          <Text style={[typography.dimSmall, styles.analyticsMeta]}>
             Ubicación móvil: {mobileLocationId || 'No disponible'}
           </Text>
-          <Text style={styles.analyticsMeta}>
+          <Text style={[typography.dimSmall, styles.analyticsMeta]}>
             Visit line: {stop.visit_line_id || 'No disponible'}
           </Text>
         </View>
 
         {submitIssues.includes('duplicate_products') ? (
-          <Text style={styles.validationHint}>{getIssueMessage('duplicate_products')}</Text>
+          <Text style={[typography.dimSmall, styles.validationHint]}>{getIssueMessage('duplicate_products')}</Text>
         ) : null}
         {submitIssues.includes('no_valid_lines') ? (
-          <Text style={styles.validationHint}>{getIssueMessage('no_valid_lines')}</Text>
+          <Text style={[typography.dimSmall, styles.validationHint]}>{getIssueMessage('no_valid_lines')}</Text>
         ) : null}
 
         <Button
@@ -427,17 +429,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
-  headerTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
-  headerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 6, lineHeight: 18 },
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    color: colors.textDim,
-    marginTop: 16,
-    marginBottom: 8,
-  },
+  headerTitle: { fontWeight: '700' },
+  headerSubtitle: { marginTop: 6, lineHeight: 18 },
   lineCard: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
@@ -450,17 +443,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  lineTitle: { fontSize: 13, fontWeight: '700', color: colors.text },
-  removeText: { fontSize: 12, color: colors.error, fontWeight: '600' },
-  inputLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    color: colors.textDim,
-    marginTop: 10,
-    marginBottom: 5,
-  },
+  lineTitle: { fontWeight: '700' },
+  removeText: { color: colors.error, fontWeight: '600' },
   selector: {
     backgroundColor: colors.cardLighter,
     borderRadius: radii.button,
@@ -470,16 +454,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 14,
   },
-  selectorPlaceholder: { fontSize: 14, color: colors.textDim },
-  selectorValue: { fontSize: 14, color: colors.text, fontWeight: '600' },
+  selectorPlaceholder: { color: colors.textDim },
+  selectorValue: { color: colors.text, fontWeight: '600' },
   qtyInput: {
     backgroundColor: colors.cardLighter,
     borderRadius: radii.button,
     borderWidth: 1,
     borderColor: colors.border,
-    color: colors.text,
-    fontFamily: fonts.monoBold,
-    fontSize: 15,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -490,8 +471,6 @@ const styles = StyleSheet.create({
     borderRadius: radii.button,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: colors.text,
-    fontSize: 15,
     minHeight: 84,
   },
   analyticsInfo: {
@@ -501,24 +480,17 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   analyticsTitle: {
-    fontSize: 12,
-    color: colors.textDim,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   analyticsValue: {
-    fontSize: 13,
     fontWeight: '600',
-    color: colors.text,
     marginTop: 4,
   },
   analyticsMeta: {
-    fontSize: 11,
-    color: colors.textDim,
     marginTop: 4,
   },
   validationHint: {
-    fontSize: 11,
     color: colors.warning,
     textAlign: 'center',
     marginTop: 8,

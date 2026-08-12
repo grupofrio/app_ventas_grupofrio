@@ -12,7 +12,6 @@ import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
 import { CacheStatusBadge } from '../../src/components/ui/CacheStatusBadge';
 import { colors, spacing, radii, stopStateColors } from '../../src/theme/tokens';
-import { fonts } from '../../src/theme/typography';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
@@ -321,13 +320,13 @@ export default function RouteScreen() {
             styles.card,
             { borderLeftColor: stopStateColors[stop.state] || colors.textDim },
             isDone && { opacity: 0.65 },
-            stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
+            stop.state === 'in_progress' && { backgroundColor: 'rgba(0,119,187,0.03)' },
             isNext && styles.cardNext,
           ]}
         >
           <TouchableOpacity onPress={() => handleOpenClient(stop)} activeOpacity={0.7}>
             <View style={styles.cardRow}>
-              <Text style={styles.cardName} numberOfLines={1}>
+              <Text style={[typography.body, styles.cardName]} numberOfLines={1}>
                 {isDone ? '✅ ' : `${stop.route_sequence || index + 1}. `}
                 {stop.state === 'in_progress' ? '🔵 ' : ''}
                 {stop.customer_name}
@@ -396,10 +395,10 @@ export default function RouteScreen() {
           />
           <View style={styles.mapFabs} pointerEvents="box-none">
             <TouchableOpacity style={styles.fab} onPress={() => setActionsMenuOpen(true)} activeOpacity={0.85}>
-              <Text style={styles.fabText}>⋯</Text>
+              <Text style={typography.stepperGlyph}>⋯</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.fab} onPress={() => mapRef.current?.fitAll()} activeOpacity={0.85}>
-              <Text style={styles.fabText}>⤢</Text>
+              <Text style={typography.stepperGlyph}>⤢</Text>
             </TouchableOpacity>
             {userLat != null && userLon != null && (
               <TouchableOpacity
@@ -407,7 +406,7 @@ export default function RouteScreen() {
                 onPress={() => mapRef.current?.centerOn(userLat, userLon)}
                 activeOpacity={0.85}
               >
-                <Text style={styles.fabText}>◎</Text>
+                <Text style={typography.stepperGlyph}>◎</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -463,7 +462,7 @@ export default function RouteScreen() {
         {/* Pedidos offline pendientes de envío (se sincronizan al reconectar). */}
         {pendingOrdersBanner && (
           <TouchableOpacity onPress={() => router.push('/sync' as never)} style={styles.pendingOrdersBanner}>
-            <Text style={styles.pendingOrdersText}>{pendingOrdersBanner} · toca para ver Sync</Text>
+            <Text style={[typography.dim, styles.pendingOrdersText]}>{pendingOrdersBanner} · toca para ver Sync</Text>
           </TouchableOpacity>
         )}
         {/* F1.12: el header de 9 botones se reduce a un menú "☰"
@@ -475,7 +474,7 @@ export default function RouteScreen() {
           onPress={() => setActionsMenuOpen(true)}
           activeOpacity={0.8}
         >
-          <Text style={styles.moreActionsText}>☰ Más acciones</Text>
+          <Text style={[typography.bodySmall, styles.moreActionsText]}>☰ Más acciones</Text>
         </TouchableOpacity>
 
         {(planTypeLabel || freshnessBadge) && (
@@ -494,8 +493,8 @@ export default function RouteScreen() {
             { label: 'Restante', value: 'Sin dato', color: colors.primary },
           ].map((s) => (
             <View key={s.label} style={styles.statItem}>
-              <Text style={styles.statLabel}>{s.label}</Text>
-              <Text style={[styles.statValue, s.color ? { color: s.color } : undefined]}>
+              <Text style={[typography.badge, styles.statLabel]}>{s.label}</Text>
+              <Text style={[typography.metricValue, styles.statValue, s.color ? { color: s.color } : undefined]}>
                 {s.value}
               </Text>
             </View>
@@ -511,7 +510,7 @@ export default function RouteScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             clearButtonMode="while-editing"
-            style={styles.searchInput}
+            style={[typography.body, styles.searchInput]}
           />
           {hasSearchQuery ? (
             <TouchableOpacity
@@ -521,12 +520,12 @@ export default function RouteScreen() {
               accessibilityRole="button"
               accessibilityLabel="Limpiar busqueda"
             >
-              <Text style={styles.clearSearchText}>×</Text>
+              <Text style={[typography.stepperGlyph, styles.clearSearchText]}>×</Text>
             </TouchableOpacity>
           ) : null}
         </View>
         {hasSearchQuery ? (
-          <Text style={styles.searchCount}>
+          <Text style={[typography.dim, styles.searchCount]}>
             {visibleStops.length} de {plannedStops.length} planificados
           </Text>
         ) : null}
@@ -556,7 +555,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 4,
   },
-  fabText: { fontSize: 20, color: colors.text },
   moreActionsBtn: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -568,18 +566,18 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  moreActionsText: { fontSize: 13, fontWeight: '700', color: colors.text },
+  moreActionsText: { fontWeight: '700', color: colors.text },
   pendingOrdersBanner: {
-    backgroundColor: 'rgba(234,179,8,0.10)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.45)',
+    backgroundColor: colors.warningAlpha12, borderWidth: 1, borderColor: 'rgba(180,83,9,0.45)',
     borderRadius: radii.button, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10,
   },
-  pendingOrdersText: { fontSize: 12, color: colors.text, fontWeight: '600' },
+  pendingOrdersText: { color: colors.text, fontWeight: '600' },
   cardBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
   statItem: { alignItems: 'center' },
-  statLabel: { fontSize: 10, color: colors.textDim, marginBottom: 2 },
-  statValue: { fontFamily: fonts.monoBold, fontSize: 14, fontWeight: '700', color: colors.text },
+  statLabel: { color: colors.textDim, fontWeight: '400', marginBottom: 2 },
+  statValue: { color: colors.text },
   searchBox: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
@@ -594,8 +592,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     minHeight: 44,
-    color: colors.text,
-    fontSize: 14,
     paddingVertical: 0,
   },
   clearSearchButton: {
@@ -604,21 +600,21 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+    backgroundColor: 'rgba(15,42,61,0.08)',
   },
-  clearSearchText: { color: colors.textDim, fontSize: 20, lineHeight: 22, fontWeight: '700' },
-  searchCount: { color: colors.textDim, fontSize: 12, marginBottom: 8 },
+  clearSearchText: { color: colors.textDim, lineHeight: 22 },
+  searchCount: { marginBottom: 8 },
   card: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 12, paddingHorizontal: 14, marginBottom: 8, borderLeftWidth: 4,
   },
   cardNext: {
-    backgroundColor: 'rgba(37,99,235,0.06)',
+    backgroundColor: colors.primaryAlpha08,
     borderWidth: 1,
-    borderColor: 'rgba(37,99,235,0.35)',
+    borderColor: 'rgba(0,119,187,0.35)',
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardName: { flex: 1, fontWeight: '700', fontSize: 14, color: colors.text, marginRight: 8 },
+  cardName: { flex: 1, fontWeight: '700', marginRight: 8 },
   cardActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
   mapsButton: { minWidth: 104 },
   empty: { backgroundColor: colors.card, borderRadius: radii.card, padding: 20, alignItems: 'center' },

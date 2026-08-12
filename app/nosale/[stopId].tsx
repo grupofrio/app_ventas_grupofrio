@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
+import { Chip } from '../../src/components/ui/Chip';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
@@ -290,63 +291,45 @@ export default function NoSaleScreen() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
-        <Text style={styles.hint}>Alimenta KoldDemand para mejorar forecasts.</Text>
+        <Text style={[typography.dim, styles.hint]}>Alimenta KoldDemand para mejorar forecasts.</Text>
 
         {/* Reason selection */}
-        <Text style={styles.sectionTitle}>¿Por que no se vendio?</Text>
+        <Text style={typography.sectionTitle}>¿Por que no se vendio?</Text>
         <View style={styles.chipContainer}>
           {NO_SALE_REASONS.map((reason) => (
-            <TouchableOpacity
+            <Chip
               key={reason.id}
-              style={[
-                styles.chip,
-                selectedReasonId === reason.id && styles.chipSelected,
-              ]}
+              label={reason.label}
+              selected={selectedReasonId === reason.id}
               onPress={() => setSelectedReasonId(reason.id)}
-            >
-              <Text style={[
-                styles.chipText,
-                selectedReasonId === reason.id && styles.chipTextSelected,
-              ]}>
-                {reason.label}
-              </Text>
-            </TouchableOpacity>
+            />
           ))}
         </View>
 
         {/* Competitor detection (shown when reason = competitor) */}
         {showCompetitor && (
           <>
-            <Text style={styles.inputLabel}>COMPETIDOR DETECTADO</Text>
+            <Text style={typography.inputLabel}>COMPETIDOR DETECTADO</Text>
             <View style={styles.chipContainer}>
               {COMPETITORS.map((comp) => (
-                <TouchableOpacity
+                <Chip
                   key={comp}
-                  style={[
-                    styles.chip,
-                    selectedCompetitor === comp && styles.chipSelected,
-                  ]}
+                  label={comp}
+                  selected={selectedCompetitor === comp}
                   onPress={() => {
                     setSelectedCompetitor(selectedCompetitor === comp ? null : comp);
                     setNoSaleCompetitor(selectedCompetitor === comp ? null : comp);
                   }}
-                >
-                  <Text style={[
-                    styles.chipText,
-                    selectedCompetitor === comp && styles.chipTextSelected,
-                  ]}>
-                    {comp}
-                  </Text>
-                </TouchableOpacity>
+                />
               ))}
             </View>
           </>
         )}
 
         {/* Notes */}
-        <Text style={styles.inputLabel}>NOTAS</Text>
+        <Text style={typography.inputLabel}>NOTAS</Text>
         <TextInput
-          style={styles.textArea}
+          style={[typography.body, styles.textArea]}
           placeholder="¿Que observaste?"
           placeholderTextColor={colors.textDim}
           value={notes}
@@ -356,15 +339,15 @@ export default function NoSaleScreen() {
         />
 
         {/* Mandatory photo */}
-        <Text style={styles.sectionTitle}>📸 Foto del punto (obligatoria)</Text>
+        <Text style={typography.sectionTitle}>📸 Foto del punto (obligatoria)</Text>
         {noSalePhotoTaken ? (
           <View style={styles.photoDone}>
-            <Text style={{ fontSize: 28 }}>📸</Text>
-            <Text style={{ fontSize: 12, color: colors.success, fontWeight: '600' }}>
+            <Text style={typography.stateIcon}>📸</Text>
+            <Text style={[typography.dim, { color: colors.success, fontWeight: '600' }]}>
               {noSalePhotoUris.length} {noSalePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
             <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddNoSalePhoto}>
-              <Text style={styles.addPhotoText}>Agregar otra foto</Text>
+              <Text style={[typography.buttonSmall, styles.addPhotoText]}>Agregar otra foto</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -372,11 +355,11 @@ export default function NoSaleScreen() {
             style={styles.photoReq}
             onPress={handleAddNoSalePhoto}
           >
-            <Text style={{ fontSize: 32 }}>📸</Text>
-            <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
+            <Text style={typography.stateIcon}>📸</Text>
+            <Text style={[typography.bodySmall, { color: colors.primary, fontWeight: '600' }]}>
               Tomar foto de no-venta
             </Text>
-            <Text style={{ fontSize: 10, color: colors.textDim }}>
+            <Text style={typography.dimSmall}>
               Evidencia del punto de venta
             </Text>
           </TouchableOpacity>
@@ -400,38 +383,18 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
-  hint: { fontSize: 12, color: colors.textDim, marginBottom: 14 },
-  sectionTitle: {
-    fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
-    letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
-  },
-  inputLabel: {
-    fontSize: 11, fontWeight: '600', textTransform: 'uppercase',
-    letterSpacing: 0.4, color: colors.textDim, marginTop: 14, marginBottom: 5,
-  },
+  hint: { color: colors.textDim, marginBottom: 14 },
   chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
-  chip: {
-    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20,
-    backgroundColor: colors.cardLighter,
-    borderWidth: 1, borderColor: colors.border,
-  },
-  chipSelected: {
-    backgroundColor: colors.primaryAlpha12,
-    borderColor: colors.primary,
-  },
-  chipText: { fontSize: 12, color: colors.text },
-  chipTextSelected: { color: colors.primary },
   textArea: {
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
     borderRadius: radii.button,
     paddingHorizontal: 14, paddingVertical: 12,
-    color: colors.text, fontSize: 15,
     minHeight: 60, textAlignVertical: 'top',
   },
   photoReq: {
     backgroundColor: colors.cardLighter,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(37,99,235,0.3)',
+    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(0,119,187,0.3)',
     borderRadius: radii.card, padding: 28, alignItems: 'center', gap: 6,
   },
   photoDone: {
@@ -447,8 +410,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryAlpha12,
   },
   addPhotoText: {
-    fontSize: 12,
     color: colors.primary,
-    fontWeight: '700',
   },
 });

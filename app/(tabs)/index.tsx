@@ -317,7 +317,7 @@ export default function HomeScreen() {
 
             {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
             <View style={styles.weatherCard}>
-              <Text style={{ fontSize: 22 }}>🌤️</Text>
+              <Text style={typography.stateIcon}>🌤️</Text>
               <View style={{ flex: 1, marginLeft: 8 }}>
                 <Text style={styles.weatherCity}>Clima no disponible</Text>
                 <Text style={styles.weatherSub}>Proximamente en KOLD</Text>
@@ -474,15 +474,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: 6,
   },
-  greetLabel: {
-    fontSize: 12,
-    color: colors.textDim,
-  },
-  greetName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
-  },
+  greetLabel: { ...typography.dim },
+  greetName: { ...typography.screenTitle },
   settingsBtn: {
     width: 40,
     height: 40,
@@ -504,7 +497,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: radii.button,
     marginBottom: 14,
-    backgroundColor: 'rgba(37,99,235,0.04)',
+    backgroundColor: colors.primaryAlpha04,
   },
   // BLD-SPRINT-A: CTA "Iniciar operación"
   routeStartCta: {
@@ -514,9 +507,9 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: radii.card,
     marginBottom: 14,
-    backgroundColor: 'rgba(37,99,235,0.08)',
+    backgroundColor: colors.primaryAlpha08,
     borderWidth: 1,
-    borderColor: 'rgba(37,99,235,0.3)',
+    borderColor: 'rgba(0,119,187,0.3)',
   },
   inspectionCta: {
     flexDirection: 'row',
@@ -527,31 +520,16 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: colors.border,
   },
-  routeStartIcon: { fontSize: 26 },
-  routeStartTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
-  routeStartSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-  routeStartChevron: { fontSize: 28, color: colors.primary, fontWeight: '300' },
-  weatherTemp: {
-    fontFamily: fonts.monoBold,
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  weatherCity: {
-    fontSize: 10,
-    color: colors.textDim,
-  },
-  weatherImpact: {
-    fontSize: 12,
-    color: colors.primary,
-    fontWeight: '600',
-  },
-  weatherSub: {
-    fontSize: 9,
-    color: colors.textDim,
-  },
+  routeStartIcon: { ...typography.stepperGlyph, fontWeight: '400' },
+  routeStartTitle: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700' },
+  routeStartSub: { ...typography.dim, marginTop: 2 },
+  routeStartChevron: { ...typography.stepperGlyph, color: colors.primary, fontWeight: '300' },
+  weatherTemp: { ...typography.kpiValue },
+  weatherCity: { ...typography.dimSmall },
+  weatherImpact: { ...typography.dim, color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
+  weatherSub: { ...typography.dimSmall },
   kpiGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -575,17 +553,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
-  quickIcon: { fontSize: 20 },
-  quickLabel: { fontSize: 12, fontWeight: '600', color: colors.text, textAlign: 'center' },
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    color: colors.textDim,
-    marginTop: 16,
-    marginBottom: 8,
-  },
+  quickIcon: { ...typography.stepperGlyph, fontWeight: '400' },
+  quickLabel: { ...typography.dim, color: colors.text, fontFamily: fonts.bodyBold, fontWeight: '700', textAlign: 'center' },
+  sectionTitle: { ...typography.sectionTitle },
   mapPreview: {
     width: '100%',
     height: 160,
@@ -599,16 +569,8 @@ const styles = StyleSheet.create({
   mapContent: {
     alignItems: 'center',
   },
-  mapRouteName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.primary,
-  },
-  mapSub: {
-    fontSize: 10,
-    color: colors.textDim,
-    marginTop: 2,
-  },
+  mapRouteName: { ...typography.dim, color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
+  mapSub: { ...typography.dimSmall, marginTop: 2 },
   progressContainer: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
@@ -621,15 +583,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  progressValue: {
-    fontFamily: fonts.monoBold,
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-  },
+  progressValue: { ...typography.scoreValue },
   progressBar: {
     height: 8,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: colors.border,
     borderRadius: 4,
     overflow: 'hidden',
   },
@@ -652,27 +609,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
   },
-  noPlanIcon: {
-    fontSize: 56,
-    marginBottom: 12,
-  },
-  noPlanTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    textAlign: 'center',
-    marginBottom: 10,
-  },
+  noPlanIcon: { ...typography.stateIcon, marginBottom: 12 },
+  noPlanTitle: { ...typography.screenTitle, textAlign: 'center', marginBottom: 10 },
   noPlanBody: {
-    fontSize: 13,
-    lineHeight: 19,
+    ...typography.bodySmall,
     color: colors.textDim,
+    lineHeight: 19,
     textAlign: 'center',
     marginBottom: 16,
   },
   noPlanServerMsg: {
-    fontSize: 11,
-    color: colors.textDim,
+    ...typography.dimSmall,
     fontStyle: 'italic',
     textAlign: 'center',
     marginBottom: 14,
@@ -689,19 +636,10 @@ const styles = StyleSheet.create({
   noPlanBtnDisabled: {
     opacity: 0.4,
   },
-  noPlanBtnText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  noPlanHint: {
-    fontSize: 11,
-    color: colors.textDim,
-    marginTop: 8,
-  },
+  noPlanBtnText: { ...typography.button },
+  noPlanHint: { ...typography.dimSmall, marginTop: 8 },
   noPlanFootnote: {
-    fontSize: 10,
-    color: colors.textDim,
+    ...typography.dimSmall,
     textAlign: 'center',
     marginTop: 18,
     paddingHorizontal: 12,

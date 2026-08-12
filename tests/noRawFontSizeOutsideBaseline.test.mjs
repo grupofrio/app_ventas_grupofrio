@@ -26,7 +26,6 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const BASELINE = new Set([
   'app/(tabs)/_layout.tsx',
   'app/(tabs)/alerts.tsx',
-  'app/(tabs)/index.tsx',
   'app/(tabs)/inventory.tsx',
   'app/(tabs)/sales.tsx',
   'app/(tabs)/tasks.tsx',

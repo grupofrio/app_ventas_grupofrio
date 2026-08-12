@@ -14,7 +14,7 @@ interface TopBarProps {
   showBack?: boolean;
   onBack?: () => void;
   rightAction?: { label: string; onPress: () => void };
-  rightIcon?: { name: keyof typeof Ionicons.glyphMap; onPress: () => void };
+  rightIcon?: { name: keyof typeof Ionicons.glyphMap; onPress: () => void; accessibilityLabel?: string };
 }
 
 export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon }: TopBarProps) {
@@ -24,7 +24,12 @@ export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon
   return (
     <View style={styles.container}>
       {showBack ? (
-        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={handleBack}
+          accessibilityRole="button"
+          accessibilityLabel="Volver"
+        >
           <Ionicons name="chevron-back" size={18} color={colors.text} />
         </TouchableOpacity>
       ) : (
@@ -40,7 +45,11 @@ export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon
           <Text style={styles.action}>{rightAction.label}</Text>
         </TouchableOpacity>
       ) : rightIcon ? (
-        <TouchableOpacity onPress={rightIcon.onPress}>
+        <TouchableOpacity
+          onPress={rightIcon.onPress}
+          accessibilityRole="button"
+          accessibilityLabel={rightIcon.accessibilityLabel ?? 'Más opciones'}
+        >
           <Ionicons name={rightIcon.name} size={20} color={colors.primary} />
         </TouchableOpacity>
       ) : (

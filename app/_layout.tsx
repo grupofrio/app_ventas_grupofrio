@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, TextInput } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -28,6 +28,21 @@ import { rehydrateAppState } from '../src/services/rehydrate';
 import { startConnectivityMonitor, checkConnectivity } from '../src/services/connectivity';
 import { initializeGPS, startLocationWatch } from '../src/services/gps';
 import { startBackgroundTracking } from '../src/services/gpsBackground';
+
+// F2.7: tope global de escala de fuente por accesibilidad del sistema. Sin
+// esto, un vendedor con "texto grande" activado en el teléfono puede romper
+// layouts de una sola línea (KPIs, chips, barras fijas) que no tienen espacio
+// para crecer sin límite. 1.4x sigue siendo una mejora real de legibilidad
+// sobre el 1.0x por defecto, sin desbordar los layouts más ajustados.
+// @ts-expect-error — defaultProps no está en los tipos de RN 0.76 pero sigue
+// siendo el mecanismo soportado para un tope global (React 18, no 19).
+Text.defaultProps = Text.defaultProps || {};
+// @ts-expect-error — idem.
+Text.defaultProps.maxFontSizeMultiplier = 1.4;
+// @ts-expect-error — idem.
+TextInput.defaultProps = TextInput.defaultProps || {};
+// @ts-expect-error — idem.
+TextInput.defaultProps.maxFontSizeMultiplier = 1.4;
 
 export default function RootLayout() {
   const [isReady, setIsReady] = useState(false);
@@ -136,14 +151,14 @@ export default function RootLayout() {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color={colors?.primary || '#000'} />
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
       </View>
     );
   }
 
   return (
     <>
-      <StatusBar style="light" backgroundColor={colors?.bg || '#000'} />
+      <StatusBar style="dark" backgroundColor={colors?.bg || '#F0F9FF'} />
       <Slot />
       <GlobalRefreshButton />
       <GlobalHomeButton />
@@ -154,7 +169,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: '#0F1419',
+    backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },

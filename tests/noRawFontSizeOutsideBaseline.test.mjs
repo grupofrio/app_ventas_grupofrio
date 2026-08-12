@@ -36,7 +36,6 @@ const BASELINE = new Set([
   'app/checkout/[stopId].tsx',
   'app/collect/[partnerId].tsx',
   'app/customer/[partnerId].tsx',
-  'app/exchange/[stopId].tsx',
   'app/incident.tsx',
   'app/loyalty/[partnerId].tsx',
   'app/map.tsx',

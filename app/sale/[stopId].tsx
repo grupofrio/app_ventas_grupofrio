@@ -19,7 +19,7 @@ import {
 import { describeSaleConfirmBlock } from '../../src/services/trustSignals';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography, fonts } from '../../src/theme/typography';
+import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
@@ -736,9 +736,9 @@ function SaleScreenInner() {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Customer + forecast hint */}
-        <Text style={styles.customerName}>{stop.customer_name}</Text>
+        <Text style={[typography.dim, styles.customerName]}>{stop.customer_name}</Text>
         {forecast && (
-          <Text style={styles.forecastHint}>
+          <Text style={[typography.dimSmall, styles.forecastHint]}>
             Sugerido KoldDemand: {forecast.predicted_kg.toFixed(0)} kg
           </Text>
         )}
@@ -763,8 +763,8 @@ function SaleScreenInner() {
           saleLines.map((line) => (
             <View key={line.productId} style={styles.productLine}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.productName}>{line.productName}</Text>
-                <Text style={styles.productInfo}>
+                <Text style={[typography.bodySmall, styles.productName]}>{line.productName}</Text>
+                <Text style={[typography.dimSmall, styles.productInfo]}>
                   {formatCatalogPrice(line.price)} · Stock: {line.stock}{!isOnline ? ' · ref.' : ''}
                 </Text>
               </View>
@@ -773,11 +773,11 @@ function SaleScreenInner() {
                   style={styles.qtyBtn}
                   onPress={() => updateSaleQty(line.productId, line.qty - 1)}
                 >
-                  <Text style={styles.qtyBtnText}>−</Text>
+                  <Text style={typography.stepperGlyph}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   accessibilityLabel={`Piezas de ${line.productName}`}
-                  style={styles.qtyValue}
+                  style={[typography.scoreValue, styles.qtyValue]}
                   value={String(line.qty)}
                   onChangeText={(text) => setSaleQtyFromText(line.productId, text)}
                   keyboardType="number-pad"
@@ -789,7 +789,7 @@ function SaleScreenInner() {
                   style={styles.qtyBtn}
                   onPress={() => updateSaleQty(line.productId, line.qty + 1)}
                 >
-                  <Text style={styles.qtyBtnText}>+</Text>
+                  <Text style={typography.stepperGlyph}>+</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -828,26 +828,26 @@ function SaleScreenInner() {
         {/* Totals card */}
         <Card style={styles.totalsCard}>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>{formatCurrency(subtotal)}</Text>
+            <Text style={[typography.dim, styles.totalLabel]}>Subtotal</Text>
+            <Text style={typography.metricValue}>{formatCurrency(subtotal)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Impuestos</Text>
-            <Text style={styles.totalValue}>{formatCurrency(tax)}</Text>
+            <Text style={[typography.dim, styles.totalLabel]}>Impuestos</Text>
+            <Text style={typography.metricValue}>{formatCurrency(tax)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total kg</Text>
-            <Text style={[styles.totalValue, { color: colors.primary }]}>
+            <Text style={[typography.dim, styles.totalLabel]}>Total kg</Text>
+            <Text style={[typography.metricValue, { color: colors.primary }]}>
               {totalKg.toFixed(1)} kg
             </Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.totalRow}>
-            <Text style={styles.grandTotalLabel}>TOTAL</Text>
-            <Text style={styles.grandTotalValue}>{formatCurrency(total)}</Text>
+            <Text style={[typography.body, styles.grandTotalLabel]}>TOTAL</Text>
+            <Text style={[typography.kpiValueLarge, styles.grandTotalValue]}>{formatCurrency(total)}</Text>
           </View>
           {!isOnline && (
-            <Text style={styles.referentialNote}>
+            <Text style={[typography.dimSmall, styles.referentialNote]}>
               ⚠️ Precios y stock REFERENCIALES (sin conexión). Odoo confirma el monto al sincronizar.
             </Text>
           )}
@@ -870,25 +870,25 @@ function SaleScreenInner() {
         </View>
 
         <View style={styles.analyticsInfo}>
-          <Text style={styles.sectionTitle}>Analiticas</Text>
-          <Text style={styles.analyticsInfoText}>
+          <Text style={typography.sectionTitle}>Analiticas</Text>
+          <Text style={[typography.dim, styles.analyticsInfoText]}>
             Plaza: {employeeAnalyticPlazaName || 'Sin configurar en empleado'}
           </Text>
-          <Text style={styles.analyticsInfoText}>
+          <Text style={[typography.dim, styles.analyticsInfoText]}>
             Unidad de negocio: CEDIS
           </Text>
         </View>
 
         {/* Mandatory photo */}
-        <Text style={styles.sectionTitle}>📸 Foto del congelador (obligatoria)</Text>
+        <Text style={typography.sectionTitle}>📸 Foto del congelador (obligatoria)</Text>
         {salePhotoTaken ? (
           <View style={styles.photoDone}>
-            <Text style={{ fontSize: 28 }}>📸</Text>
-            <Text style={{ fontSize: 12, color: colors.success, fontWeight: '600' }}>
+            <Text style={typography.stateIcon}>📸</Text>
+            <Text style={[typography.dim, { color: colors.success, fontWeight: '600' }]}>
               {salePhotoUris.length} {salePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
             <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddSalePhoto}>
-              <Text style={styles.addPhotoText}>Agregar otra foto</Text>
+              <Text style={[typography.buttonSmall, styles.addPhotoText]}>Agregar otra foto</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -896,11 +896,11 @@ function SaleScreenInner() {
             style={styles.photoReq}
             onPress={handleAddSalePhoto}
           >
-            <Text style={{ fontSize: 32 }}>📸</Text>
-            <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600' }}>
+            <Text style={typography.stateIcon}>📸</Text>
+            <Text style={[typography.bodySmall, { color: colors.primary, fontWeight: '600' }]}>
               Tomar foto del congelador
             </Text>
-            <Text style={{ fontSize: 10, color: colors.textDim }}>
+            <Text style={typography.dimSmall}>
               Encuadra el congelador con el producto acomodado
             </Text>
           </TouchableOpacity>
@@ -908,10 +908,10 @@ function SaleScreenInner() {
 
         {routeLoadState.hasPendingLoad && routeLoadState.nextPendingLoad && (
           <View style={styles.loadWarning}>
-            <Text style={styles.loadWarningTitle}>
+            <Text style={[typography.dim, styles.loadWarningTitle]}>
               {routeLoadState.nextPendingLoad.isRefill ? 'Recarga pendiente' : 'Carga pendiente'}
             </Text>
-            <Text style={styles.loadWarningLine}>
+            <Text style={[typography.dimSmall, styles.loadWarningLine]}>
               Acepta {routeLoadState.nextPendingLoad.name} en Inicio antes de confirmar ventas.
             </Text>
           </View>
@@ -920,13 +920,13 @@ function SaleScreenInner() {
         {/* Stock referencial: aviso, no bloqueo — el backend valida el real */}
         {stockIssues.length > 0 && (
           <View style={styles.stockWarning}>
-            <Text style={styles.stockWarningTitle}>⚠️ Sobre stock de referencia</Text>
+            <Text style={[typography.dim, styles.stockWarningTitle]}>⚠️ Sobre stock de referencia</Text>
             {stockIssues.map((issue) => (
-              <Text key={issue.productId} style={styles.stockWarningLine}>
+              <Text key={issue.productId} style={[typography.dimSmall, styles.stockWarningLine]}>
                 {issue.name}: pides {issue.requested}, referencia {issue.available}
               </Text>
             ))}
-            <Text style={styles.stockWarningLine}>
+            <Text style={[typography.dimSmall, styles.stockWarningLine]}>
               El servidor validará el stock real al confirmar.
             </Text>
           </View>
@@ -938,10 +938,10 @@ function SaleScreenInner() {
           patrón anterior de "botón al fondo del scroll con FABs encima". */}
       <View style={styles.fixedBar}>
         <View style={styles.fixedBarTotal}>
-          <Text style={styles.fixedBarTotalLabel}>
+          <Text style={[typography.dim, styles.fixedBarTotalLabel]}>
             TOTAL{saleLines.length > 0 ? ` · ${saleLines.reduce((sum, l) => sum + l.qty, 0)} piezas` : ''}
           </Text>
-          <Text style={styles.fixedBarTotalValue}>{formatCurrency(total)}</Text>
+          <Text style={[typography.kpiValueLarge, styles.fixedBarTotalValue]}>{formatCurrency(total)}</Text>
         </View>
 
         {saleConfirmed && afterSaleAction ? (
@@ -983,7 +983,7 @@ function SaleScreenInner() {
             {/* Aviso offline bajo el botón (no se deshabilita: conectividad
                 intermitente; el guard de confirmación cubre el caso offline). */}
             {saleOffline.buttonHint && (
-              <Text style={styles.validationHint}>{saleOffline.buttonHint}</Text>
+              <Text style={[typography.dimSmall, styles.validationHint]}>{saleOffline.buttonHint}</Text>
             )}
 
             {/* Validation feedback — razón única y clara de por qué está
@@ -997,7 +997,7 @@ function SaleScreenInner() {
                 hasWarehouse,
                 routeLoadAccepted: canStartSale,
               });
-              return reason ? <Text style={styles.validationHint}>{reason}</Text> : null;
+              return reason ? <Text style={[typography.dimSmall, styles.validationHint]}>{reason}</Text> : null;
             })()}
           </>
         )}
@@ -1020,8 +1020,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 16 },
-  customerName: { fontSize: 12, color: colors.textDim, marginBottom: 2 },
-  forecastHint: { fontSize: 11, color: colors.primary, marginBottom: 14 },
+  customerName: { color: colors.textDim, marginBottom: 2 },
+  forecastHint: { color: colors.primary, marginBottom: 14 },
   emptyProducts: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
@@ -1040,8 +1040,8 @@ const styles = StyleSheet.create({
     borderRadius: radii.button,
     marginBottom: 5,
   },
-  productName: { fontSize: 13, fontWeight: '600', color: colors.text },
-  productInfo: { fontSize: 11, color: colors.textDim },
+  productName: { fontWeight: '600', color: colors.text },
+  productInfo: { color: colors.textDim },
   qtyControls: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   qtyBtn: {
     width: 46, height: 46, borderRadius: 16,
@@ -1049,10 +1049,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.borderLight,
     alignItems: 'center', justifyContent: 'center',
   },
-  qtyBtnText: { fontSize: 20, fontWeight: '700', color: colors.text },
   qtyValue: {
-    fontFamily: fonts.monoBold,
-    fontSize: 16, fontWeight: '700', color: colors.text,
     minWidth: 48, height: 46, textAlign: 'center',
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.borderLight,
@@ -1071,15 +1068,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 7,
   },
-  totalLabel: { fontSize: 12, color: colors.textDim },
-  totalValue: { fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text },
-  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 6 },
-  referentialNote: { fontSize: 11, color: colors.warning, fontWeight: '600', marginTop: 8, lineHeight: 15 },
-  grandTotalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
-  grandTotalValue: {
-    fontFamily: fonts.monoBold,
-    fontSize: 22, fontWeight: '700', color: colors.success,
-  },
+  totalLabel: { color: colors.textDim },
+  divider: { height: 1, backgroundColor: colors.border, marginVertical: 6 },
+  referentialNote: { color: colors.warning, fontWeight: '600', marginTop: 8, lineHeight: 15 },
+  grandTotalLabel: { fontWeight: '700', color: colors.text },
+  grandTotalValue: { color: colors.success },
   // Payment
   paymentRow: { flexDirection: 'row', gap: 6, marginVertical: 10 },
   analyticsInfo: {
@@ -1089,18 +1082,13 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   analyticsInfoText: {
-    fontSize: 12,
     color: colors.text,
     marginTop: 4,
   },
   // Photo
-  sectionTitle: {
-    fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
-    letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
-  },
   photoReq: {
     backgroundColor: colors.cardLighter,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(37,99,235,0.3)',
+    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(0,119,187,0.3)',
     borderRadius: radii.card, padding: 28, alignItems: 'center', gap: 6,
   },
   photoDone: {
@@ -1116,12 +1104,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryAlpha12,
   },
   addPhotoText: {
-    fontSize: 12,
     color: colors.primary,
-    fontWeight: '700',
   },
   validationHint: {
-    fontSize: 11, color: colors.warning, textAlign: 'center', marginTop: 8,
+    color: colors.warning, textAlign: 'center', marginTop: 8,
   },
   fixedBar: {
     paddingHorizontal: spacing.screenPadding,
@@ -1138,40 +1124,38 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   fixedBarTotalLabel: {
-    fontSize: 12, fontWeight: '700', color: colors.textDim,
+    fontWeight: '700', color: colors.textDim,
   },
   fixedBarTotalValue: {
-    fontSize: 22, fontWeight: '800', color: colors.success,
+    fontWeight: '800', color: colors.success,
   },
   loadWarning: {
     backgroundColor: colors.warningAlpha08,
     borderWidth: 1,
-    borderColor: 'rgba(245,158,11,0.28)',
+    borderColor: 'rgba(180,83,9,0.28)',
     borderRadius: radii.button,
     padding: 10,
     marginTop: 8,
   },
   loadWarningTitle: {
-    fontSize: 12,
     fontWeight: '700',
     color: colors.warning,
     marginBottom: 4,
   },
   loadWarningLine: {
-    fontSize: 11,
     color: colors.warning,
     lineHeight: 16,
   },
   // V1.2
   stockWarning: {
     backgroundColor: colors.errorAlpha08, borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.15)', borderRadius: radii.button,
+    borderColor: 'rgba(185,28,28,0.15)', borderRadius: radii.button,
     padding: 10, marginTop: 8,
   },
   stockWarningTitle: {
-    fontSize: 12, fontWeight: '700', color: colors.error, marginBottom: 4,
+    fontWeight: '700', color: colors.error, marginBottom: 4,
   },
   stockWarningLine: {
-    fontSize: 11, color: colors.error, lineHeight: 16,
+    color: colors.error, lineHeight: 16,
   },
 });

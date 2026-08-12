@@ -15,7 +15,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Input } from '../../src/components/ui/Input';
 import { Chip } from '../../src/components/ui/Chip';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -466,7 +466,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
   },
-  reqStatus: { fontWeight: '700' },
+  reqStatus: { fontFamily: fonts.bodyBold, fontWeight: '700' },
   reqOk: { color: colors.success },
   reqPending: { color: colors.textDim },
 });

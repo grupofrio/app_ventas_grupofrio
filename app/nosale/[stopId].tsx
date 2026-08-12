@@ -11,7 +11,7 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Chip } from '../../src/components/ui/Chip';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -343,7 +343,7 @@ export default function NoSaleScreen() {
         {noSalePhotoTaken ? (
           <View style={styles.photoDone}>
             <Text style={typography.stateIcon}>📸</Text>
-            <Text style={[typography.dim, { color: colors.success, fontWeight: '600' }]}>
+            <Text style={[typography.dim, { color: colors.success, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               {noSalePhotoUris.length} {noSalePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
             <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddNoSalePhoto}>
@@ -356,7 +356,7 @@ export default function NoSaleScreen() {
             onPress={handleAddNoSalePhoto}
           >
             <Text style={typography.stateIcon}>📸</Text>
-            <Text style={[typography.bodySmall, { color: colors.primary, fontWeight: '600' }]}>
+            <Text style={[typography.bodySmall, { color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               Tomar foto de no-venta
             </Text>
             <Text style={typography.dimSmall}>

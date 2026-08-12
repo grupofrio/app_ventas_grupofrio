@@ -13,7 +13,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { Badge } from '../../src/components/ui/Badge';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
@@ -646,14 +646,14 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     padding: 14, marginBottom: 10,
   },
-  geoStatusText: { fontWeight: '600' },
+  geoStatusText: { fontFamily: fonts.bodyBold, fontWeight: '700' },
   distanceBar: { marginBottom: 10 },
   distanceTrack: {
     height: 6, backgroundColor: colors.border,
     borderRadius: 3, overflow: 'hidden',
   },
   distanceFill: { height: 6, borderRadius: 3 },
-  distanceLabel: { fontWeight: '600', textAlign: 'center', marginTop: 4 },
+  distanceLabel: { fontFamily: fonts.bodyBold, fontWeight: '700', textAlign: 'center', marginTop: 4 },
   checkInActionRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -665,7 +665,7 @@ const styles = StyleSheet.create({
   retryBtn: {
     alignItems: 'center', paddingVertical: 12, marginTop: 8,
   },
-  retryText: { color: colors.primary, fontWeight: '600' },
+  retryText: { color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
   // GPS confirmation (post check-in)
   geoBar: {
     backgroundColor: colors.successAlpha08,
@@ -673,7 +673,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.button, padding: 10,
     alignItems: 'center', marginBottom: 10,
   },
-  geoBarText: { fontWeight: '600', color: colors.success },
+  geoBarText: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.success },
   flashBar: {
     backgroundColor: colors.successAlpha08,
     borderColor: colors.successAlpha12,
@@ -685,6 +685,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   flashText: {
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
     color: colors.success,
   },
@@ -700,7 +701,7 @@ const styles = StyleSheet.create({
     flexGrow: 1, flexBasis: '46%',
   },
   actionPrimary: { backgroundColor: colors.primary },
-  actionLabel: { fontWeight: '700', color: colors.text },
+  actionLabel: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
   metricRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 7, borderBottomWidth: 1,

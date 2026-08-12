@@ -8,7 +8,7 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, ViewStyle } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
-import { typography } from '../../theme/typography';
+import { typography, fonts } from '../../theme/typography';
 
 interface ChipProps {
   label: string;
@@ -60,5 +60,5 @@ const styles = StyleSheet.create({
   },
   chipDisabled: { opacity: 0.5 },
   label: { color: colors.textDim, fontWeight: '500' },
-  labelSelected: { color: colors.primary, fontWeight: '700' },
+  labelSelected: { color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
 });

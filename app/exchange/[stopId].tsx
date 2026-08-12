@@ -27,7 +27,7 @@ import { useProductStore } from '../../src/stores/useProductStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { colors, radii, spacing } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 
 type ExchangeSection = 'delivery' | 'merma';
@@ -584,7 +584,7 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 8,
   },
-  sectionTitle: { ...typography.bodySmall, fontWeight: '700' },
+  sectionTitle: { ...typography.bodySmall, fontFamily: fonts.bodyBold, fontWeight: '700' },
   sectionSubtitle: {
     ...typography.dim,
     marginTop: 3,
@@ -614,12 +614,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   selectorPlaceholder: { ...typography.body, color: colors.textDim },
-  selectorValue: { ...typography.body, fontWeight: '700' },
+  selectorValue: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700' },
   selectorMeta: {
     ...typography.dimSmall,
     marginTop: 2,
   },
-  selectorAction: { ...typography.dim, color: colors.primary, fontWeight: '700' },
+  selectorAction: { ...typography.dim, color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
   qtyRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -659,12 +659,12 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
   },
-  evidenceTitle: { ...typography.body, fontWeight: '700' },
+  evidenceTitle: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700' },
   evidenceCopy: {
     ...typography.dim,
     marginTop: 4,
   },
-  photoCount: { ...typography.dim, color: colors.primary, fontWeight: '700' },
+  photoCount: { ...typography.dim, color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

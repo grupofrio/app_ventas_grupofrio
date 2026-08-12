@@ -12,7 +12,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { Badge } from '../../src/components/ui/Badge';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -381,7 +381,7 @@ function CheckoutScreenInner() {
                   <Text style={typography.stepperGlyph}>📍</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[typography.body, { fontWeight: '700' }]}>
+                  <Text style={[typography.body, { fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
                     {nextStop.customer_name}
                   </Text>
                   <Text style={typography.dimSmall}>
@@ -523,6 +523,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.errorAlpha08,
   },
   saleErrorTitle: {
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
     color: colors.error,
     marginBottom: 6,

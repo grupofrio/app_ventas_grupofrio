@@ -46,7 +46,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { typography } from '../src/theme/typography';
+import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useSalesStore } from '../src/stores/useSalesStore';
 import { useRouteStore } from '../src/stores/useRouteStore';
@@ -821,7 +821,7 @@ export default function CashCloseScreen() {
               line.highlight && styles.highlightValue,
               line.pending && styles.pendingValue,
               line.unavailable && styles.unavailableValue,
-              isCollectionDiff && hasLiquidationData && { color: collectionDiffColor, fontWeight: '700' as const },
+              isCollectionDiff && hasLiquidationData && { color: collectionDiffColor, fontFamily: fonts.bodyBold, fontWeight: '700' as const },
             ];
             return (
               <View key={line.label} style={styles.summaryRow}>
@@ -984,7 +984,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginBottom: 8,
   },
-  syncMetric: { ...typography.bodySmall, fontWeight: '700', marginBottom: 10 },
+  syncMetric: { ...typography.bodySmall, fontFamily: fonts.bodyBold, fontWeight: '700', marginBottom: 10 },
   syncBtn: {
     backgroundColor: colors.primary,
     borderRadius: radii.button,
@@ -1033,6 +1033,7 @@ const styles = StyleSheet.create({
   summaryValue: { ...typography.body },
   highlightLabel: {
     color: colors.text,
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
   },
   highlightValue: {
@@ -1097,7 +1098,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     paddingVertical: spacing.sm,
   },
-  productName: { ...typography.bodySmall, fontWeight: '700', marginBottom: 3 },
+  productName: { ...typography.bodySmall, fontFamily: fonts.bodyBold, fontWeight: '700', marginBottom: 3 },
   productMeta: { ...typography.dimSmall, lineHeight: 16 },
   adjustmentGrid: {
     flexDirection: 'row',
@@ -1110,6 +1111,7 @@ const styles = StyleSheet.create({
   adjustmentLabel: {
     ...typography.dimSmall,
     marginBottom: 4,
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
   },
   adjustmentInput: {
@@ -1125,6 +1127,7 @@ const styles = StyleSheet.create({
   productDiff: {
     ...typography.dim,
     marginTop: 3,
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
   },
   primaryAction: {
@@ -1175,6 +1178,7 @@ const styles = StyleSheet.create({
   confirmedBadgeText: {
     ...typography.bodySmall,
     color: colors.success,
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
     textAlign: 'center',
   },
@@ -1202,10 +1206,9 @@ const styles = StyleSheet.create({
   },
   infoIcon: { ...typography.stepperGlyph, fontWeight: '400' },
   infoText: {
-    ...typography.dim,
+    ...typography.body,
     flex: 1,
     color: colors.text,
-    fontWeight: '500',
     lineHeight: 16,
   },
   statusCard: {
@@ -1235,7 +1238,8 @@ const styles = StyleSheet.create({
   statusErrorText: {
     ...typography.bodySmall,
     color: colors.error,
-    fontWeight: '600',
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
     textAlign: 'center',
     marginBottom: spacing.sm,
   },
@@ -1247,5 +1251,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(185,28,28,0.4)',
   },
-  retryButtonText: { ...typography.bodySmall, color: colors.error, fontWeight: '700' },
+  retryButtonText: { ...typography.bodySmall, color: colors.error, fontFamily: fonts.bodyBold, fontWeight: '700' },
 });

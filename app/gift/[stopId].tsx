@@ -17,7 +17,7 @@ import { Card } from '../../src/components/ui/Card';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { GiftProductPicker } from '../../src/components/domain/GiftProductPicker';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
@@ -429,7 +429,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
-  headerTitle: { fontWeight: '700' },
+  headerTitle: { fontFamily: fonts.bodyBold, fontWeight: '700' },
   headerSubtitle: { marginTop: 6, lineHeight: 18 },
   lineCard: {
     backgroundColor: colors.card,
@@ -443,8 +443,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  lineTitle: { fontWeight: '700' },
-  removeText: { color: colors.error, fontWeight: '600' },
+  lineTitle: { fontFamily: fonts.bodyBold, fontWeight: '700' },
+  removeText: { color: colors.error, fontFamily: fonts.bodyBold, fontWeight: '700' },
   selector: {
     backgroundColor: colors.cardLighter,
     borderRadius: radii.button,
@@ -455,7 +455,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   selectorPlaceholder: { color: colors.textDim },
-  selectorValue: { color: colors.text, fontWeight: '600' },
+  selectorValue: { color: colors.text, fontFamily: fonts.bodyBold, fontWeight: '700' },
   qtyInput: {
     backgroundColor: colors.cardLighter,
     borderRadius: radii.button,
@@ -484,7 +484,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   analyticsValue: {
-    fontWeight: '600',
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
     marginTop: 4,
   },
   analyticsMeta: {

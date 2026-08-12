@@ -7,7 +7,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ViewStyle } from 'react-native';
 import { colors, radii, spacing, state } from '../../theme/tokens';
-import { typography } from '../../theme/typography';
+import { typography, fonts } from '../../theme/typography';
 import { Button } from './Button';
 
 interface ErrorStateProps {
@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   glifo: { marginBottom: 8, color: colors.error },
-  title: { textAlign: 'center', color: colors.error, fontWeight: '700' },
+  title: { textAlign: 'center', color: colors.error, fontFamily: fonts.bodyBold, fontWeight: '700' },
   message: { textAlign: 'center', marginTop: 4 },
   action: { marginTop: 14 },
 });

@@ -8,7 +8,7 @@
 import React from 'react';
 import { View, Text, TextInput, TextInputProps, StyleSheet, ViewStyle } from 'react-native';
 import { colors, radii, spacing } from '../../theme/tokens';
-import { typography } from '../../theme/typography';
+import { typography, fonts } from '../../theme/typography';
 
 interface InputProps extends TextInputProps {
   label?: string;
@@ -42,5 +42,5 @@ const styles = StyleSheet.create({
     minHeight: spacing.screenPadding * 2 + 6,
   },
   inputError: { borderColor: colors.error },
-  errorText: { color: colors.error, fontWeight: '600' },
+  errorText: { color: colors.error, fontFamily: fonts.bodyBold, fontWeight: '700' },
 });

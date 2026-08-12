@@ -20,7 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { typography } from '../src/theme/typography';
+import { typography, fonts } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
@@ -397,7 +397,8 @@ const styles = StyleSheet.create({
     ...typography.dimSmall,
     color: colors.primary,
     marginBottom: 10,
-    fontWeight: '600',
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
   },
   list: { paddingBottom: 80 },
   customerCard: {
@@ -409,7 +410,7 @@ const styles = StyleSheet.create({
   customerCardDisabled: {
     opacity: 0.65,
   },
-  customerName: { ...typography.body, fontWeight: '700' },
+  customerName: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700' },
   customerSubtitle: { ...typography.dim, marginTop: 2 },
   customerContact: { ...typography.dimSmall, color: colors.primary, marginTop: 2 },
   resultMeta: { alignItems: 'flex-end', gap: 8, marginLeft: 8 },

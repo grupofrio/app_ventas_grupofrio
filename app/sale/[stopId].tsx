@@ -19,7 +19,7 @@ import {
 import { describeSaleConfirmBlock } from '../../src/services/trustSignals';
 import { getSaleSyncState } from '../../src/services/saleSyncState';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
@@ -884,7 +884,7 @@ function SaleScreenInner() {
         {salePhotoTaken ? (
           <View style={styles.photoDone}>
             <Text style={typography.stateIcon}>📸</Text>
-            <Text style={[typography.dim, { color: colors.success, fontWeight: '600' }]}>
+            <Text style={[typography.dim, { color: colors.success, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               {salePhotoUris.length} {salePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
             <TouchableOpacity style={styles.addPhotoBtn} onPress={handleAddSalePhoto}>
@@ -897,7 +897,7 @@ function SaleScreenInner() {
             onPress={handleAddSalePhoto}
           >
             <Text style={typography.stateIcon}>📸</Text>
-            <Text style={[typography.bodySmall, { color: colors.primary, fontWeight: '600' }]}>
+            <Text style={[typography.bodySmall, { color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               Tomar foto del congelador
             </Text>
             <Text style={typography.dimSmall}>
@@ -1040,7 +1040,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.button,
     marginBottom: 5,
   },
-  productName: { fontWeight: '600', color: colors.text },
+  productName: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
   productInfo: { color: colors.textDim },
   qtyControls: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   qtyBtn: {
@@ -1070,8 +1070,8 @@ const styles = StyleSheet.create({
   },
   totalLabel: { color: colors.textDim },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 6 },
-  referentialNote: { color: colors.warning, fontWeight: '600', marginTop: 8, lineHeight: 15 },
-  grandTotalLabel: { fontWeight: '700', color: colors.text },
+  referentialNote: { color: colors.warning, fontFamily: fonts.bodyBold, fontWeight: '700', marginTop: 8, lineHeight: 15 },
+  grandTotalLabel: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
   grandTotalValue: { color: colors.success },
   // Payment
   paymentRow: { flexDirection: 'row', gap: 6, marginVertical: 10 },
@@ -1124,7 +1124,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   fixedBarTotalLabel: {
-    fontWeight: '700', color: colors.textDim,
+    fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.textDim,
   },
   fixedBarTotalValue: {
     fontWeight: '800', color: colors.success,
@@ -1138,6 +1138,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   loadWarningTitle: {
+    fontFamily: fonts.bodyBold,
     fontWeight: '700',
     color: colors.warning,
     marginBottom: 4,
@@ -1153,7 +1154,7 @@ const styles = StyleSheet.create({
     padding: 10, marginTop: 8,
   },
   stockWarningTitle: {
-    fontWeight: '700', color: colors.error, marginBottom: 4,
+    fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.error, marginBottom: 4,
   },
   stockWarningLine: {
     color: colors.error, lineHeight: 16,

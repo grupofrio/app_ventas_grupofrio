@@ -12,7 +12,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
 import { CacheStatusBadge } from '../../src/components/ui/CacheStatusBadge';
 import { colors, spacing, radii, stopStateColors } from '../../src/theme/tokens';
-import { typography } from '../../src/theme/typography';
+import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { GFStop } from '../../src/types/plan';
@@ -566,12 +566,12 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  moreActionsText: { fontWeight: '700', color: colors.text },
+  moreActionsText: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
   pendingOrdersBanner: {
     backgroundColor: colors.warningAlpha12, borderWidth: 1, borderColor: 'rgba(180,83,9,0.45)',
     borderRadius: radii.button, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10,
   },
-  pendingOrdersText: { color: colors.text, fontWeight: '600' },
+  pendingOrdersText: { color: colors.text, fontFamily: fonts.bodyBold, fontWeight: '700' },
   cardBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   routeTypeRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
@@ -614,7 +614,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,119,187,0.35)',
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardName: { flex: 1, fontWeight: '700', marginRight: 8 },
+  cardName: { flex: 1, fontFamily: fonts.bodyBold, fontWeight: '700', marginRight: 8 },
   cardActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
   mapsButton: { minWidth: 104 },
   empty: { backgroundColor: colors.card, borderRadius: radii.card, padding: 20, alignItems: 'center' },

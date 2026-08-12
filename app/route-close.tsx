@@ -25,7 +25,7 @@ import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
 import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { typography } from '../src/theme/typography';
+import { typography, fonts } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
   kmDrivenRow: {
     marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border,
   },
-  kmDrivenLabel: { ...typography.bodySmall, fontWeight: '700' },
+  kmDrivenLabel: { ...typography.bodySmall, fontFamily: fonts.bodyBold, fontWeight: '700' },
   kmDrivenValue: { ...typography.scoreValue, color: colors.primary },
   kmWarn: {
     ...typography.dim, color: colors.warning, marginTop: 6, lineHeight: 16,
@@ -471,7 +471,7 @@ const styles = StyleSheet.create({
     padding: 16, borderRadius: radii.card, borderWidth: 1,
     borderColor: 'rgba(22,101,52,0.3)', backgroundColor: colors.successAlpha08, marginTop: 4,
   },
-  closeTitle: { ...typography.body, fontWeight: '700', marginBottom: 6 },
+  closeTitle: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700', marginBottom: 6 },
   closeBody: { ...typography.dim, lineHeight: 17, marginBottom: 12 },
   closeHint: { ...typography.dimSmall, marginTop: 8, textAlign: 'center' },
   syncBlock: {

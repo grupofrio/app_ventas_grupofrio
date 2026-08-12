@@ -30,7 +30,7 @@ function main() {
   );
   assert.match(
     checkinScreen,
-    /Text style=\{styles\.actionLabel\}>Registrar Regalo</,
+    /Text style=\{\[typography\.bodySmall, styles\.actionLabel\]\}>Registrar Regalo</,
     'el grid post-check-in debe mostrar Registrar Regalo junto a Venta',
   );
   assert.match(

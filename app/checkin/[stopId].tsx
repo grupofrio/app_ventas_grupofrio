@@ -13,7 +13,7 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { Badge } from '../../src/components/ui/Badge';
 import { colors, spacing, radii } from '../../src/theme/tokens';
-import { typography, fonts } from '../../src/theme/typography';
+import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
@@ -323,18 +323,18 @@ export default function CheckinScreen() {
   // GPS status display
   const gpsStatusInfo = (() => {
     if (gpsLoading) return { icon: '⏳', text: 'Obteniendo ubicación...', color: colors.textDim };
-    if (locStatus === 'denied') return { icon: '🚫', text: 'GPS denegado. Habilita ubicación.', color: '#EF4444' };
-    if (locStatus === 'error') return { icon: '⚠️', text: locError || 'Error GPS', color: '#F59E0B' };
-    if (!hasCustomerCoords) return { icon: '📍', text: 'Cliente sin coordenadas (check-in libre)', color: '#F59E0B' };
+    if (locStatus === 'denied') return { icon: '🚫', text: 'GPS denegado. Habilita ubicación.', color: colors.error };
+    if (locStatus === 'error') return { icon: '⚠️', text: locError || 'Error GPS', color: colors.warning };
+    if (!hasCustomerCoords) return { icon: '📍', text: 'Cliente sin coordenadas (check-in libre)', color: colors.warning };
     if (canSkipGeofence && !isWithinFence) {
       return {
         icon: '🟠',
         text: `A ${Math.round(distanceMeters || 0)}m del cliente · excepción por permiso`,
-        color: '#F59E0B',
+        color: colors.warning,
       };
     }
     if (isWithinFence) return { icon: '✅', text: `A ${Math.round(distanceMeters || 0)}m del cliente`, color: colors.success };
-    return { icon: '🔴', text: `A ${Math.round(distanceMeters || 0)}m — necesitas estar a <${GEOFENCE_RADIUS_M}m`, color: '#EF4444' };
+    return { icon: '🔴', text: `A ${Math.round(distanceMeters || 0)}m — necesitas estar a <${GEOFENCE_RADIUS_M}m`, color: colors.error };
   })();
 
   const forecast = stop._koldForecast;
@@ -345,7 +345,7 @@ export default function CheckinScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Check-in" showBack />
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
-          <Text style={styles.customerName}>{stop.customer_name}</Text>
+          <Text style={[typography.body, styles.customerName]}>{stop.customer_name}</Text>
           {stop.customer_ref && (
             <Text style={[typography.dimSmall, { textAlign: 'center' }]}>
               Ref: {stop.customer_ref}
@@ -368,10 +368,10 @@ export default function CheckinScreen() {
             {gpsLoading ? (
               <ActivityIndicator color={colors.primary} size="small" />
             ) : (
-              <Text style={{ fontSize: 24 }}>{gpsStatusInfo.icon}</Text>
+              <Text style={typography.stateIcon}>{gpsStatusInfo.icon}</Text>
             )}
             <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={[styles.geoStatusText, { color: gpsStatusInfo.color }]}>
+              <Text style={[typography.bodySmall, styles.geoStatusText, { color: gpsStatusInfo.color }]}>
                 {gpsStatusInfo.text}
               </Text>
               {latitude && (
@@ -390,15 +390,15 @@ export default function CheckinScreen() {
                   styles.distanceFill,
                   {
                     width: `${Math.min(100, Math.max(5, (1 - distanceMeters / 200) * 100))}%`,
-                    backgroundColor: isWithinFence ? colors.success : '#EF4444',
+                    backgroundColor: isWithinFence ? colors.success : colors.error,
                   }
                 ]} />
               </View>
-              <Text style={[styles.distanceLabel, { color: isWithinFence ? colors.success : '#EF4444' }]}>
+              <Text style={[typography.dimSmall, styles.distanceLabel, { color: isWithinFence ? colors.success : colors.error }]}>
                 {Math.round(distanceMeters)}m / {GEOFENCE_RADIUS_M}m
               </Text>
               {canSkipGeofence && !isWithinFence && (
-                <Text style={[styles.distanceLabel, { color: '#F59E0B' }]}>
+                <Text style={[typography.dimSmall, styles.distanceLabel, { color: colors.warning }]}>
                   Check-in permitido por permiso del empleado
                 </Text>
               )}
@@ -445,7 +445,7 @@ export default function CheckinScreen() {
                 setGpsLoading(false);
               }}
             >
-              <Text style={styles.retryText}>🔄 Actualizar ubicación</Text>
+              <Text style={[typography.bodySmall, styles.retryText]}>🔄 Actualizar ubicación</Text>
             </TouchableOpacity>
           )}
 
@@ -453,7 +453,7 @@ export default function CheckinScreen() {
           {forecast && (
             <Card style={{ marginTop: 16 }}>
               <Text style={typography.dimSmall}>FORECAST HOY</Text>
-              <Text style={[typography.screenTitle, { color: colors.primary, fontSize: 18 }]}>
+              <Text style={[typography.screenTitle, { color: colors.primary }]}>
                 {forecast.predicted_kg.toFixed(0)} kg estimados
               </Text>
             </Card>
@@ -478,17 +478,17 @@ export default function CheckinScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* GPS confirmation bar */}
         <View style={styles.geoBar}>
-          <Text style={styles.geoBarText}>
+          <Text style={[typography.dimSmall, styles.geoBarText]}>
             📍 Check-in: {new Date(checkInTime || Date.now()).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
             {latitude ? ` · ${latitude.toFixed(4)}, ${longitude?.toFixed(4)}` : ''} ✓
           </Text>
         </View>
 
-        <Text style={styles.customerName}>{stop.customer_name}</Text>
+        <Text style={[typography.body, styles.customerName]}>{stop.customer_name}</Text>
 
         {flashMessage ? (
           <View style={styles.flashBar}>
-            <Text style={styles.flashText}>{flashMessage}</Text>
+            <Text style={[typography.dim, styles.flashText]}>{flashMessage}</Text>
           </View>
         ) : null}
 
@@ -500,8 +500,8 @@ export default function CheckinScreen() {
               style={[styles.actionBtn, styles.actionPrimary]}
               onPress={() => router.push(`/sale/${stop.id}` as never)}
             >
-              <Text style={styles.actionIcon}>🧾</Text>
-              <Text style={styles.actionLabel}>Hacer Venta</Text>
+              <Text style={typography.stateIcon}>🧾</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Hacer Venta</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -510,8 +510,8 @@ export default function CheckinScreen() {
               style={styles.actionBtn}
               onPress={() => router.push(`/gift/${stop.id}?from=checkin` as never)}
             >
-              <Text style={styles.actionIcon}>🎁</Text>
-              <Text style={styles.actionLabel}>Registrar Regalo</Text>
+              <Text style={typography.stateIcon}>🎁</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Registrar Regalo</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -520,8 +520,8 @@ export default function CheckinScreen() {
               style={styles.actionBtn}
               onPress={() => router.push(`/nosale/${stop.id}` as never)}
             >
-              <Text style={styles.actionIcon}>✕</Text>
-              <Text style={styles.actionLabel}>No Venta</Text>
+              <Text style={typography.stateIcon}>✕</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>No Venta</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -530,8 +530,8 @@ export default function CheckinScreen() {
               style={styles.actionBtn}
               onPress={() => router.push(`/postvisit/${stop.id}` as never)}
             >
-              <Text style={styles.actionIcon}>📋</Text>
-              <Text style={styles.actionLabel}>Datos</Text>
+              <Text style={typography.stateIcon}>📋</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Datos</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -542,8 +542,8 @@ export default function CheckinScreen() {
                 if (stop) router.push(`/collect/${stop.customer_id}` as never);
               }}
             >
-              <Text style={styles.actionIcon}>💰</Text>
-              <Text style={styles.actionLabel}>Cobrar</Text>
+              <Text style={typography.stateIcon}>💰</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Cobrar</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -552,8 +552,8 @@ export default function CheckinScreen() {
               style={styles.actionBtn}
               onPress={() => router.push(`/exchange/${stop.id}` as never)}
             >
-              <Text style={styles.actionIcon}>🔁</Text>
-              <Text style={styles.actionLabel}>Registrar Cambio</Text>
+              <Text style={typography.stateIcon}>🔁</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Registrar Cambio</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -562,8 +562,8 @@ export default function CheckinScreen() {
               style={styles.actionBtn}
               onPress={() => router.push(`/consignment/${stop.id}` as never)}
             >
-              <Text style={styles.actionIcon}>📦</Text>
-              <Text style={styles.actionLabel}>Consignación</Text>
+              <Text style={typography.stateIcon}>📦</Text>
+              <Text style={[typography.bodySmall, styles.actionLabel]}>Consignación</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -571,8 +571,8 @@ export default function CheckinScreen() {
             style={styles.actionBtn}
             onPress={() => router.push(`/presale?stopId=${stop.id}` as never)}
           >
-            <Text style={styles.actionIcon}>📅</Text>
-            <Text style={styles.actionLabel}>Preventa</Text>
+            <Text style={typography.stateIcon}>📅</Text>
+            <Text style={[typography.bodySmall, styles.actionLabel]}>Preventa</Text>
           </TouchableOpacity>
         </View>
 
@@ -594,22 +594,22 @@ export default function CheckinScreen() {
         ) : null}
 
         {/* Quick context card */}
-        <Text style={styles.sectionTitle}>CONTEXTO RAPIDO</Text>
+        <Text style={typography.sectionTitle}>CONTEXTO RAPIDO</Text>
         <Card>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Forecast hoy</Text>
-            <Text style={[styles.metricValue, { color: colors.primary }]}>
+            <Text style={typography.metricLabel}>Forecast hoy</Text>
+            <Text style={[typography.metricValue, { color: colors.primary }]}>
               {forecast ? `${forecast.predicted_kg.toFixed(0)} kg` : 'Sin dato'}
             </Text>
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Prob. compra</Text>
-            <Text style={styles.metricValue}>
+            <Text style={typography.metricLabel}>Prob. compra</Text>
+            <Text style={typography.metricValue}>
               {forecast ? `${(forecast.probability_of_purchase * 100).toFixed(0)}%` : 'Sin dato'}
             </Text>
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Confianza</Text>
+            <Text style={typography.metricLabel}>Confianza</Text>
             <Badge
               label={forecast?.confidence_level || 'Sin dato'}
               variant={forecast?.confidence_level === 'high' ? 'green' : forecast?.confidence_level === 'medium' ? 'yellow' : 'red'}
@@ -623,7 +623,7 @@ export default function CheckinScreen() {
             style={styles.checkoutBtn}
             onPress={() => router.push(`/checkout/${stop.id}` as never)}
           >
-            <Text style={styles.checkoutText}>✓ Check-out · Terminar Visita</Text>
+            <Text style={[typography.button, styles.checkoutText]}>✓ Check-out · Terminar Visita</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -636,8 +636,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   customerName: {
-    textAlign: 'center', fontSize: 15, fontWeight: '700',
-    color: colors.text, paddingVertical: 10,
+    textAlign: 'center', color: colors.text, paddingVertical: 10,
   },
   addressMuted: { fontStyle: 'italic', opacity: 0.7 },
   // Geofence card (pre check-in)
@@ -647,14 +646,14 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     padding: 14, marginBottom: 10,
   },
-  geoStatusText: { fontSize: 13, fontWeight: '600' },
+  geoStatusText: { fontWeight: '600' },
   distanceBar: { marginBottom: 10 },
   distanceTrack: {
-    height: 6, backgroundColor: 'rgba(255,255,255,0.08)',
+    height: 6, backgroundColor: colors.border,
     borderRadius: 3, overflow: 'hidden',
   },
   distanceFill: { height: 6, borderRadius: 3 },
-  distanceLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center', marginTop: 4 },
+  distanceLabel: { fontWeight: '600', textAlign: 'center', marginTop: 4 },
   checkInActionRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -666,15 +665,15 @@ const styles = StyleSheet.create({
   retryBtn: {
     alignItems: 'center', paddingVertical: 12, marginTop: 8,
   },
-  retryText: { fontSize: 13, color: colors.primary, fontWeight: '600' },
+  retryText: { color: colors.primary, fontWeight: '600' },
   // GPS confirmation (post check-in)
   geoBar: {
-    backgroundColor: 'rgba(34,197,94,0.08)',
-    borderWidth: 1, borderColor: 'rgba(34,197,94,0.15)',
+    backgroundColor: colors.successAlpha08,
+    borderWidth: 1, borderColor: colors.successAlpha12,
     borderRadius: radii.button, padding: 10,
     alignItems: 'center', marginBottom: 10,
   },
-  geoBarText: { fontSize: 11, fontWeight: '600', color: colors.success },
+  geoBarText: { fontWeight: '600', color: colors.success },
   flashBar: {
     backgroundColor: colors.successAlpha08,
     borderColor: colors.successAlpha12,
@@ -686,7 +685,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   flashText: {
-    fontSize: 12,
     fontWeight: '700',
     color: colors.success,
   },
@@ -702,26 +700,16 @@ const styles = StyleSheet.create({
     flexGrow: 1, flexBasis: '46%',
   },
   actionPrimary: { backgroundColor: colors.primary },
-  actionIcon: { fontSize: 24 },
-  actionLabel: { fontSize: 13, fontWeight: '700', color: colors.text },
-  sectionTitle: {
-    fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
-    letterSpacing: 0.7, color: colors.textDim,
-    marginTop: 16, marginBottom: 8,
-  },
+  actionLabel: { fontWeight: '700', color: colors.text },
   metricRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 7, borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.04)',
-  },
-  metricLabel: { fontSize: 12, color: colors.textDim, flex: 1 },
-  metricValue: {
-    fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.text,
+    borderBottomColor: colors.border,
   },
   checkoutBtn: {
     width: '100%', paddingVertical: 16,
     borderRadius: radii.card, alignItems: 'center',
     backgroundColor: colors.success,
   },
-  checkoutText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  checkoutText: { color: colors.textOnPrimary },
 });

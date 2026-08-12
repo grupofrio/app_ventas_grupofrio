@@ -49,6 +49,7 @@ import {
   canStartSaleWithRouteLoad,
 } from '../../src/services/routeLoadAcceptance';
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
+import { buildLocalStockDelta } from '../../src/services/stockRollback';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import {
   buildSaleTicketSnapshot,
@@ -412,6 +413,17 @@ function SaleScreenInner() {
       createdAt: new Date().toISOString(),
       lines: saleLines,
     });
+    // F3.2: descuento óptimo de inventario local (S2 — antes S1 no descontaba
+    // nada, permitiendo sobreventa offline; ver hallazgo P0 de la auditoría).
+    // El delta viaja en el payload encolado para que, si esta venta muere en
+    // la cola (rechazo definitivo tras reintentos agotados), el rollback
+    // genérico de useSyncStore.ts la revierta sola — no se llama aquí para el
+    // caso online-síntesis porque ahí no hay nada que revertir (ya se
+    // confirmó con Odoo).
+    const localStockDelta = buildLocalStockDelta(
+      saleLines.map((l) => ({ product_id: l.productId, qty: l.qty })),
+      -1,
+    );
     const recoveryIntent = createSaleRecoveryIntent({
       version: 1,
       operationId,
@@ -419,11 +431,15 @@ function SaleScreenInner() {
         ...payload,
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
+        _localStockDelta: localStockDelta,
       },
       stopId: stop.id,
       ticketSnapshot,
       photoUris: [...salePhotoUris],
     });
+    const deductLocalStockOptimistically = () => {
+      saleLines.forEach((l) => useProductStore.getState().updateLocalStock(l.productId, -l.qty));
+    };
 
     logInfo('general', 'sale_confirm_payload', {
       partner_id: salePartnerId,
@@ -516,6 +532,9 @@ function SaleScreenInner() {
         );
         return;
       }
+      // F3.2: la venta quedó durablemente encolada — descuenta la camioneta
+      // local ahora (antes de esto, S1 no descontaba nada offline).
+      deductLocalStockOptimistically();
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
       setLastSaleTicketId(operationId);
       setSaleSubmitting(false);
@@ -539,6 +558,9 @@ function SaleScreenInner() {
         recoveryIntent.ticketSnapshot,
         saleResult.name,
       );
+      // F3.2: Odoo ya confirmó — descuenta la camioneta local también aquí
+      // (no solo el refresh de loadProducts más abajo, que tarda en llegar).
+      deductLocalStockOptimistically();
     } catch (error) {
       const outcome = classifySaleSubmissionError(error);
       const metadata = readSaleSubmissionErrorMetadata(error);
@@ -622,6 +644,12 @@ function SaleScreenInner() {
         );
         return;
       }
+
+      // F3.2: respuesta ambigua (probablemente sí llegó a Odoo) — la venta
+      // queda encolada para verificación; descuenta la camioneta local igual
+      // que en la rama offline, con el mismo _localStockDelta como red de
+      // seguridad si termina en rechazo definitivo.
+      deductLocalStockOptimistically();
 
       void processQueue().catch((processError) => logError(
         'sync',

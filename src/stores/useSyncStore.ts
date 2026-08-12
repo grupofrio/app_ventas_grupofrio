@@ -1462,12 +1462,12 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
   // flujo se retiró; los eventos legacy los intercepta el guard antes de morir).
   switch (item.type) {
     case 'sale_order': {
-      // Pedido offline pendiente (política S1): NO se descuenta stock local al
-      // encolar (el backend valida/descuenta al confirmar en Odoo). Por lo tanto
-      // NO hay nada que restaurar si el pedido muere — restaurar aquí inflaría
-      // el inventario local. El pedido muerto queda visible en Sync y bloquea
-      // cierre/liquidación hasta resolverse. (Si se adoptara descuento optimista
-      // —S2— habría que reactivar la restauración.)
+      // F3.2 adoptó S2 (descuento optimista) — esas ventas ya traen
+      // `_localStockDelta` y se revierten arriba por la ruta genérica. Este
+      // caso solo se alcanza para ítems legacy pre-F3.2 sin delta (política
+      // S1: nunca se descontó al encolar, así que no hay nada que restaurar).
+      // El pedido muerto queda visible en Sync y bloquea cierre/liquidación
+      // hasta resolverse.
       logError('sync', 'sale_order_dead_no_stock_rollback', {
         id: item.id,
         lines: Array.isArray(item.payload.lines) ? item.payload.lines.length : 0,

@@ -90,11 +90,14 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
     });
 
     try {
-      // ── Step 1: ensure plan/stops ─────────────────────────────────────────
-      const route = useRouteStore.getState();
-      if (route.stops.length === 0 && useSyncStore.getState().isOnline) {
-        await route.loadPlan();
-      }
+      // ── Step 1: force-refresh plan/stops ───────────────────────────────────
+      // F3.1: precarga FORZADA — antes esto solo recargaba si el caché en
+      // memoria estaba vacío, así que "Preparar ruta" en un segundo tap (con
+      // el plan ya rehidratado) no bajaba nada nuevo. `loadPlan({ force: true })`
+      // invalida el caché y siempre pide de nuevo; su propio guard interno
+      // (useRouteStore.ts) sigue siendo offline-safe: sin conexión, conserva
+      // el plan cacheado tal cual en vez de fallar.
+      await useRouteStore.getState().loadPlan({ force: true });
       const refreshedRoute = useRouteStore.getState();
       const plan = refreshedRoute.plan;
       const stops = refreshedRoute.stops;
@@ -108,10 +111,15 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
         return;
       }
 
-      // ── Step 2: ensure products ───────────────────────────────────────────
+      // ── Step 2: force-refresh products ─────────────────────────────────────
+      // Mismo criterio que el plan: forzar siempre que haya conexión.
+      // loadProducts (a diferencia de loadPlan) no trae su propio guard de
+      // conectividad, así que lo decidimos aquí — sin red, se conserva el
+      // catálogo ya cargado en memoria en vez de intentar un fetch que
+      // fallaría.
       set({ currentStep: 'Cargando productos' });
       const productStore = useProductStore.getState();
-      if (productStore.products.length === 0 && auth.warehouseId) {
+      if (auth.warehouseId && useSyncStore.getState().isOnline) {
         await productStore.loadProducts(auth.warehouseId);
       }
       const products = useProductStore.getState().products;

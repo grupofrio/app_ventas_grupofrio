@@ -160,6 +160,11 @@ export function describeGeoStatus(input: {
   withinThresholdMeters?: number;
   lowAccuracyMeters?: number;
 }): GeoStatus {
+  // F3.6: el default espeja GEO_FENCE_RADIUS_M (useLocationStore.ts) sin
+  // importarlo — este módulo se mantiene deliberadamente sin imports
+  // cross-module para poder correr sus tests bajo node plano (ver docstring
+  // del archivo). El caller real (app/stop/[stopId].tsx) pasa
+  // withinThresholdMeters explícitamente desde la fuente única.
   const threshold = input.withinThresholdMeters ?? 50;
   const lowAcc = input.lowAccuracyMeters ?? 100;
 

@@ -25,7 +25,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore } from '../../src/stores/useKoldStore';
-import { useLocationStore } from '../../src/stores/useLocationStore';
+import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocationStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
@@ -95,6 +95,10 @@ export default function StopDetailScreen() {
     hasClientGeo,
     distanceMeters: geoDistance,
     accuracyMeters: realAccuracy,
+    // F3.6: unifica el radio de geocerca con la fuente única del store —
+    // antes describeGeoStatus caía a su propio default local (50m), una
+    // segunda copia del mismo valor sin relación con GEO_FENCE_RADIUS_M.
+    withinThresholdMeters: GEO_FENCE_RADIUS_M,
   });
   const scoreModuleAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const demandModuleAvailable = useKoldStore((s) => s.demandModuleAvailable);

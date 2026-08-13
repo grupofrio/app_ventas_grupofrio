@@ -14,7 +14,10 @@ import { create } from 'zustand';
 
 export type LocationStatus = 'loading' | 'denied' | 'unavailable' | 'ready' | 'error';
 
-const GEO_FENCE_RADIUS_M = 50;
+// F3.6: fuente única del radio de geocerca — antes checkin/[stopId].tsx y
+// trustSignals.ts declaraban su propia copia local del mismo valor (50m),
+// sin ninguna importada de aquí, así que un cambio futuro no se propagaba.
+export const GEO_FENCE_RADIUS_M = 50;
 
 interface LocationState {
   status: LocationStatus;

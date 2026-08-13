@@ -16,7 +16,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
-import { useLocationStore } from '../../src/stores/useLocationStore';
+import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
@@ -28,8 +28,6 @@ import { formatCustomerAddress } from '../../src/services/formatCustomerAddress'
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
-
-const GEOFENCE_RADIUS_M = 50;
 
 export default function CheckinScreen() {
   const {
@@ -144,7 +142,7 @@ export default function CheckinScreen() {
     if (!allowOffDistanceVisits && !isWithinFence && stop.customer_latitude && stop.customer_longitude) {
       Alert.alert(
         'Fuera de rango',
-        `Estás a ${Math.round(distanceMeters || 0)}m del cliente. Debes estar a menos de ${GEOFENCE_RADIUS_M}m para hacer check-in.`,
+        `Estás a ${Math.round(distanceMeters || 0)}m del cliente. Debes estar a menos de ${GEO_FENCE_RADIUS_M}m para hacer check-in.`,
         [{ text: 'Entendido' }]
       );
       return;
@@ -320,7 +318,7 @@ export default function CheckinScreen() {
       };
     }
     if (isWithinFence) return { icon: '✅', text: `A ${Math.round(distanceMeters || 0)}m del cliente`, color: colors.success };
-    return { icon: '🔴', text: `A ${Math.round(distanceMeters || 0)}m — necesitas estar a <${GEOFENCE_RADIUS_M}m`, color: colors.error };
+    return { icon: '🔴', text: `A ${Math.round(distanceMeters || 0)}m — necesitas estar a <${GEO_FENCE_RADIUS_M}m`, color: colors.error };
   })();
 
   const forecast = stop._koldForecast;
@@ -381,7 +379,7 @@ export default function CheckinScreen() {
                 ]} />
               </View>
               <Text style={[typography.dimSmall, styles.distanceLabel, { color: isWithinFence ? colors.success : colors.error }]}>
-                {Math.round(distanceMeters)}m / {GEOFENCE_RADIUS_M}m
+                {Math.round(distanceMeters)}m / {GEO_FENCE_RADIUS_M}m
               </Text>
               {canSkipGeofence && !isWithinFence && (
                 <Text style={[typography.dimSmall, styles.distanceLabel, { color: colors.warning }]}>

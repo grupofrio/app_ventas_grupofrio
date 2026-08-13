@@ -1277,6 +1277,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
           no_sale_competitor: payload.no_sale_competitor as string | undefined,
         },
         meta,
+        payload.operation_id as string | undefined,
       );
       break;
 
@@ -1317,6 +1318,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         (payload.reason_id as number) || 1,
         `No-venta: ${payload.reason_code || ''} ${payload.notes || ''}`.trim(),
         meta,
+        payload.operation_id as string | undefined,
       );
       break;
 

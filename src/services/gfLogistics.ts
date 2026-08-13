@@ -501,6 +501,11 @@ export async function checkOut(
   resultStatus: CheckoutResultStatus,
   noSaleDetail?: CheckOutNoSaleDetail | null,
   meta?: ClientEventMeta | null,
+  // F3.3: id estable a través de reintentos (misma sesión de intento, no uno
+  // nuevo por cada llamada). El backend TODAVÍA no lo deduplica (pendiente
+  // B1.3 del plan) — mandarlo ya deja el frontend listo para cuando lo haga,
+  // sin más cambios de este lado.
+  operationId?: string | null,
 ): Promise<boolean> {
   const payload = attachClientMetaToRestPayload(
     {
@@ -519,6 +524,7 @@ export async function checkOut(
       ...(noSaleDetail?.no_sale_competitor
         ? { no_sale_competitor: noSaleDetail.no_sale_competitor }
         : {}),
+      ...(operationId ? { operation_id: operationId } : {}),
     },
     meta ?? null,
   );
@@ -542,9 +548,16 @@ export async function reportIncident(
   incidentTypeId: number,
   notes: string,
   meta?: ClientEventMeta | null,
+  // F3.3: ver nota de operationId en checkOut() — mismo criterio.
+  operationId?: string | null,
 ): Promise<boolean> {
   const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, incident_type_id: incidentTypeId, notes },
+    {
+      stop_id: stopId,
+      incident_type_id: incidentTypeId,
+      notes,
+      ...(operationId ? { operation_id: operationId } : {}),
+    },
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/incidents`, payload);

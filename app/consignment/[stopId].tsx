@@ -10,7 +10,7 @@
  * - NO simula éxito. Carrito local (no contamina venta activa).
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
@@ -50,6 +50,12 @@ function makeOperationId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// F3.3: antes se generaba un operationId NUEVO en cada tap de "Confirmar" en
+// visita/cierre — tras un fallo ambiguo un reintento manual mandaba un id
+// distinto (visitConsignment/closeConsignment SÍ leen operation_id hoy en el
+// backend). Visita y cierre son operaciones distintas, así que cada una
+// mantiene su propia key estable hasta que ESA operación tenga éxito.
+
 function ConsignmentScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
@@ -84,6 +90,13 @@ function ConsignmentScreenInner() {
   const [closing, setClosing] = useState(false); // toggle: visita vs cierre
   const paymentMethod: ConsignmentPaymentMethod = 'cash';
   const [submitting, setSubmitting] = useState(false);
+  const visitOperationIdRef = useRef<string | null>(null);
+  const closeOperationIdRef = useRef<string | null>(null);
+  function getVisitOrCloseOperationId(isClosing: boolean): string {
+    const ref = isClosing ? closeOperationIdRef : visitOperationIdRef;
+    if (!ref.current) ref.current = makeOperationId(isClosing ? 'consign-close' : 'consign-visit');
+    return ref.current;
+  }
 
   // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
   // al vendedor atrapado. No borra datos sin confirmación (logout es explícito).
@@ -244,17 +257,19 @@ function ConsignmentScreenInner() {
               try {
                 const payload = {
                   consignmentId: active.id,
-                  operationId: makeOperationId(closing ? 'consign-close' : 'consign-visit'),
+                  operationId: getVisitOrCloseOperationId(closing),
                   paymentMethod,
                   counts: built.counts,
                 };
                 if (closing) {
                   const res = await closeConsignment(payload);
+                  closeOperationIdRef.current = null; // siguiente cierre = nuevo id
                   Alert.alert(res.message || 'Consignación cerrada', 'El servidor registró el cobro y la devolución.', [
                     { text: 'OK', onPress: () => router.back() },
                   ]);
                 } else {
                   const res = await visitConsignment(payload);
+                  visitOperationIdRef.current = null; // siguiente visita = nuevo id
                   Alert.alert(res.message || 'Visita registrada', 'El servidor cobró el faltante y resurtió al objetivo.', [
                     { text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } },
                   ]);

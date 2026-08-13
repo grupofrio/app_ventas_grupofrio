@@ -60,6 +60,12 @@ function makeIdempotencyKey(): string {
   });
 }
 
+// F3.3: antes se regeneraba un idempotency_key NUEVO en cada tap de
+// "Confirmar cambio" — si el primero fallaba de forma ambigua (respuesta
+// perdida pero el cambio sí llegó a Odoo) y el vendedor reintentaba, el
+// segundo intento mandaba una key distinta y no había forma de que el
+// backend lo deduplicara. Ahora se mantiene estable hasta un envío exitoso.
+
 function parsePositiveQty(value: string): number | null {
   const normalized = value.replace(',', '.').trim();
   if (!normalized) return null;
@@ -102,6 +108,11 @@ export default function CambioProductoScreen() {
   const [notes, setNotes] = useState('');
   const [pickerState, setPickerState] = useState<PickerState | null>(null);
   const [saving, setSaving] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
+  function getExchangeIdempotencyKey(): string {
+    if (!idempotencyKeyRef.current) idempotencyKeyRef.current = makeIdempotencyKey();
+    return idempotencyKeyRef.current;
+  }
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const capturingPhotoRef = useRef(false);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
@@ -235,7 +246,7 @@ export default function CambioProductoScreen() {
     }
 
     setSaving(true);
-    const idempotencyKey = makeIdempotencyKey();
+    const idempotencyKey = getExchangeIdempotencyKey();
     let registeredMessage = 'Cambio procesado';
     let response;
     try {
@@ -251,6 +262,7 @@ export default function CambioProductoScreen() {
         validate: true,
       });
       registeredMessage = response.user_message || registeredMessage;
+      idempotencyKeyRef.current = null; // siguiente cambio = nueva key
     } catch (error) {
       const code = (error as { code?: string }).code;
       let message: string;

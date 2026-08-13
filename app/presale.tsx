@@ -15,7 +15,7 @@
  * simula éxito.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert,
   KeyboardAvoidingView, Platform,
@@ -50,6 +50,11 @@ import { presaleOfflineBlockMessage } from '../src/services/secondaryFlowCopy';
 function makeOperationId(): string {
   return `presale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// F3.3: antes se generaba un operationId NUEVO en cada tap de "Confirmar" —
+// tras un fallo ambiguo (respuesta perdida pero la preventa sí llegó) un
+// reintento manual mandaba un id distinto, sin forma de deduplicar. Ahora se
+// mantiene estable hasta un envío exitoso.
 
 export default function PresaleScreen() {
   const router = useRouter();
@@ -107,6 +112,11 @@ export default function PresaleScreen() {
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [manualDate, setManualDate] = useState(false); // fallback al input manual
   const [submitting, setSubmitting] = useState(false);
+  const operationIdRef = useRef<string | null>(null);
+  function getPresaleOperationId(): string {
+    if (!operationIdRef.current) operationIdRef.current = makeOperationId();
+    return operationIdRef.current;
+  }
 
   // Ensure catalog is available (presale may be opened without a loaded plan).
   React.useEffect(() => {
@@ -173,7 +183,7 @@ export default function PresaleScreen() {
     if (submitting) return;
     const built = buildPresalePayload(
       {
-        operationId: makeOperationId(),
+        operationId: getPresaleOperationId(),
         partnerId,
         leadId,
         commitmentDate: deliveryDate,
@@ -197,6 +207,7 @@ export default function PresaleScreen() {
     try {
       const res = await createPresale(built.payload);
       const folio = res.name || `#${res.saleOrderId ?? ''}`;
+      operationIdRef.current = null; // siguiente preventa = nuevo id
       // Limpiar formulario/carrito local tras éxito.
       setCart([]);
       setSelected(null);

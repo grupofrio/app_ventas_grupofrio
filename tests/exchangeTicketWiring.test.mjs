@@ -75,7 +75,7 @@ test('exchange submit wires local snapshot creation, strict save, and exchange t
 
   assert.match(source, /buildExchangeTicketSnapshot/);
   assert.match(source, /saveExchangeTicketSnapshot/);
-  assert.match(source, /const idempotencyKey = makeIdempotencyKey\(\);/);
+  assert.match(source, /const idempotencyKey = getExchangeIdempotencyKey\(\);/);
   assert.match(source, /let registeredMessage = 'Cambio procesado';/);
   assert.match(source, /idempotency_key:\s*idempotencyKey/);
   assert.match(source, /registeredMessage = response\.user_message \|\| registeredMessage/);

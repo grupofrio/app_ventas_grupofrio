@@ -3,7 +3,7 @@
  * Reason selection, competitor detection, notes, mandatory photo.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -28,6 +28,10 @@ import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
 const COMPETITORS = ['Crystal', 'Ice Factory', 'Pureza', 'Generico'];
 
+function makeAttemptId(): string {
+  return `nosale-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function NoSaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
@@ -49,6 +53,18 @@ export default function NoSaleScreen() {
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [notes, setNotes] = useState(noSaleNotes);
+  const [submitting, setSubmitting] = useState(false);
+
+  // F3.3: id estable a través de reintentos (online → falla ambigua → misma
+  // no-venta encolada) para que reportIncident/checkOut manden el MISMO
+  // operation_id las dos veces — hoy el backend aún no dedupe con esto
+  // (pendiente B1.3), pero sin un id estable ni siquiera queda la opción de
+  // dedupear cuando el backend lo soporte. Se regenera tras un envío exitoso.
+  const operationIdRef = useRef<string | null>(null);
+  function getNoSaleOperationId(): string {
+    if (!operationIdRef.current) operationIdRef.current = makeAttemptId();
+    return operationIdRef.current;
+  }
 
   if (!stop) {
     return (
@@ -72,6 +88,7 @@ export default function NoSaleScreen() {
   const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
+    operationIdRef.current = null; // siguiente no-venta = nuevo id
     captureAndEnqueueGpsPoint('checkout').catch(() => {});
     setGpsMode('in_transit');
     if (stop!._isOffroute) {
@@ -104,6 +121,7 @@ export default function NoSaleScreen() {
   }
 
   async function handleSave() {
+    if (submitting) return; // guard doble-tap
     if (!canSave) {
       const missing = [];
       if (!selectedReasonId) missing.push('razon de no-venta');
@@ -113,9 +131,12 @@ export default function NoSaleScreen() {
     }
 
     if (!stop) return;
+    const operationId = getNoSaleOperationId();
     const reason = NO_SALE_REASONS.find((r) => r.id === selectedReasonId);
     setNoSaleReason(selectedReasonId!, reason?.label || '');
     setNoSaleNotes(notes);
+    setSubmitting(true);
+    try {
 
     if (isOffrouteVisit) {
       const closePayload = offrouteVisitId
@@ -133,6 +154,7 @@ export default function NoSaleScreen() {
         if (closePayload) {
           closeSyncId = enqueue('offroute_visit_close', {
             ...closePayload,
+            operation_id: operationId,
             timestamp: Date.now(),
           });
         }
@@ -149,12 +171,13 @@ export default function NoSaleScreen() {
       let closeSyncId: string | null = null;
       if (closePayload) {
         try {
-          await closeOffrouteVisit(closePayload);
+          await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
           if (isRetryableSyncErrorMessage(message)) {
             closeSyncId = enqueue('offroute_visit_close', {
               ...closePayload,
+              operation_id: operationId,
               timestamp: Date.now(),
             });
           } else {
@@ -198,6 +221,7 @@ export default function NoSaleScreen() {
         reason_code: reason?.code,
         competitor: selectedCompetitor,
         notes,
+        operation_id: operationId,
         timestamp: Date.now(),
       });
 
@@ -205,6 +229,7 @@ export default function NoSaleScreen() {
         'checkout',
         {
           ...checkoutPayload,
+          operation_id: operationId,
           timestamp: Date.now(),
         },
         { dependsOn: [noSaleId] },
@@ -228,6 +253,8 @@ export default function NoSaleScreen() {
         stop.id,
         (selectedReasonId as number) || 1,
         `No-venta: ${reason?.code || ''} ${notes || ''}`.trim(),
+        undefined,
+        operationId,
       );
       enqueueVisitPhotos({
         stopId: stop.id,
@@ -261,6 +288,8 @@ export default function NoSaleScreen() {
           no_sale_notes: checkoutPayload.no_sale_notes,
           no_sale_competitor: checkoutPayload.no_sale_competitor,
         },
+        undefined,
+        operationId,
       );
       finalizeNoSaleLocally();
     } catch (error) {
@@ -270,6 +299,7 @@ export default function NoSaleScreen() {
           'checkout',
           {
             ...checkoutPayload,
+            operation_id: operationId,
             timestamp: Date.now(),
           },
         );
@@ -282,6 +312,9 @@ export default function NoSaleScreen() {
       }
 
       Alert.alert('Check-out rechazado', message);
+    }
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -367,10 +400,11 @@ export default function NoSaleScreen() {
 
         {/* Save button */}
         <Button
-          label="Guardar No Venta"
+          label={submitting ? 'Guardando…' : 'Guardar No Venta'}
           onPress={handleSave}
           fullWidth
-          disabled={!canSave}
+          disabled={!canSave || submitting}
+          loading={submitting}
           style={{ marginTop: 14 }}
         />
       </ScrollView>

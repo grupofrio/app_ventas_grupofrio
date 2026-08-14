@@ -45,9 +45,10 @@ import { OperationGate } from '../../src/components/OperationGate';
 import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlowCopy';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
-function makeOperationId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function makeOperationId(): string {
+  return createUuidV4();
 }
 
 // F3.3: antes se generaba un operationId NUEVO en cada tap de "Confirmar" en
@@ -86,11 +87,16 @@ function ConsignmentScreenInner() {
   const [closing, setClosing] = useState(false); // toggle: visita vs cierre
   const paymentMethod: ConsignmentPaymentMethod = 'cash';
   const [submitting, setSubmitting] = useState(false);
+  const createOperationIdRef = useRef<string | null>(null);
   const visitOperationIdRef = useRef<string | null>(null);
   const closeOperationIdRef = useRef<string | null>(null);
+  function getCreateOperationId(): string {
+    if (!createOperationIdRef.current) createOperationIdRef.current = makeOperationId();
+    return createOperationIdRef.current;
+  }
   function getVisitOrCloseOperationId(isClosing: boolean): string {
     const ref = isClosing ? closeOperationIdRef : visitOperationIdRef;
-    if (!ref.current) ref.current = makeOperationId(isClosing ? 'consign-close' : 'consign-visit');
+    if (!ref.current) ref.current = makeOperationId();
     return ref.current;
   }
 
@@ -195,8 +201,10 @@ function ConsignmentScreenInner() {
       try {
         const res = await createConsignment({
           partnerId,
+          operationId: getCreateOperationId(),
           lines: v.lines,
         });
+        createOperationIdRef.current = null; // siguiente create = nuevo id
         const c = res.consignment;
         Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
           { text: 'OK', onPress: () => router.back() },

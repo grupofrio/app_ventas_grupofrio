@@ -40,7 +40,8 @@ export const CLIENT_EVENT_SCHEMA = 'client-meta-1';
 const DEVICE_ID_KEY = 'kf_client_device_id';
 let _cachedDeviceId: string | null = null;
 
-function uuidV4(): string {
+/** Generate a RFC 4122 version-4 UUID for client idempotency keys. */
+export function createUuidV4(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
@@ -61,13 +62,13 @@ export async function getDeviceId(): Promise<string> {
       _cachedDeviceId = stored;
       return stored;
     }
-    const fresh = uuidV4();
+    const fresh = createUuidV4();
     await SecureStore.setItemAsync(DEVICE_ID_KEY, fresh);
     _cachedDeviceId = fresh;
     return fresh;
   } catch {
     // Fallback: non-persistent but non-crashing.
-    if (!_cachedDeviceId) _cachedDeviceId = `eph-${uuidV4()}`;
+    if (!_cachedDeviceId) _cachedDeviceId = `eph-${createUuidV4()}`;
     return _cachedDeviceId;
   }
 }

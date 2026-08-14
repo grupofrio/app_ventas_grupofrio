@@ -116,6 +116,7 @@ export async function getActiveConsignment(
 
 interface CreateInput {
   partnerId: number;
+  operationId: string;
   notes?: string;
   lines: CreateConsignmentLine[];
 }
@@ -124,6 +125,7 @@ interface CreateInput {
 export async function createConsignment(input: CreateInput): Promise<ConsignmentMutationResult> {
   const body: Record<string, unknown> = {
     partner_id: input.partnerId,
+    operation_id: input.operationId,
     apply_inventory: true,
     lines: input.lines,
   };

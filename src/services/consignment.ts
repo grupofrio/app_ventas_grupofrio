@@ -1,9 +1,10 @@
 /**
  * Consignación network service (gf_consignment) — CONTRATO REAL (Sebas).
  *
- * Endpoints (auth api_key; empleado por X-GF-Employee-Token que ya manda
- * buildHeaders + employee_id en payload):
- *   GET  /pwa-ruta/consignment/my-active?partner_id=N[&company_id=M]
+ * Endpoints authenticated by the shared employee Authorization: Bearer
+ * transport. The server derives employee, company and route context from the
+ * employee session:
+ *   GET  /pwa-ruta/consignment/my-active?partner_id=N
  *   POST /pwa-ruta/consignment/create
  *   POST /pwa-ruta/consignment/visit
  *   POST /pwa-ruta/consignment/close
@@ -108,21 +109,13 @@ function messageOf(result: unknown, fallback: string): string {
 /** GET consignación activa del cliente (null si no tiene). */
 export async function getActiveConsignment(
   partnerId: number,
-  companyId?: number | null,
 ): Promise<ActiveConsignment | null> {
-  let url = `${ENDPOINTS.myActive}?partner_id=${partnerId}`;
-  if (typeof companyId === 'number' && companyId > 0) url += `&company_id=${companyId}`;
-  const result = await getRest<unknown>(url);
+  const result = await getRest<unknown>(`${ENDPOINTS.myActive}?partner_id=${partnerId}`);
   return parseConsignment(result);
 }
 
 interface CreateInput {
   partnerId: number;
-  companyId: number | null;
-  employeeId: number | null;
-  routePlanId: number | null;
-  mobileLocationId: number | null;
-  vehicleId: number | null;
   notes?: string;
   lines: CreateConsignmentLine[];
 }
@@ -131,14 +124,9 @@ interface CreateInput {
 export async function createConsignment(input: CreateInput): Promise<ConsignmentMutationResult> {
   const body: Record<string, unknown> = {
     partner_id: input.partnerId,
-    employee_id: input.employeeId,
     apply_inventory: true,
     lines: input.lines,
   };
-  if (input.companyId != null) body.company_id = input.companyId;
-  if (input.routePlanId != null) body.route_plan_id = input.routePlanId;
-  if (input.mobileLocationId != null) body.mobile_location_id = input.mobileLocationId;
-  if (input.vehicleId != null) body.vehicle_id = input.vehicleId;
   if (input.notes && input.notes.trim()) body.notes = input.notes.trim();
 
   const result = await postRest<unknown>(ENDPOINTS.create, body);

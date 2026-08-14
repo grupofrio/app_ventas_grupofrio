@@ -61,10 +61,6 @@ function ConsignmentScreenInner() {
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
-  const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
-  const mobileLocationId = useRouteStore((s) => s.plan?.mobile_location_id ?? null);
-  const employeeId = useAuthStore((s) => s.employeeId);
-  const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const logout = useAuthStore((s) => s.logout);
   const isOnline = useSyncStore((s) => s.isOnline);
@@ -131,7 +127,7 @@ function ConsignmentScreenInner() {
     setLoading(true);
     setError(null);
     try {
-      const a = await getActiveConsignment(partnerId, companyId);
+      const a = await getActiveConsignment(partnerId);
       setActive(a);
       setFromCache(false);
       // Read-through: guardar la consignación (o borrarla si ya no hay) para
@@ -159,7 +155,7 @@ function ConsignmentScreenInner() {
     } finally {
       setLoading(false);
     }
-  }, [partnerId, isOnline, companyId, promptReLogin]);
+  }, [partnerId, isOnline, promptReLogin]);
 
   React.useEffect(() => { void fetchActive(); }, [fetchActive]);
   React.useEffect(() => {
@@ -199,11 +195,6 @@ function ConsignmentScreenInner() {
       try {
         const res = await createConsignment({
           partnerId,
-          companyId,
-          employeeId,
-          routePlanId: planId,
-          mobileLocationId,
-          vehicleId: null, // no disponible en el plan actual
           lines: v.lines,
         });
         const c = res.consignment;
@@ -216,24 +207,6 @@ function ConsignmentScreenInner() {
         setSubmitting(false);
       }
     })();
-  }
-
-  function handleCreate() {
-    if (submitting || !partnerId) return;
-    // Backend necesita route_plan_id O mobile_location_id para saber de dónde
-    // bajar inventario (apply_inventory=true).
-    if (planId == null && mobileLocationId == null) {
-      Alert.alert(
-        'Sin ruta/ubicación',
-        'No hay plan de ruta ni ubicación de unidad. El backend puede no saber de dónde bajar el inventario. ¿Continuar de todos modos?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Continuar', onPress: runCreate },
-        ],
-      );
-      return;
-    }
-    runCreate();
   }
 
   // ── VISIT / CLOSE ───────────────────────────────────────────────────────────
@@ -383,7 +356,7 @@ function ConsignmentScreenInner() {
 
           <Button
             label={submitting ? 'Creando…' : 'Confirmar consignación'}
-            variant="success" onPress={handleCreate} fullWidth
+            variant="success" onPress={runCreate} fullWidth
             disabled={submitting || cart.length === 0} loading={submitting}
           />
           <Text style={styles.footNote}>La consignación NO cobra al crear; el cobro ocurre en visitas/cierre.</Text>

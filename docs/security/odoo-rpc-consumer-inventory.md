@@ -65,7 +65,8 @@ no convertirlas automáticamente en otra escritura genérica.
 | `src/stores/useSyncStore.ts` — caso `collection` | Crea `account.payment` por `/api/create_update` con partner, importe y diario desde la cola. | Deshabilitar/eliminar tipo y rama. Si se descubre un productor activo, detener la retirada y definir primero un endpoint de cobro idempotente con autorización. | Ninguno mientras no haya productor. Si reaparece: ruta `payments/create` con `operation_id`, importe y contexto validados en servidor. | `tests/secureSyncTransport.test.ts` (**pendiente**) debe exigir cero `/api/create_update`; `tests/salesMigration.test.ts` es cobertura parcial existente. |
 | `src/stores/useSyncStore.ts` — caso `transfer` | Crea `stock.picking` con un `dict` arbitrario por `/api/create_update`. | Deshabilitar/eliminar tipo y rama; las transferencias no se reintroducen sin contrato de inventario y prueba de servidor. | Ninguno mientras no haya productor. Si se aprueba: endpoint específico con autorización de unidad/ubicación e idempotencia. | `tests/secureSyncTransport.test.ts` (**pendiente**). |
 | `src/stores/useSyncStore.ts` — caso `customer_create` | Crea `res.partner` por `/api/create_update` con datos de la cola. | Deshabilitar/eliminar tipo y rama. No confundirlo con `customer/contact/update`, que solo modifica un partner ya autorizado. | Ninguno mientras no haya productor. Si se necesita alta: endpoint de creación de cliente con validación, alcance e idempotencia. | `tests/secureSyncTransport.test.ts` (**pendiente**). |
-| `src/types/sync.ts` — `SyncItemType` y `SYNC_PRIORITY_MAP` para `collection`, `transfer`, `customer_create` | Mantiene los tres tipos legacy en el esquema persistente y sus prioridades, aunque el dispatcher es el consumidor que los ejecuta. | Eliminar las tres variantes y prioridades al retirar las ramas; la rehidratación debe descartar o migrar explícitamente ítems heredados, nunca enviarlos por RPC. | Ninguno mientras no haya productor. Cualquier nuevo tipo requiere su propio endpoint seguro antes de añadirse al esquema. | `tests/secureSyncTransport.test.ts` (**pendiente**) debe afirmar ausencia de ramas **y** tipos; `tests/syncDependencies.test.ts` cubre las dependencias de cola. |
+| `src/types/sync.ts` — `SyncItemType` (`collection`, `transfer`, `customer_create`) | Declara los tres tipos legacy en el esquema persistente de ítems, por lo que un ítem rehidratado aún puede alcanzar el dispatcher. | Eliminar las tres variantes; la rehidratación debe descartar o migrar explícitamente los ítems heredados, nunca enviarlos por RPC. | Ninguno mientras no haya productor. Cualquier nuevo tipo requiere su propio endpoint seguro antes de añadirse al esquema. | `tests/secureSyncTransport.test.ts` (**pendiente**) debe afirmar la ausencia de los tres literales en `SyncItemType`; `tests/syncDependencies.test.ts` cubre dependencias de cola. |
+| `src/types/sync.ts` — `SYNC_PRIORITY_MAP` (`collection`, `transfer`, `customer_create`) | Mantiene prioridades para los tres tipos legacy aunque se retire su ejecución; puede normalizar/persistir ítems obsoletos. | Eliminar las tres prioridades junto con los tipos y ramas; no sustituirlas por una prioridad genérica. | Ninguno mientras no haya productor. | `tests/secureSyncTransport.test.ts` (**pendiente**) debe afirmar la ausencia de las tres claves en `SYNC_PRIORITY_MAP`; `tests/syncDependencies.test.ts` cubre dependencias de cola. |
 | `src/services/odooRpc.ts` — soporte compartido de las tres ramas | Centraliza los transportes `/get_records` y `/api/create_update` que permiten modelo/dominio/dict genéricos. | Eliminar el archivo cuando las filas anteriores estén migradas o retiradas. | No aplica; se reemplaza por clientes REST tipados. | `tests/noPrivilegedOdooClient.test.mjs` y `tests/secureSyncTransport.test.ts` (**pendientes**). |
 
 ## Verificación reproducible de esta línea base
@@ -74,11 +75,11 @@ El inventario se obtuvo con los siguientes barridos (la salida no debe copiar
 coincidencias que puedan contener secretos):
 
 ```sh
-rg -n --glob '!node_modules/**' --glob '!\\.git/**' \
+rg -l --glob '!node_modules/**' --glob '!\\.git/**' \
   'odooSession|odooRpc|odooRead|odooWrite|koldRead|call_kw|execute_kw|setServiceCredentials|/get_records|/api/create_update' \
   app src
 
-rg -n -U --glob '!node_modules/**' --glob '!\\.git/**' \
+rg -l -U --glob '!node_modules/**' --glob '!\\.git/**' \
   "postRpc\\([\\s\\S]{0,80}['\\\"](?:/get_records|/api/create_update)['\\\"]" \
   app src
 ```

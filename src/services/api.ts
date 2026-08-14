@@ -123,17 +123,10 @@ async function buildHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json',
   };
 
-  const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
   const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
-  if (apiKey) {
-    headers['Api-Key'] = sanitizeHeaderValue(apiKey);
-  }
   if (gfToken) {
-    headers['X-GF-Employee-Token'] = sanitizeHeaderValue(gfToken);
-    // gf_salesops guard expects X-GF-Token (different from logistics).
-    // Send the same token under both names so both auth systems work.
-    headers['X-GF-Token'] = sanitizeHeaderValue(gfToken);
+    headers.Authorization = `Bearer ${sanitizeHeaderValue(gfToken)}`;
   }
 
   return headers;
@@ -188,14 +181,10 @@ export function createApiClient(): AxiosInstance {
       config.url = `${baseUrl}/${config.url.replace(/^\//, '')}`;
     }
 
-    const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
     const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
-    if (apiKey) {
-      config.headers.set('Api-Key', sanitizeHeaderValue(apiKey));
-    }
     if (gfToken) {
-      config.headers.set('X-GF-Employee-Token', sanitizeHeaderValue(gfToken));
+      config.headers.set('Authorization', `Bearer ${sanitizeHeaderValue(gfToken)}`);
     }
 
     return config;

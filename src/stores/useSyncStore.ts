@@ -64,7 +64,10 @@ import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { shouldRetrySyncItemError } from '../services/syncRetryDecision';
+import {
+  shouldRetrySyncItemError,
+  transitionAgedItemsToManualReconciliation,
+} from '../services/syncRetryDecision';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
@@ -564,6 +567,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (!isOnline || isSyncing) return;
 
     const now = Date.now();
+    const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
+    if (queueAfterRetryAgeCutoff !== queue) {
+      set({ queue: queueAfterRetryAgeCutoff, ...computeCounts(queueAfterRetryAgeCutoff) });
+      schedulePersist();
+      logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
+        count: queue.filter((item, index) => item !== queueAfterRetryAgeCutoff[index]).length,
+      });
+    }
 
     // Items eligible for processing:
     // - pending with no backoff, OR
@@ -577,7 +588,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return false;
     };
 
-    const candidates = processingHolds.withoutHeld(queue).filter(isReady);
+    const candidates = processingHolds.withoutHeld(queueAfterRetryAgeCutoff).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -613,7 +624,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const p3 = candidates.filter((i) => i.priority === 3);
 
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
-      const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+      const orderedP1 = computeProcessingOrder(queueAfterRetryAgeCutoff, p1).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
         tally(item, await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,

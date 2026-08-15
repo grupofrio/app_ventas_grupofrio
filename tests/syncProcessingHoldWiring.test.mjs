@@ -116,8 +116,18 @@ const processQueueBlock = block(
   'processQueue',
 );
 assert.match(
+  source,
+  /import \{[\s\S]*?shouldRetrySyncItemError,[\s\S]*?transitionAgedItemsToManualReconciliation,[\s\S]*?\} from ['"]\.\.\/services\/syncRetryDecision['"];/,
+  'store delegates the automatic-retry age cutoff to the pure retry decision helper',
+);
+assertOrdered(processQueueBlock, [
+  /const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation\(queue, now\);/,
+  /if \(queueAfterRetryAgeCutoff !== queue\) \{[\s\S]*?set\(\{ queue: queueAfterRetryAgeCutoff, \.\.\.computeCounts\(queueAfterRetryAgeCutoff\) \}\);/,
+  /const candidates = processingHolds\.withoutHeld\(queueAfterRetryAgeCutoff\)\.filter\(isReady\);/,
+], 'aged operations become durable reconciliation state before candidate selection');
+assert.match(
   processQueueBlock,
-  /const candidates = processingHolds\.withoutHeld\(queue\)\.filter\(isReady\);/,
+  /const candidates = processingHolds\.withoutHeld\(queueAfterRetryAgeCutoff\)\.filter\(isReady\);/,
   'initial candidates exclude held ids before readiness checks',
 );
 assert.match(

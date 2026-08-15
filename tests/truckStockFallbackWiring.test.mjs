@@ -20,11 +20,10 @@ function main() {
     /\bodooRead\b|stock\.quant|product\.product|global_legacy|stock_quant/,
     'el catálogo no debe caer a stock.quant, product.product ni catálogo global',
   );
-  const truckStockFunction = gfLogistics.slice(gfLogistics.indexOf('export async function fetchTruckStock'));
   assert.match(
-    truckStockFunction,
-    /throw new Error\('No fue posible cargar el inventario autorizado del camión\.'/,
-    'un truck_stock ausente debe exponer error explícito y no habilitar un fallback legado',
+    gfLogistics,
+    /parseTruckStockResponse\(result\)/,
+    'truck_stock debe validar el sobre antes de devolverlo al store',
   );
   assert.match(
     productStore,

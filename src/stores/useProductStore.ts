@@ -50,7 +50,8 @@ interface ProductState {
    * sincronizado; false = el catálogo existe pero sin stock (situación
    * normal cuando aún no se procesa el llenado del camión). Reemplaza la
    * heurística client-side anterior ("todos los qty en 0 → asumir sin
-   * stock"). Si el backend no manda el flag (compat), por defecto true.
+   * stock"). El contrato employee exige este flag; un sobre incompleto se
+   * rechaza antes de mutar el catálogo contextual.
    *
    * null cuando no se ha hecho carga aún.
    */

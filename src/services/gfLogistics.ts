@@ -35,6 +35,7 @@ import { fetchMyPlan } from './routePlanRefresh';
 import { validateSaleCreateResult } from './saleCreateResult';
 import type { SaleCreateResultData } from './saleCreateResult';
 import { buildFieldLeadCreatePayload } from './fieldLeadCreatePayload';
+import { parseTruckStockResponse, type TruckStockResponse } from './truckStockResponse';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -1273,10 +1274,7 @@ export async function signOut(): Promise<void> {
  * "Agotado/referencia" (BUG A original) en lugar de inferir desde
  * la heurística "todos en 0" del lado app.
  */
-export interface TruckStockResponse {
-  products: unknown[];
-  hasStockData: boolean;
-}
+export { type TruckStockResponse } from './truckStockResponse';
 
 export async function fetchTruckStock(
   warehouseId: number | null | undefined,
@@ -1286,15 +1284,5 @@ export async function fetchTruckStock(
   if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
   if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
   const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
-  if (!result || typeof result !== 'object' || result.ok === false) {
-    throw new Error('No fue posible cargar el inventario autorizado del camión.');
-  }
-  const data = result.data !== undefined ? result.data : result;
-  if (!Array.isArray(data?.products)) {
-    throw new Error('La respuesta de inventario autorizado no tiene un catálogo válido.');
-  }
-  const hasStockData = typeof data?.has_stock_data === 'boolean'
-    ? data.has_stock_data
-    : true;
-  return { products: data.products, hasStockData };
+  return parseTruckStockResponse(result);
 }

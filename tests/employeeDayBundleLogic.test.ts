@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const CONTRACT_ROOT = resolve('contracts/koldfield');
-const EXPECTED_SCHEMA_SHA256 = '0f058bbd65612f6b294671fbd2bb5da4e1c99a3f568ba29e6333ed80b2d27b52';
+const EXPECTED_SCHEMA_SHA256 = 'ec160335cd9f3fe2a328d701b43ff130deb5d91dc95fbdb343606e554270e7b5';
 
 interface DayBundleLogic {
   evaluateStoredDayBundle: (record: unknown, context: {
@@ -54,7 +54,7 @@ test('day-bundle contract artifact matches the pinned backend schema hash', () =
   assert.equal(fixture.schema_version, 'day_bundle.v1');
 });
 
-test('day bundle rejects another employee, another operational date, and malformed expiry', async () => {
+test('day bundle rejects another employee and malformed expiry; soft-date keeps lease until expires_at', async () => {
   const logic = await loadLogic();
   const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
 
@@ -62,10 +62,14 @@ test('day bundle rejects another employee, another operational date, and malform
     () => logic.evaluateStoredDayBundle(validRecord({ identity: { ...identity, employeeId: 43 } }), context),
     /identidad/i,
   );
-  assert.throws(
-    () => logic.evaluateStoredDayBundle(validRecord({ bundle: { ...validRecord().bundle as object, operational_date: '2026-08-13' } }), context),
-    /fecha operativa/i,
+  // Device calendar rollover before expires_at must not strand the seller.
+  const afterLocalMidnight = logic.evaluateStoredDayBundle(
+    validRecord(),
+    { ...identity, operationalDate: '2026-08-15', nowMs: Date.parse('2026-08-15T01:00:00Z') },
   );
+  assert.deepEqual(afterLocalMidnight, {
+    mode: 'fresh', canRead: true, canStartRoute: true, canRunActions: true,
+  });
   assert.throws(
     () => logic.evaluateStoredDayBundle(validRecord({ bundle: { ...validRecord().bundle as object, expires_at: 'not-a-date' } }), context),
     /expir/i,
@@ -74,8 +78,34 @@ test('day bundle rejects another employee, another operational date, and malform
     () => logic.evaluateStoredDayBundle(validRecord({ bundle: { ...validRecord().bundle as object, plan: { id: 1, date: '2026-08-13', state: 'published', route_id: 1, vehicle_id: 1 } } }), context),
     /fecha operativa/i,
   );
+  // New server bodies still require operational-date match.
+  assert.throws(
+    () => logic.replaceDayBundleAtomically(
+      validRecord({ bundle: { ...validRecord().bundle as object, operational_date: '2026-08-13', plan: { id: 1, date: '2026-08-13', state: 'published', route_id: 1, vehicle_id: 1 } } }),
+      context,
+    ),
+    /fecha operativa/i,
+  );
 });
 
+test('crossing expires_at at company midnight blocks mutations but keeps read orientation', async () => {
+  const logic = await loadLogic();
+  // expires_at = 2026-08-15 05:59:59Z → stale at/after that instant
+  const atExpiry = logic.evaluateStoredDayBundle(
+    validRecord(),
+    { ...identity, operationalDate: '2026-08-15', nowMs: Date.parse('2026-08-15T05:59:59Z') },
+  );
+  assert.deepEqual(atExpiry, {
+    mode: 'stale', canRead: true, canStartRoute: false, canRunActions: false,
+  });
+  const justBefore = logic.evaluateStoredDayBundle(
+    validRecord(),
+    { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-15T05:59:58Z') },
+  );
+  assert.deepEqual(justBefore, {
+    mode: 'fresh', canRead: true, canStartRoute: true, canRunActions: true,
+  });
+});
 test('day bundle rejects schema-drift fields and capped arrays before persistence', async () => {
   const logic = await loadLogic();
   const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };

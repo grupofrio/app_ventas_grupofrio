@@ -20,14 +20,15 @@
     "payment_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "allowed_payment_methods", "credit_limit", "credit_used", "credit_available", "credit_overdue", "credit_hold", "payment_term"],
+      "required": ["mode", "allowed_payment_methods", "credit_limit", "credit_used", "credit_available", "credit_overdue", "credit_over_limit", "credit_hold", "payment_term"],
       "properties": {
-        "mode": {"enum": ["cash_only", "credit_allowed", "credit_only", "blocked"]},
+        "mode": {"enum": ["cash_only", "credit_allowed", "blocked"]},
         "allowed_payment_methods": {"type": "array", "maxItems": 8, "items": {"enum": ["cash", "credit"]}},
         "credit_limit": {"type": "number", "minimum": 0},
         "credit_used": {"type": "number", "minimum": 0},
         "credit_available": {"type": "number", "minimum": 0},
         "credit_overdue": {"type": "boolean"},
+        "credit_over_limit": {"type": "boolean"},
         "credit_hold": {"type": "boolean"},
         "payment_term": {"$ref": "#/$defs/payment_term"}
       }

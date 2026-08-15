@@ -155,10 +155,12 @@ function paymentPolicy(value: unknown, field: string): void {
     'credit_used',
     'credit_available',
     'credit_overdue',
+    'credit_over_limit',
     'credit_hold',
     'payment_term',
   ], field);
-  if (!['cash_only', 'credit_allowed', 'credit_only', 'blocked'].includes(policy.mode as string)) {
+  // credit_only is intentionally not accepted: the backend never emits it.
+  if (!['cash_only', 'credit_allowed', 'blocked'].includes(policy.mode as string)) {
     throw invalid(`${field}.mode no es válido.`);
   }
   const methods = array(policy.allowed_payment_methods, `${field}.allowed_payment_methods`, 8);
@@ -171,6 +173,12 @@ function paymentPolicy(value: unknown, field: string): void {
   nonNegativeNumber(policy.credit_used, `${field}.credit_used`);
   nonNegativeNumber(policy.credit_available, `${field}.credit_available`);
   if (typeof policy.credit_overdue !== 'boolean') throw invalid(`${field}.credit_overdue debe ser booleano.`);
+  // Older bundles may omit credit_over_limit; default false when absent.
+  if (policy.credit_over_limit === undefined) {
+    (policy as Record<string, unknown>).credit_over_limit = false;
+  } else if (typeof policy.credit_over_limit !== 'boolean') {
+    throw invalid(`${field}.credit_over_limit debe ser booleano.`);
+  }
   if (typeof policy.credit_hold !== 'boolean') throw invalid(`${field}.credit_hold debe ser booleano.`);
   paymentTerm(policy.payment_term, `${field}.payment_term`);
 }
@@ -294,7 +302,12 @@ function validateBundle(value: unknown): DayBundle {
   };
 }
 
-function validateRecord(value: unknown, context: DayBundleContext): StoredDayBundle {
+function validateRecord(
+  value: unknown,
+  context: DayBundleContext,
+  options: { requireOperationalDateMatch?: boolean } = {},
+): StoredDayBundle {
+  const requireOperationalDateMatch = options.requireOperationalDateMatch !== false;
   const record = object(value, 'registro');
   const identity = object(record.identity, 'identidad');
   const companyId = positiveInteger(identity.companyId, 'identidad.companyId');
@@ -307,11 +320,13 @@ function validateRecord(value: unknown, context: DayBundleContext): StoredDayBun
     throw invalid('fetched_at_ms no es válido.');
   }
   const bundle = validateBundle(record.bundle);
-  if (bundle.operational_date !== isoDate(context.operationalDate, 'fecha operativa')) {
-    throw invalid('la fecha operativa no corresponde a esta sesión.');
-  }
   if (bundle.plan.date !== bundle.operational_date) {
     throw invalid('la fecha operativa del plan no corresponde al bundle.');
+  }
+  if (requireOperationalDateMatch) {
+    if (bundle.operational_date !== isoDate(context.operationalDate, 'fecha operativa')) {
+      throw invalid('la fecha operativa no corresponde a esta sesión.');
+    }
   }
   return {
     identity: { companyId, employeeId },
@@ -321,8 +336,16 @@ function validateRecord(value: unknown, context: DayBundleContext): StoredDayBun
   };
 }
 
+/**
+ * Offline lease is governed by ``expires_at`` (company-local next midnight as
+ * UTC), not by the device calendar date alone. Crossing local midnight while
+ * the lease is still active must not strand the seller mid-route.
+ *
+ * After ``expires_at``: readable orientation only (stale). Mutations require a
+ * fresh download for the new operational day.
+ */
 export function evaluateStoredDayBundle(value: unknown, context: DayBundleContext): DayBundleAccess {
-  const record = validateRecord(value, context);
+  const record = validateRecord(value, context, { requireOperationalDateMatch: false });
   const expiry = expiryMs(record.bundle.expires_at);
   const stale = expiry !== null && expiry <= context.nowMs;
   return stale
@@ -333,8 +356,17 @@ export function evaluateStoredDayBundle(value: unknown, context: DayBundleContex
 /**
  * Validate then clone a complete server version.  Callers persist this as the
  * one encrypted `day-bundle` record; no field is merged with an older bundle.
+ *
+ * When accepting a **new** HTTP body, pass ``requireOperationalDateMatch: true``
+ * (default). Cached offline reads used only for ETag / lease evaluation may
+ * pass ``false`` so a device-date rollover before ``expires_at`` does not wipe
+ * the in-hand lease.
  */
-export function replaceDayBundleAtomically(value: unknown, context: DayBundleContext): StoredDayBundle {
-  const record = validateRecord(value, context);
+export function replaceDayBundleAtomically(
+  value: unknown,
+  context: DayBundleContext,
+  options: { requireOperationalDateMatch?: boolean } = {},
+): StoredDayBundle {
+  const record = validateRecord(value, context, options);
   return JSON.parse(JSON.stringify(record)) as StoredDayBundle;
 }

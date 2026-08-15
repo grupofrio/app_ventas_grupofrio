@@ -92,9 +92,12 @@ export async function refreshEmployeeDayBundle(
     Accept: 'application/json',
   };
   if (prior !== null) {
-    // Validate before using a stored ETag: another account/day must never
-    // influence conditional request state for this session.
-    const validatedPrior = replaceDayBundleAtomically(prior, input.context);
+    // Validate before using a stored ETag: another account must never
+    // influence conditional request state. Soft-date: device midnight must
+    // not wipe a still-valid lease before expires_at.
+    const validatedPrior = replaceDayBundleAtomically(prior, input.context, {
+      requireOperationalDateMatch: false,
+    });
     headers['If-None-Match'] = validatedPrior.etag;
   }
 
@@ -104,7 +107,9 @@ export async function refreshEmployeeDayBundle(
 
   if (response.status === 304) {
     if (prior === null) throw new DayBundleTransportError(304, 'not_modified_without_cache');
-    const record = replaceDayBundleAtomically(prior, input.context);
+    const record = replaceDayBundleAtomically(prior, input.context, {
+      requireOperationalDateMatch: false,
+    });
     // An expired bundle is intentionally returned read-only; we never issue a
     // second request that would turn it into a hidden network fallback.
     evaluateStoredDayBundle(record, input.context);
@@ -117,6 +122,7 @@ export async function refreshEmployeeDayBundle(
 
   const etag = responseHeader(response.headers, 'etag');
   if (!etag?.trim()) throw new DayBundleTransportError(200, 'missing_day_bundle_etag');
+  // New server bodies must match the requested operational day.
   const record = replaceDayBundleAtomically({
     identity: { companyId: input.session.companyId, employeeId: input.session.employeeId },
     etag,
@@ -190,5 +196,8 @@ export async function loadCurrentEmployeeDayBundle(
   const record = await loadEncrypted<StoredDayBundle>(session, DAY_BUNDLE_RECORD_KEY);
   if (!record) return null;
   const context = currentContext(session, nowMs);
-  return { record: replaceDayBundleAtomically(record, context), access: evaluateStoredDayBundle(record, context) };
+  return {
+    record: replaceDayBundleAtomically(record, context, { requireOperationalDateMatch: false }),
+    access: evaluateStoredDayBundle(record, context),
+  };
 }

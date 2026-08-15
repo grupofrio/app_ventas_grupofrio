@@ -17,6 +17,7 @@
       "credit_used": 860.0,
       "credit_available": 4140.0,
       "credit_overdue": false,
+      "credit_over_limit": false,
       "credit_hold": false,
       "payment_term": {"id": 3, "name": "15 días"}
     }
@@ -33,6 +34,7 @@
       "credit_used": 860.0,
       "credit_available": 4140.0,
       "credit_overdue": false,
+      "credit_over_limit": false,
       "credit_hold": false,
       "payment_term": {"id": 3, "name": "15 días"}
     },

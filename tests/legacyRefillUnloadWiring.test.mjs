@@ -180,7 +180,7 @@ assert(!/catch/.test(strictLoadBlock[0]),
 // ── #6/#7: carga con resultado AUTORITATIVO explícito en el product store ─────
 const productStore = read('src/stores/useProductStore.ts');
 assert(/loadProductsAuthoritative:/.test(productStore), 'useProductStore expone loadProductsAuthoritative');
-assert(/global_legacy_fallback/.test(productStore), 'distingue el fallback global (no autoritativo)');
+assert(!/global_legacy_fallback|stock_quant/.test(productStore), 'el refresh autoritativo no conserva fallbacks de inventario legacy');
 assert(/warehouse_mismatch/.test(productStore), 'detecta warehouse distinto');
 
 // ── copy de refill retirado; sync.tsx ya no usa syncItemLabel ────────────────

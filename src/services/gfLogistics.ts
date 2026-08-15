@@ -1243,12 +1243,9 @@ export async function signOut(): Promise<void> {
 
 // ═══ BLD-20260404-013 — Truck stock by warehouse ═══
 //
-// Tries the new gf_logistics_ops endpoint `/truck_stock` which returns
-// products scoped by the chofer's assigned warehouse. If the endpoint
-// does not exist yet (HTTP 404, gateway error, or empty/invalid payload)
-// the caller is expected to fall back to the legacy `odooRead` path.
+// The employee endpoint `/truck_stock` is the only fresh inventory source.
 //
-// Contract (expected from Sprint 3 P4, still not deployed in backend):
+// Contract:
 //   POST /gf/logistics/api/employee/truck_stock
 //   Body: { warehouse_id?: number, mobile_location_id?: number }
 //   Response: {
@@ -1262,8 +1259,6 @@ export async function signOut(): Promise<void> {
 //     }
 //   }
 //
-// Returns `null` when the endpoint is unavailable — caller must treat
-// `null` as "fall back to existing behaviour". NEVER throws.
 /**
  * BLD-20260424-STOCKMETA: la respuesta de /truck_stock ahora trae el flag
  * `has_stock_data` (commit dd78489 de Sebastián). El backend lo calcula
@@ -1286,27 +1281,20 @@ export interface TruckStockResponse {
 export async function fetchTruckStock(
   warehouseId: number | null | undefined,
   mobileLocationId: number | null | undefined,
-): Promise<TruckStockResponse | null> {
-  try {
-    const body: Record<string, unknown> = {};
-    if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
-    if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
-    const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
-    if (!result || typeof result !== 'object') return null;
-    if (result.ok === false) return null;
-    const data = result.data !== undefined ? result.data : result;
-    const products = (data && Array.isArray(data.products)) ? data.products : null;
-    if (!products) return null;
-    // Si el backend no lo manda (compat), asumimos `true` (comportamiento
-    // legacy: aceptar la lista tal cual y dejar que el cliente decida).
-    const hasStockData = typeof data?.has_stock_data === 'boolean'
-      ? data.has_stock_data
-      : true;
-    return { products, hasStockData };
-  } catch (error) {
-    // Endpoint not deployed yet, auth issue, offline, etc.
-    // We swallow so the caller transparently falls back.
-    if (__DEV__) console.warn('[gfLogistics] truck_stock unavailable, falling back:', error);
-    return null;
+): Promise<TruckStockResponse> {
+  const body: Record<string, unknown> = {};
+  if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
+  if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
+  const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
+  if (!result || typeof result !== 'object' || result.ok === false) {
+    throw new Error('No fue posible cargar el inventario autorizado del camión.');
   }
+  const data = result.data !== undefined ? result.data : result;
+  if (!Array.isArray(data?.products)) {
+    throw new Error('La respuesta de inventario autorizado no tiene un catálogo válido.');
+  }
+  const hasStockData = typeof data?.has_stock_data === 'boolean'
+    ? data.has_stock_data
+    : true;
+  return { products: data.products, hasStockData };
 }

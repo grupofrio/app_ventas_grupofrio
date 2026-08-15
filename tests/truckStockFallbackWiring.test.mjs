@@ -9,21 +9,22 @@ function main() {
     resolve(REPO_ROOT, 'src/stores/useProductStore.ts'),
     'utf8',
   );
-
-  assert.match(
-    productStore,
-    /scoped && scoped\.products\.length > 0\) \{/,
-    'truck_stock con productos debe poblar el store aunque hasStockData=false',
+  const gfLogistics = readFileSync(
+    resolve(REPO_ROOT, 'src/services/gfLogistics.ts'),
+    'utf8',
   );
+
+  assert.match(productStore, /scoped\.products/, 'truck_stock debe ser la única fuente de catálogo fresco');
   assert.doesNotMatch(
     productStore,
-    /scoped\.hasStockData !== false/,
-    'hasStockData=false no debe descartar el catalogo REST ni forzar get_records',
+    /\bodooRead\b|stock\.quant|product\.product|global_legacy|stock_quant/,
+    'el catálogo no debe caer a stock.quant, product.product ni catálogo global',
   );
+  const truckStockFunction = gfLogistics.slice(gfLogistics.indexOf('export async function fetchTruckStock'));
   assert.match(
-    productStore,
-    /\['location_id', 'child_of', mobileLocationId\]/,
-    'stock.quant debe consultar por la ubicacion movil y sus sububicaciones',
+    truckStockFunction,
+    /throw new Error\('No fue posible cargar el inventario autorizado del camión\.'/,
+    'un truck_stock ausente debe exponer error explícito y no habilitar un fallback legado',
   );
   assert.match(
     productStore,

@@ -1,0 +1,12 @@
+{
+  "schema_version": "day_bundle.v1",
+  "operational_date": "2026-08-14",
+  "expires_at": "2026-08-15 05:59:59",
+  "plan": {"id": 1, "date": "2026-08-14", "state": "in_progress", "route_id": 1, "vehicle_id": 1},
+  "stops": [],
+  "catalog": [{"id": 10, "name": "Producto controlado", "default_code": "P-010", "uom_id": 1, "stock_qty": 12.0, "effective_prices": [{"partner_id": 2, "price": 99.5}]}],
+  "directory": [],
+  "no_sale_reasons": [],
+  "gift_reasons": [],
+  "competitors": []
+}

@@ -75,9 +75,10 @@ function main() {
 
   assert.match(
     offrouteSearch,
-    /\$\{EMPLOYEE_API_BASE\}\/directory\/search/,
-    'la búsqueda de visita especial debe delegar el scope de plaza al directorio Bearer',
+    /loadCurrentEmployeeDayBundle/,
+    'la búsqueda de visita especial debe leer primero el directorio del bundle cifrado',
   );
+  assert.doesNotMatch(offrouteSearch, /directory\/search|postRest/);
   assert.doesNotMatch(
     offrouteSearch,
     /x_analytic_un_id|analyticPlazaId|employee_id|company_id/,

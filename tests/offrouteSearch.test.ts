@@ -118,19 +118,19 @@ function testMixedResultsKeepTypes(module: OffrouteSearchModule) {
   );
 }
 
-function testEmployeeDirectoryRestWiring() {
+function testDayBundleDirectoryWiring() {
   const source = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearch.ts'), 'utf8');
   const logic = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearchLogic.ts'), 'utf8');
   const screen = readFileSync(resolve(process.cwd(), 'app/offroute.tsx'), 'utf8');
 
-  assert.match(source, /import\s*\{\s*postRest\s*\}\s*from ['"]\.\/api['"]/);
-  assert.match(source, /\$\{EMPLOYEE_API_BASE\}\/directory\/search/);
+  assert.match(source, /import\s*\{\s*loadCurrentEmployeeDayBundle\s*\}\s*from ['"]\.\/employeeDayBundle['"]/);
+  assert.match(source, /loaded\.record\.bundle\.directory/);
   assert.match(source, /const q = query\.trim\(\)/);
-  assert.match(source, /query:\s*q,\s*limit:\s*20/s);
+  assert.doesNotMatch(source, /directory\/search|postRest/);
   assert.doesNotMatch(
     source,
     /odooRpc|odooRead|odooSession|call_kw|execute_kw|get_records|\/api\/create_update/,
-    'el directorio debe usar solo el endpoint REST acotado del empleado',
+    'el directorio debe usar solo el bundle cifrado del empleado',
   );
   assert.doesNotMatch(
     source,
@@ -161,7 +161,7 @@ async function main() {
   testCustomerCarriesNavigationLocation(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
-  testEmployeeDirectoryRestWiring();
+  testDayBundleDirectoryWiring();
   console.log('offroute search tests: ok');
 }
 

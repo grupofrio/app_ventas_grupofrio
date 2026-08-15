@@ -20,6 +20,7 @@ import { useAuthStore } from './useAuthStore';
 import { useRouteStore } from './useRouteStore';
 import { useProductStore } from './useProductStore';
 import { useSyncStore } from './useSyncStore';
+import { useEmployeeDayBundleStore } from './useEmployeeDayBundleStore';
 import {
   computeCustomerPrices,
   peekCachedCustomerPrices,
@@ -90,6 +91,20 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
     });
 
     try {
+      // The versioned bundle is the critical offline snapshot. Do not fall
+      // through to legacy route/catalog fetches if it is stale or unavailable.
+      set({ currentStep: 'Validando bundle del día' });
+      await useEmployeeDayBundleStore.getState().prepare();
+      const dayBundle = useEmployeeDayBundleStore.getState().access;
+      if (!dayBundle?.canStartRoute) {
+        set({
+          isPreparing: false,
+          currentStep: null,
+          lastError: 'El bundle del día está vencido. Solo puedes consultar datos hasta renovarlo con conexión.',
+        });
+        return;
+      }
+
       // ── Step 1: force-refresh plan/stops ───────────────────────────────────
       // F3.1: precarga FORZADA — antes esto solo recargaba si el caché en
       // memoria estaba vacío, así que "Preparar ruta" en un segundo tap (con

@@ -22,7 +22,7 @@ function main() {
   );
   assert.match(
     noSaleScreen,
-    /noSaleCompetitor: selectedReasonId === COMPETITOR_REASON_ID \? selectedCompetitor : null/,
+    /noSaleCompetitor: selectedReasonId === competitorReasonId \? selectedCompetitor : null/,
     'el competidor solo viaja cuando el motivo es competidor',
   );
 

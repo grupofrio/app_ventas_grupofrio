@@ -11,7 +11,7 @@
  * Uses Odoo search with authenticated fallback to /get_records.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, Alert, RefreshControl,
@@ -26,6 +26,7 @@ import { useVisitStore } from '../src/stores/useVisitStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { useProductStore } from '../src/stores/useProductStore';
+import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
@@ -60,8 +61,14 @@ export default function OffRouteScreen() {
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
+  const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
+
+  useEffect(() => {
+    void hydrateDayBundle();
+  }, [hydrateDayBundle]);
 
   const doSearch = useCallback(async () => {
     const q = search.trim();
@@ -101,6 +108,10 @@ export default function OffRouteScreen() {
   }
 
   async function handleSelect(result: OffrouteSearchResult) {
+    if (!dayBundleAccess?.canRunActions) {
+      Alert.alert('Bundle vencido', 'La información del día solo está disponible para consulta. Renueva el bundle antes de iniciar una visita.');
+      return;
+    }
     const selectionKey = offrouteEntityKey(result);
     if (selectingKeyRef.current === selectionKey) return;
 

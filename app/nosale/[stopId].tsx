@@ -3,7 +3,7 @@
  * Reason selection, competitor detection, notes, mandatory photo.
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -22,11 +22,9 @@ import { checkOut, closeOffrouteVisit, reportIncident } from '../../src/services
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
-import { NO_SALE_REASONS } from '../../src/services/noSaleReasons';
+import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
-
-const COMPETITORS = ['Crystal', 'Ice Factory', 'Pureza', 'Generico'];
 
 function makeAttemptId(): string {
   return `nosale-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -54,6 +52,14 @@ export default function NoSaleScreen() {
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [notes, setNotes] = useState(noSaleNotes);
   const [submitting, setSubmitting] = useState(false);
+  const noSaleReasons = useEmployeeDayBundleStore((s) => s.noSaleReasons);
+  const competitors = useEmployeeDayBundleStore((s) => s.competitors);
+  const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
+
+  useEffect(() => {
+    void hydrateDayBundle();
+  }, [hydrateDayBundle]);
 
   // F3.3: id estable a través de reintentos (online → falla ambigua → misma
   // no-venta encolada) para que reportIncident/checkOut manden el MISMO
@@ -82,9 +88,9 @@ export default function NoSaleScreen() {
   // Antes del refactor de Sebastián el cálculo estaba aquí; el guard se
   // intercaló más abajo y rompió tanto el tipo como la seguridad runtime.
   const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
-  const COMPETITOR_REASON_ID = 5;
-  const showCompetitor = selectedReasonId === COMPETITOR_REASON_ID;
-  const canSave = selectedReasonId != null && noSalePhotoTaken;
+  const competitorReasonId = noSaleReasons.find((reason) => reason.code === 'competitor')?.id ?? null;
+  const showCompetitor = selectedReasonId === competitorReasonId;
+  const canSave = selectedReasonId != null && noSalePhotoTaken && dayBundleAccess?.canRunActions === true;
   const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
@@ -122,6 +128,10 @@ export default function NoSaleScreen() {
 
   async function handleSave() {
     if (submitting) return; // guard doble-tap
+    if (!dayBundleAccess?.canRunActions) {
+      Alert.alert('Bundle vencido', 'La no-venta está bloqueada hasta renovar el bundle del día con conexión.');
+      return;
+    }
     if (!canSave) {
       const missing = [];
       if (!selectedReasonId) missing.push('razon de no-venta');
@@ -132,7 +142,7 @@ export default function NoSaleScreen() {
 
     if (!stop) return;
     const operationId = getNoSaleOperationId();
-    const reason = NO_SALE_REASONS.find((r) => r.id === selectedReasonId);
+    const reason = noSaleReasons.find((r) => r.id === selectedReasonId);
     setNoSaleReason(selectedReasonId!, reason?.label || '');
     setNoSaleNotes(notes);
     setSubmitting(true);
@@ -210,7 +220,7 @@ export default function NoSaleScreen() {
       noSaleReasonId: selectedReasonId,
       noSaleReasonCode: reason?.code,
       noSaleNotes: notes,
-      noSaleCompetitor: selectedReasonId === COMPETITOR_REASON_ID ? selectedCompetitor : null,
+      noSaleCompetitor: selectedReasonId === competitorReasonId ? selectedCompetitor : null,
     });
 
     const enqueueNoSaleAndCheckout = () => {
@@ -329,7 +339,7 @@ export default function NoSaleScreen() {
         {/* Reason selection */}
         <Text style={typography.sectionTitle}>¿Por que no se vendio?</Text>
         <View style={styles.chipContainer}>
-          {NO_SALE_REASONS.map((reason) => (
+          {noSaleReasons.map((reason) => (
             <Chip
               key={reason.id}
               label={reason.label}
@@ -344,7 +354,7 @@ export default function NoSaleScreen() {
           <>
             <Text style={typography.inputLabel}>COMPETIDOR DETECTADO</Text>
             <View style={styles.chipContainer}>
-              {COMPETITORS.map((comp) => (
+              {competitors.map((comp) => (
                 <Chip
                   key={comp}
                   label={comp}

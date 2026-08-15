@@ -177,6 +177,12 @@ export async function getAuthSessionId(): Promise<string | null> {
   return sessionId;
 }
 
+/** Employee Bearer credential for bounded first-party REST transports. */
+export async function getEmployeeBearerToken(): Promise<string | null> {
+  const token = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
+  return token ? sanitizeHeaderValue(token) : null;
+}
+
 export async function hasAuthTokens(): Promise<boolean> {
   const [apiKey, gfToken] = await Promise.all([
     SecureStore.getItemAsync(STORE_KEYS.API_KEY),

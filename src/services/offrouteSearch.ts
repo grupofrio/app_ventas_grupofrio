@@ -1,34 +1,34 @@
-import { postRest } from './api';
+import { loadCurrentEmployeeDayBundle } from './employeeDayBundle';
 import { buildOffrouteResults } from './offrouteSearchLogic';
 import type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
 
-const EMPLOYEE_API_BASE = '/gf/logistics/api/employee';
-
 export type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
 export { buildOffrouteResults };
-
-interface EmployeeDirectoryResponse {
-  ok: true;
-  message: string;
-  data: {
-    customers: OffrouteCustomerRecord[];
-    leads: OffrouteLeadRecord[];
-  };
-}
 
 export async function searchOffrouteEntities(
   query: string,
 ): Promise<OffrouteSearchResult[]> {
   const q = query.trim();
   if (q.length < 3) return [];
-
-  const response = await postRest<EmployeeDirectoryResponse>(
-    `${EMPLOYEE_API_BASE}/directory/search`,
-    { query: q, limit: 20 },
-  );
-  if (!response || response.ok !== true || !response.data
-    || !Array.isArray(response.data.customers) || !Array.isArray(response.data.leads)) {
-    throw new Error('La respuesta del directorio no cumple el contrato de empleado.');
-  }
-  return buildOffrouteResults(response.data.customers, response.data.leads);
+  const loaded = await loadCurrentEmployeeDayBundle();
+  if (!loaded) throw new Error('Prepara el bundle del día antes de buscar fuera de ruta.');
+  const normalized = q.toLocaleLowerCase();
+  const customers: OffrouteCustomerRecord[] = loaded.record.bundle.directory.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return [];
+    const item = entry as Record<string, unknown>;
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    const address = typeof item.address === 'string' ? item.address.trim() : '';
+    const zone = typeof item.zone === 'string' ? item.zone.trim() : '';
+    if (typeof item.id !== 'number' || item.id <= 0 || !name) return [];
+    if (![name, address, zone].some((value) => value.toLocaleLowerCase().includes(normalized))) return [];
+    return [{
+      id: item.id,
+      name,
+      street: address || undefined,
+      city: zone || undefined,
+      partner_latitude: typeof item.latitude === 'number' ? item.latitude : undefined,
+      partner_longitude: typeof item.longitude === 'number' ? item.longitude : undefined,
+    }];
+  });
+  return buildOffrouteResults(customers.slice(0, 20), []);
 }

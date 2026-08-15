@@ -16,9 +16,8 @@
  *      sibling key (`_client_meta`) at the payload root, so any backend
  *      controller that extracts named fields explicitly will simply
  *      ignore it and keep working.
- *   5. Meta is NEVER injected into `dict` of /api/create_update calls,
- *      because Odoo `create()` rejects unknown fields — that path is
- *      preserved exactly as it works today.
+ *   5. Meta is never injected into server-owned records; bounded controllers
+ *      accept it only as a sibling payload key.
  *
  * Fields produced (Sprint 3 P1 naming):
  *   - x_client_event_at   : ISO 8601 UTC capture time

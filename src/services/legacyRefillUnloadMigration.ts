@@ -11,7 +11,7 @@
  *
  * Este módulo detecta esos eventos legacy que pudieran haber quedado en la cola
  * offline persistida y los MIGRA de forma segura:
- *   - nunca se reenvían a endpoints (ni /lead/upsert ni /api/create_update);
+ *   - nunca se reenvían a endpoints;
  *   - se revierte idempotentemente cualquier delta de stock local aplicado;
  *   - unload sin delta explícito → restaura sus líneas UNA vez (marca de
  *     migración para no doble-restaurar);

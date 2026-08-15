@@ -422,7 +422,7 @@ export async function getRest<T = any>(
 }
 
 /**
- * POST to an Odoo JSON-RPC endpoint (e.g. /jsonrpc, /get_records, /api/create_update).
+ * POST to a bounded JSON-RPC compatibility endpoint.
  * Wraps params in { jsonrpc: '2.0', params: {...} }.
  * Returns the .result from the JSON-RPC response.
  */
@@ -466,7 +466,7 @@ export async function postRpc<T = any>(
       : (parsed?.error?.data?.message || parsed?.error?.message);
     // BLD-20260505-RPCENVELOPE: detect functional failure carried inside
     // result envelope ({ ok:false, status>=400, case<0, error:"..." }).
-    // Without this the GPS batch (and any other postRpc('/api/create_update'))
+    // Without this the GPS batch (and any other bounded RPC call)
     // would treat HTTP 200 + ok:false as success and silently mark items done.
     const functionalErr = !odooErrMsg
       ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })

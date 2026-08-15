@@ -8,7 +8,7 @@
  * 3. Virtual stop is created in route store
  * 4. Customers choose location or sale; leads route to prospection
  *
- * Uses Odoo search with authenticated fallback to /get_records.
+ * Uses the bounded employee directory search contract.
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';

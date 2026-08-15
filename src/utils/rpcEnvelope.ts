@@ -38,7 +38,7 @@ export function detectFunctionalErrorMessage(
   ctx: FunctionalErrorContext = {},
 ): string | null {
   // Only object envelopes can carry functional errors. Arrays / primitives
-  // are healthy /get_records responses, primitive returns from create, etc.
+  // are healthy list responses, primitive returns from bounded mutations, etc.
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return null;
   }

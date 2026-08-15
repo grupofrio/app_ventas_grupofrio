@@ -39,7 +39,6 @@ const BASELINE = new Set([
   'app/ranking.tsx',
   'app/refill-accept.tsx',
   'app/stop/[stopId].tsx',
-  'app/supervisor.tsx',
   'app/sync.tsx',
   'src/components/OperationGate.tsx',
   'src/components/domain/CatalogProductPicker.tsx',

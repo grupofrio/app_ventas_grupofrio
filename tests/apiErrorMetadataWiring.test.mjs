@@ -55,7 +55,7 @@ test('postRest preserves structured response and transport error metadata', () =
 test('getRest retains its legacy message-only error handling', () => {
   const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8').replace(/\r\n/g, '\n');
   const getRestBlock = api.match(
-    /export async function getRest[\s\S]*?(?=\n\/\*\*\n \* POST to an Odoo JSON-RPC endpoint)/,
+    /export async function getRest[\s\S]*?(?=\n\/\*\*\n \* POST to a bounded JSON-RPC compatibility endpoint)/,
   )?.[0] ?? '';
 
   assert.notEqual(getRestBlock, '', 'getRest block must be isolated for policy-scope assertions');

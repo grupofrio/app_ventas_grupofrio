@@ -6,9 +6,6 @@
  * Checkout now also sends result_status so Odoo can close the stop.
  * Do NOT wrap with jsonrpc/params — that causes 400 errors.
  *
- * For Odoo JSON-RPC endpoints (/jsonrpc, /get_records, /api/create_update),
- * use odooRpc.ts or postRpc() from api.ts instead.
- *
  * Reference: useSyncStore.ts uses these same endpoints with plain payloads
  * and works correctly in production.
  */
@@ -581,9 +578,8 @@ export async function uploadStopImage(
 
 // ═══ Sales & Payments (gf_logistics_ops) ═══
 //
-// Replaces the legacy `/api/create_update` path over `sale.order` /
-// `account.payment`, which required ACLs the driver user doesn't have
-// and had no server-side tolerance for obsolete stop_id.
+// These bounded employee routes keep sales and payments within the authenticated
+// employee scope and tolerate an obsolete stop ID on the server.
 //
 // Backend contract (already deployed):
 //   POST /gf/logistics/api/employee/sales/create

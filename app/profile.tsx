@@ -99,15 +99,6 @@ export default function ProfileScreen() {
 
         {/* Quick actions */}
         <Text style={styles.sectionTitle}>ACCIONES</Text>
-        {isSupervisor && (
-          <Button
-            label="👥 Panel de Supervisor"
-            variant="secondary"
-            fullWidth
-            onPress={() => router.push('/supervisor' as never)}
-            style={{ marginBottom: 8 }}
-          />
-        )}
         <Button
           label="💰 Corte de Caja"
           variant="secondary"

@@ -20,8 +20,8 @@ import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
 import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { useAuthStore } from '../src/stores/useAuthStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { useVisitStore } from '../src/stores/useVisitStore';
 import { createIncident, getMyIncidents } from '../src/services/routeIncidents';
 import {
   INCIDENT_CATEGORIES,
@@ -34,8 +34,7 @@ import { GFIncident } from '../src/types/incident';
 
 export default function IncidentScreen() {
   const router = useRouter();
-  const employeeId = useAuthStore((s) => s.employeeId);
-  const companyId = useAuthStore((s) => s.companyId);
+  const currentStopId = useVisitStore((s) => s.currentStopId);
   const isOnline = useSyncStore((s) => s.isOnline);
 
   const [typeKey, setTypeKey] = useState<string | null>(null);
@@ -47,10 +46,10 @@ export default function IncidentScreen() {
   const [loadingRecent, setLoadingRecent] = useState(false);
 
   const loadRecent = useCallback(async () => {
-    if (!employeeId || !isOnline) return;
+    if (!isOnline) return;
     setLoadingRecent(true);
     try {
-      const list = await getMyIncidents(employeeId);
+      const list = await getMyIncidents();
       setRecent(list);
     } catch {
       // Recent list is best-effort; a failure here must not block reporting.
@@ -58,7 +57,7 @@ export default function IncidentScreen() {
     } finally {
       setLoadingRecent(false);
     }
-  }, [employeeId, isOnline]);
+  }, [isOnline]);
 
   useEffect(() => { void loadRecent(); }, [loadRecent]);
 
@@ -73,13 +72,13 @@ export default function IncidentScreen() {
       Alert.alert('Sin conexión', 'Conéctate para reportar el incidente.');
       return;
     }
-    if (!employeeId || !companyId) {
-      Alert.alert('Sesión incompleta', 'No se pudo identificar tu empleado/empresa. Vuelve a iniciar sesión.');
+    if (!currentStopId) {
+      Alert.alert('Sin visita activa', 'Abre una visita para reportar el incidente en la parada correspondiente.');
       return;
     }
     setSubmitting(true);
     try {
-      await createIncident(built.payload, employeeId, companyId);
+      await createIncident(built.payload, currentStopId);
       setTypeKey(null);
       setSeverityKey(null);
       setDescription('');

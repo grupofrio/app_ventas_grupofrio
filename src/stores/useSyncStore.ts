@@ -32,6 +32,7 @@ import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { createSerializedPersistenceCoordinator } from '../services/serializedTaskRunner';
 import { postRest } from '../services/api';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
   readPhotoAsBase64,
   deletePhoto,
@@ -1274,6 +1275,10 @@ export function computeProcessingOrder(
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
   const meta = item.meta ?? null;
+
+  if (['sale_order', 'checkout', 'customer_update', 'no_sale'].includes(type)) {
+    await assertCurrentEmployeeDayBundleAllowsActions();
+  }
 
   switch (type) {
     case 'sale_order':

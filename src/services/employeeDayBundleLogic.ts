@@ -72,6 +72,44 @@ function positiveInteger(value: unknown, field: string): number {
   return value;
 }
 
+function nonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalid(`${field} debe ser un entero no negativo.`);
+  }
+  return value;
+}
+
+function text(value: unknown, field: string, maxLength: number, required = true): string {
+  if (typeof value !== 'string' || (required && !value.trim()) || value.length > maxLength) {
+    throw invalid(`${field} debe ser texto válido.`);
+  }
+  return value;
+}
+
+function nullableText(value: unknown, field: string, maxLength: number): string | null {
+  if (value === null) return null;
+  return text(value, field, maxLength, false);
+}
+
+function optionalNullableText(value: unknown, field: string, maxLength: number): string | null {
+  if (value === undefined || value === null) return null;
+  return text(value, field, maxLength, false);
+}
+
+function nonNegativeNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw invalid(`${field} debe ser un número no negativo.`);
+  }
+  return value;
+}
+
+function optionalNumberInRange(value: unknown, field: string, min: number, max: number): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    throw invalid(`${field} no es válida.`);
+  }
+}
+
 function isoDate(value: unknown, field: string): string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw invalid(`${field} debe ser una fecha ISO.`);
@@ -99,6 +137,79 @@ function expiryMs(value: unknown): number | null {
   return parsed;
 }
 
+function paymentTerm(value: unknown, field: string): void {
+  if (value === null) return;
+  const term = object(value, field);
+  allowOnly(term, ['id', 'name'], field);
+  positiveInteger(term.id, `${field}.id`);
+  text(term.name, `${field}.name`, 256, false);
+}
+
+function customer(value: unknown, field: string): void {
+  if (value === null) return;
+  const entry = object(value, field);
+  allowOnly(entry, ['id', 'name'], field);
+  positiveInteger(entry.id, `${field}.id`);
+  text(entry.name, `${field}.name`, 512, false);
+}
+
+function reason(value: unknown, field: string): void {
+  const entry = object(value, field);
+  allowOnly(entry, ['code', 'name'], field);
+  text(entry.code, `${field}.code`, 128);
+  text(entry.name, `${field}.name`, 256, false);
+}
+
+function validateStops(values: unknown[]): void {
+  values.forEach((value, index) => {
+    const field = `stops[${index}]`;
+    const entry = object(value, field);
+    allowOnly(entry, ['id', 'sequence', 'state', 'kind', 'customer', 'payment_term'], field);
+    positiveInteger(entry.id, `${field}.id`);
+    nonNegativeInteger(entry.sequence, `${field}.sequence`);
+    if (!['pending', 'in_progress', 'done'].includes(entry.state as string)) throw invalid(`${field}.state no es válido.`);
+    if (!['customer', 'lead'].includes(entry.kind as string)) throw invalid(`${field}.kind no es válido.`);
+    customer(entry.customer, `${field}.customer`);
+    paymentTerm(entry.payment_term, `${field}.payment_term`);
+  });
+}
+
+function validateCatalog(values: unknown[]): void {
+  values.forEach((value, index) => {
+    const field = `catalog[${index}]`;
+    const entry = object(value, field);
+    allowOnly(entry, ['id', 'name', 'default_code', 'uom_id', 'stock_qty', 'effective_prices'], field);
+    positiveInteger(entry.id, `${field}.id`);
+    text(entry.name, `${field}.name`, 512, false);
+    nullableText(entry.default_code, `${field}.default_code`, 256);
+    positiveInteger(entry.uom_id, `${field}.uom_id`);
+    nonNegativeNumber(entry.stock_qty, `${field}.stock_qty`);
+    const prices = array(entry.effective_prices, `${field}.effective_prices`, 1000);
+    prices.forEach((price, priceIndex) => {
+      const priceField = `${field}.effective_prices[${priceIndex}]`;
+      const effective = object(price, priceField);
+      allowOnly(effective, ['partner_id', 'price'], priceField);
+      positiveInteger(effective.partner_id, `${priceField}.partner_id`);
+      nonNegativeNumber(effective.price, `${priceField}.price`);
+    });
+  });
+}
+
+function validateDirectory(values: unknown[]): void {
+  values.forEach((value, index) => {
+    const field = `directory[${index}]`;
+    const entry = object(value, field);
+    allowOnly(entry, ['id', 'name', 'payment_term', 'zone', 'address', 'latitude', 'longitude'], field);
+    positiveInteger(entry.id, `${field}.id`);
+    text(entry.name, `${field}.name`, 512, false);
+    paymentTerm(entry.payment_term, `${field}.payment_term`);
+    optionalNullableText(entry.zone, `${field}.zone`, 256);
+    optionalNullableText(entry.address, `${field}.address`, 512);
+    optionalNumberInRange(entry.latitude, `${field}.latitude`, -90, 90);
+    optionalNumberInRange(entry.longitude, `${field}.longitude`, -180, 180);
+  });
+}
+
 function validateBundle(value: unknown): DayBundle {
   const data = object(value, 'bundle');
   allowOnly(data, [
@@ -118,6 +229,19 @@ function validateBundle(value: unknown): DayBundle {
   const vehicleId = plan.vehicle_id;
   if (vehicleId !== null) positiveInteger(vehicleId, 'plan.vehicle_id');
 
+  const stops = array(data.stops, 'stops', 1000);
+  const catalog = array(data.catalog, 'catalog', 10000);
+  const directory = array(data.directory, 'directory', 1000);
+  const noSaleReasons = array(data.no_sale_reasons, 'no_sale_reasons', 200);
+  const giftReasons = array(data.gift_reasons, 'gift_reasons', 200);
+  const competitors = array(data.competitors, 'competitors', 1000);
+  validateStops(stops);
+  validateCatalog(catalog);
+  validateDirectory(directory);
+  noSaleReasons.forEach((entry, index) => reason(entry, `no_sale_reasons[${index}]`));
+  giftReasons.forEach((entry, index) => reason(entry, `gift_reasons[${index}]`));
+  competitors.forEach((entry, index) => reason(entry, `competitors[${index}]`));
+
   return {
     schema_version: 'day_bundle.v1',
     operational_date: operationalDate,
@@ -129,12 +253,12 @@ function validateBundle(value: unknown): DayBundle {
       route_id: positiveInteger(plan.route_id, 'plan.route_id'),
       vehicle_id: vehicleId as number | null,
     },
-    stops: array(data.stops, 'stops', 1000),
-    catalog: array(data.catalog, 'catalog', 10000),
-    directory: array(data.directory, 'directory', 1000),
-    no_sale_reasons: array(data.no_sale_reasons, 'no_sale_reasons', 200),
-    gift_reasons: array(data.gift_reasons, 'gift_reasons', 200),
-    competitors: array(data.competitors, 'competitors', 1000),
+    stops,
+    catalog,
+    directory,
+    no_sale_reasons: noSaleReasons,
+    gift_reasons: giftReasons,
+    competitors,
   };
 }
 

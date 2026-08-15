@@ -16,6 +16,7 @@ import {
   phoneChanged,
   validateCustomerContactForm,
 } from '../../src/services/customerContactUpdate';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 
 export default function CustomerEditScreen() {
   const { partnerId, stopId } = useLocalSearchParams<{ partnerId: string; stopId?: string }>();
@@ -53,7 +54,13 @@ export default function CustomerEditScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function doSave() {
+  async function doSave() {
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
+      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de editar el contacto.');
+      return;
+    }
     setSaving(true);
 
     const payload = buildCustomerContactUpdatePayload(numericPartnerId, form);

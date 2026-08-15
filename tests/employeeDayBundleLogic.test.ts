@@ -90,6 +90,48 @@ test('day bundle rejects schema-drift fields and capped arrays before persistenc
   );
 });
 
+test('day bundle rejects malformed nested stop, catalog, directory, and reason records', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+  const base = validRecord().bundle as Record<string, unknown>;
+
+  for (const [field, value] of Object.entries({
+    stops: [{}],
+    catalog: [{}],
+    directory: [{}],
+    no_sale_reasons: [{}],
+    gift_reasons: [{}],
+    competitors: [{}],
+  })) {
+    assert.throws(
+      () => logic.evaluateStoredDayBundle(validRecord({ bundle: { ...base, [field]: value } }), context),
+      /inválido|debe|required|entero|campo/i,
+      `${field} must reject an empty nested record`,
+    );
+  }
+
+  assert.throws(
+    () => logic.evaluateStoredDayBundle(validRecord({
+      bundle: {
+        ...base,
+        catalog: [{ id: 1, name: 'Producto', default_code: null, uom_id: 1, stock_qty: 1, effective_prices: [{}] }],
+      },
+    }), context),
+    /inválido|debe|required|entero|campo/i,
+    'effective_prices must reject an empty nested record',
+  );
+  assert.throws(
+    () => logic.evaluateStoredDayBundle(validRecord({
+      bundle: {
+        ...base,
+        directory: [{ id: 1, name: 'Cliente', payment_term: null, latitude: '18.3', longitude: null }],
+      },
+    }), context),
+    /latitude/i,
+    'directory coordinates must keep the schema numeric type',
+  );
+});
+
 test('expired bundle remains read-only and blocks route start and operational actions', async () => {
   const logic = await loadLogic();
   const access = logic.evaluateStoredDayBundle(
@@ -118,11 +160,17 @@ test('day-bundle replacement accepts one complete validated version without mixi
   const logic = await loadLogic();
   const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
   const prior = validRecord({ etag: '"prior"', bundle: { ...validRecord().bundle as object, directory: [{ id: 99 }] } });
-  const incoming = validRecord({ etag: '"next"', bundle: { ...validRecord().bundle as object, catalog: [{ id: 7 }] } });
+  const incoming = validRecord({
+    etag: '"next"',
+    bundle: {
+      ...validRecord().bundle as object,
+      catalog: [{ id: 7, name: 'Producto nuevo', default_code: null, uom_id: 1, stock_qty: 1, effective_prices: [] }],
+    },
+  });
 
   const replaced = logic.replaceDayBundleAtomically(incoming, context) as typeof incoming;
   assert.equal(replaced.etag, '"next"');
-  assert.deepEqual(replaced.bundle.catalog, [{ id: 7 }]);
+  assert.deepEqual(replaced.bundle.catalog, [{ id: 7, name: 'Producto nuevo', default_code: null, uom_id: 1, stock_qty: 1, effective_prices: [] }]);
   assert.deepEqual(replaced.bundle.directory, []);
   assert.notDeepEqual(replaced, prior);
 });

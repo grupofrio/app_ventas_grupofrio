@@ -29,6 +29,7 @@ import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
 import { createIncident } from '../../src/services/routeIncidents';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -156,6 +157,12 @@ function CheckoutScreenInner() {
   async function handleCheckout(shouldNavigateToNextStop: boolean) {
     if (!stop) return;
     if (checkingOut) return; // Guard: prevent double-tap
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
+      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de cerrar la visita.');
+      return;
+    }
     setCheckingOut(true);
 
     let saleSyncState = getSaleSyncState(saleOperationId, queue);

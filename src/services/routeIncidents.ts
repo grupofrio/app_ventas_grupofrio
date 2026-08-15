@@ -3,6 +3,7 @@
 import { createUuidV4 } from '../utils/clientEvent';
 import { logInfo } from '../utils/logger';
 import { createEmployeeIncident, listEmployeeIncidents } from './employeeData';
+import { assertCurrentEmployeeDayBundleAllowsActions } from './dayBundleMutationGate';
 import { CreateIncidentPayload, GFIncident } from '../types/incident';
 
 /**
@@ -13,6 +14,7 @@ export async function createIncident(
   payload: CreateIncidentPayload,
   stopId: number,
 ): Promise<void> {
+  await assertCurrentEmployeeDayBundleAllowsActions();
   await createEmployeeIncident({
     operation_id: createUuidV4(),
     stop_id: stopId,

@@ -164,8 +164,10 @@ const strictLoadBlock = storage.match(
   /export async function storeLoadStrict<T>\(key: string\): Promise<T \| null> \{[\s\S]*?\n\}/,
 );
 assert(strictLoadBlock, 'storeLoadStrict tiene un límite tipado y explícito');
-assert(/await AsyncStorage\.getItem\(`\$\{PREFIX\}\$\{key\}`\)/.test(strictLoadBlock[0]),
-  'storeLoadStrict espera directamente la lectura de AsyncStorage');
+assert(/if \(isEncryptedFieldDataKey\(key\)\) \{[\s\S]*?return loadFieldData<T>\(key\);/.test(strictLoadBlock[0]),
+  'storeLoadStrict enruta primero los registros de campo sensibles al sobre cifrado');
+assert(/await AsyncStorage\.getItem\(plaintextKey\(key\)\)/.test(strictLoadBlock[0]),
+  'storeLoadStrict conserva AsyncStorage solo para preferencias no sensibles');
 assert(/if \(raw === null\) return null;/.test(strictLoadBlock[0]),
   'storeLoadStrict devuelve null solo para ausencia confirmada');
 assert(/const parsed = JSON\.parse\(raw\) as unknown;/.test(strictLoadBlock[0]),

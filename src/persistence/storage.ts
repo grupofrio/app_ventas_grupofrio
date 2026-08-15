@@ -1,19 +1,65 @@
 /**
- * Typed persistence layer — AsyncStorage wrapper.
+ * Typed persistence layer.
  *
  * ARCHITECTURE DECISION (F6):
- * V1 uses AsyncStorage (no native build required, works with Expo Go).
- * V2 can swap to WatermelonDB by implementing the same interface.
- *
- * All stores use this layer instead of AsyncStorage directly.
- * Data is JSON-serialized with type safety.
+ * Harmless preferences use AsyncStorage. Employee-scoped operational data uses
+ * the native encrypted session envelope selected by fieldDataPersistenceLogic.
  *
  * Storage keys are namespaced: "kf:{entity}:{subkey}"
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  ENCRYPTED_FIELD_DATA_KEYS,
+  isEncryptedFieldDataKey,
+} from '../services/fieldDataPersistenceLogic.ts';
+import { getFieldDataSession } from '../services/fieldDataSession.ts';
 
 const PREFIX = 'kf:';
+
+function plaintextKey(key: string): string {
+  return `${PREFIX}${key}`;
+}
+
+async function removeLegacyPlaintextFieldData(key: string): Promise<void> {
+  // Migration is erase-only: a legacy plaintext value is never copied into the
+  // encrypted envelope because it cannot be trusted to match this session.
+  await AsyncStorage.removeItem(plaintextKey(key));
+}
+
+/**
+ * Removes the bounded set of pre-encryption operational keys on logout or an
+ * account switch. This is intentionally erase-only: no old plaintext record
+ * can be associated with the next authenticated employee session.
+ */
+export async function clearSensitiveFieldData(): Promise<void> {
+  await AsyncStorage.multiRemove(ENCRYPTED_FIELD_DATA_KEYS.map(plaintextKey));
+}
+
+async function saveFieldData<T>(key: string, data: T): Promise<void> {
+  await removeLegacyPlaintextFieldData(key);
+  const session = await getFieldDataSession();
+  if (!session) throw new Error(`Encrypted field-data session unavailable for ${key}`);
+  const { saveEncrypted } = await import('../services/encryptedStore.ts');
+  await saveEncrypted(session, key, data);
+}
+
+async function loadFieldData<T>(key: string): Promise<T | null> {
+  await removeLegacyPlaintextFieldData(key);
+  const session = await getFieldDataSession();
+  if (!session) return null;
+  const { loadEncrypted } = await import('../services/encryptedStore.ts');
+  return loadEncrypted<T>(session, key);
+}
+
+async function removeFieldData(key: string): Promise<void> {
+  await removeLegacyPlaintextFieldData(key);
+  const session = await getFieldDataSession();
+  if (session) {
+    const { removeEncrypted } = await import('../services/encryptedStore.ts');
+    await removeEncrypted(session, key);
+  }
+}
 
 // ═══════════════════════════════════════════
 // CORE OPERATIONS
@@ -21,8 +67,12 @@ const PREFIX = 'kf:';
 
 export async function storeSave<T>(key: string, data: T): Promise<void> {
   try {
+    if (isEncryptedFieldDataKey(key)) {
+      await saveFieldData(key, data);
+      return;
+    }
     const serialized = JSON.stringify(data);
-    await AsyncStorage.setItem(`${PREFIX}${key}`, serialized);
+    await AsyncStorage.setItem(plaintextKey(key), serialized);
   } catch (error) {
     console.error(`[storage] save failed for ${key}:`, error);
   }
@@ -30,7 +80,8 @@ export async function storeSave<T>(key: string, data: T): Promise<void> {
 
 export async function storeLoad<T>(key: string): Promise<T | null> {
   try {
-    const raw = await AsyncStorage.getItem(`${PREFIX}${key}`);
+    if (isEncryptedFieldDataKey(key)) return loadFieldData<T>(key);
+    const raw = await AsyncStorage.getItem(plaintextKey(key));
     if (raw === null) return null;
     return JSON.parse(raw) as T;
   } catch (error) {
@@ -41,7 +92,11 @@ export async function storeLoad<T>(key: string): Promise<T | null> {
 
 export async function storeRemove(key: string): Promise<void> {
   try {
-    await AsyncStorage.removeItem(`${PREFIX}${key}`);
+    if (isEncryptedFieldDataKey(key)) {
+      await removeFieldData(key);
+      return;
+    }
+    await AsyncStorage.removeItem(plaintextKey(key));
   } catch (error) {
     console.error(`[storage] remove failed for ${key}:`, error);
   }
@@ -53,12 +108,19 @@ export async function storeRemove(key: string): Promise<void> {
 // se necesita observar el fallo y abortar; estas variantes propagan la excepción.
 
 export async function storeSaveStrict<T>(key: string, data: T): Promise<void> {
+  if (isEncryptedFieldDataKey(key)) {
+    await saveFieldData(key, data);
+    return;
+  }
   const serialized = JSON.stringify(data);
-  await AsyncStorage.setItem(`${PREFIX}${key}`, serialized);
+  await AsyncStorage.setItem(plaintextKey(key), serialized);
 }
 
 export async function storeLoadStrict<T>(key: string): Promise<T | null> {
-  const raw = await AsyncStorage.getItem(`${PREFIX}${key}`);
+  if (isEncryptedFieldDataKey(key)) {
+    return loadFieldData<T>(key);
+  }
+  const raw = await AsyncStorage.getItem(plaintextKey(key));
   if (raw === null) return null;
   const parsed = JSON.parse(raw) as unknown;
   if (parsed === null) {
@@ -68,7 +130,11 @@ export async function storeLoadStrict<T>(key: string): Promise<T | null> {
 }
 
 export async function storeRemoveStrict(key: string): Promise<void> {
-  await AsyncStorage.removeItem(`${PREFIX}${key}`);
+  if (isEncryptedFieldDataKey(key)) {
+    await removeFieldData(key);
+    return;
+  }
+  await AsyncStorage.removeItem(plaintextKey(key));
 }
 
 export async function storeClear(): Promise<void> {
@@ -77,6 +143,11 @@ export async function storeClear(): Promise<void> {
     const kfKeys = allKeys.filter((k) => k.startsWith(PREFIX));
     if (kfKeys.length > 0) {
       await AsyncStorage.multiRemove(kfKeys);
+    }
+    const session = await getFieldDataSession();
+    if (session) {
+      const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
+      await clearEncryptedSession(session);
     }
   } catch (error) {
     console.error('[storage] clear failed:', error);

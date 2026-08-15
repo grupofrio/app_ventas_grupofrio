@@ -241,6 +241,8 @@ interface SyncState {
   // error item; fires processQueue when its backoff elapses).
   scheduleWake: () => void;
   clearWakeTimer: () => void;
+  /** Drops one employee's in-memory work before another session is established. */
+  resetForSessionChange: () => void;
 
   // Migración/guard de eventos legacy refill/unload. Async: la reparación
   // pendiente se persiste durablemente ANTES de retirar cola o tocar stock.
@@ -473,6 +475,26 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   setSyncing: (syncing) => set({ isSyncing: syncing }),
+
+  resetForSessionChange: () => {
+    if (_persistTimer) {
+      clearTimeout(_persistTimer);
+      _persistTimer = null;
+    }
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
+    }
+    set({
+      queue: [],
+      isSyncing: false,
+      lastSyncAt: null,
+      ...computeCounts([]),
+      legacyMigrationNoticeCount: 0,
+      legacyRefreshPending: false,
+      lastCycleMetrics: null,
+    });
+  },
 
   clearDone: () => {
     const newQueue = get().queue.filter((i) => i.status !== 'done');

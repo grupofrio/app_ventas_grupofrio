@@ -12,7 +12,7 @@ import {
   createEncryptedSessionStore,
   type EncryptedSessionIdentity,
   type EncryptedStorageDriver,
-} from './encryptedStoreLogic';
+} from './encryptedStoreLogic.ts';
 
 function isValueNotFound(error: unknown): boolean {
   return typeof error === 'object'
@@ -45,7 +45,7 @@ const nativeEncryptedDriver: EncryptedStorageDriver = {
 
 const encryptedSessionStore = createEncryptedSessionStore(nativeEncryptedDriver);
 
-export type { EncryptedSessionIdentity } from './encryptedStoreLogic';
+export type { EncryptedSessionIdentity } from './encryptedStoreLogic.ts';
 
 export function saveEncrypted<T>(
   sessionKey: EncryptedSessionIdentity,

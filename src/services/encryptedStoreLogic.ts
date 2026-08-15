@@ -32,7 +32,7 @@ interface EncryptedEnvelope {
 }
 
 const ENCRYPTED_STORE_PREFIX = 'kf-field-v1';
-const RECORD_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const RECORD_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,95}$/;
 const SENSITIVE_RECORDS = new Set(['day-bundle', 'sync-queue']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -19,9 +19,20 @@ import { signOut } from '../services/gfLogistics';
 import { clearOdooSession } from '../services/odooSession';
 import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
-import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import {
+  clearSensitiveFieldData,
+  storeSave,
+  storeLoad,
+  storeRemove,
+  STORAGE_KEYS,
+} from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
 import { isRestorableSession } from '../services/authOffline';
+import {
+  clearFieldDataIdentity,
+  getFieldDataSession,
+  setFieldDataIdentity,
+} from '../services/fieldDataSession';
 import { useSalesStore } from './useSalesStore';
 
 interface AuthState {
@@ -109,12 +120,36 @@ interface EmployeePayload {
 }
 
 async function clearRouteCache(): Promise<void> {
+  // Keep this deferred import explicit: route -> sync -> product already
+  // depends on auth, so a static import here would close that module cycle.
   const { useRouteStore } = await import('./useRouteStore');
+  const [
+    { useVisitStore },
+    { useProductStore },
+    { useSyncStore },
+  ] = await Promise.all([
+    import('./useVisitStore'),
+    import('./useProductStore'),
+    import('./useSyncStore'),
+  ]);
   useRouteStore.getState().reset();
+  useVisitStore.getState().resetVisit();
+  useProductStore.getState().reset();
+  useSyncStore.getState().resetForSessionChange();
   await Promise.all([
     storeRemove(STORAGE_KEYS.PLAN),
     storeRemove(STORAGE_KEYS.STOPS),
   ]);
+}
+
+async function clearCurrentEncryptedFieldData(): Promise<void> {
+  const session = await getFieldDataSession();
+  if (session) {
+    const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
+    await clearEncryptedSession(session);
+  }
+  await clearSensitiveFieldData();
+  clearFieldDataIdentity();
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -248,6 +283,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: Array.isArray(saved.customerIds) ? saved.customerIds as number[] : [],
       });
 
+      const companyId = typeof saved.companyId === 'number' ? saved.companyId : null;
+      if (companyId && companyId > 0) {
+        setFieldDataIdentity({ companyId, employeeId });
+      }
+
       console.log(`[auth] Rehydrated: employee=${employeeId}, warehouse=${warehouseId}`);
       return true;
     } catch (error) {
@@ -341,10 +381,13 @@ export const useAuthStore = create<AuthState>((set) => ({
         return false;
       }
 
-      await setAuthTokens(result.api_key, result.gf_employee_token || '');
+      // Account switches must erase the prior employee's encrypted field data
+      // while its secure session reference is still available.
+      await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       clearPricelistCaches();
       useSalesStore.getState().reset();
+      await setAuthTokens(result.api_key, result.gf_employee_token || '');
 
       const emp: EmployeePayload = result.employee || {};
 
@@ -391,6 +434,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         defaultCashAccountId: extractId(cashAccountRaw),
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
       });
+
+      const companyId = useAuthStore.getState().companyId;
+      if (companyId && companyId > 0) {
+        setFieldDataIdentity({ companyId, employeeId });
+      }
 
       // Fetch plaza analytic from hr.employee if login response didn't include it.
       // Runs synchronously before returning so the sale screen always has plaza set.
@@ -447,6 +495,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       await signOut();
     } finally {
       clearOdooSession();
+      await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       useSalesStore.getState().reset();
       await clearAuthTokens();

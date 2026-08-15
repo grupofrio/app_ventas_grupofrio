@@ -98,15 +98,15 @@ function fuzzyMatch(text: string, query: string): boolean {
 }
 
 /** Format visible pricelist price exactly as backend returned it. */
-function displayPrice(basePrice: number): string {
-  return formatCurrency(getVisiblePricelistPrice(basePrice));
+function displayPrice(basePrice: number | null): string {
+  return typeof basePrice === 'number' ? formatCurrency(getVisiblePricelistPrice(basePrice)) : '—';
 }
 
 type EnrichedProduct = TruckProduct & {
   category: CategoryKey;
   isRecommended: boolean;
   isAlreadyAdded: boolean;
-  customerPrice: number; // price for this customer (may differ from list_price)
+  customerPrice: number | null; // null until the customer price response is authorized
   hasCustomPrice: boolean; // true when price comes from customer pricelist
 };
 
@@ -137,6 +137,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const [priceMap, setPriceMap] = useState<Map<number, number>>(new Map());
   const [priceLoading, setPriceLoading] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
+  const [hasAuthorizedPrices, setHasAuthorizedPrices] = useState(!partnerId);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
   // Load base URL for image URLs
@@ -157,14 +158,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       setPriceMap(new Map());
       setPriceLoading(false);
       setPriceError(null);
+      setHasAuthorizedPrices(true);
       return;
     }
     const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
+    setHasAuthorizedPrices(false);
     const cached = peekCachedCustomerPrices(partnerId, products, pricingOptions);
     if (cached) {
       setPriceMap(cached);
       setPriceLoading(false);
       setPriceError(null);
+      setHasAuthorizedPrices(true);
       return;
     }
     // Sin red y sin caché no hay un precio autorizado para esta venta.
@@ -172,6 +176,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       setPriceMap(new Map());
       setPriceLoading(false);
       setPriceError('Conéctate para consultar los precios autorizados de este cliente.');
+      setHasAuthorizedPrices(false);
       return;
     }
     let cancelled = false;
@@ -181,6 +186,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         setPriceMap(map);
         setPriceLoading(false);
         setPriceError(null);
+        setHasAuthorizedPrices(true);
       }
       // Perf Fase 2B: persistir el precio recién computado para lectura offline
       // tras un reinicio (partner no precargado en la preparación de ruta).
@@ -189,6 +195,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       if (!cancelled) {
         setPriceLoading(false);
         setPriceError(error instanceof Error ? error.message : 'No fue posible obtener los precios autorizados.');
+        setHasAuthorizedPrices(false);
       }
     });
     return () => { cancelled = true; };
@@ -210,6 +217,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setRefreshingCatalog(true);
     setPriceLoading(true);
     setPriceError(null);
+    setHasAuthorizedPrices(!partnerId);
     clearPricelistCaches();
     try {
       await loadProducts(warehouseId);
@@ -218,12 +226,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         const map = await computeCustomerPrices(partnerId, useProductStore.getState().products, pricingOptions);
         setPriceMap(map);
         setPriceError(null);
+        setHasAuthorizedPrices(true);
         schedulePersistPriceCache();
       } else {
         setPriceMap(new Map());
       }
     } catch (error) {
       setPriceError(error instanceof Error ? error.message : 'No fue posible obtener los precios autorizados.');
+      setHasAuthorizedPrices(false);
     } finally {
       setPriceLoading(false);
       setRefreshingCatalog(false);
@@ -247,11 +257,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         category: categorizeProduct(p.name),
         isRecommended: recommendations.has(p.id),
         isAlreadyAdded: existingProductIds.includes(p.id),
-        customerPrice: custom ?? p.list_price,
+        customerPrice: !partnerId || hasAuthorizedPrices ? custom ?? p.list_price : null,
         hasCustomPrice: custom !== undefined,
       };
     });
-  }, [products, recommendations, existingProductIds, priceMap]);
+  }, [products, recommendations, existingProductIds, priceMap, partnerId, hasAuthorizedPrices]);
 
   // BLD-20260424-STOCKMETA: usamos el flag explícito hasStockData del
   // backend (commit dd78489 de Sebastián) en vez de la heurística
@@ -309,8 +319,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
     if (existingProductIds.includes(product.id)) return;
-    if (priceError) {
-      Alert.alert('Precios no disponibles', priceError);
+    if (partnerId && (priceLoading || !hasAuthorizedPrices || priceError)) {
+      Alert.alert('Precios no disponibles', priceError ?? 'Espera la respuesta de precios autorizados.');
       return;
     }
 
@@ -335,7 +345,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setSearch('');
     setQuantities({});
     onClose();
-  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose, priceError]);
+  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   // ═══ Product Image ═══
 
@@ -376,7 +386,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded;
+    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
     const qty = quantities[p.id] || 1;
 
     return (
@@ -424,14 +434,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   // ═══ Grid View Card ═══
 
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded;
+    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
     const qty = quantities[p.id] || 1;
 
     return (
@@ -488,7 +498,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;

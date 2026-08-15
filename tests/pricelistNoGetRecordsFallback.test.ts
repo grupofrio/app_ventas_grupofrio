@@ -33,6 +33,16 @@ function main() {
     /Alert\.alert\('Precios no disponibles'/,
     'ProductPicker debe bloquear la selección cuando no hay precios autorizados',
   );
+  assert.match(
+    picker,
+    /const \[hasAuthorizedPrices, setHasAuthorizedPrices\]/,
+    'ProductPicker debe distinguir una respuesta autorizada de un mapa de precios vacío',
+  );
+  assert.match(
+    picker,
+    /priceLoading \|\| !hasAuthorizedPrices \|\| priceError/,
+    'ProductPicker debe bloquear mientras carga o no existe una respuesta autorizada',
+  );
 
   console.log('pricelist REST-only tests: ok');
 }

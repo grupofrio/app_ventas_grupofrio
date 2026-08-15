@@ -108,11 +108,14 @@ async function fetchServerSidePrices(
     const result = await postRest<any>(`${GF_BASE}/pricing/by_partner`, payload, {
       timeoutMs: DEFAULT_READ_TIMEOUT_MS,
     });
-    const data = result?.data !== undefined ? result.data : result;
-    const rawPrices = data?.prices ?? data?.price_map ?? data?.items ?? data;
-    if (!rawPrices || typeof rawPrices !== 'object') {
+    if (!result || typeof result !== 'object' || result.ok !== true) {
       throw new PricingUnavailableError();
     }
+    const data = result.data;
+    if (!data || typeof data !== 'object' || !Array.isArray(data.prices)) {
+      throw new PricingUnavailableError();
+    }
+    const rawPrices = data.prices;
 
     const productById = new Map(products.map((product) => [product.id, product]));
     const priceMap = new Map<number, number>();
@@ -123,11 +126,10 @@ async function fetchServerSidePrices(
       if (product && Math.abs(price - product.list_price) > 0.01) priceMap.set(productId, price);
     };
 
-    if (Array.isArray(rawPrices)) {
-      rawPrices.forEach((row) => addPrice(row?.product_id ?? row?.id, row?.price ?? row?.price_unit ?? row?.unit_price));
-    } else {
-      Object.entries(rawPrices).forEach(([productId, price]) => addPrice(Number(productId), price));
-    }
+    rawPrices.forEach((row: unknown) => {
+      const priceRow = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      addPrice(priceRow.product_id, priceRow.price_unit);
+    });
     markServerPricingEndpointAvailable();
     return priceMap;
   } catch (error) {

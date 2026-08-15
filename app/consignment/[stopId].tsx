@@ -46,6 +46,13 @@ import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlow
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import { getAuthSessionId } from '../../src/services/api';
+import {
+  clearConsignmentPendingOperation,
+  loadConsignmentPendingOperations,
+  saveConsignmentPendingOperation,
+  type ConsignmentOperationKind,
+} from '../../src/services/consignmentOperationPersistence';
 
 function makeOperationId(): string {
   return createUuidV4();
@@ -98,6 +105,31 @@ function ConsignmentScreenInner() {
     const ref = isClosing ? closeOperationIdRef : visitOperationIdRef;
     if (!ref.current) ref.current = makeOperationId();
     return ref.current;
+  }
+  function operationIdRefFor(kind: ConsignmentOperationKind) {
+    if (kind === 'create') return createOperationIdRef;
+    return kind === 'visit' ? visitOperationIdRef : closeOperationIdRef;
+  }
+  async function getConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<string> {
+    const ref = operationIdRefFor(kind);
+    if (ref.current) return ref.current;
+    const sessionId = await getAuthSessionId();
+    if (!sessionId) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+    const pending = await loadConsignmentPendingOperations(sessionId);
+    const operationId = pending[kind] ?? (
+      kind === 'create' ? getCreateOperationId() : getVisitOrCloseOperationId(kind === 'close')
+    );
+    if (!pending[kind]) await saveConsignmentPendingOperation(sessionId, kind, operationId);
+    ref.current = operationId;
+    return operationId;
+  }
+  async function clearConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<void> {
+    const sessionId = await getAuthSessionId();
+    if (!sessionId) return;
+    await clearConsignmentPendingOperation(sessionId, kind);
+    if (kind === 'create') createOperationIdRef.current = null; // siguiente create = nuevo id
+    if (kind === 'visit') visitOperationIdRef.current = null; // siguiente visita = nuevo id
+    if (kind === 'close') closeOperationIdRef.current = null; // siguiente cierre = nuevo id
   }
 
   // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
@@ -199,12 +231,13 @@ function ConsignmentScreenInner() {
     setSubmitting(true);
     (async () => {
       try {
+        const operationId = await getConsignmentPendingOperationId('create');
         const res = await createConsignment({
           partnerId,
-          operationId: getCreateOperationId(),
+          operationId,
           lines: v.lines,
         });
-        createOperationIdRef.current = null; // siguiente create = nuevo id
+        await clearConsignmentPendingOperationId('create');
         const c = res.consignment;
         Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
           { text: 'OK', onPress: () => router.back() },
@@ -236,21 +269,22 @@ function ConsignmentScreenInner() {
             setSubmitting(true);
             (async () => {
               try {
+                const operationId = await getConsignmentPendingOperationId(closing ? 'close' : 'visit');
                 const payload = {
                   consignmentId: active.id,
-                  operationId: getVisitOrCloseOperationId(closing),
+                  operationId,
                   paymentMethod,
                   counts: built.counts,
                 };
+                const res = closing
+                  ? await closeConsignment(payload)
+                  : await visitConsignment(payload);
+                await clearConsignmentPendingOperationId(closing ? 'close' : 'visit');
                 if (closing) {
-                  const res = await closeConsignment(payload);
-                  closeOperationIdRef.current = null; // siguiente cierre = nuevo id
                   Alert.alert(res.message || 'Consignación cerrada', 'El servidor registró el cobro y la devolución.', [
                     { text: 'OK', onPress: () => router.back() },
                   ]);
                 } else {
-                  const res = await visitConsignment(payload);
-                  visitOperationIdRef.current = null; // siguiente visita = nuevo id
                   Alert.alert(res.message || 'Visita registrada', 'El servidor cobró el faltante y resurtió al objetivo.', [
                     { text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } },
                   ]);

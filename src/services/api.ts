@@ -18,11 +18,13 @@ import {
   makeApiTransportError,
 } from './apiRequestError';
 import { readPostRestResponseText } from './postRestResponse';
+import { createUuidV4 } from '../utils/clientEvent';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
   API_KEY: 'kf_api_key',
   GF_TOKEN: 'kf_gf_token',
+  SESSION_ID: 'kf_employee_session_id',
 } as const;
 
 const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefined>)[
@@ -144,15 +146,35 @@ export async function getBaseUrl(): Promise<string> {
 }
 
 export async function setAuthTokens(apiKey: string, gfToken: string) {
-  await SecureStore.setItemAsync(STORE_KEYS.API_KEY, apiKey);
-  await SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken);
+  await Promise.all([
+    SecureStore.setItemAsync(STORE_KEYS.API_KEY, apiKey),
+    SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken),
+    SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, createUuidV4()),
+  ]);
 }
 
 export async function clearAuthTokens() {
   _baseUrl = DEFAULT_BASE_URL;
   await SecureStore.deleteItemAsync(STORE_KEYS.API_KEY);
   await SecureStore.deleteItemAsync(STORE_KEYS.GF_TOKEN);
+  await SecureStore.deleteItemAsync(STORE_KEYS.SESSION_ID);
   await SecureStore.deleteItemAsync(STORE_KEYS.BASE_URL);
+}
+
+/**
+ * Stable only for the authenticated employee session currently held in
+ * SecureStore. Legacy restored sessions get a fresh scope before mutations.
+ */
+export async function getAuthSessionId(): Promise<string | null> {
+  const [gfToken, storedSessionId] = await Promise.all([
+    SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN),
+    SecureStore.getItemAsync(STORE_KEYS.SESSION_ID),
+  ]);
+  if (!gfToken) return null;
+  if (storedSessionId) return storedSessionId;
+  const sessionId = createUuidV4();
+  await SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, sessionId);
+  return sessionId;
 }
 
 export async function hasAuthTokens(): Promise<boolean> {

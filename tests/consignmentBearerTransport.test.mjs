@@ -58,8 +58,8 @@ assert.match(screen, /const createOperationIdRef = useRef<string \| null>\(null\
 assert.match(screen, /createOperationIdRef\.current = null; \/\/ siguiente create = nuevo id/, 'create id is reset only after success');
 assert.match(
   screen,
-  /createConsignment\(\{\s*partnerId,\s*operationId: getCreateOperationId\(\),\s*lines: v\.lines,\s*\}\)/,
-  'create must pass its stable operation id to the adapter',
+  /const operationId = await getConsignmentPendingOperationId\('create'\);[\s\S]*?createConsignment\(\{\s*partnerId,\s*operationId,\s*lines: v\.lines,\s*\}\)/,
+  'create must pass its durable stable operation id to the adapter',
 );
 
 const createPayload = createSection.slice(createSection.indexOf('const body'), createSection.indexOf('const result'));

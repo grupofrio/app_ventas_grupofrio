@@ -31,7 +31,7 @@ import {
 import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { createSerializedPersistenceCoordinator } from '../services/serializedTaskRunner';
-import { postRest, postRpc } from '../services/api';
+import { postRest } from '../services/api';
 import {
   readPhotoAsBase64,
   deletePhoto,
@@ -95,6 +95,7 @@ import {
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
 import { promoteStoredSaleTicketOdooFolio } from '../services/saleTicketStorage';
+import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
 
 // ═══ Constants ═══
 
@@ -526,22 +527,25 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   rehydrateQueue: async () => {
-    const saved = await storeLoad<SyncQueueItem[]>(STORAGE_KEYS.SYNC_QUEUE);
-    if (saved && saved.length > 0) {
-      const restored = saved.map((item) => ({
-        ...item,
-        // V2: crash recovery — syncing items reset to pending
-        status: item.status === 'syncing' ? ('pending' as SyncItemStatus) : item.status,
-        // V2: ensure priority exists (migration from V1 items without priority)
-        priority: item.priority ?? (SYNC_PRIORITY_MAP[item.type] || 3),
-        // V2: ensure next_retry_at exists
-        next_retry_at: item.next_retry_at ?? null,
-      }));
+    const saved = await storeLoad<unknown[]>(STORAGE_KEYS.SYNC_QUEUE);
+    if (Array.isArray(saved) && saved.length > 0) {
+      const { queue: restored, discardedCount, syncingRecoveredCount } = restorePersistedSyncQueue(saved);
       set({ queue: restored, ...computeCounts(restored) });
       logInfo('sync', 'rehydrate', {
         total: restored.length,
-        syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
+        syncing_recovered: syncingRecoveredCount,
       });
+      if (discardedCount > 0) {
+        try {
+          await persistCurrentQueue();
+          logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+        } catch (error: unknown) {
+          logError('sync', 'rehydrate_discard_persist_failed', {
+            discardedCount,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     // Rehidrata la bandera DURABLE de refresh autoritativo pendiente: si una
     // migración previa retiró eventos legacy pero la app cerró (o el refresh
@@ -1383,43 +1387,11 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }, meta);
       break;
 
-    // NOTA: los antiguos case 'refill'/'unload' (que posteaban a los modelos van
-    // de recarga/descarga vía /api/create_update) se ELIMINARON. El flujo se
+    // NOTA: los antiguos case 'refill'/'unload' se ELIMINARON. El flujo se
     // retiró: la recarga la crea Almacén y el vendedor la acepta; la devolución
     // (vendible + merma) se captura en el Corte. Cualquier evento legacy que quede
     // en cola lo intercepta el guard de processOneItem (isLegacyRefillUnloadItem) y
     // se migra (revierte stock + descarta); nunca llega a este dispatcher.
-
-    // V2 types — basic dispatchers. Payloads follow the same
-    // postRpc pattern. Backend contracts TBD per endpoint.
-    case 'collection':
-      await postRpc('/api/create_update', {
-        model: 'account.payment',
-        method: 'create',
-        dict: {
-          partner_id: payload.partner_id,
-          amount: payload.amount,
-          payment_type: 'inbound',
-          journal_id: payload.journal_id || null,
-        },
-      });
-      break;
-
-    case 'transfer':
-      await postRpc('/api/create_update', {
-        model: 'stock.picking',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
-    case 'customer_create':
-      await postRpc('/api/create_update', {
-        model: 'res.partner',
-        method: 'create',
-        dict: payload,
-      });
-      break;
 
     case 'customer_update':
       await syncCustomerContactUpdate(payload as Record<string, unknown>);

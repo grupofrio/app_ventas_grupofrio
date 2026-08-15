@@ -75,8 +75,13 @@ function main() {
 
   assert.match(
     offrouteSearch,
-    /x_analytic_un_id/,
-    'la búsqueda de visita especial debe filtrar por plaza analítica',
+    /\$\{EMPLOYEE_API_BASE\}\/directory\/search/,
+    'la búsqueda de visita especial debe delegar el scope de plaza al directorio Bearer',
+  );
+  assert.doesNotMatch(
+    offrouteSearch,
+    /x_analytic_un_id|analyticPlazaId|employee_id|company_id/,
+    'la búsqueda móvil no debe transportar selectores de autoridad; el backend deriva la plaza del Bearer',
   );
 
   // P1 review (Sebas): la tarjeta de la LISTA debe abrir el cliente vía

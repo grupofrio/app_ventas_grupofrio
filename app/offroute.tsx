@@ -59,7 +59,6 @@ export default function OffRouteScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
@@ -74,9 +73,7 @@ export default function OffRouteScreen() {
     setIsSearching(true);
     setHasSearched(true);
     try {
-      const searchResults = await searchOffrouteEntities(q, {
-        analyticPlazaId: employeeAnalyticPlazaId,
-      });
+      const searchResults = await searchOffrouteEntities(q);
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
@@ -84,7 +81,7 @@ export default function OffRouteScreen() {
     } finally {
       setIsSearching(false);
     }
-  }, [employeeAnalyticPlazaId, search]);
+  }, [search]);
   const refreshSearch = useCallback(async () => {
     const q = search.trim();
     if (!hasSearched || q.length < 3) return;

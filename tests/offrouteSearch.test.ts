@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 interface OffrouteSearchModule {
   BASIC_CUSTOMER_FIELDS: string[];
@@ -174,6 +176,31 @@ function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) 
   ]);
 }
 
+function testEmployeeDirectoryRestWiring() {
+  const source = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearch.ts'), 'utf8');
+  const screen = readFileSync(resolve(process.cwd(), 'app/offroute.tsx'), 'utf8');
+
+  assert.match(source, /import\s*\{\s*postRest\s*\}\s*from ['"]\.\/api['"]/);
+  assert.match(source, /\$\{EMPLOYEE_API_BASE\}\/directory\/search/);
+  assert.match(source, /const q = query\.trim\(\)/);
+  assert.match(source, /query:\s*q,\s*limit:\s*20/s);
+  assert.doesNotMatch(
+    source,
+    /odooRpc|odooRead|odooSession|call_kw|execute_kw|get_records|\/api\/create_update/,
+    'el directorio debe usar solo el endpoint REST acotado del empleado',
+  );
+  assert.doesNotMatch(
+    source,
+    /analyticPlazaId|employee_id|company_id/,
+    'la autoridad del directorio se deriva exclusivamente del Bearer',
+  );
+  assert.doesNotMatch(
+    screen,
+    /employeeAnalyticPlazaId|analyticPlazaId/,
+    'la pantalla no debe reenviar la plaza del empleado como autoridad de búsqueda',
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -188,6 +215,7 @@ async function main() {
   testMixedResultsKeepTypes(module);
   await testCustomerFieldFallbackKeepsResults(module);
   testCustomerDomainSearchesMobileAndEmail(module);
+  testEmployeeDirectoryRestWiring();
   console.log('offroute search tests: ok');
 }
 

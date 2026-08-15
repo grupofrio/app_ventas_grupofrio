@@ -1,22 +1,14 @@
 /**
- * Programa de Lealtad — lectura desde Odoo (wiring del fetch).
- *
- * Backend (verificado): NO usa el módulo nativo `loyalty.program/card/reward`.
- * El esquema es custom (`gf_partner_loyalty` + cron `gf_w14_loyalty_engine`) y
- * vive como campos de `res.partner` (ver loyaltyLogic.ts). NO hay endpoint
- * dedicado ni modelo de redención → MVP de SOLO LECTURA.
- *
- * Se lee vía `odooRpc('res.partner','search_read')` (sesión Odoo autenticada),
- * el mismo camino que pricelist.ts — `/get_records` corre como público y no lee
- * res.partner de forma confiable. Sin cambios de backend.
+ * Programa de Lealtad — lectura acotada al cliente visible para el empleado.
  */
 
-import { odooRpc } from './odooRpc';
+import { postRest } from './api';
 import {
   parsePartnerLoyalty,
-  PARTNER_LOYALTY_FIELDS,
   type PartnerLoyalty,
 } from './loyaltyLogic';
+
+const EMPLOYEE_API_BASE = '/gf/logistics/api/employee';
 
 export type { LoyaltyLevel, PartnerLoyalty, LoyaltyLevelInfo } from './loyaltyLogic';
 export {
@@ -27,18 +19,27 @@ export {
 } from './loyaltyLogic';
 
 /**
- * Lee la lealtad de un cliente desde Odoo (search_read, sesión autenticada).
- * Devuelve null si no se encuentra el partner. Lanza si la sesión/red falla
- * (el caller muestra error/offline). Solo lectura.
+ * Lee la lealtad allowlisted de un cliente visible para la sesión Bearer.
  */
 export async function fetchPartnerLoyalty(partnerId: number): Promise<PartnerLoyalty | null> {
   if (!partnerId || partnerId <= 0) return null;
-  const rows = await odooRpc<Array<Record<string, unknown>>>(
-    'res.partner',
-    'search_read',
-    [[['id', '=', partnerId]]],
-    { fields: PARTNER_LOYALTY_FIELDS, limit: 1 },
+  const response = await postRest<{
+    ok: true;
+    message: string;
+    data: { customer: Record<string, unknown> };
+  }>(
+    `${EMPLOYEE_API_BASE}/customer/loyalty`,
+    { partner_id: partnerId },
   );
-  const row = Array.isArray(rows) ? rows[0] : null;
-  return parsePartnerLoyalty(row);
+  const customer = response?.data?.customer;
+  if (!response || response.ok !== true || !customer || typeof customer !== 'object') {
+    throw new Error('La respuesta de lealtad no cumple el contrato de empleado.');
+  }
+  return parsePartnerLoyalty({
+    id: customer.id,
+    name: customer.name,
+    x_loyalty_level: customer.x_loyalty_level,
+    x_loyalty_streak: customer.x_loyalty_streak,
+    x_last_order_week: customer.x_last_order_week,
+  });
 }

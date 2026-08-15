@@ -46,7 +46,7 @@ import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlow
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { createUuidV4 } from '../../src/utils/clientEvent';
-import { getAuthSessionId } from '../../src/services/api';
+import { getFieldDataSession } from '../../src/services/fieldDataSession';
 import {
   clearConsignmentPendingOperation,
   loadConsignmentPendingOperations,
@@ -113,20 +113,20 @@ function ConsignmentScreenInner() {
   async function getConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<string> {
     const ref = operationIdRefFor(kind);
     if (ref.current) return ref.current;
-    const sessionId = await getAuthSessionId();
-    if (!sessionId) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-    const pending = await loadConsignmentPendingOperations(sessionId);
+    const session = await getFieldDataSession();
+    if (!session) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+    const pending = await loadConsignmentPendingOperations(session);
     const operationId = pending[kind] ?? (
       kind === 'create' ? getCreateOperationId() : getVisitOrCloseOperationId(kind === 'close')
     );
-    if (!pending[kind]) await saveConsignmentPendingOperation(sessionId, kind, operationId);
+    if (!pending[kind]) await saveConsignmentPendingOperation(session, kind, operationId);
     ref.current = operationId;
     return operationId;
   }
   async function clearConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<void> {
-    const sessionId = await getAuthSessionId();
-    if (!sessionId) return;
-    await clearConsignmentPendingOperation(sessionId, kind);
+    const session = await getFieldDataSession();
+    if (!session) return;
+    await clearConsignmentPendingOperation(session, kind);
     if (kind === 'create') createOperationIdRef.current = null; // siguiente create = nuevo id
     if (kind === 'visit') visitOperationIdRef.current = null; // siguiente visita = nuevo id
     if (kind === 'close') closeOperationIdRef.current = null; // siguiente cierre = nuevo id

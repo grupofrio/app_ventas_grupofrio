@@ -16,7 +16,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function readOperations(value: unknown): ConsignmentPendingOperations | null {
+export function parsePendingOperations(value: unknown): ConsignmentPendingOperations | null {
   if (!isRecord(value)) return null;
   const operations: ConsignmentPendingOperations = {};
   for (const kind of ['create', 'visit', 'close'] as const) {
@@ -38,7 +38,7 @@ export function decodePendingOperations(
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed) || parsed.version !== 1 || parsed.sessionId !== sessionId) return null;
-    return readOperations(parsed.operations);
+    return parsePendingOperations(parsed.operations);
   } catch {
     return null;
   }

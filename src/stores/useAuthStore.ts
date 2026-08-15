@@ -143,6 +143,12 @@ async function clearRouteCache(): Promise<void> {
 }
 
 async function clearCurrentEncryptedFieldData(): Promise<void> {
+  const { clearLegacyConsignmentPendingOperations } = await import(
+    '../services/consignmentOperationPersistence'
+  );
+  // This pre-envelope key is global to the install, so erase it before any
+  // operation that might fail while clearing the current session envelope.
+  await clearLegacyConsignmentPendingOperations();
   const session = await getFieldDataSession();
   if (session) {
     const { clearEncryptedSession } = await import('../services/encryptedStore.ts');

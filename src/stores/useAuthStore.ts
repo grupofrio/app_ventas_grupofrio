@@ -278,7 +278,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       // BLD-20260404-007 (Fix 4): Use fetch instead of axios.
       // Axios XHR adapter fails with generic Network Error on some Android
-      // devices running React Native 0.76. The postRest/postRpc helpers already
+      // devices running React Native 0.76. The REST helpers already
       // use fetch for the same reason — login must too.
       let response: Response;
       try {
@@ -332,7 +332,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
 
       const result = payload?.result;
-      if (!result?.api_key) {
+      if (typeof result?.gf_employee_token !== 'string' || !result.gf_employee_token.trim()) {
         const backendMsg = result?.message || payload?.error?.data?.message;
         set({ error: backendMsg || 'Credenciales incorrectas', isLoading: false });
         return false;
@@ -344,7 +344,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       await clearRouteCache();
       clearPricelistCaches();
       useSalesStore.getState().reset();
-      await setAuthTokens(result.api_key, result.gf_employee_token || '');
+      await setAuthTokens(result.gf_employee_token);
 
       const emp: EmployeePayload = result.employee || {};
 

@@ -31,8 +31,8 @@ test('postRest preserves structured response and transport error metadata', () =
   );
   assert.match(
     postRestBlock,
-    /throw makeApiResponseError\(resultError, msg, response\.status\);/,
-    'response failures must keep backend metadata and HTTP status',
+    /const responseErrorStatus = typeof \(resultError as \{ httpStatus\?: unknown \} \| undefined\)\?\.httpStatus === 'number'\s*\? \(resultError as \{ httpStatus: number \}\)\.httpStatus\s*:\s*response\.status;[\s\S]*?throw makeApiResponseError\(resultError, msg, responseErrorStatus\);/,
+    'response failures must prefer a deterministic status declared by the backend envelope',
   );
   assert.match(
     postRestBlock,

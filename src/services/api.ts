@@ -302,7 +302,10 @@ export async function postRest<T = any>(
     } else {
       logError('api', 'http_error', trace);
       const msg = errorMessage || parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
-      throw makeApiResponseError(resultError, msg, response.status);
+      const responseErrorStatus = typeof (resultError as { httpStatus?: unknown } | undefined)?.httpStatus === 'number'
+        ? (resultError as { httpStatus: number }).httpStatus
+        : response.status;
+      throw makeApiResponseError(resultError, msg, responseErrorStatus);
     }
 
     return resultPayload as T;

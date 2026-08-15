@@ -50,6 +50,25 @@ function testThrowsClearMessageOn401(
   );
 }
 
+function testPreservesEnvelopeStatusOverSuccessfulTransport(
+  unwrapRestResult: (parsed: unknown, status: number) => unknown,
+) {
+  assert.throws(
+    () => unwrapRestResult({
+      ok: false,
+      status: 409,
+      code: 'idempotency_conflict',
+      message: 'La operación ya fue procesada.',
+    }, 200),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.equal((err as Error & { code?: string }).code, 'idempotency_conflict');
+      assert.equal((err as Error & { httpStatus?: number }).httpStatus, 409);
+      return true;
+    },
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const apiResult = await import(
@@ -60,6 +79,7 @@ async function main() {
   testUnwrapsSuccessfulWrappedRestResult(apiResult.unwrapRestResult);
   testThrowsWhenWrappedRestResultReportsOkFalse(apiResult.unwrapRestResult);
   testThrowsClearMessageOn401(apiResult.unwrapRestResult);
+  testPreservesEnvelopeStatusOverSuccessfulTransport(apiResult.unwrapRestResult);
   console.log('api result tests: ok');
 }
 

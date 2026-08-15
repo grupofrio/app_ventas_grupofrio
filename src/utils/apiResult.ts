@@ -24,6 +24,17 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
     if (typeof result.code === 'string' && result.code.length > 0) {
       (err as Error & { code: string }).code = result.code;
     }
+    // Algunas rutas type=json devuelven HTTP 200 con un estado de negocio
+    // determinista dentro del sobre. Preservarlo permite que postRest exponga
+    // conflictos idempotentes sin confundirlos con un éxito de transporte.
+    if (
+      typeof result.status === 'number'
+      && Number.isInteger(result.status)
+      && result.status >= 400
+      && result.status <= 599
+    ) {
+      (err as Error & { httpStatus: number }).httpStatus = result.status;
+    }
     // También viaja un `error_code` dentro de `data` (p.ej. insufficient_stock).
     // Adjuntamos el `data` del backend al error para que el caller pueda mostrar
     // detalle por línea (available_qty real). Aditivo: no rompe a nadie.

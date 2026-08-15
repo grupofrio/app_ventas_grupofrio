@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const CONTRACT_ROOT = resolve('contracts/koldfield');
-const EXPECTED_SCHEMA_SHA256 = 'ee610e0fbe3ddfc94b655217b277821f3be79d11c56d9d54db3fcff6271774fa';
+const EXPECTED_SCHEMA_SHA256 = '0f058bbd65612f6b294671fbd2bb5da4e1c99a3f568ba29e6333ed80b2d27b52';
 
 interface DayBundleLogic {
   evaluateStoredDayBundle: (record: unknown, context: {

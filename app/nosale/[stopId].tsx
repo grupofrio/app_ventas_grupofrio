@@ -25,9 +25,10 @@ import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
 function makeAttemptId(): string {
-  return `nosale-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return createUuidV4();
 }
 
 export default function NoSaleScreen() {

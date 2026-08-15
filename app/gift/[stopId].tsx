@@ -36,17 +36,18 @@ import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { decideGiftFailureAction } from '../../src/services/giftSubmit';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
 interface EditableGiftLine extends GiftDraftLine {
   productName: string;
 }
 
 function makeLineKey(): string {
-  return `gift-line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return createUuidV4();
 }
 
 function makeAttemptId(): string {
-  return `gift-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return createUuidV4();
 }
 
 function getIssueMessage(issue: string): string {
@@ -297,7 +298,7 @@ export default function GiftScreen() {
         <Card>
           <Text style={[typography.body, styles.headerTitle]}>{stop.customer_name}</Text>
           <Text style={[typography.dim, styles.headerSubtitle]}>
-            Registra producto entregado sin cobro. El movimiento sale de la unidad móvil y baja a merma de la van.
+            Registra producto entregado sin cobro. Sale de la unidad móvil como entrega al cliente (no es merma) y genera ticket.
           </Text>
         </Card>
 

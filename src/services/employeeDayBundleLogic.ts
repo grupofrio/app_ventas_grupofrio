@@ -145,6 +145,36 @@ function paymentTerm(value: unknown, field: string): void {
   text(term.name, `${field}.name`, 256, false);
 }
 
+function paymentPolicy(value: unknown, field: string): void {
+  if (value === undefined) return;
+  const policy = object(value, field);
+  allowOnly(policy, [
+    'mode',
+    'allowed_payment_methods',
+    'credit_limit',
+    'credit_used',
+    'credit_available',
+    'credit_overdue',
+    'credit_hold',
+    'payment_term',
+  ], field);
+  if (!['cash_only', 'credit_allowed', 'credit_only', 'blocked'].includes(policy.mode as string)) {
+    throw invalid(`${field}.mode no es válido.`);
+  }
+  const methods = array(policy.allowed_payment_methods, `${field}.allowed_payment_methods`, 8);
+  methods.forEach((method, index) => {
+    if (method !== 'cash' && method !== 'credit') {
+      throw invalid(`${field}.allowed_payment_methods[${index}] no es válido.`);
+    }
+  });
+  nonNegativeNumber(policy.credit_limit, `${field}.credit_limit`);
+  nonNegativeNumber(policy.credit_used, `${field}.credit_used`);
+  nonNegativeNumber(policy.credit_available, `${field}.credit_available`);
+  if (typeof policy.credit_overdue !== 'boolean') throw invalid(`${field}.credit_overdue debe ser booleano.`);
+  if (typeof policy.credit_hold !== 'boolean') throw invalid(`${field}.credit_hold debe ser booleano.`);
+  paymentTerm(policy.payment_term, `${field}.payment_term`);
+}
+
 function customer(value: unknown, field: string): void {
   if (value === null) return;
   const entry = object(value, field);
@@ -164,13 +194,14 @@ function validateStops(values: unknown[]): void {
   values.forEach((value, index) => {
     const field = `stops[${index}]`;
     const entry = object(value, field);
-    allowOnly(entry, ['id', 'sequence', 'state', 'kind', 'customer', 'payment_term'], field);
+    allowOnly(entry, ['id', 'sequence', 'state', 'kind', 'customer', 'payment_term', 'payment_policy'], field);
     positiveInteger(entry.id, `${field}.id`);
     nonNegativeInteger(entry.sequence, `${field}.sequence`);
     if (!['pending', 'in_progress', 'done'].includes(entry.state as string)) throw invalid(`${field}.state no es válido.`);
     if (!['customer', 'lead'].includes(entry.kind as string)) throw invalid(`${field}.kind no es válido.`);
     customer(entry.customer, `${field}.customer`);
     paymentTerm(entry.payment_term, `${field}.payment_term`);
+    paymentPolicy(entry.payment_policy, `${field}.payment_policy`);
   });
 }
 
@@ -199,10 +230,11 @@ function validateDirectory(values: unknown[]): void {
   values.forEach((value, index) => {
     const field = `directory[${index}]`;
     const entry = object(value, field);
-    allowOnly(entry, ['id', 'name', 'payment_term', 'zone', 'address', 'latitude', 'longitude'], field);
+    allowOnly(entry, ['id', 'name', 'payment_term', 'payment_policy', 'zone', 'address', 'latitude', 'longitude'], field);
     positiveInteger(entry.id, `${field}.id`);
     text(entry.name, `${field}.name`, 512, false);
     paymentTerm(entry.payment_term, `${field}.payment_term`);
+    paymentPolicy(entry.payment_policy, `${field}.payment_policy`);
     optionalNullableText(entry.zone, `${field}.zone`, 256);
     optionalNullableText(entry.address, `${field}.address`, 512);
     optionalNumberInRange(entry.latitude, `${field}.latitude`, -90, 90);

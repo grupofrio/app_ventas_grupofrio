@@ -29,6 +29,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
 type ExchangeSection = 'delivery' | 'merma';
 
@@ -50,14 +51,11 @@ interface ExchangeSnapshotSourceLine {
 }
 
 function makeDraftId(): string {
-  return `line_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return createUuidV4();
 }
 
 function makeIdempotencyKey(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-    const rand = (Math.random() * 16) | 0;
-    return (char === 'x' ? rand : (rand & 0x3) | 0x8).toString(16);
-  });
+  return createUuidV4();
 }
 
 // F3.3: antes se regeneraba un idempotency_key NUEVO en cada tap de
@@ -303,10 +301,10 @@ export default function CambioProductoScreen() {
       );
     }
 
-    // Delivery: producto sale de la van → resta stock local.
+    // Delivery: producto bueno sale de la van → resta stock vendible local.
+    // Merma/dañado NO vuelve al stock vendible (queda en bucket damaged/pending
+    // hasta la separación en CEDIS). No sumar merma a updateLocalStock.
     deliveryPayloadLines.forEach((line) => updateLocalStock(line.product_id, -line.qty));
-    // Merma: producto dañado regresa a la van → suma stock local.
-    mermaPayloadLines.forEach((line) => updateLocalStock(line.product_id, +line.qty));
 
     const deliverySnapshotLines: ExchangeSnapshotSourceLine[] = deliveryPayloadLines.map((line) => ({
       productId: line.product_id,

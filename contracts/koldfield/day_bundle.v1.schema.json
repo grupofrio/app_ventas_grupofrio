@@ -17,12 +17,27 @@
   "$defs": {
     "id": {"type": "integer", "minimum": 1}, "nullable_id": {"type": ["integer", "null"], "minimum": 1},
     "payment_term": {"type": ["object", "null"], "additionalProperties": false, "required": ["id", "name"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 256}}},
+    "payment_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "allowed_payment_methods", "credit_limit", "credit_used", "credit_available", "credit_overdue", "credit_hold", "payment_term"],
+      "properties": {
+        "mode": {"enum": ["cash_only", "credit_allowed", "credit_only", "blocked"]},
+        "allowed_payment_methods": {"type": "array", "maxItems": 8, "items": {"enum": ["cash", "credit"]}},
+        "credit_limit": {"type": "number", "minimum": 0},
+        "credit_used": {"type": "number", "minimum": 0},
+        "credit_available": {"type": "number", "minimum": 0},
+        "credit_overdue": {"type": "boolean"},
+        "credit_hold": {"type": "boolean"},
+        "payment_term": {"$ref": "#/$defs/payment_term"}
+      }
+    },
     "plan": {"type": "object", "additionalProperties": false, "required": ["id", "date", "state", "route_id", "vehicle_id"], "properties": {"id": {"$ref": "#/$defs/id"}, "date": {"type": "string", "format": "date"}, "state": {"enum": ["published", "in_progress"]}, "route_id": {"$ref": "#/$defs/id"}, "vehicle_id": {"$ref": "#/$defs/nullable_id"}}},
     "customer": {"type": ["object", "null"], "additionalProperties": false, "required": ["id", "name"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}}},
-    "stop": {"type": "object", "additionalProperties": false, "required": ["id", "sequence", "state", "kind", "customer", "payment_term"], "properties": {"id": {"$ref": "#/$defs/id"}, "sequence": {"type": "integer", "minimum": 0}, "state": {"enum": ["pending", "in_progress", "done"]}, "kind": {"enum": ["customer", "lead"]}, "customer": {"$ref": "#/$defs/customer"}, "payment_term": {"$ref": "#/$defs/payment_term"}}},
+    "stop": {"type": "object", "additionalProperties": false, "required": ["id", "sequence", "state", "kind", "customer", "payment_term", "payment_policy"], "properties": {"id": {"$ref": "#/$defs/id"}, "sequence": {"type": "integer", "minimum": 0}, "state": {"enum": ["pending", "in_progress", "done"]}, "kind": {"enum": ["customer", "lead"]}, "customer": {"$ref": "#/$defs/customer"}, "payment_term": {"$ref": "#/$defs/payment_term"}, "payment_policy": {"$ref": "#/$defs/payment_policy"}}},
     "effective_price": {"type": "object", "additionalProperties": false, "required": ["partner_id", "price"], "properties": {"partner_id": {"$ref": "#/$defs/id"}, "price": {"type": "number", "minimum": 0}}},
     "catalog_item": {"type": "object", "additionalProperties": false, "required": ["id", "name", "default_code", "uom_id", "stock_qty", "effective_prices"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}, "default_code": {"type": ["string", "null"], "maxLength": 256}, "uom_id": {"$ref": "#/$defs/id"}, "stock_qty": {"type": "number", "minimum": 0}, "effective_prices": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/effective_price"}}}},
-    "directory_item": {"type": "object", "additionalProperties": false, "required": ["id", "name", "payment_term"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}, "payment_term": {"$ref": "#/$defs/payment_term"}, "zone": {"type": ["string", "null"], "maxLength": 256}, "address": {"type": ["string", "null"], "maxLength": 512}, "latitude": {"type": ["number", "null"], "minimum": -90, "maximum": 90}, "longitude": {"type": ["number", "null"], "minimum": -180, "maximum": 180}}},
+    "directory_item": {"type": "object", "additionalProperties": false, "required": ["id", "name", "payment_term", "payment_policy"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}, "payment_term": {"$ref": "#/$defs/payment_term"}, "payment_policy": {"$ref": "#/$defs/payment_policy"}, "zone": {"type": ["string", "null"], "maxLength": 256}, "address": {"type": ["string", "null"], "maxLength": 512}, "latitude": {"type": ["number", "null"], "minimum": -90, "maximum": 90}, "longitude": {"type": ["number", "null"], "minimum": -180, "maximum": 180}}},
     "reason": {"type": "object", "additionalProperties": false, "required": ["code", "name"], "properties": {"code": {"type": "string", "minLength": 1, "maxLength": 128}, "name": {"type": "string", "maxLength": 256}}}
   }
 }

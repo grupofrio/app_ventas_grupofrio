@@ -67,6 +67,7 @@ import {
   describeLiquidationButtonBlock,
 } from '../src/services/cashcloseGuard';
 import { describeCashDifference } from '../src/services/trustSignals';
+import { createUuidV4 } from '../src/utils/clientEvent';
 
 interface SummaryLine {
   label: string;
@@ -458,7 +459,7 @@ export default function CashCloseScreen() {
   const liquidationOpIdRef = useRef<string | null>(null);
   function getLiquidationOperationId(): string {
     if (!liquidationOpIdRef.current) {
-      liquidationOpIdRef.current = `liquidation-${planId ?? 'na'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      liquidationOpIdRef.current = createUuidV4();
     }
     return liquidationOpIdRef.current;
   }

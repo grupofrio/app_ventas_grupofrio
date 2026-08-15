@@ -7,15 +7,16 @@
 ```
 ## Kold Field R0/R1 — Backend (gf) PR #73
 
-Tip SHA: 7ca918306940ecb62a068f6a31377bf631a1c39c
+Tip SHA: 59485003f6d7aa1ce8797120d2b040f84988ccce
 Module: gf_logistics_ops 18.0.1.13.0
 pytest: 223 passed (local source contracts)
 
-CI tip 7ca91830 — all completed/success:
-- write-inventory-drift 31913109042
-- gf_saleops CI (static) 31913108048
-- gf_pwa_admin-odoo-ci 31913107966
+CI tip 59485003 — all completed/success:
+- write-inventory-drift 31913354160
+- gf_saleops CI (static) 31913354145
+- gf_pwa_admin-odoo-ci 31913354169
   jobs: stub-hygiene, policy-pure, odoo-tests, odoo-tests-saleops SUCCESS
+(TransactionCases first proven GREEN on 7ca91830 run 31913107966; tip reconfirmed.)
 
 odoo-tests-saleops now runs Fase 0 Empresa×Plaza contracts PLUS R0/R1 TransactionCases:
 gf_no_sale_checkout, gf_no_sale_control_center, gf_koldfield_bundle, gf_koldfield_idempotency, kf_day_bundle
@@ -35,14 +36,14 @@ Merged main into branch to clear CONFLICTING after #75. Merge backend before fro
 ```
 ## Kold Field R0/R1 — Frontend PR #73
 
-Tip SHA: 951ad20132cd1e93fa7299b3ee6da1ada846293e
+Tip SHA: 6f48f00549182255df302f74b7c62a0ee998fda1
 npm test: 552 passed · typecheck pass
 No GitHub Actions workflows in this repo — CI gate is local test + typecheck.
 
 UUID v4 field ops · bundle lease (expires_at) · offroute directory contract · payment policy schema (credit_overdue ≠ over_limit) · exchange sellable stock · no privileged Odoo RPC (odooRpc/call_kw/web/dataset removed from src)
 salePaymentMethod retained (not removed in this phase).
 
-Depends on backend gf #73 tip 7ca91830 (day-bundle / employee APIs / logistics 18.0.1.13.0). Staging HTTP smoke validated against upgraded logistics overlay.
+Depends on backend gf #73 tip 59485003 (day-bundle / employee APIs / logistics 18.0.1.13.0). Staging HTTP smoke validated against upgraded logistics overlay.
 
 Merge after backend gf #73 is on main. No auto-merge.
 ```

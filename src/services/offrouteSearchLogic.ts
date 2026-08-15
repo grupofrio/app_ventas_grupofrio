@@ -11,7 +11,6 @@ export interface OffrouteCustomerRecord {
   partner_longitude?: number;
   google_maps_url?: string;
   pricelist_id?: [number, string] | number | false | null;
-  property_product_pricelist?: [number, string] | number | false | null;
 }
 
 export interface OffrouteLeadRecord {
@@ -45,68 +44,6 @@ export interface OffrouteSearchResult {
   city: string | null;
 }
 
-export const BASIC_CUSTOMER_FIELDS = [
-  'id',
-  'name',
-  'street',
-  'city',
-  'phone',
-  'mobile',
-  'email',
-  'vat',
-];
-
-export const CUSTOMER_PRICELIST_FIELDS = [
-  'pricelist_id',
-  'property_product_pricelist',
-];
-
-export const CUSTOMER_LOCATION_FIELDS = [
-  'partner_latitude',
-  'partner_longitude',
-];
-
-export const CUSTOMER_FIELDS = [
-  ...BASIC_CUSTOMER_FIELDS,
-  ...CUSTOMER_PRICELIST_FIELDS,
-  ...CUSTOMER_LOCATION_FIELDS,
-];
-
-export function buildCustomerSearchDomain(query: string, analyticPlazaId?: number | null): unknown[] {
-  const q = query.trim();
-  const domain: unknown[] = [
-    '|', '|', '|', '|',
-    ['name', 'ilike', q],
-    ['phone', 'ilike', q],
-    ['mobile', 'ilike', q],
-    ['vat', 'ilike', q],
-    ['email', 'ilike', q],
-  ];
-
-  if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
-    return domain;
-  }
-
-  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...domain];
-}
-
-export async function readCustomersWithFieldFallback(
-  readers: {
-    rpc: (fields: string[]) => Promise<OffrouteCustomerRecord[]>;
-    read: (fields: string[]) => Promise<OffrouteCustomerRecord[]>;
-  },
-): Promise<OffrouteCustomerRecord[]> {
-  try {
-    return await readers.rpc(CUSTOMER_FIELDS);
-  } catch {
-    try {
-      return await readers.rpc(BASIC_CUSTOMER_FIELDS);
-    } catch {
-      return await readers.read(BASIC_CUSTOMER_FIELDS);
-    }
-  }
-}
-
 function joinParts(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(', ');
 }
@@ -124,11 +61,11 @@ function extractMany2oneName(value: [number, string] | number | false | null | u
   return null;
 }
 
-function pickPricelist(record: {
-  pricelist_id?: [number, string] | number | false | null;
-  property_product_pricelist?: [number, string] | number | false | null;
-}): { pricelistId: number | null; pricelistName: string | null } {
-  const raw = record.pricelist_id || record.property_product_pricelist;
+function pickPricelist(record: Pick<OffrouteCustomerRecord, 'pricelist_id'>): {
+  pricelistId: number | null;
+  pricelistName: string | null;
+} {
+  const raw = record.pricelist_id;
   return {
     pricelistId: extractMany2oneId(raw),
     pricelistName: extractMany2oneName(raw),

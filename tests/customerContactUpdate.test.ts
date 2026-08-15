@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import {
   buildCustomerContactUpdatePayload,
-  buildCustomerContactStopPatch,
   hasContactPhone,
   normalizeEmployeeCustomerContactUpdate,
   normalizeMxPhone,
@@ -12,14 +11,13 @@ import {
 function testBuildsTrimmedPartnerPayload() {
   const payload = buildCustomerContactUpdatePayload(51063, {
     name: '  ABARROTES ESTRADA  ',
-    contactName: '  Ana Lopez  ',
     phone: '  733 100 0000  ',
     mobile: '  733 200 0000  ',
     email: '  ana@example.com  ',
   });
 
   // Teléfonos válidos se guardan normalizados a E.164 MX dentro del
-  // contrato REST allowlisted; contactName nunca llega al servidor.
+  // contrato REST allowlisted.
   assert.deepEqual(payload, {
     partner_id: 51063,
     values: {
@@ -34,7 +32,6 @@ function testBuildsTrimmedPartnerPayload() {
 function testEmptyOptionalFieldsBecomeFalseForEmployeeRest() {
   const payload = buildCustomerContactUpdatePayload(51063, {
     name: 'Abarrotes Estrada',
-    contactName: '',
     phone: ' ',
     mobile: '',
     email: '',
@@ -54,31 +51,12 @@ function testEmptyOptionalFieldsBecomeFalseForEmployeeRest() {
 function testRejectsEmptyCustomerName() {
   const error = validateCustomerContactForm({
     name: ' ',
-    contactName: 'Ana',
     phone: '',
     mobile: '',
     email: '',
   });
 
   assert.equal(error, 'El nombre del cliente es obligatorio.');
-}
-
-function testBuildsLocalStopPatch() {
-  const patch = buildCustomerContactStopPatch({
-    name: '  Nuevo Nombre  ',
-    contactName: '  Beto  ',
-    phone: '  555  ',
-    mobile: '',
-    email: ' correo@example.com ',
-  });
-
-  assert.deepEqual(patch, {
-    customer_name: 'Nuevo Nombre',
-    contact_name: 'Beto',
-    phone: '555',
-    mobile: '',
-    email: 'correo@example.com',
-  });
 }
 
 function testNormalizeMxPhoneAcceptsValidFormats() {
@@ -99,7 +77,7 @@ function testNormalizeMxPhoneRejectsGarbage() {
 }
 
 function testValidateRejectsInvalidPhoneButAllowsEmpty() {
-  const base = { name: 'Cliente', contactName: '', email: '' };
+  const base = { name: 'Cliente', email: '' };
   assert.match(
     validateCustomerContactForm({ ...base, phone: '0000000000', mobile: '' }) ?? '',
     /Teléfono/,
@@ -129,7 +107,6 @@ function testHasContactPhoneIgnoresWaPhone() {
 function testPayloadNeverTouchesWaPhone() {
   const payload = buildCustomerContactUpdatePayload(1, {
     name: 'Cliente',
-    contactName: '',
     phone: '7333320269',
     mobile: '',
     email: '',
@@ -172,7 +149,6 @@ function main() {
   testBuildsTrimmedPartnerPayload();
   testEmptyOptionalFieldsBecomeFalseForEmployeeRest();
   testRejectsEmptyCustomerName();
-  testBuildsLocalStopPatch();
   testNormalizeMxPhoneAcceptsValidFormats();
   testNormalizeMxPhoneRejectsGarbage();
   testValidateRejectsInvalidPhoneButAllowsEmpty();

@@ -38,10 +38,10 @@ function main() {
     /buildCustomerContactUpdatePayload/,
     'la pantalla debe usar el helper de payload de contacto',
   );
-  assert.match(
+  assert.doesNotMatch(
     customerEditScreen,
-    /patchStop\(currentStop\.id/,
-    'la pantalla debe parchear la parada local para reflejar cambios inmediatos',
+    /buildCustomerContactStopPatch|patchStop\(currentStop\.id|label="CONTACTO"|contactName/,
+    'el editor no debe ofrecer ni simular un contacto que el contrato REST no persiste',
   );
 
   // Aviso de teléfono faltante (captura en visita)
@@ -95,8 +95,9 @@ function main() {
     'la actualización de cliente debe usar solo REST Bearer acotado',
   );
   const updatePayload = contactLogic.match(
-    /export function buildCustomerContactUpdatePayload[\s\S]*?\n}\n\nexport function buildCustomerContactStopPatch/,
+    /export function buildCustomerContactUpdatePayload[\s\S]*?\n}/,
   )?.[0] ?? '';
+  assert.notEqual(updatePayload, '', 'el payload de contacto debe estar definido');
   assert.doesNotMatch(
     updatePayload,
     /employee_id|company_id|contact_name/,

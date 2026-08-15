@@ -2,7 +2,6 @@ import type { GFStop } from '../types/plan';
 
 export interface CustomerContactForm {
   name: string;
-  contactName: string;
   phone: string;
   mobile: string;
   email: string;
@@ -111,15 +110,5 @@ export function normalizeEmployeeCustomerContactUpdate(
       mobile: optional('mobile'),
       email: optional('email'),
     },
-  };
-}
-
-export function buildCustomerContactStopPatch(form: CustomerContactForm): Partial<GFStop> {
-  return {
-    customer_name: clean(form.name),
-    contact_name: clean(form.contactName),
-    phone: canonicalPhone(form.phone),
-    mobile: canonicalPhone(form.mobile),
-    email: clean(form.email),
   };
 }

@@ -35,12 +35,14 @@ Frontend (`evaluateStoredDayBundle`):
 
 POST-R1A inventory ledger:
 - append-only movements (`sale`, `gift`, `exchange_*`, …)
-- sellable display is a **projection** (`projectInventory`)
+- sellable display is a **projection** (`projectInventory`) — exact math, no clamp
 - encrypted record key: `inventory-ledger`
+- offline sale/gift: `sync:queue` + `inventory-ledger` in **one** envelope put
+  (`updateEncryptedRecords` / `commitSyncQueueAndLedger`)
 - see `INVENTORY_LEDGER.md`
 
+`updateLocalStock` remains only for legacy / non-`_ledgerApplied` queue items.
 Migrated call sites (A1): sale · gift · exchange.
-`updateLocalStock` remains for legacy rollback paths without `_ledgerApplied`.
 
 ## Directory / Venta Especial
 

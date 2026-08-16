@@ -66,13 +66,23 @@ export interface InventoryMovement {
 }
 
 export interface ProductBucketBalances {
+  /**
+   * Exact mathematical sellable. May be negative when local sales exceed the
+   * referential snapshot (allowed; backend remains authority). Never clamp.
+   */
   sellable: number;
   consigned: number;
   return_good: number;
   damaged: number;
   pending: number;
-  /** Derived: sellable + return_good + damaged + pending (+ consigned stays at customer). */
+  /**
+   * Derived van-held units: sellable + return_good + damaged + pending.
+   * Consigned is NOT included (physically at customer).
+   * May be negative when sellable is in deficit.
+   */
   physical_van: number;
+  /** Convenience: max(0, -sellable). Projection never hides deficit as 0. */
+  sellable_deficit: number;
 }
 
 export type InventorySnapshot = Record<string, Partial<ProductBucketBalances> & { sellable?: number }>;
@@ -93,13 +103,31 @@ export const EMPTY_BALANCES = (): ProductBucketBalances => ({
   damaged: 0,
   pending: 0,
   physical_van: 0,
+  sellable_deficit: 0,
 });
 
 export const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** UUID v4 (commercial op) or v5 (deterministic movement identity). */
+export const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function assertUuidV4(value: string, label: string): void {
   if (!UUID_V4_RE.test(value)) {
     throw new Error(`${label} must be a UUID v4`);
   }
+}
+
+export function assertUuid(value: string, label: string): void {
+  if (!UUID_RE.test(value)) {
+    throw new Error(`${label} must be a UUID`);
+  }
+}
+
+export function withDerivedFields(balances: ProductBucketBalances): ProductBucketBalances {
+  balances.physical_van =
+    balances.sellable + balances.return_good + balances.damaged + balances.pending;
+  balances.sellable_deficit = balances.sellable < 0 ? -balances.sellable : 0;
+  return balances;
 }

@@ -4,6 +4,7 @@
 
 import type { InventoryMovement, LedgerState } from '../domain/inventory/types.ts';
 import {
+  commitSyncQueueAndLedger as commitSyncQueueAndLedgerWithPorts,
   ensureLedgerHydrated as ensureLedgerHydratedWithPorts,
   LEDGER_RECORD_KEY,
   loadOrMigrateLedger as loadOrMigrateLedgerWithPorts,
@@ -13,25 +14,33 @@ import {
 } from './inventoryLedgerLogic.ts';
 import { assertEncryptedRecord } from './encryptedStoreLogic.ts';
 
-export { LEDGER_RECORD_KEY, createMemoryLedgerPorts } from './inventoryLedgerLogic.ts';
+export {
+  LEDGER_RECORD_KEY,
+  SYNC_QUEUE_RECORD_KEY,
+  createMemoryLedgerPorts,
+} from './inventoryLedgerLogic.ts';
 export type { InventoryLedgerPorts } from './inventoryLedgerLogic.ts';
 
 async function productionPorts(): Promise<InventoryLedgerPorts> {
-  const [{ loadEncrypted, saveEncrypted }, { getFieldDataSession }, { useProductStore }] =
-    await Promise.all([
-      import('./encryptedStore.ts'),
-      import('./fieldDataSession.ts'),
-      import('../stores/useProductStore.ts'),
-    ]);
+  const [
+    { loadEncrypted, updateEncryptedRecords },
+    { getFieldDataSession },
+    { useProductStore },
+    { useSyncStore },
+  ] = await Promise.all([
+    import('./encryptedStore.ts'),
+    import('./fieldDataSession.ts'),
+    import('../stores/useProductStore.ts'),
+    import('../stores/useSyncStore.ts'),
+  ]);
   return {
     getSession: getFieldDataSession,
     load: async (session, key) => {
       assertEncryptedRecord(key, 'encrypted');
       return loadEncrypted<LedgerState>(session, key);
     },
-    save: async (session, key, value) => {
-      assertEncryptedRecord(key, 'encrypted');
-      await saveEncrypted(session, key, value);
+    updateRecords: async (session, mutator) => {
+      await updateEncryptedRecords(session, mutator);
     },
     applySellableProjection: (sellableByProductId) => {
       useProductStore.getState().applySellableProjection(sellableByProductId);
@@ -45,6 +54,9 @@ async function productionPorts(): Promise<InventoryLedgerPorts> {
       return out;
     },
     nowIso: () => new Date().toISOString(),
+    publishQueue: (queue) => {
+      useSyncStore.getState().replaceQueueFromDurable(queue as never);
+    },
   };
 }
 
@@ -61,6 +73,14 @@ export async function recordInventoryMovements(
   ports?: InventoryLedgerPorts,
 ): Promise<LedgerState> {
   return recordInventoryMovementsWithPorts(movements, await resolvePorts(ports));
+}
+
+export async function commitSyncQueueAndLedger(
+  nextQueue: unknown[],
+  movements: InventoryMovement[],
+  ports?: InventoryLedgerPorts,
+): Promise<LedgerState> {
+  return commitSyncQueueAndLedgerWithPorts(nextQueue, movements, await resolvePorts(ports));
 }
 
 export async function reverseInventoryOperation(

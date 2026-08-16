@@ -15,7 +15,9 @@ assert(gift.includes("from '../../src/services/stockRollback'") && gift.includes
   'regalo debe construir el delta de stock local para el rollback genérico');
 
 assert(gift.includes('applyGiftStockViaLedger'),
-  'el regalo debe aplicar inventario vía ledger (POST-R1A)');
+  'el regalo online-confirmado debe aplicar inventario vía ledger (POST-R1A)');
+assert(gift.includes('commitQueuedOperationWithLedger') && gift.includes('queueGiftWithLedger'),
+  'el regalo offline/retry debe usar barrera atómica queue+ledger');
 assert.doesNotMatch(gift, /updateLocalStock\(l\.productId,\s*-l\.qty\)/,
   'el regalo no debe mutar stock con updateLocalStock directo');
 
@@ -34,11 +36,13 @@ assert.doesNotMatch(
   'createGift no debe recibir un payload con _localStockDelta mezclado (sin whitelist en el backend)',
 );
 
-// Los 3 puntos de commit (offline-enqueue, online-success, retry-enqueue)
-// deben deducir antes de navegar fuera de la pantalla.
+// Commit points: online ledger-only + offline/retry atomic queue+ledger.
 const submitBody = gift.slice(gift.indexOf('async function handleSubmit'));
 const deductCalls = submitBody.match(/await deductLocalStockOptimistically\(\)/g) ?? [];
-assert.equal(deductCalls.length, 3,
-  'debe descontar stock local en los 3 puntos de confirmación: offline, online-success y retry-enqueue');
+const queueLedgerCalls = submitBody.match(/await queueGiftWithLedger\(\)/g) ?? [];
+assert.equal(deductCalls.length, 1,
+  'online-success debe descontar vía ledger una vez');
+assert.equal(queueLedgerCalls.length, 2,
+  'offline + retry-enqueue deben usar queueGiftWithLedger');
 
 console.log('gift stock wiring tests: ok');

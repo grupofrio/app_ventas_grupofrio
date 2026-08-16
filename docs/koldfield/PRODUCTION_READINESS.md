@@ -11,7 +11,10 @@ R0/R1 (#73) is **merged** on both repos. This document tracks post-R1 workstream
 | app_ventas_grupofrio | `104dfedcaaf19001bc1926264734ed64cd5f4194` |
 
 ### POST-R1A scope
-Frontend inventory ledger core: domain types, projection, encrypted persistence, atomic apply, adapters for sale/gift/exchange.
+Frontend inventory ledger core (closure): exact projection (no clamp), UUID v5
+stable movement identities, encrypted envelope RMW, atomic `sync:queue` +
+`inventory-ledger` commit for offline sale/gift, adapters for sale/gift/exchange,
+idempotent reversals without counter-mutation fallback.
 
 ### Pilot hardening register (not in A1)
 | Gate | Classification |

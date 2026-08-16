@@ -51,7 +51,7 @@ import {
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { buildLocalStockDelta } from '../../src/services/stockRollback';
-import { applySaleStockViaLedger } from '../../src/services/inventoryLedgerAdapters';
+import { applySaleStockViaLedger, buildSaleLedgerMovements, commitQueuedOperationWithLedger } from '../../src/services/inventoryLedgerAdapters';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import {
   buildSaleTicketSnapshot,
@@ -446,13 +446,46 @@ function SaleScreenInner() {
       ticketSnapshot,
       photoUris: [...salePhotoUris],
     });
+    const saleLedgerLines = saleLines.map((l) => ({ product_id: l.productId, qty: l.qty }));
+    /** Online-confirmed path: ledger RMW only (no new queue row). */
     const deductLocalStockOptimistically = async () => {
       await applySaleStockViaLedger({
         operationId,
-        lines: saleLines.map((l) => ({ product_id: l.productId, qty: l.qty })),
+        lines: saleLedgerLines,
         stopId: stop.id,
         partnerId: salePartnerId,
       });
+    };
+    /** Offline/ambiguous: enqueue in memory then ONE envelope write for queue+ledger. */
+    const commitQueuedSaleWithLedger = async () => {
+      const previousQueue = useSyncStore.getState().queue;
+      try {
+        await persistAmbiguousSaleRecovery({
+          operationId: recoveryIntent.operationId,
+          payload: recoveryIntent.queuePayload,
+          customerName: recoveryIntent.ticketSnapshot.customerName,
+          total: recoveryIntent.ticketSnapshot.total,
+          stopId: recoveryIntent.stopId,
+          photoUris: recoveryIntent.photoUris,
+          enqueue,
+          persistQueue,
+          deferDurablePersist: true,
+          releaseProcessingHolds,
+        });
+        const movements = buildSaleLedgerMovements({
+          operationId,
+          lines: saleLedgerLines,
+          stopId: stop.id,
+          partnerId: salePartnerId,
+        });
+        await commitQueuedOperationWithLedger({
+          nextQueue: useSyncStore.getState().queue,
+          movements,
+        });
+      } catch (error) {
+        useSyncStore.getState().replaceQueueFromDurable(previousQueue);
+        throw error;
+      }
     };
 
     logInfo('general', 'sale_confirm_payload', {
@@ -519,21 +552,12 @@ function SaleScreenInner() {
       }
 
       try {
-        await persistAmbiguousSaleRecovery({
-          operationId: recoveryIntent.operationId,
-          payload: recoveryIntent.queuePayload,
-          customerName: recoveryIntent.ticketSnapshot.customerName,
-          total: recoveryIntent.ticketSnapshot.total,
-          stopId: recoveryIntent.stopId,
-          photoUris: recoveryIntent.photoUris,
-          enqueue,
-          persistQueue,
-          releaseProcessingHolds,
-        });
+        // POST-R1A closure: queue + ledger in one encrypted envelope write.
+        await commitQueuedSaleWithLedger();
       } catch (persistError) {
         setSaleRecoveryPersistenceFailed(true);
         setSaleSubmitting(false);
-        logError('sync', 'offline_sale_persist_failed', {
+        logError('sync', 'offline_sale_queue_ledger_persist_failed', {
           operation_id: operationId,
           message: safeUnknownErrorMessage(
             persistError,
@@ -542,22 +566,7 @@ function SaleScreenInner() {
         });
         Alert.alert(
           'No cierres la aplicación',
-          'No pudimos guardar la cola del pedido. La operación permanece bloqueada y se recuperará con el mismo identificador.',
-        );
-        return;
-      }
-      // F3.2 / POST-R1A: durable enqueue then ledger apply (fail-closed).
-      try {
-        await deductLocalStockOptimistically();
-      } catch (ledgerError) {
-        setSaleSubmitting(false);
-        logError('sync', 'sale_ledger_apply_failed_offline', {
-          operation_id: operationId,
-          message: safeUnknownErrorMessage(ledgerError, 'Error al registrar inventario local.'),
-        });
-        Alert.alert(
-          'Inventario local no actualizado',
-          'El pedido quedó en cola, pero no pudimos registrar el movimiento de inventario. No repitas el pedido; sincroniza o contacta soporte.',
+          'No pudimos guardar de forma atómica el pedido y el inventario local. La operación permanece bloqueada y se recuperará con el mismo identificador.',
         );
         return;
       }
@@ -641,22 +650,13 @@ function SaleScreenInner() {
 
       try {
         await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot);
-        await persistAmbiguousSaleRecovery({
-          operationId: recoveryIntent.operationId,
-          payload: recoveryIntent.queuePayload,
-          customerName: recoveryIntent.ticketSnapshot.customerName,
-          total: recoveryIntent.ticketSnapshot.total,
-          stopId: recoveryIntent.stopId,
-          photoUris: recoveryIntent.photoUris,
-          enqueue,
-          persistQueue,
-          releaseProcessingHolds,
-        });
+        // POST-R1A closure: queue + ledger atomic (same operation_id).
+        await commitQueuedSaleWithLedger();
         setSaleRecoveryPersistenceFailed(false);
       } catch (persistError) {
         setSaleRecoveryPersistenceFailed(true);
         setSaleSubmitting(false);
-        logError('sync', 'ambiguous_sale_persist_failed', {
+        logError('sync', 'ambiguous_sale_queue_ledger_persist_failed', {
           operation_id: operationId,
           message: safeUnknownErrorMessage(
             persistError,
@@ -665,19 +665,9 @@ function SaleScreenInner() {
         });
         Alert.alert(
           'No cierres la aplicación',
-          'No pudimos guardar de forma segura el pedido. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente.',
+          'No pudimos guardar de forma atómica el pedido y el inventario local. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente.',
         );
         return;
-      }
-
-      // F3.2 / POST-R1A: ambiguous path — ledger apply with same operation_id.
-      try {
-        await deductLocalStockOptimistically();
-      } catch (ledgerError) {
-        logError('sync', 'sale_ledger_apply_failed_ambiguous', {
-          operation_id: operationId,
-          message: safeUnknownErrorMessage(ledgerError, 'Error al registrar inventario local.'),
-        });
       }
 
       void processQueue().catch((processError) => logError(

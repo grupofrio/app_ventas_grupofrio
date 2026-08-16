@@ -341,9 +341,12 @@ export const useProductStore = create<ProductState>((set, get) => ({
     const products = get().products.map((p) => {
       if (!Object.prototype.hasOwnProperty.call(sellableByProductId, p.id)) return p;
       const sellable = sellableByProductId[p.id];
-      if (typeof sellable !== 'number' || !Number.isFinite(sellable) || sellable < 0) return p;
+      // Exact projection — allow negative sellable (deficit). Never coerce to 0.
+      if (typeof sellable !== 'number' || !Number.isFinite(sellable)) return p;
       const newDisplay = sellable;
-      const newReserved = Math.max(0, p.qty_available - newDisplay);
+      const newReserved = Number.isFinite(p.qty_available)
+        ? Math.max(0, p.qty_available - Math.min(newDisplay, p.qty_available))
+        : 0;
       return {
         ...p,
         qty_reserved: newReserved,

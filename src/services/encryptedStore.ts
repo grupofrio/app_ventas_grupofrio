@@ -74,3 +74,10 @@ export function clearEncryptedSession(
 ): Promise<void> {
   return encryptedSessionStore.clear(sessionKey);
 }
+
+export function updateEncryptedRecords(
+  sessionKey: EncryptedSessionIdentity,
+  mutator: Parameters<typeof encryptedSessionStore.updateRecords>[1],
+): Promise<void> {
+  return encryptedSessionStore.updateRecords(sessionKey, mutator);
+}

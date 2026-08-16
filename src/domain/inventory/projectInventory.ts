@@ -1,9 +1,13 @@
 /**
  * Pure inventory projection from snapshot + append-only movements.
+ *
+ * Exact arithmetic — never silently clamp negatives to 0.
+ * Local sellable is referential; oversell → explicit deficit.
  */
 
 import {
   EMPTY_BALANCES,
+  withDerivedFields,
   type InventoryBucket,
   type InventoryMovement,
   type InventorySnapshot,
@@ -15,12 +19,12 @@ function cloneBalances(partial?: Partial<ProductBucketBalances>): ProductBucketB
   if (!partial) return base;
   for (const key of ['sellable', 'consigned', 'return_good', 'damaged', 'pending'] as const) {
     const value = partial[key];
+    // Snapshot baselines must be finite non-negative. Projection math may go negative later.
     if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
       base[key] = value;
     }
   }
-  base.physical_van = base.sellable + base.return_good + base.damaged + base.pending;
-  return base;
+  return withDerivedFields(base);
 }
 
 function applySide(
@@ -29,7 +33,8 @@ function applySide(
   signedQty: number,
 ): void {
   if (!bucket) return;
-  balances[bucket] = Math.max(0, balances[bucket] + signedQty);
+  // Exact math — no Math.max(0, …). Oversell produces negative sellable / deficit.
+  balances[bucket] = balances[bucket] + signedQty;
 }
 
 function compareMovements(a: InventoryMovement, b: InventoryMovement): number {
@@ -83,8 +88,7 @@ export function projectInventory({
 
     applySide(balances, movement.bucket_from, -movement.quantity);
     applySide(balances, movement.bucket_to, +movement.quantity);
-    balances.physical_van =
-      balances.sellable + balances.return_good + balances.damaged + balances.pending;
+    withDerivedFields(balances);
   }
 
   return result;

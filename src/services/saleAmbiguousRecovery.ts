@@ -1,4 +1,4 @@
-import type { SyncEnqueueOptions, SyncItemType } from '../types/sync';
+import type { SyncEnqueueOptions, SyncItemType, SyncQueueItem } from '../types/sync';
 import { enqueueVisitPhotos } from './visitPhotos.ts';
 
 type Enqueue = (
@@ -16,6 +16,12 @@ export interface PersistAmbiguousSaleInput {
   photoUris: string[];
   enqueue: Enqueue;
   persistQueue: () => Promise<void>;
+  /**
+   * When true, only mutates in-memory queue. Caller must commit queue+ledger
+   * atomically (commitSyncQueueAndLedger). Default false preserves legacy
+   * persistQueue behaviour for callers that are not ledger-aware.
+   */
+  deferDurablePersist?: boolean;
   /**
    * Expected to be non-throwing. If cleanup fails after another failure, the
    * helper rejects with an AggregateError whose cause is the primary failure;
@@ -38,12 +44,17 @@ export async function persistAmbiguousSaleRecovery({
   photoUris,
   enqueue,
   persistQueue,
+  deferDurablePersist = false,
   releaseProcessingHolds,
 }: PersistAmbiguousSaleInput): Promise<PersistAmbiguousSaleResult> {
   const normalizedOperationId = operationId.trim();
   const heldIds: string[] = [];
   const trackedEnqueue: Enqueue = (type, enqueuedPayload, opts) => {
-    const id = enqueue(type, enqueuedPayload, opts);
+    const id = enqueue(
+      type,
+      enqueuedPayload,
+      deferDurablePersist ? { ...opts, skipPersist: true } : opts,
+    );
     heldIds.push(id);
     return id;
   };
@@ -76,7 +87,9 @@ export async function persistAmbiguousSaleRecovery({
       imageType: 'sale',
     });
 
-    await persistQueue();
+    if (!deferDurablePersist) {
+      await persistQueue();
+    }
     result = { saleId: normalizedOperationId, photoIds };
   } catch (error) {
     try {
@@ -94,3 +107,6 @@ export async function persistAmbiguousSaleRecovery({
   releaseProcessingHolds(heldIds);
   return result;
 }
+
+/** Snapshot helper for atomic queue+ledger commit after deferred enqueue. */
+export type DeferredSaleQueueSnapshot = SyncQueueItem[];

@@ -4,11 +4,13 @@
  */
 
 import {
+  assertUuid,
   assertUuidV4,
   type InventoryMovement,
   type InventorySyncStatus,
   type MovementType,
 } from './types.ts';
+import { stableReversalMovementId } from './stableIds.ts';
 
 export interface MovementLine {
   product_id: number;
@@ -54,7 +56,7 @@ function baseMovement(
     throw new Error(`missing movement_id for line index ${index}`);
   }
   assertUuidV4(ctx.operation_id, 'operation_id');
-  assertUuidV4(movement_id, 'movement_id');
+  assertUuid(movement_id, 'movement_id');
   return {
     movement_id,
     operation_id: ctx.operation_id,
@@ -112,13 +114,18 @@ export function buildExchangeMovements(
 
 export function buildReversalMovements(
   originals: InventoryMovement[],
-  ctx: Pick<BuildMovementContext, 'operation_id' | 'created_at' | 'movement_ids' | 'sync_status'>,
+  ctx: {
+    operation_id: string;
+    created_at: string;
+    sync_status?: InventorySyncStatus;
+    /** When omitted, each reversal id is derived stably from the original movement_id. */
+    movement_ids?: string[];
+  },
 ): InventoryMovement[] {
   assertUuidV4(ctx.operation_id, 'operation_id');
   return originals.map((original, index) => {
-    const movement_id = ctx.movement_ids[index];
-    if (!movement_id) throw new Error(`missing reversal movement_id for index ${index}`);
-    assertUuidV4(movement_id, 'movement_id');
+    const movement_id = ctx.movement_ids?.[index] ?? stableReversalMovementId(original.movement_id);
+    assertUuid(movement_id, 'movement_id');
     return {
       movement_id,
       operation_id: ctx.operation_id,

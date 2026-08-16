@@ -196,8 +196,13 @@ function main() {
   const accept = routeStart.slice(acceptStart, acceptEnd);
   assert.match(
     accept,
-    /onPress: async \(\) => \{\s*if \(!isCurrentPlan\(capturedPlanId\)\) \{\s*showRouteChangedAlert\(\);\s*return;\s*\}[\s\S]*?await acceptRouteLoad\(capturedPlanId, pending\.picking_id\)/,
-    'aceptar carga debe releer ambos stores inmediatamente antes de mutar Odoo',
+    /onPress: async \(\) => \{\s*if \(!isCurrentPlan\(capturedPlanId\)\) \{\s*showRouteChangedAlert\(\);\s*return;\s*\}[\s\S]*?runRouteLoadAcceptAndRefresh\(\{[\s\S]*?planId: capturedPlanId,[\s\S]*?pickingId,/,
+    'aceptar carga debe capturar picking_id exacto y usar el flujo R1B-B accept+refresh',
+  );
+  assert.match(
+    accept,
+    /requirePositivePickingId\(pending\.picking_id\)/,
+    'picking_id debe fijarse antes del diálogo/async',
   );
 
   console.log('route start checklist/km wiring tests: ok');

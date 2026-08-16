@@ -5,12 +5,12 @@
  * vendor REVIEW and ACCEPT a pending load/refill during the route, with clear
  * states for: no pending, pending+detail, already accepted, error, offline.
  *
- * Reuses Sebas's service entirely (no duplication):
+ * R1B-B: uses runRouteLoadAcceptAndRefresh + exact picking_id.
  *   buildRouteLoadAcceptanceState(plan)  → load cards from the plan object
- *   acceptRouteLoad(planId, pickingId)   → route_plan/seal_load
+ *   acceptRouteLoad(planId, pickingId)   → route_plan/seal_load (backend #92 replay-safe)
  *
- * Acceptance is BINARY (seals the picking as-is). The current contract does
- * not support per-line physical-vs-planned differences (see SPRINT-B notes).
+ * Acceptance is BINARY (seals the picking as-is). Online-only; no local +qty.
+ * The current contract does not support per-line physical-vs-planned differences.
  */
 
 import React, { useCallback, useState } from 'react';
@@ -30,7 +30,13 @@ import { useRouteStore } from '../src/stores/useRouteStore';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { acceptRouteLoad } from '../src/services/gfLogistics';
+import {
+  describeRouteLoadAcceptSuccess,
+  requirePositivePickingId,
+  runRouteLoadAcceptAndRefresh,
+} from '../src/services/routeLoadAcceptFlow';
 import { buildRouteLoadAcceptanceState, RouteLoadCard, RouteLoadLine } from '../src/services/routeLoadAcceptance';
+import { logWarn } from '../src/utils/logger';
 
 function formatQty(value: number): string {
   if (!Number.isFinite(value)) return '0';
@@ -65,13 +71,17 @@ export default function RefillAcceptScreen() {
 
   async function handleAccept() {
     if (!planId || accepting || !pending?.picking_id) return;
+    // Capture exact picking identity before dialog / network (multi-refill safe).
+    const pickingId = requirePositivePickingId(pending.picking_id);
+    const isRefill = pending.isRefill;
+    const pickingName = pending.name;
     if (!isOnline) {
       Alert.alert('Sin conexión', 'Conéctate para aceptar la recarga.');
       return;
     }
     Alert.alert(
-      pending.isRefill ? 'Aceptar recarga' : 'Aceptar carga',
-      `¿Confirmas que recibiste el producto de "${pending.name}"? Se acepta tal cual viene.`,
+      isRefill ? 'Aceptar recarga' : 'Aceptar carga',
+      `¿Confirmas que recibiste el producto de "${pickingName}"? Se acepta tal cual viene.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -79,18 +89,38 @@ export default function RefillAcceptScreen() {
           onPress: async () => {
             setAccepting(true);
             try {
-              await acceptRouteLoad(planId, pending.picking_id);
-              await loadPlan({ force: true });
-              if (warehouseId) await loadProducts(warehouseId);
-              Alert.alert('Recarga aceptada', `${pending.name} quedó confirmada.`);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : 'Intenta de nuevo.';
-              if (/ya.*acept|already/i.test(msg)) {
-                await loadPlan({ force: true });
-                Alert.alert('Ya estaba aceptada', 'Esta recarga ya había sido aceptada.');
-              } else {
-                Alert.alert('Error al aceptar', msg);
+              const outcome = await runRouteLoadAcceptAndRefresh({
+                planId,
+                pickingId,
+                warehouseId,
+                isOnline: true,
+                accept: acceptRouteLoad,
+                refreshPlan: () => loadPlan({ force: true }),
+                refreshInventory: async (wid) => {
+                  await loadProducts(wid);
+                },
+              });
+              const copy = describeRouteLoadAcceptSuccess({
+                isRefill,
+                pickingName,
+                idempotentReplay: outcome.accept.idempotent_replay,
+                inventoryRefreshOk: outcome.inventoryRefreshOk && outcome.planRefreshOk,
+              });
+              if (!outcome.inventoryRefreshOk || !outcome.planRefreshOk) {
+                logWarn('inventory', 'route_load_accept_refresh_failed', {
+                  plan_id: planId,
+                  picking_id: pickingId,
+                  plan_refresh_ok: outcome.planRefreshOk,
+                  inventory_refresh_ok: outcome.inventoryRefreshOk,
+                  error: outcome.inventoryRefreshError,
+                });
               }
+              Alert.alert(copy.title, copy.body);
+            } catch (err) {
+              Alert.alert(
+                'Error al aceptar',
+                err instanceof Error ? err.message : 'Intenta de nuevo.',
+              );
             } finally {
               setAccepting(false);
             }

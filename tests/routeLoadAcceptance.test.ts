@@ -218,8 +218,13 @@ function testFrontendWiringUsesSharedAcceptanceFlow() {
   );
   assert.match(
     routeLoadAcceptanceCard,
-    /acceptRouteLoad\(/,
-    'La tarjeta compartida debe confirmar el picking pendiente en Odoo',
+    /runRouteLoadAcceptAndRefresh/,
+    'La tarjeta compartida debe confirmar el picking pendiente vía el flujo R1B-B',
+  );
+  assert.match(
+    routeLoadAcceptanceCard,
+    /accept:\s*acceptRouteLoad/,
+    'La tarjeta compartida debe llamar acceptRouteLoad con el picking exacto',
   );
   assert.match(
     routeLoadAcceptanceCard,

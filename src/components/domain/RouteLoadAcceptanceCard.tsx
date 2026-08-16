@@ -11,8 +11,14 @@ import {
 } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
 import { acceptRouteLoad } from '../../services/gfLogistics';
+import {
+  describeRouteLoadAcceptSuccess,
+  requirePositivePickingId,
+  runRouteLoadAcceptAndRefresh,
+} from '../../services/routeLoadAcceptFlow';
 import { buildRouteLoadAcceptanceState, RouteLoadCard, RouteLoadLine } from '../../services/routeLoadAcceptance';
 import type { GFPlan } from '../../types/plan';
+import { logWarn } from '../../utils/logger';
 
 interface Props {
   plan: GFPlan | null;
@@ -35,37 +41,61 @@ export function RouteLoadAcceptanceCard({
   showAcceptedLoads = false,
   style,
 }: Props) {
-  const [acceptingLoad, setAcceptingLoad] = useState(false);
+  const [acceptingPickingId, setAcceptingPickingId] = useState<number | null>(null);
   const routeLoadState = useMemo(() => buildRouteLoadAcceptanceState(plan), [plan]);
   const pendingLoad = routeLoadState.nextPendingLoad;
+  const acceptingLoad = acceptingPickingId != null;
 
   const handleAcceptRouteLoad = useCallback(async () => {
-    if (!plan?.plan_id || !pendingLoad?.picking_id || acceptingLoad) return;
+    if (!plan?.plan_id || !pendingLoad?.picking_id || acceptingPickingId != null) return;
+    // Capture exact picking identity before any await (multi-refill safe).
+    const pickingId = requirePositivePickingId(pendingLoad.picking_id);
+    const planId = plan.plan_id;
+    const isRefill = pendingLoad.isRefill;
+    const pickingName = pendingLoad.name;
     if (!isOnline) {
       Alert.alert('Sin conexión', 'Conéctate para aceptar la carga pendiente.');
       return;
     }
 
-    setAcceptingLoad(true);
+    setAcceptingPickingId(pickingId);
     try {
-      await acceptRouteLoad(plan.plan_id, pendingLoad.picking_id);
-      await loadPlan({ force: true });
-      if (warehouseId) {
-        await loadProducts(warehouseId);
+      const outcome = await runRouteLoadAcceptAndRefresh({
+        planId,
+        pickingId,
+        warehouseId,
+        isOnline: true,
+        accept: acceptRouteLoad,
+        refreshPlan: () => loadPlan({ force: true }),
+        refreshInventory: async (wid) => {
+          await loadProducts(wid);
+        },
+      });
+      const copy = describeRouteLoadAcceptSuccess({
+        isRefill,
+        pickingName,
+        idempotentReplay: outcome.accept.idempotent_replay,
+        inventoryRefreshOk: outcome.inventoryRefreshOk && outcome.planRefreshOk,
+      });
+      if (!outcome.inventoryRefreshOk || !outcome.planRefreshOk) {
+        logWarn('inventory', 'route_load_accept_refresh_failed', {
+          plan_id: planId,
+          picking_id: pickingId,
+          plan_refresh_ok: outcome.planRefreshOk,
+          inventory_refresh_ok: outcome.inventoryRefreshOk,
+          error: outcome.inventoryRefreshError,
+        });
       }
-      Alert.alert(
-        pendingLoad.isRefill ? 'Recarga aceptada' : 'Carga aceptada',
-        `${pendingLoad.name} quedó confirmada para tu ruta.`,
-      );
+      Alert.alert(copy.title, copy.body);
     } catch (error) {
       Alert.alert(
         'No se pudo aceptar la carga',
         error instanceof Error ? error.message : 'Intenta de nuevo o reporta a soporte.',
       );
     } finally {
-      setAcceptingLoad(false);
+      setAcceptingPickingId(null);
     }
-  }, [acceptingLoad, isOnline, loadPlan, loadProducts, pendingLoad, plan?.plan_id, warehouseId]);
+  }, [acceptingPickingId, isOnline, loadPlan, loadProducts, pendingLoad, plan?.plan_id, warehouseId]);
 
   const acceptedLoads = showAcceptedLoads ? routeLoadState.acceptedLoads : [];
 

@@ -5,16 +5,39 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app_ventas_grupofrio
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: app_ventas_grupofrio
+
+      # Cross-repo contract tests (saleTicketBackendContract) read
+      # ../gf/gf_logistics_ops/models/sale_order.py beside the app checkout.
+      - name: Checkout gf sibling for contract tests
+        uses: actions/checkout@v4
+        with:
+          repository: grupofrio/gf
+          path: gf
+          ref: main
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
+          cache-dependency-path: app_ventas_grupofrio/package-lock.json
+
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
-      - run: git diff --check
+      - name: Whitespace check
+        run: git diff --check
+        working-directory: app_ventas_grupofrio

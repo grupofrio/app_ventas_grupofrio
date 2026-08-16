@@ -231,6 +231,10 @@ export const LEDGER_AFFECTING_SYNC_TYPES = new Set([
   'gift',
 ]);
 
+/**
+ * @deprecated Prefer keepLedgerOperationIdsForSnapshot (INV-1B ack-aware keep-set).
+ * Kept for transitional imports; delegates to status≠done/dead only.
+ */
 export function pendingLedgerOperationIdsFromQueue(
   queue: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> }>,
 ): Set<string> {

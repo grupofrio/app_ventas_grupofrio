@@ -15,6 +15,10 @@ import {
   type InventoryLedgerPorts,
 } from './inventoryLedgerLogic.ts';
 import { assertEncryptedRecord } from './encryptedStoreLogic.ts';
+import {
+  keepLedgerOperationIdsForSnapshot,
+  type AmbiguousQueueItem,
+} from './ambiguousAckReconcile.ts';
 
 export {
   LEDGER_RECORD_KEY,
@@ -24,6 +28,10 @@ export {
   LEDGER_AFFECTING_SYNC_TYPES,
 } from './inventoryLedgerLogic.ts';
 export type { InventoryLedgerPorts } from './inventoryLedgerLogic.ts';
+export {
+  keepLedgerOperationIdsForSnapshot,
+  SERVER_ACK_AT_MS_KEY,
+} from './ambiguousAckReconcile.ts';
 
 async function productionPorts(): Promise<InventoryLedgerPorts> {
   const [
@@ -118,30 +126,29 @@ export async function rebaseLedgerFromServerSnapshot(
 }
 
 /**
- * After truck_stock refresh: rebase ledger snapshot and re-project sellable,
- * keeping only local movements for ops still pending in the sync queue.
+ * After truck_stock refresh: rebase ledger snapshot and re-project sellable.
+ * Keep-set is ACK-aware (INV-1B): drop only when snapshotAtMs >= server ack.
  */
 export async function rebaseAfterTruckStockRefresh(
   products: Array<{ id: number; qty_available: number }>,
+  snapshotAtMs: number = Date.now(),
   ports?: InventoryLedgerPorts,
 ): Promise<LedgerState | null> {
   try {
     const [{ useSyncStore }] = await Promise.all([
       import('../stores/useSyncStore.ts'),
     ]);
-    const queue = useSyncStore.getState().queue;
-    const keep = pendingLedgerOperationIdsFromQueue(queue);
+    const queue = useSyncStore.getState().queue as AmbiguousQueueItem[];
+    const keep = keepLedgerOperationIdsForSnapshot(queue, snapshotAtMs);
     const sellable: Record<number, number> = {};
     for (const p of products) {
       if (typeof p.qty_available === 'number' && Number.isFinite(p.qty_available)) {
         sellable[p.id] = p.qty_available;
       }
     }
-    const version = `truck_stock:${new Date().toISOString()}`;
+    const version = `truck_stock:${new Date(snapshotAtMs).toISOString()}`;
     return rebaseLedgerFromServerSnapshot(sellable, keep, version, ports);
   } catch (err) {
-    // Non-fatal for catalog load: stock display falls back to server qty until
-    // the next successful hydrate. Log via caller.
     throw err;
   }
 }

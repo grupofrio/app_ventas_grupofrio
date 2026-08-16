@@ -606,6 +606,41 @@ export async function createSale(
   return validateSaleCreateResult(result, expectedOperationId);
 }
 
+/**
+ * INV-1B: operation-identity status for sales (no create side-effect).
+ * Omit created_at_ms so the backend skips the time-window heuristic.
+ */
+export async function checkSaleDuplicate(
+  payload: Record<string, unknown>,
+): Promise<{ duplicate: boolean; existing: Record<string, unknown> | null }> {
+  const body: Record<string, unknown> = {
+    operation_id: payload.operation_id,
+    partner_id: payload.partner_id,
+  };
+  if (typeof payload.stop_id === 'number' && payload.stop_id > 0) {
+    body.stop_id = payload.stop_id;
+  }
+  if (typeof payload.plan_id === 'number' && payload.plan_id > 0) {
+    body.plan_id = payload.plan_id;
+  }
+  const result = await postRest<Record<string, unknown>>(
+    `${GF_BASE}/sales/check_duplicate`,
+    body,
+  );
+  const data = result && typeof result === 'object' ? result : {};
+  // postRest unwraps {ok,data}; tolerate both shapes.
+  const nested = data.data && typeof data.data === 'object'
+    ? data.data as Record<string, unknown>
+    : data;
+  return {
+    duplicate: nested.duplicate === true,
+    existing:
+      nested.existing && typeof nested.existing === 'object'
+        ? nested.existing as Record<string, unknown>
+        : null,
+  };
+}
+
 export async function acceptRouteLoad(routePlanId: number, pickingId: number): Promise<boolean> {
   const result = await postRest<{ ok?: boolean; success?: boolean }>(
     `${GF_BASE}/route_plan/seal_load`,

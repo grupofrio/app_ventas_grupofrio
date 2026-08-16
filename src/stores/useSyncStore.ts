@@ -31,6 +31,12 @@ import {
 import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { createSerializedPersistenceCoordinator } from '../services/serializedTaskRunner';
+import {
+  applyServerAckIntentsToQueue,
+  collectSkippedServerAckIntents,
+  type AmbiguousQueueItem,
+  type ServerAckIntent,
+} from '../services/ambiguousAckReconcile';
 import { postRest } from '../services/api';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
@@ -244,6 +250,13 @@ interface SyncState {
    * wrote `sync:queue` (avoids a second plaintext race write).
    */
   replaceQueueFromDurable: (queue: SyncQueueItem[]) => void;
+  /**
+   * INV-1B: apply server ACK intents onto the *current* queue via the existing
+   * serialized persistence coordinator (transformAndPersist). Durable write
+   * completes before memory publish. Rejects on persist failure (fail-safe:
+   * no in-memory ACK).
+   */
+  applyServerAcknowledgementsDurably: (intents: ServerAckIntent[]) => Promise<void>;
   rehydrateQueue: () => Promise<void>;
 
   // V2: Sync processor with priority
@@ -417,9 +430,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ Status transitions ═══
 
   markDone: (id) => {
-    const newQueue = get().queue.map((i) =>
-      i.id === id ? { ...i, status: 'done' as SyncItemStatus } : i
-    );
+    const ackAt = Date.now();
+    const newQueue = get().queue.map((i) => {
+      if (i.id !== id) return i;
+      const isLedgerOp = i.type === 'sale_order' || i.type === 'gift';
+      const payload =
+        isLedgerOp && typeof i.payload._serverAcknowledgedAtMs !== 'number'
+          ? { ...i.payload, _serverAcknowledgedAtMs: ackAt }
+          : i.payload;
+      return { ...i, status: 'done' as SyncItemStatus, payload };
+    });
     set({ queue: newQueue, ...computeCounts(newQueue) });
     schedulePersist();
   },
@@ -572,6 +592,32 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       _persistTimer = null;
     }
     set({ queue, ...computeCounts(queue) });
+  },
+
+  applyServerAcknowledgementsDurably: async (intents) => {
+    if (intents.length === 0) return;
+    if (_persistTimer) {
+      clearTimeout(_persistTimer);
+      _persistTimer = null;
+    }
+    // transformAndPersist: write durable snapshot first, then re-apply the
+    // same pure transform on the then-current queue and publish. Concurrent
+    // enqueue / status mutations on unrelated items are preserved.
+    await queuePersistence.transformAndPersist((queue) =>
+      applyServerAckIntentsToQueue(queue as AmbiguousQueueItem[], intents) as SyncQueueItem[],
+    );
+    const skipped = collectSkippedServerAckIntents(
+      get().queue as AmbiguousQueueItem[],
+      intents,
+    );
+    for (const entry of skipped) {
+      logWarn('sync', 'server_ack_intent_skipped', {
+        item_id: entry.intent.item_id,
+        operation_id: entry.intent.operation_id,
+        type: entry.intent.type,
+        reason: entry.reason,
+      });
+    }
   },
 
   rehydrateQueue: async () => {

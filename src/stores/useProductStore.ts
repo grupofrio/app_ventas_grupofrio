@@ -240,6 +240,17 @@ export const useProductStore = create<ProductState>((set, get) => ({
         cachedAtMs: null,
       });
 
+      // INV-1: rebase ledger against authoritative truck_stock, then re-project
+      // sellable (pending local ops kept; synced ops dropped to avoid double-apply).
+      try {
+        const { rebaseAfterTruckStockRefresh } = await import('../services/inventoryLedger.ts');
+        await rebaseAfterTruckStockRefresh(products);
+      } catch (ledgerErr) {
+        logWarn('inventory', 'ledger_rebase_after_truck_stock_failed', {
+          error: ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr),
+        });
+      }
+
       // BLD-20260424-BUGA: resumen estructurado de la carga para poder
       // diagnosticar en campo sin rebuild. Útil cuando el operador reporta
       // "no salen productos" — con esta línea sabemos inmediatamente si

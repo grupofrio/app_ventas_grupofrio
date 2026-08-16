@@ -16,8 +16,9 @@ import {
   migrateLegacySellableSnapshot,
   movementsForOperation,
   projectSellable,
+  replaceServerSnapshot,
 } from '../domain/inventory/ledgerState.ts';
-import type { InventoryMovement, LedgerState } from '../domain/inventory/types.ts';
+import type { InventoryMovement, InventorySnapshot, LedgerState } from '../domain/inventory/types.ts';
 import type {
   EncryptedRecordMutator,
   EncryptedSessionIdentity,
@@ -173,6 +174,75 @@ export async function ensureLedgerHydrated(ports: InventoryLedgerPorts): Promise
   const { state } = await loadOrMigrateLedger(ports);
   ports.applySellableProjection(projectSellable(state));
   return state;
+}
+
+/**
+ * INV-1: Rebase ledger against an authoritative server truck_stock snapshot.
+ *
+ * visible = server_snapshot + local movements still pending acknowledgement
+ * (operation_ids in keepOperationIds). Movements for synced ops are dropped so
+ * we do not double-apply effects the server already incorporated.
+ *
+ * No invented server revision: snapshot_version is a client label (timestamp /
+ * hash of the refresh). Contract note: backend does not yet emit revision tokens.
+ */
+export async function rebaseLedgerFromServerSnapshot(
+  ports: InventoryLedgerPorts,
+  serverSellableByProductId: Record<number, number>,
+  keepOperationIds: Set<string>,
+  snapshotVersion: string,
+): Promise<LedgerState> {
+  const session = await ports.getSession();
+  if (!session) {
+    throw new Error('Inventory ledger requires an encrypted field session');
+  }
+
+  const snapshot: InventorySnapshot = {};
+  for (const [rawId, qty] of Object.entries(serverSellableByProductId)) {
+    const id = Number(rawId);
+    if (!Number.isFinite(id) || typeof qty !== 'number' || !Number.isFinite(qty)) continue;
+    snapshot[String(id)] = { sellable: qty };
+  }
+
+  let next: LedgerState | null = null;
+  await ports.updateRecords(session, (api) => {
+    const existing = api.getRecord<LedgerState>(LEDGER_RECORD_KEY);
+    const state = resolveLedgerState(existing, ports);
+    next = replaceServerSnapshot(
+      state,
+      snapshot,
+      snapshotVersion,
+      ports.nowIso(),
+      keepOperationIds,
+    );
+    assertEncryptedRecord(LEDGER_RECORD_KEY, 'encrypted');
+    api.setRecord(LEDGER_RECORD_KEY, next);
+  });
+  if (!next) {
+    throw new Error('rebaseLedgerFromServerSnapshot failed to produce ledger state');
+  }
+  ports.applySellableProjection(projectSellable(next));
+  return next;
+}
+
+/** Sync queue item shapes that have already mutated the local ledger. */
+export const LEDGER_AFFECTING_SYNC_TYPES = new Set([
+  'sale_order',
+  'gift',
+]);
+
+export function pendingLedgerOperationIdsFromQueue(
+  queue: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> }>,
+): Set<string> {
+  const keep = new Set<string>();
+  for (const item of queue) {
+    if (!LEDGER_AFFECTING_SYNC_TYPES.has(item.type)) continue;
+    if (item.status === 'done' || item.status === 'dead') continue;
+    keep.add(item.id);
+    const payloadOp = item.payload?.operation_id ?? item.payload?._operationId;
+    if (typeof payloadOp === 'string' && payloadOp.trim()) keep.add(payloadOp.trim());
+  }
+  return keep;
 }
 
 export function createMemoryLedgerPorts(seed?: LedgerState | null): InventoryLedgerPorts & {

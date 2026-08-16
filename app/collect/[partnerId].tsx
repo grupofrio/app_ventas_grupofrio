@@ -1,9 +1,11 @@
 /**
  * Collect screen — s-collect in mockup (lines 408-422).
  * Invoice collection / payment registration.
+ *
+ * FE-1: single-flight + stable operation_id (see collectPaymentIntent).
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,12 +18,20 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatCurrency } from '../../src/utils/time';
 import { Invoice } from '../../src/types/product';
+import { createCollectPaymentController } from '../../src/services/collectPaymentIntent';
 
 const PAYMENT_METHODS = [
   { id: 'cash', label: '💵 Efectivo' },
   { id: 'transfer', label: '💳 Transferencia' },
   { id: 'check', label: '🏦 Cheque' },
 ];
+
+function uuidV4(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
 
 export default function CollectScreen() {
   const { partnerId } = useLocalSearchParams<{ partnerId: string }>();
@@ -34,28 +44,58 @@ export default function CollectScreen() {
   const [invoices] = useState<Invoice[]>([]); // F6: load from cache
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [submitting, setSubmitting] = useState(false);
+
+  const partnerNum = Number(partnerId);
+  const numAmount = parseFloat(amount);
+
+  const paymentController = useMemo(
+    () =>
+      createCollectPaymentController({
+        uuid: uuidV4,
+        enqueue: (type, payload, opts) => enqueue(type, payload, opts),
+      }),
+    [enqueue],
+  );
+
+  useEffect(() => {
+    const amt = Number.isFinite(numAmount) ? numAmount : 0;
+    paymentController.onIntentInputsChanged(partnerNum, amt);
+  }, [paymentController, partnerNum, numAmount]);
 
   const totalPending = invoices.reduce((sum, inv) => sum + inv.amount_residual, 0);
 
   function handleCollect() {
-    const numAmount = parseFloat(amount);
-    if (!numAmount || numAmount <= 0) {
-      Alert.alert('Monto invalido', 'Ingresa un monto valido');
-      return;
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const outcome = paymentController.submit({
+        partnerId: partnerNum,
+        amount: numAmount,
+        journalId: defaultPaymentJournalId,
+        paymentMethod,
+        reference: 'Cobro visita',
+      });
+
+      if (outcome.status === 'invalid') {
+        Alert.alert('Monto invalido', outcome.message);
+        return;
+      }
+      if (outcome.status === 'ignored_inflight' || outcome.status === 'ignored_done') {
+        return;
+      }
+
+      Alert.alert(
+        'Cobro registrado',
+        `${formatCurrency(numAmount)} registrado como ${paymentMethod}`,
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo registrar el cobro';
+      Alert.alert('Error', msg);
+    } finally {
+      setSubmitting(false);
     }
-
-    enqueue('payment', {
-      partner_id: Number(partnerId),
-      amount: numAmount,
-      journal_id: defaultPaymentJournalId,
-      reference: 'Cobro visita',
-    });
-
-    Alert.alert(
-      'Cobro registrado',
-      `${formatCurrency(numAmount)} registrado como ${paymentMethod}`,
-      [{ text: 'OK', onPress: () => router.back() }]
-    );
   }
 
   return (
@@ -147,7 +187,7 @@ export default function CollectScreen() {
           label="💰 Registrar Cobro"
           onPress={handleCollect}
           fullWidth
-          disabled={!amount || parseFloat(amount) <= 0}
+          disabled={submitting || !amount || parseFloat(amount) <= 0}
           style={{ marginTop: 14 }}
         />
       </ScrollView>

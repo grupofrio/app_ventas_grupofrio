@@ -22,6 +22,19 @@ import {
   type InventoryLedgerPorts,
 } from './inventoryLedger.ts';
 
+/**
+ * INV-6: Canonicalize line order before assigning semantic slots so retries
+ * with reordered lines yield the same movement_id set. Identity is
+ * (kind, product_id, occurrence) after sort by product_id then qty — not
+ * created_at and not raw array index of the unsorted payload.
+ */
+export function canonicalizeMovementLines(lines: MovementLine[]): MovementLine[] {
+  return [...lines].sort((a, b) => {
+    if (a.product_id !== b.product_id) return a.product_id - b.product_id;
+    return a.qty - b.qty;
+  });
+}
+
 function saleMovementIds(operationId: string, lines: MovementLine[]): string[] {
   return lines.map((line, index) =>
     stableMovementId(operationId, saleMovementSlot(line.product_id, index)),
@@ -62,7 +75,7 @@ export function buildSaleLedgerMovements(args: {
   employeeId?: number | null;
   createdAt?: string;
 }) {
-  const lines = args.lines;
+  const lines = canonicalizeMovementLines(args.lines);
   return buildSaleMovements(
     {
       operation_id: args.operationId,
@@ -84,7 +97,7 @@ export function buildGiftLedgerMovements(args: {
   partnerId?: number | null;
   createdAt?: string;
 }) {
-  const lines = args.lines;
+  const lines = canonicalizeMovementLines(args.lines);
   return buildGiftMovements(
     {
       operation_id: args.operationId,
@@ -106,9 +119,9 @@ export function buildExchangeLedgerMovements(args: {
   partnerId?: number | null;
   createdAt?: string;
 }) {
-  const delivery = args.delivery;
-  const returnGood = args.returnGood ?? [];
-  const returnDamaged = args.returnDamaged ?? [];
+  const delivery = canonicalizeMovementLines(args.delivery);
+  const returnGood = canonicalizeMovementLines(args.returnGood ?? []);
+  const returnDamaged = canonicalizeMovementLines(args.returnDamaged ?? []);
   return buildExchangeMovements(
     {
       operation_id: args.operationId,

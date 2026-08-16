@@ -421,3 +421,107 @@ describe('exchange semantics', () => {
     assert.equal(projection['8'].damaged, 0);
   });
 });
+
+describe('INV-1 ledger rebase against server snapshot', () => {
+  it('pending sale survives refresh that does not yet include the sale', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 10: 10 }, 'v0', 't0'),
+    );
+    await applySaleStockViaLedger({
+      operationId: OP,
+      lines: [{ product_id: 10, qty: 3 }],
+      ports,
+    });
+    assert.equal(ports._sellable[10], 7);
+
+    const { rebaseLedgerFromServerSnapshot } = await import(
+      '../src/services/inventoryLedgerLogic.ts'
+    );
+    // Server still shows 10 (sale not posted).
+    await rebaseLedgerFromServerSnapshot(ports, { 10: 10 }, new Set([OP]), 'v1');
+    assert.equal(ports._sellable[10], 7);
+    assert.equal(ports._state?.movements.length, 1);
+  });
+
+  it('after server incorporates sale, drop local movement — no double subtract', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 10: 10 }, 'v0', 't0'),
+    );
+    await applySaleStockViaLedger({
+      operationId: OP,
+      lines: [{ product_id: 10, qty: 3 }],
+      ports,
+    });
+    const { rebaseLedgerFromServerSnapshot } = await import(
+      '../src/services/inventoryLedgerLogic.ts'
+    );
+    // Server now shows 7; keep set empty (op synced).
+    await rebaseLedgerFromServerSnapshot(ports, { 10: 7 }, new Set(), 'v2');
+    assert.equal(ports._sellable[10], 7);
+    assert.equal(ports._state?.movements.length, 0);
+  });
+
+  it('refill server +5 updates visible sellable', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 10: 7 }, 'v2', 't2'),
+    );
+    const { rebaseLedgerFromServerSnapshot } = await import(
+      '../src/services/inventoryLedgerLogic.ts'
+    );
+    await rebaseLedgerFromServerSnapshot(ports, { 10: 12 }, new Set(), 'v3-refill');
+    assert.equal(ports._sellable[10], 12);
+  });
+});
+
+describe('INV-6 stable movement identity under reorder', () => {
+  it('reordered same logical lines → same movement_ids', () => {
+    const a = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [
+        { product_id: 2, qty: 1 },
+        { product_id: 1, qty: 2 },
+      ],
+    });
+    const b = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [
+        { product_id: 1, qty: 2 },
+        { product_id: 2, qty: 1 },
+      ],
+    });
+    assert.deepEqual(
+      a.map((m) => m.movement_id).sort(),
+      b.map((m) => m.movement_id).sort(),
+    );
+  });
+
+  it('duplicate product lines do not collide', () => {
+    const movements = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [
+        { product_id: 1, qty: 1 },
+        { product_id: 1, qty: 2 },
+      ],
+    });
+    assert.equal(movements.length, 2);
+    assert.notEqual(movements[0].movement_id, movements[1].movement_id);
+  });
+
+  it('retry same lines does not double-project', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 1: 10 }, 'v0', 't0'),
+    );
+    const lines = [
+      { product_id: 1, qty: 2 },
+      { product_id: 2, qty: 1 },
+    ];
+    await applySaleStockViaLedger({ operationId: OP, lines, ports });
+    await applySaleStockViaLedger({
+      operationId: OP,
+      lines: [...lines].reverse(),
+      ports,
+    });
+    assert.equal(ports._sellable[1], 8);
+    assert.equal(ports._state?.movements.length, 2);
+  });
+});

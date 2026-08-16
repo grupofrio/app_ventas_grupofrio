@@ -472,10 +472,9 @@ describe('INV-1 ledger rebase against server snapshot', () => {
     assert.equal(ports._sellable[10], 12);
   });
 
-  it('AMBIGUOUS ACK GAP: server already includes sale X but queue still pending → double-apply', async () => {
-    // Models: sale committed server-side, response lost, queue still pending/error,
-    // truck_stock refresh already reflects X, rebase keeps local movement X.
-    // Without a canonical ack protocol this over-subtracts until retry marks done.
+  it('AMBIGUOUS ACK GAP (pre-INV1B): server includes sale + unacked keep → double-apply', async () => {
+    // Documents the failure mode when keep-set ignores server ack.
+    // INV-1B fixes this via ack + post-ack snapshot (see ambiguousAckReconcile.test.ts).
     const ports = createMemoryLedgerPorts(
       migrateLegacySellableSnapshot({ 10: 10 }, 'v0', 't0'),
     );
@@ -489,7 +488,6 @@ describe('INV-1 ledger rebase against server snapshot', () => {
     const { rebaseLedgerFromServerSnapshot } = await import(
       '../src/services/inventoryLedgerLogic.ts'
     );
-    // Server qty already 7 (sale incorporated). keep still has OP (ambiguous queue).
     await rebaseLedgerFromServerSnapshot(ports, { 10: 7 }, new Set([OP]), 'v-ambiguous');
     assert.equal(
       ports._sellable[10],

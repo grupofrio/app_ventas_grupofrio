@@ -187,6 +187,30 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
 
     try {
+      // INV-1B: reconcile ambiguous ops BEFORE fetching truck_stock so the
+      // snapshot is taken at-or-after any new server acknowledgements.
+      try {
+        const { useSyncStore } = await import('./useSyncStore.ts');
+        const { reconcileAmbiguousLedgerOpsAgainstStore } = await import(
+          '../services/ambiguousAckReconcileRuntime.ts'
+        );
+        const sync = useSyncStore.getState();
+        await reconcileAmbiguousLedgerOpsAgainstStore({
+          queue: sync.queue as never,
+          replaceQueue: (queue) => {
+            useSyncStore.getState().replaceQueueFromDurable(queue as never);
+          },
+          persist: () => {
+            void useSyncStore.getState().persistQueue();
+          },
+        });
+      } catch (reconcileErr) {
+        logWarn('inventory', 'ambiguous_ack_reconcile_failed', {
+          error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+        });
+      }
+
+      const snapshotAtMs = Date.now();
       const mobileLocationId = useAuthStore.getState().mobileLocationId;
       const scoped = await fetchTruckStock(warehouseId, mobileLocationId);
       const rawProducts = scoped.products as Product[];
@@ -244,7 +268,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // sellable (pending local ops kept; synced ops dropped to avoid double-apply).
       try {
         const { rebaseAfterTruckStockRefresh } = await import('../services/inventoryLedger.ts');
-        await rebaseAfterTruckStockRefresh(products);
+        await rebaseAfterTruckStockRefresh(products, snapshotAtMs);
       } catch (ledgerErr) {
         logWarn('inventory', 'ledger_rebase_after_truck_stock_failed', {
           error: ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr),

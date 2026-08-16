@@ -417,9 +417,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ Status transitions ═══
 
   markDone: (id) => {
-    const newQueue = get().queue.map((i) =>
-      i.id === id ? { ...i, status: 'done' as SyncItemStatus } : i
-    );
+    const ackAt = Date.now();
+    const newQueue = get().queue.map((i) => {
+      if (i.id !== id) return i;
+      const isLedgerOp = i.type === 'sale_order' || i.type === 'gift';
+      const payload =
+        isLedgerOp && typeof i.payload._serverAcknowledgedAtMs !== 'number'
+          ? { ...i.payload, _serverAcknowledgedAtMs: ackAt }
+          : i.payload;
+      return { ...i, status: 'done' as SyncItemStatus, payload };
+    });
     set({ queue: newQueue, ...computeCounts(newQueue) });
     schedulePersist();
   },

@@ -32,6 +32,7 @@ import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
+import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleStore';
 import { ensureChecklistReady } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad, startPlan } from '../src/services/gfLogistics';
@@ -83,6 +84,8 @@ export default function RouteStartScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
 
   // Perf Fase 2C: readiness de datos (gate de salida) — ruta + productos +
   // precios precargados. Mínimo bloqueante = ruta + productos.
@@ -136,6 +139,7 @@ export default function RouteStartScreen() {
 
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
+    await hydrateDayBundle();
     if (!planId) {
       setLoading(false);
       return;
@@ -181,7 +185,7 @@ export default function RouteStartScreen() {
         setLoading(false);
       }
     }
-  }, [planId, isOnline, loadPlan, setForPlan, setChecklistCompleteForPlan]);
+  }, [planId, isOnline, loadPlan, setForPlan, setChecklistCompleteForPlan, hydrateDayBundle]);
 
   async function handleAcceptLoad() {
     if (!planId || acceptingLoad) return;
@@ -238,7 +242,7 @@ export default function RouteStartScreen() {
   // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
   // caché (ruta + productos) para no salir a ruta sin con qué operar. Los
   // precios faltantes son advertencia, no bloqueo (degradación segura).
-  const dataMinReady = dataReady.minimumReady;
+  const dataMinReady = dataReady.minimumReady && dayBundleAccess?.canStartRoute === true;
   const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive && dataMinReady;
   const canRequestStart = plan?.state === 'published' && readyToStartLive && isOnline;
   const canContinue = serverStarted || canRequestStart;
@@ -254,6 +258,7 @@ export default function RouteStartScreen() {
       && currentStart.loadAccepted
       && dataMinReady;
     if (currentPlan?.plan_id !== capturedPlanId) return;
+    if (!useEmployeeDayBundleStore.getState().access?.canStartRoute) return;
     const currentUiState = buildRouteStartUiState({
       planState: currentPlan.state,
       readyToStart: currentReadyToStart,

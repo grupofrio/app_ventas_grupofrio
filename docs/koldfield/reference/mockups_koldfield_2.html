@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kold Field — Propuesta visual del flujo del vendedor · Grupo Frío</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300..800&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;font-family:'DM Sans',-apple-system,system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+:root{
+  /* Tema claro institucional Grupo Frío (brandTokens.js de la PWA supervisor_ventas) */
+  --bg0:#F0F9FF;--bg1:#F0F9FF;--bg2:#E0F3FC;
+  --surface:#FFFFFF;--surface-soft:#F7FCFF;--surface-strong:#E0F3FC;
+  --border:#DBEFF9;--border-blue:rgba(0,119,187,0.18);
+  --blue:#0077BB;--blue2:#00B8D4;--blue3:#005A8D;--glow:rgba(0,119,187,0.10);
+  --text:#0F2A3D;--text-soft:#0F2A3D;--text-muted:#5B7285;--text-low:#5B7285;
+  --success:#166534;--success-soft:rgba(22,101,52,0.10);
+  --warning:#b45309;--warning-soft:rgba(180,83,9,0.10);
+  --error:#b91c1c;--error-soft:rgba(185,28,28,0.10);
+  --cta:linear-gradient(90deg,#005A8D,#0077BB);
+  --hero:linear-gradient(135deg,#005A8D 0%,#00B8D4 100%);
+  --sh-soft:0 1px 2px rgba(15,42,61,0.06);
+  --sh-md:0 2px 8px rgba(15,42,61,0.08);
+  --sh-lg:0 8px 24px rgba(15,42,61,0.10);
+}
+body{background:linear-gradient(160deg,#F0F9FF 0%,#E0F3FC 100%);color:var(--text);min-height:100vh;padding:28px 16px 60px}
+.wrap{max-width:1200px;margin:0 auto}
+.pagehdr{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+.logo-lockup{display:flex;align-items:center;gap:10px}
+.logo-lockup svg{height:44px;width:auto}
+.logo-word{line-height:1.02;color:#1852A2;letter-spacing:.06em}
+.logo-word .w1{font-size:13px;font-weight:300;display:block}
+.logo-word .w2{font-size:16px;font-weight:800;display:block;letter-spacing:.09em}
+h1{font-size:22px;font-weight:800;letter-spacing:-0.03em;color:#0F2A3D}
+.sub{color:var(--text-muted);font-size:13px;margin-top:6px;max-width:760px;line-height:1.5}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 26px}
+.tab{padding:9px 16px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--blue3);font-size:12.5px;font-weight:700;cursor:pointer;transition:all .18s ease;box-shadow:var(--sh-soft)}
+.tab.on{background:var(--cta);border-color:transparent;box-shadow:var(--sh-md);color:#fff}
+.stage{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap}
+.note{flex:1;min-width:280px;max-width:420px;background:var(--surface);border:1px solid var(--border);border-radius:22px;padding:20px 22px;position:sticky;top:20px;box-shadow:var(--sh-md)}
+.note h2{font-size:15px;font-weight:800;margin-bottom:10px;color:var(--blue3)}
+.note p{font-size:13px;color:var(--text-soft);line-height:1.6;margin-bottom:10px}
+.note .fix{font-size:12px;color:var(--text-muted);line-height:1.55;padding:8px 0 8px 12px;border-left:2px solid var(--blue);margin-bottom:8px}
+.note .fix b{color:var(--text-soft)}
+/* ---- phone frame ---- */
+.phone{width:390px;height:800px;border-radius:44px;border:1px solid #CBE4F2;background:linear-gradient(160deg,#F0F9FF 0%,#F0F9FF 55%,#E0F3FC 100%);box-shadow:0 30px 80px rgba(15,42,61,.18),inset 0 1px 0 rgba(255,255,255,.8);overflow:hidden;position:relative;flex-shrink:0}
+.screen{height:100%;display:flex;flex-direction:column}
+.body{flex:1;overflow-y:auto;padding:0 16px;scrollbar-width:none}
+.body::-webkit-scrollbar{display:none}
+.statusbar{display:flex;justify-content:space-between;padding:14px 24px 4px;font-size:12px;font-weight:600;color:var(--text-muted)}
+.hdr{display:flex;align-items:center;gap:10px;padding:12px 16px 10px}
+.iconbtn{width:38px;height:38px;border-radius:18px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--blue3);font-size:16px;flex-shrink:0;box-shadow:var(--sh-soft)}
+.hdr .t{font-size:16px;font-weight:700;letter-spacing:-0.01em;color:var(--text)}
+.hdr .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.gf-mini{height:26px;width:auto;flex-shrink:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:22px;padding:15px 17px;margin-bottom:12px;box-shadow:var(--sh-soft)}
+.hero{background:var(--hero);border:none;border-radius:24px;padding:16px;margin-bottom:12px;color:#fff;box-shadow:var(--sh-md)}
+.hero .hmut{color:rgba(255,255,255,.75)!important}
+.hero b{color:#fff!important}
+.overline{font-size:10px;font-weight:700;letter-spacing:.18em;color:var(--text-low);text-transform:uppercase;margin:14px 2px 8px}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px}
+.chip.info{color:#005A8D;background:#E0F3FC;border:1px solid rgba(0,119,187,.25)}
+.chip.ok{color:#166534;background:var(--success-soft);border:1px solid rgba(22,101,52,.28)}
+.chip.warn{color:#b45309;background:var(--warning-soft);border:1px solid rgba(180,83,9,.28)}
+.chip.err{color:#b91c1c;background:var(--error-soft);border:1px solid rgba(185,28,28,.28)}
+.chip.mut{color:var(--text-muted);background:#F7FCFF;border:1px solid var(--border)}
+.chip.onhero{color:#fff;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.4)}
+.cta{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:50px;border:none;border-radius:999px;background:var(--cta);color:#fff;font-size:14px;font-weight:700;box-shadow:var(--sh-md);cursor:pointer}
+.cta.dis{background:#E4EEF5;color:#8FA5B5;box-shadow:none}
+.ghost{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;border-radius:999px;background:var(--surface);color:var(--blue3);border:1px solid var(--border-blue);font-size:13px;font-weight:700;cursor:pointer;box-shadow:var(--sh-soft)}
+.step{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:22px;background:var(--surface);border:1px solid var(--border);margin-bottom:6px;box-shadow:var(--sh-soft)}
+.step .dot{width:30px;height:30px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;border:2px solid}
+.step .tt{font-size:13.5px;font-weight:700;color:var(--text)}
+.step .dd{font-size:11.5px;color:var(--text-muted);margin-top:1px}
+.step .st{margin-left:auto;flex-shrink:0}
+.step.active{background:#EAF6FE;border-color:rgba(0,119,187,.35)}
+.step.pend{opacity:.6}
+.navbar{display:flex;border-top:1px solid var(--border);background:rgba(255,255,255,.96);backdrop-filter:blur(20px);padding:6px 4px 14px}
+.navbar .nv{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--text-low);font-size:10px;font-weight:500;padding-top:6px}
+.navbar .nv.on{color:var(--blue);font-weight:700}
+.navbar .nv svg{width:20px;height:20px}
+.kpi{flex:1;padding:8px 10px;border-radius:18px;background:#F7FCFF;border:1px solid var(--border)}
+.rowline{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #EAF3F9;font-size:13px}
+.rowline:last-child{border-bottom:none}
+.rowline .l{color:var(--text-muted)}
+.rowline .r{font-weight:700;color:var(--text)}
+/* venta steppers */
+.pline{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #EAF3F9}
+.pline .pi{width:40px;height:40px;border-radius:14px;background:#E0F3FC;border:1px solid var(--border-blue);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.pline .pn{font-size:13px;font-weight:700;color:var(--text)}
+.pline .pp{font-size:11px;color:var(--text-muted)}
+.stepper{display:flex;align-items:center;gap:6px;margin-left:auto}
+.stepper .sb{width:46px;height:46px;border-radius:16px;border:1px solid rgba(0,119,187,.30);background:#EAF6FE;color:var(--blue3);font-size:20px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.stepper .sq{width:36px;text-align:center;font-size:16px;font-weight:800}
+.fixedbar{border-top:1px solid var(--border);background:rgba(255,255,255,.97);backdrop-filter:blur(16px);padding:12px 16px 16px;box-shadow:0 -6px 20px rgba(15,42,61,.06)}
+.fixedbar .tot{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.fixedbar .tot .tl{font-size:12px;color:var(--text-muted);font-weight:700}
+.fixedbar .tot .tv{font-size:24px;font-weight:800;color:#166534;letter-spacing:-0.02em}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.act{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 8px;border-radius:22px;background:var(--surface);border:1px solid var(--border);cursor:pointer;min-height:88px;justify-content:center;box-shadow:var(--sh-soft)}
+.act .ai{font-size:24px}
+.act .al{font-size:12px;font-weight:700;color:var(--text);text-align:center}
+.act .as{font-size:10px;color:var(--text-muted);text-align:center}
+.act.main{background:linear-gradient(180deg,#E0F3FC,#F0F9FF);border-color:rgba(0,119,187,.35)}
+.photo{border:1.5px dashed rgba(0,119,187,.4);border-radius:18px;padding:18px;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--blue3);font-size:12.5px;font-weight:700;background:#F3FAFE}
+.reason{display:inline-flex;padding:11px 16px;border-radius:999px;border:1px solid var(--border);background:var(--surface);font-size:12.5px;font-weight:600;color:var(--text);margin:0 6px 8px 0;cursor:pointer;box-shadow:var(--sh-soft)}
+.reason.on{background:#E0F3FC;border-color:rgba(0,119,187,.45);color:var(--blue3);font-weight:700}
+textarea.mock,input.mock{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:12px 14px;color:var(--text);font-size:14px;resize:none;outline:none;box-shadow:var(--sh-soft)}
+.money{font-variant-numeric:tabular-nums}
+/* map */
+.mapbox{position:relative;height:100%;background:#E8F4FB;overflow:hidden}
+.mapbox svg.mapsvg{position:absolute;inset:0;width:100%;height:100%}
+.pin{position:absolute;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;border:2.5px solid;transform:translate(-50%,-50%);box-shadow:var(--sh-md)}
+.floating-top{position:absolute;top:12px;left:12px;right:12px;z-index:5}
+.panel{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(255,255,255,.98);border:1px solid var(--border);border-radius:24px;padding:14px 16px;z-index:5;backdrop-filter:blur(16px);box-shadow:var(--sh-lg)}
+@media(max-width:900px){.note{position:static}}
+</style>
+</head>
+<body>
+
+<!-- Logo Grupo Frío (marca oficial: cubo isométrico, public/icons/logo-grupo-frio.svg de la PWA) -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="gf-mark" viewBox="100 15 460 480">
+    <g transform="translate(40,25)">
+      <polygon points="290,0 400,64 400,190 290,126" fill="#B8BAC1"/>
+      <polygon points="290,0 180,64 180,190 290,126" fill="#C5C7CD"/>
+      <polygon points="430,78 510,125 510,255 430,208" fill="#B8BAC1"/>
+      <polygon points="150,78 70,125 70,255 150,208" fill="#C5C7CD"/>
+      <polygon points="290,132 400,196 400,332 290,268" fill="#C7CCD1"/>
+      <polygon points="290,132 180,196 180,332 290,268" fill="#D2D7DB"/>
+      <polygon points="150,208 70,255 70,385 150,338" fill="#1A4F9C"/>
+      <polygon points="290,268 180,332 180,463 290,399" fill="#1A4F9C"/>
+      <polygon points="430,208 510,255 510,385 430,338" fill="#1A4F9C"/>
+      <polygon points="290,126 372,173 290,220 208,173" fill="#D8DDE0"/>
+      <g fill="none" stroke="#F5F7F8" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="290" y1="0" x2="290" y2="126" stroke-width="10"/>
+        <line x1="180" y1="64" x2="180" y2="463" stroke-width="10"/>
+        <line x1="400" y1="64" x2="400" y2="332" stroke-width="10"/>
+        <line x1="70" y1="255" x2="180" y2="332" stroke-width="10"/>
+        <line x1="400" y1="196" x2="510" y2="255" stroke-width="10"/>
+        <line x1="180" y1="196" x2="70" y2="125" stroke-width="10"/>
+        <line x1="400" y1="190" x2="510" y2="125" stroke-width="10"/>
+        <line x1="180" y1="190" x2="290" y2="126" stroke-width="10"/>
+        <line x1="290" y1="126" x2="400" y2="190" stroke-width="10"/>
+        <line x1="180" y1="332" x2="70" y2="255" stroke-width="10"/>
+        <line x1="180" y1="332" x2="290" y2="399" stroke-width="10"/>
+        <line x1="290" y1="399" x2="400" y2="332" stroke-width="10"/>
+        <line x1="400" y1="332" x2="510" y2="255" stroke-width="10"/>
+      </g>
+    </g>
+  </symbol>
+</svg>
+
+<div class="wrap">
+  <div class="pagehdr">
+    <div class="logo-lockup">
+      <svg viewBox="0 0 460 480"><use href="#gf-mark"/></svg>
+      <div class="logo-word"><span class="w1">GRUPO</span><span class="w2">FRÍO</span></div>
+    </div>
+  </div>
+  <h1>Kold Field — Propuesta visual del flujo del vendedor</h1>
+  <p class="sub">Mockups con el tema claro institucional de la PWA de supervisor de ventas (azules #0077BB / #00B8D4 / #005A8D sobre #F0F9FF, tarjetas blancas, CTA pill degradado, semáforo con palabra + glifo, contrastes AA) y el logo oficial de Grupo Frío. Cada pantalla incorpora las correcciones de la auditoría. Toca las pestañas para navegar.</p>
+  <div class="tabs" id="tabs"></div>
+  <div class="stage" id="stage"></div>
+</div>
+
+<template id="screens">
+
+<!-- ============ 0. LOGIN ============ -->
+<section data-name="0 · Login" data-note='<h2>Entrada directa al trabajo</h2><p>Sin portada intermedia: después del login, el vendedor cae DIRECTO en "Inicio del día" — checklist de la camioneta, kilómetros, aceptar carga y descargar toda la información del día.</p><div class="fix"><b>Logo Grupo Frío completo</b> como protagonista, sobre el tema claro institucional.</div><div class="fix"><b>Código de empleado + PIN</b> — igual que hoy, con teclado numérico y campos grandes para usar con prisa.</div><div class="fix"><b>Sesión persistente:</b> el login solo se pide una vez al día; si ya hay sesión, la app abre directo en donde ibas.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>07:55</span><span>CEDIS Iguala · Wifi</span></div>
+    <div class="body" style="display:flex;flex-direction:column;justify-content:center">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:28px">
+        <svg style="height:120px;width:auto" viewBox="0 0 460 480"><use href="#gf-mark"/></svg>
+        <div style="text-align:center;line-height:1.05;color:#1852A2;letter-spacing:.08em">
+          <div style="font-size:20px;font-weight:300">GRUPO</div>
+          <div style="font-size:25px;font-weight:800;letter-spacing:.12em">FRÍO</div>
+        </div>
+        <span class="chip info" style="margin-top:2px">Kold Field · App del vendedor</span>
+      </div>
+      <div class="overline" style="text-align:center;margin-bottom:10px">Inicia sesión</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <input class="mock" placeholder="Código de empleado" value="V-1048" style="font-size:16px;text-align:center;padding:15px;font-weight:700">
+        <input class="mock" placeholder="PIN" value="• • • •" style="font-size:18px;text-align:center;padding:15px;letter-spacing:.3em">
+      </div>
+      <div style="height:18px"></div>
+      <button class="cta">Entrar</button>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);margin-top:14px">Al entrar vas directo a tu inicio del día:<br>checklist · kilómetros · carga · descarga de información</div>
+      <div style="height:30px"></div>
+      <div style="text-align:center;font-size:10px;color:var(--text-low)">¿Problemas para entrar? Avísale a tu supervisor</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 1. INICIO DEL DIA ============ -->
+<section data-name="1 · Inicio del día" data-note='<h2>Iniciar plan del día</h2><p>El hub de salida conserva los 5 pasos actuales, pero con las reglas corregidas y el semáforo por palabra.</p><div class="fix"><b>Rechazar carga:</b> junto a Aceptar aparece Rechazar con motivo (hoy solo existe "reportar diferencia" como incidente).</div><div class="fix"><b>Precarga automática:</b> al tocar "Iniciar plan del día" se descarga TODO (plan, clientes, precios, catálogo, razones de no venta) aprovechando el wifi del CEDIS. El botón no se habilita hasta que los precios del día bajaron — nada de salir con caché de ayer.</div><div class="fix"><b>Checklist con dientes:</b> un punto crítico reprobado bloquea la salida, no solo "responder".</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>08:12</span><span>▲ CEDIS Iguala · Wifi</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Inicio del día</span><div class="right"><svg class="gf-mini" viewBox="0 0 460 480"><use href="#gf-mark"/></svg><div class="iconbtn">⟳</div></div></div>
+    <div class="body">
+      <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:17px;font-weight:800">Ruta Norte · V-08</div><div class="hmut" style="font-size:11.5px;margin-top:2px">Lun 10 ago · 14 visitas planeadas</div></div>
+          <span class="chip onhero">◈ En preparación</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <div style="flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden"><div style="width:60%;height:100%;background:#fff"></div></div>
+          <span class="hmut" style="font-size:11px;font-weight:700">3 de 5</span>
+        </div>
+      </div>
+      <div class="overline">Pasos de salida</div>
+      <div class="step"><div class="dot" style="border-color:var(--success);color:var(--success);background:var(--success-soft)">✓</div><div><div class="tt">Checklist de la unidad</div><div class="dd">18 puntos · aprobado</div></div><span class="st chip ok">✓ Listo</span></div>
+      <div class="step"><div class="dot" style="border-color:var(--success);color:var(--success);background:var(--success-soft)">✓</div><div><div class="tt">Kilometraje de salida</div><div class="dd">48,230 km</div></div><span class="st chip ok">✓ Listo</span></div>
+      <div class="step active"><div class="dot" style="border-color:var(--blue);color:var(--blue);background:#E0F3FC">3</div><div><div class="tt">Traspaso de producto</div><div class="dd">Picking WH/OUT/00412 · 32 líneas</div></div><span class="st chip warn">⚠ Por revisar</span></div>
+      <div class="card" style="border-color:rgba(0,119,187,.3)">
+        <div class="rowline"><span class="l">Paletas surtido</span><span class="r money">18 cajas</span></div>
+        <div class="rowline"><span class="l">Bolis mango</span><span class="r money">24 bolsas</span></div>
+        <div class="rowline"><span class="l">Hielo 5kg</span><span class="r money">40 bolsas</span></div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button class="ghost" style="flex:1;color:#b91c1c;border-color:rgba(185,28,28,.35)">Rechazar</button>
+          <button class="cta" style="flex:2;min-height:46px">Aceptar carga</button>
+        </div>
+      </div>
+      <div class="step pend"><div class="dot" style="border-color:#9FB4C2;color:#7C93A3">4</div><div><div class="tt">Descarga del día</div><div class="dd">Plan · clientes · precios · catálogo</div></div><span class="st chip mut">▢ Pendiente</span></div>
+      <div class="step pend"><div class="dot" style="border-color:#9FB4C2;color:#7C93A3">5</div><div><div class="tt">Salir a ruta</div><div class="dd">Se habilita con todo descargado</div></div><span class="st chip mut">▢ Pendiente</span></div>
+      <div style="height:14px"></div>
+      <button class="cta dis">Iniciar plan del día</button>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);margin-top:8px">Acepta o rechaza la carga para continuar</div>
+      <div style="height:24px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. MAPA ============ -->
+<section data-name="2 · Mapa (pantalla principal)" data-note='<h2>El mapa manda</h2><p>Tras iniciar el plan, la pantalla es el mapa con la ruta y el panel del siguiente cliente. Un solo mapa (hoy hay dos implementaciones).</p><div class="fix"><b>Panel inferior fijo:</b> siguiente cliente, distancia, condición de pago visible desde aquí, y dos acciones: Navegar y "Ya llegué" (check-in).</div><div class="fix"><b>Pines con número + estado por palabra</b> en el detalle; "no visitado" y "rechazado" dejan de compartir el mismo rojo.</div><div class="fix"><b>Progreso del día siempre visible</b> arriba, con palabra (6 de 14 · En ruta).</div><div class="fix"><b>Calles reales:</b> la app usa Google Maps, así que sí se ven calles, nombres y colonias como en este dibujo — la versión anterior del mockup era solo esquemática.</div><div class="fix"><b>Tema claro:</b> mucho mejor legibilidad bajo el sol — el mapa oscuro actual actúa como espejo en exteriores.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>10:47</span><span>GPS activo · Sin señal — modo offline</span></div>
+    <div style="flex:1;position:relative">
+      <div class="mapbox">
+        <svg class="mapsvg" viewBox="0 0 390 640">
+          <!-- base tipo Google Maps: manzanas, calles y avenidas -->
+          <rect width="390" height="640" fill="#E9EEF2"/>
+          <g fill="#F5F2EA" stroke="#E3DFD3" stroke-width="1">
+            <rect x="-20" y="-20" width="120" height="130" rx="4"/><rect x="118" y="-20" width="120" height="130" rx="4"/><rect x="256" y="-20" width="160" height="130" rx="4"/>
+            <rect x="-20" y="128" width="120" height="120" rx="4"/><rect x="118" y="128" width="120" height="120" rx="4"/><rect x="256" y="128" width="160" height="120" rx="4"/>
+            <rect x="-20" y="266" width="120" height="120" rx="4"/><rect x="118" y="266" width="120" height="120" rx="4"/><rect x="256" y="266" width="160" height="120" rx="4"/>
+            <rect x="-20" y="404" width="120" height="120" rx="4"/><rect x="118" y="404" width="120" height="120" rx="4"/>
+            <rect x="-20" y="542" width="120" height="120" rx="4"/><rect x="118" y="542" width="120" height="120" rx="4"/><rect x="256" y="542" width="160" height="120" rx="4"/>
+          </g>
+          <!-- parque -->
+          <rect x="256" y="404" width="160" height="120" rx="4" fill="#D9EAD4" stroke="#C7DEC1"/>
+          <!-- calles -->
+          <g stroke="#FFFFFF" stroke-linecap="round">
+            <line x1="0" y1="119" x2="390" y2="119" stroke-width="16"/>
+            <line x1="0" y1="257" x2="390" y2="257" stroke-width="16"/>
+            <line x1="0" y1="395" x2="390" y2="395" stroke-width="16"/>
+            <line x1="0" y1="533" x2="390" y2="533" stroke-width="16"/>
+            <line x1="109" y1="0" x2="109" y2="640" stroke-width="16"/>
+            <line x1="247" y1="0" x2="247" y2="640" stroke-width="16"/>
+          </g>
+          <!-- avenida principal -->
+          <g stroke="#FFE9A8" stroke-linecap="round"><line x1="247" y1="0" x2="247" y2="640" stroke-width="18"/></g>
+          <g stroke="#F6D97B" stroke-width="1" stroke-dasharray="10 8"><line x1="247" y1="0" x2="247" y2="640"/></g>
+          <!-- nombres de calles -->
+          <g fill="#9AA5AC" font-size="9.5" font-family="'DM Sans',sans-serif" font-weight="600">
+            <text x="252" y="60" transform="rotate(90 252 60)">Av. Juárez</text>
+            <text x="16" y="112">Calle Morelos</text>
+            <text x="150" y="250">Calle Allende</text>
+            <text x="16" y="388">Calle Galeana</text>
+            <text x="290" y="526">Calle Hidalgo</text>
+            <text x="305" y="468" fill="#8FAF8B" font-style="italic">Parque</text>
+          </g>
+          <!-- trayecto por calles: recorrido (sólido) y por venir (punteado) -->
+          <path d="M30 533 L109 533 L109 395 L140 395 L140 340 L240 340 L240 300" fill="none" stroke="rgba(0,119,187,0.22)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M30 533 L109 533 L109 395 L140 395 L140 340 L240 340 L240 300" fill="none" stroke="#0077BB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M240 300 L247 257 L247 140 L285 140 L285 60 L260 60" fill="none" stroke="rgba(0,119,187,0.5)" stroke-width="3" stroke-dasharray="6 7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div class="pin" style="left:30px;top:533px;background:#fff;border-color:var(--success);color:var(--success)">✓</div>
+        <div class="pin" style="left:109px;top:463px;background:#fff;border-color:var(--success);color:var(--success)">✓</div>
+        <div class="pin" style="left:240px;top:300px;background:var(--blue);border-color:#fff;color:#fff;width:36px;height:36px;box-shadow:0 4px 14px rgba(0,119,187,.4)">7</div>
+        <div class="pin" style="left:285px;top:140px;background:#fff;border-color:#9FB4C2;color:var(--text-muted)">8</div>
+        <div class="pin" style="left:260px;top:60px;background:#fff;border-color:#9FB4C2;color:var(--text-muted)">9</div>
+        <div class="floating-top">
+          <div style="display:flex;gap:8px;align-items:center">
+            <div style="flex:1;background:rgba(255,255,255,.97);border:1px solid var(--border);border-radius:999px;padding:9px 16px;display:flex;justify-content:space-between;align-items:center;box-shadow:var(--sh-md)">
+              <span style="font-size:12.5px;font-weight:700">6 de 14 visitas · <span style="color:var(--blue)">En ruta</span></span>
+              <span class="chip ok" style="font-size:10px">$8,420 vendido</span>
+            </div>
+            <div class="iconbtn" style="background:rgba(255,255,255,.97)">☰</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <div style="font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-low)">SIGUIENTE VISITA · #7</div>
+              <div style="font-size:16px;font-weight:800;margin-top:3px">Abarrotes Doña Mary</div>
+              <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">Av. Juárez 214 · a 850 m</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+              <span class="chip info">Crédito</span>
+              <span class="chip mut">Congelador Kold</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:12px">
+            <button class="ghost" style="flex:1">Navegar ↗</button>
+            <button class="cta" style="flex:1;min-height:46px">Ya llegué</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="navbar">
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h14V10"/></svg>Mi día</div>
+      <div class="nv on"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5-8 12-8 12S4 15 4 10a8 8 0 0 1 8-8z"/></svg>Ruta</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Inventario</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Ventas</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Yo</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. CLIENTE / ACCIONES ============ -->
+<section data-name="3 · Check-in y acciones" data-note='<h2>Todo lo que puede hacer, en un solo lugar</h2><p>Tras el check-in, la rejilla reúne LAS SIETE acciones (hoy Consignación y Preventa están escondidas en otras pantallas).</p><div class="fix"><b>Condición de pago visible</b> como dato del cliente ("Cliente de crédito") — la venta ya no la preguntará.</div><div class="fix"><b>"Prospecto", nunca "lead"</b>, en toda la interfaz.</div><div class="fix"><b>Check-in con estado honesto:</b> distancia real contra la geocerca, con palabra y glifo, no solo color.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>10:53</span><span>Visita en curso · 00:03:12</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Abarrotes Doña Mary</span><div class="right"><div class="iconbtn">✎</div></div></div>
+    <div class="body">
+      <div class="hero" style="padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip onhero">Crédito</span><span class="chip onhero">Visita #7 de 14</span></div>
+          <span class="chip onhero">✓ Check-in a 22 m</span>
+        </div>
+        <div class="hmut" style="font-size:11.5px;margin-top:9px">Última compra: hace 6 días · $1,240 · Saldo de crédito: <b>$860</b></div>
+      </div>
+      <div class="overline">¿Qué vas a hacer?</div>
+      <div class="grid2">
+        <div class="act main"><span class="ai">🛒</span><span class="al">Venta</span><span class="as">Cobro según cliente</span></div>
+        <div class="act"><span class="ai">🚫</span><span class="al">No venta</span><span class="as">Razón + foto</span></div>
+        <div class="act"><span class="ai">🎁</span><span class="al">Regalo</span><span class="as">Venta a $0 · con ticket</span></div>
+        <div class="act"><span class="ai">📦</span><span class="al">Consignación</span><span class="as">A crédito · con ticket</span></div>
+        <div class="act"><span class="ai">🔄</span><span class="al">Cambio</span><span class="as">No mueve inventario</span></div>
+        <div class="act"><span class="ai">📅</span><span class="al">Preventa</span><span class="as">Con fecha de entrega</span></div>
+      </div>
+      <div style="height:10px"></div>
+      <div class="grid2">
+        <div class="act" style="min-height:64px"><span class="al">💳 Cobrar facturas</span></div>
+        <div class="act" style="min-height:64px"><span class="al">📋 Datos del cliente</span></div>
+      </div>
+      <div class="overline">Prospecto cercano</div>
+      <div class="card" style="display:flex;align-items:center;gap:12px">
+        <div class="pline pi" style="margin:0">🧊</div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:700">Miscelánea El Portal</div><div style="font-size:11px;color:var(--text-muted)">Prospecto · a 120 m · sin congelador</div></div>
+        <button class="ghost" style="width:auto;padding:0 14px;min-height:38px;font-size:12px">Convertir a cliente</button>
+      </div>
+      <div style="height:16px"></div>
+      <button class="ghost" style="border-color:rgba(22,101,52,.35);color:#166534">✓ Terminar visita → Próxima visita</button>
+      <div style="height:24px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. VENTA ============ -->
+<section data-name="4 · Venta" data-note='<h2>La pantalla crítica, sin fricción</h2><div class="fix"><b>Sin forma de pago:</b> el sistema ya sabe que Doña Mary es de crédito; se muestra como dato, no como pregunta.</div><div class="fix"><b>Steppers de 46 px</b> (hoy 30×30): usables de pie, con guantes, con prisa.</div><div class="fix"><b>Barra fija abajo:</b> total siempre visible + Confirmar. Nada de buscar el botón al fondo del scroll con FABs encima.</div><div class="fix"><b>"Foto del congelador"</b> con nombre correcto y obligatoria antes de confirmar.</div><div class="fix"><b>Inventario local descontado al confirmar</b> — el catálogo ya no muestra existencias viejas offline.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>10:58</span><span>Offline · se sincroniza al recuperar señal</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Venta · Doña Mary</span><span class="right"><span class="chip info" style="align-self:center">Crédito</span></span></div>
+    <div class="body">
+      <div class="overline">Productos</div>
+      <div class="card">
+        <div class="pline"><div class="pi">🍭</div><div><div class="pn">Paleta surtido</div><div class="pp money">$18.00 · quedan 96 en camioneta</div></div><div class="stepper"><div class="sb">−</div><div class="sq">12</div><div class="sb">+</div></div></div>
+        <div class="pline"><div class="pi">🥭</div><div><div class="pn">Bolis mango</div><div class="pp money">$10.00 · quedan 180</div></div><div class="stepper"><div class="sb">−</div><div class="sq">24</div><div class="sb">+</div></div></div>
+        <div class="pline" style="border-bottom:none"><div class="pi">🧊</div><div><div class="pn">Hielo 5 kg</div><div class="pp money">$25.00 · quedan 31</div></div><div class="stepper"><div class="sb">−</div><div class="sq">4</div><div class="sb">+</div></div></div>
+        <button class="ghost" style="margin-top:10px;min-height:42px;font-size:12.5px">+ Agregar producto</button>
+      </div>
+      <div class="overline">Evidencia</div>
+      <div class="photo">📷 Foto del congelador — obligatoria<span style="font-size:10.5px;color:var(--text-muted);font-weight:500">Encuadra el congelador con el producto acomodado</span></div>
+      <div style="height:8px"></div>
+      <div class="card" style="padding:11px 15px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--text-muted)">Cobro</span>
+        <span style="font-size:12.5px;font-weight:700">A crédito · vence en 15 días</span>
+      </div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <div class="tot"><span class="tl">TOTAL · 40 piezas</span><span class="tv money">$556.00</span></div>
+      <button class="cta">Confirmar venta e imprimir ticket</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. NO VENTA ============ -->
+<section data-name="5 · No venta" data-note='<h2>No venta en 20 segundos</h2><div class="fix"><b>Razones desde Odoo</b> (hoy hardcodeadas en la app): se actualizan sin publicar una versión nueva.</div><div class="fix"><b>Chips de 44 px</b> de alto, seleccionables con el pulgar.</div><div class="fix"><b>Guardar = idempotente:</b> reintentar con mala señal ya no duplica el incidente ni las fotos.</div><div class="fix">Al guardar, la app navega sola al siguiente cliente en el mapa (esto ya funciona así — se conserva).</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>11:24</span><span>Visita #8 · Cremería San José</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">No venta</span></div>
+    <div class="body">
+      <div class="overline">¿Por qué no compró?</div>
+      <div style="margin-bottom:6px">
+        <span class="reason on">Tiene producto suficiente</span><span class="reason">Sin efectivo</span><span class="reason">Compró a competencia</span><span class="reason">Cerrado</span><span class="reason">Encargado ausente</span><span class="reason">Congelador descompuesto</span><span class="reason">Otra razón</span>
+      </div>
+      <div class="overline">Observaciones</div>
+      <textarea class="mock" rows="3" placeholder="El dueño pide visita el jueves, día de surtido…"></textarea>
+      <div class="overline">Evidencia</div>
+      <div class="photo">📷 Foto del punto de venta — obligatoria</div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Guardar no venta → Próxima visita</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. REGALO ============ -->
+<section data-name="6 · Regalo" data-note='<h2>Regalo = venta a $0, con ticket</h2><p>Hoy el regalo baja a "merma de la van", no imprime ticket y no descuenta el inventario local. La propuesta lo corrige al modelo que definiste.</p><div class="fix"><b>Genera una venta a precio $0</b> — queda en el historial del cliente y en el corte del día como venta, no como merma.</div><div class="fix"><b>Sí afecta el inventario de la camioneta</b> y se descuenta localmente al confirmar (funciona offline).</div><div class="fix"><b>Imprime ticket</b> igual que una venta — el cliente firma de recibido.</div><div class="fix"><b>Motivo obligatorio</b> para que el supervisor vea por qué se regaló.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>11:05</span><span>Visita en curso · Doña Mary</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Regalo · Doña Mary</span><span class="right"><span class="chip info" style="align-self:center">Venta a $0</span></span></div>
+    <div class="body">
+      <div class="overline">Productos a regalar</div>
+      <div class="card">
+        <div class="pline"><div class="pi">🍭</div><div><div class="pn">Paleta surtido</div><div class="pp money">$18.00 → <b style="color:var(--success)">$0.00</b> · quedan 96</div></div><div class="stepper"><div class="sb">−</div><div class="sq">6</div><div class="sb">+</div></div></div>
+        <div class="pline" style="border-bottom:none"><div class="pi">🥭</div><div><div class="pn">Bolis mango</div><div class="pp money">$10.00 → <b style="color:var(--success)">$0.00</b> · quedan 180</div></div><div class="stepper"><div class="sb">−</div><div class="sq">4</div><div class="sb">+</div></div></div>
+        <button class="ghost" style="margin-top:10px;min-height:42px;font-size:12.5px">+ Agregar producto</button>
+      </div>
+      <div class="overline">¿Por qué se regala?</div>
+      <div style="margin-bottom:6px">
+        <span class="reason on">Apertura de cliente</span><span class="reason">Promoción</span><span class="reason">Compensación por queja</span><span class="reason">Degustación</span>
+      </div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Valor de lista</span><span class="r money">$148.00</span></div>
+        <div class="rowline"><span class="l">Descuento regalo</span><span class="r money" style="color:var(--success)">−100%</span></div>
+        <div class="rowline"><span class="l">Sale de tu camioneta</span><span class="r">10 pzas ✓</span></div>
+      </div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <div class="tot"><span class="tl">TOTAL · 10 piezas</span><span class="tv money">$0.00</span></div>
+      <button class="cta">Confirmar regalo e imprimir ticket</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. CONSIGNACION ============ -->
+<section data-name="7 · Consignación" data-note='<h2>Consignación a crédito, con ticket</h2><p>Hoy la consignación está fija a efectivo, no imprime ticket y solo funciona con señal. La propuesta la alinea a la regla y la mete a la rejilla del check-in (hoy está escondida).</p><div class="fix"><b>Cobro a crédito</b> — el producto se deja, y en la próxima visita se cuenta lo vendido y se cobra el faltante al crédito del cliente.</div><div class="fix"><b>Imprime ticket de consignación</b> con el detalle de lo que queda en el punto de venta.</div><div class="fix"><b>Funciona offline</b> — se encola igual que la venta.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>12:10</span><span>Visita #9 · Súper Los Pinos</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Consignación</span><span class="right"><span class="chip info" style="align-self:center">A crédito</span></span></div>
+    <div class="body">
+      <div class="card" style="padding:11px 15px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:13px;font-weight:800">Súper Los Pinos</div><div style="font-size:11px;color:var(--text-muted)">Consignación activa: ninguna</div></div>
+        <span class="chip ok">✓ Cliente de crédito</span>
+      </div>
+      <div class="overline">Producto que se queda</div>
+      <div class="card">
+        <div class="pline"><div class="pi">🍦</div><div><div class="pn">Helado 1 L vainilla</div><div class="pp money">$62.00 · quedan 24</div></div><div class="stepper"><div class="sb">−</div><div class="sq">10</div><div class="sb">+</div></div></div>
+        <div class="pline" style="border-bottom:none"><div class="pi">🍭</div><div><div class="pn">Paleta surtido</div><div class="pp money">$18.00 · quedan 90</div></div><div class="stepper"><div class="sb">−</div><div class="sq">12</div><div class="sb">+</div></div></div>
+        <button class="ghost" style="margin-top:10px;min-height:42px;font-size:12.5px">+ Agregar producto</button>
+      </div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Valor en consignación</span><span class="r money">$836.00</span></div>
+        <div class="rowline"><span class="l">Cobro</span><span class="r">A crédito en próxima visita</span></div>
+        <div class="rowline"><span class="l">Sale de tu camioneta</span><span class="r">22 pzas ✓</span></div>
+      </div>
+      <div class="card" style="background:#F3FAFE;border-color:var(--border-blue);padding:10px 14px;font-size:11.5px;color:var(--blue3);line-height:1.5">◈ En tu próxima visita contarás lo que queda: lo vendido se cobra al crédito del cliente y decides si resurtes o retiras.</div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <div class="tot"><span class="tl">SE DEJA · 22 piezas</span><span class="tv money" style="color:var(--blue3)">$836.00</span></div>
+      <button class="cta">Confirmar consignación e imprimir ticket</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8. CAMBIO ============ -->
+<section data-name="8 · Cambio" data-note='<h2>Cambio: espejo, sin efecto en inventario</h2><p>Hoy el cambio es la ÚNICA operación que sí mueve el inventario — exactamente al revés de la regla. La propuesta lo hace un movimiento espejo: entregas pieza nueva, recoges la dañada, tu existencia neta no cambia.</p><div class="fix"><b>Dos columnas claras:</b> lo que entregas y lo que recoges, siempre en igual cantidad.</div><div class="fix"><b>Foto del producto dañado</b> obligatoria como evidencia.</div><div class="fix"><b>Imprime ticket de cambio</b> (esto ya existe y se conserva).</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:22</span><span>Visita #10 · Abarrotes La Luz</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Cambio de producto</span></div>
+    <div class="body">
+      <div class="overline">Entregas (producto bueno)</div>
+      <div class="card">
+        <div class="pline" style="border-bottom:none"><div class="pi">🍦</div><div><div class="pn">Helado 1 L fresa</div><div class="pp">Reposición por producto dañado</div></div><div class="stepper"><div class="sb">−</div><div class="sq">3</div><div class="sb">+</div></div></div>
+      </div>
+      <div class="overline">Recoges (producto dañado)</div>
+      <div class="card" style="border-color:rgba(180,83,9,.3)">
+        <div class="pline" style="border-bottom:none"><div class="pi">⚠️</div><div><div class="pn">Helado 1 L fresa</div><div class="pp">Se descongeló · va a merma al regresar</div></div><div class="stepper"><div class="sb">−</div><div class="sq">3</div><div class="sb">+</div></div></div>
+      </div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Entregas</span><span class="r">3 pzas</span></div>
+        <div class="rowline"><span class="l">Recoges</span><span class="r">3 pzas</span></div>
+        <div class="rowline"><span class="l">Efecto en tu inventario</span><span class="r"><span class="chip ok">✓ Neto 0 · no afecta</span></span></div>
+      </div>
+      <div class="overline">Evidencia</div>
+      <div class="photo">📷 Foto del producto dañado — obligatoria</div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Confirmar cambio e imprimir ticket</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9. FIN DE VISITA ============ -->
+<section data-name="9 · Próxima visita" data-note='<h2>Un botón, un nombre</h2><p>El cierre de visita se llama como el vendedor piensa: <b>Próxima visita</b> (hoy: "Confirmar Check-out y Navegar al Siguiente").</p><div class="fix"><b>Resumen honesto del movimiento</b> con su estado de sincronización por palabra ("En cola · se envía con señal").</div><div class="fix"><b>Ruta de escape:</b> si una venta muere en el servidor, ya no atrapa al vendedor — puede marcarla para revisión del supervisor y seguir su ruta.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>11:02</span><span>Visita #7 completada</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Visita terminada</span><div class="right"><svg class="gf-mini" viewBox="0 0 460 480"><use href="#gf-mark"/></svg></div></div>
+    <div class="body">
+      <div class="hero" style="text-align:center;padding:22px 16px">
+        <div style="font-size:34px">✅</div>
+        <div style="font-size:17px;font-weight:800;margin-top:6px">Venta registrada</div>
+        <div class="hmut" style="font-size:12px;margin-top:3px">Abarrotes Doña Mary · 10:47 – 11:02 · 15 min</div>
+      </div>
+      <div class="card">
+        <div class="rowline"><span class="l">Venta a crédito</span><span class="r money">$556.00</span></div>
+        <div class="rowline"><span class="l">Piezas entregadas</span><span class="r money">40</span></div>
+        <div class="rowline"><span class="l">Ticket</span><span class="r">Impreso ✓</span></div>
+        <div class="rowline"><span class="l">Sincronización</span><span class="r"><span class="chip warn">🕑 En cola · se envía con señal</span></span></div>
+      </div>
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-low)">SIGUIENTE · #8</div><div style="font-size:14px;font-weight:800;margin-top:2px">Cremería San José</div><div style="font-size:11px;color:var(--text-muted)">a 1.2 km · Contado</div></div>
+        <span style="font-size:22px;color:var(--blue)">→</span>
+      </div>
+      <div style="height:110px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Próxima visita ↗</button>
+      <button class="ghost" style="margin-top:8px;min-height:40px;font-size:12px;border:none;box-shadow:none">Volver al mapa sin navegar</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 10. VENTA ESPECIAL ============ -->
+<section data-name="10 · Venta especial" data-note='<h2>El cliente que apareció en el camino</h2><p>Cliente que no está en el plan de visitas → "Venta especial". Hoy existe (offroute) pero la búsqueda solo funciona con señal.</p><div class="fix"><b>Búsqueda offline:</b> el padrón de clientes de la plaza se descarga en la precarga del día, así la venta especial funciona sin señal.</div><div class="fix"><b>Un solo camino:</b> encuentras al cliente (o prospecto), se crea la visita especial y entras al MISMO flujo de siempre: check-in → acciones → próxima visita.</div><div class="fix">Si no existe en el padrón, el botón de abajo lo da de alta como prospecto ahí mismo.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>12:40</span><span>Fuera de plan · Offline</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Venta especial</span><span class="right"><span class="chip warn" style="align-self:center">Fuera del plan</span></span></div>
+    <div class="body">
+      <div class="overline">¿A quién encontraste?</div>
+      <input class="mock" value="miscelanea" style="font-size:15px">
+      <div style="height:10px"></div>
+      <div class="card" style="display:flex;align-items:center;gap:12px">
+        <div class="pline pi" style="margin:0">🏪</div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:700">Miscelánea La Esquina</div><div style="font-size:11px;color:var(--text-muted)">Cliente · Contado · Col. Centro</div></div>
+        <span class="chip mut">a 40 m</span>
+      </div>
+      <div class="card" style="display:flex;align-items:center;gap:12px">
+        <div class="pline pi" style="margin:0">🏪</div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:700">Miscelánea El Portal</div><div style="font-size:11px;color:var(--text-muted)">Prospecto · sin congelador</div></div>
+        <span class="chip info">Prospecto</span>
+      </div>
+      <div class="card" style="background:#F3FAFE;border-color:var(--border-blue);padding:10px 14px;font-size:11.5px;color:var(--blue3);line-height:1.5">◈ Búsqueda sobre el padrón descargado en la mañana — funciona sin señal. La visita especial entra a tu ruta y sigue el flujo normal.</div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Iniciar visita especial → Check-in</button>
+      <button class="ghost" style="margin-top:8px;min-height:40px;font-size:12px;border:none;box-shadow:none">¿No aparece? Dar de alta como prospecto</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 11. PREVENTA ============ -->
+<section data-name="11 · Preventa" data-note='<h2>Pedido a futuro, sin tocar nada</h2><p>Cliente, productos, cantidad y fecha de entrega. No cobra, no genera venta, no mueve tu camioneta — lo entrega el reparto en la fecha pactada.</p><div class="fix"><b>Funciona offline</b> (hoy requiere señal) y <b>acepta prospectos</b> convertidos en el momento.</div><div class="fix"><b>Fecha con chips rápidos</b> (+1, +3, +7 días) o calendario — esto ya existe y se conserva.</div><div class="fix">La declaración de "no cobra · no descuenta · no entra a liquidación" ya existe en la app — se conserva, ahora con palabra y glifo.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:45</span><span>Preventa · Offline</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Preventa</span><span class="right"><span class="chip info" style="align-self:center">Entrega futura</span></span></div>
+    <div class="body">
+      <div class="card" style="padding:11px 15px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:13px;font-weight:800">Restaurante El Mirador</div><div style="font-size:11px;color:var(--text-muted)">Crédito · pedidos grandes</div></div>
+        <button class="ghost" style="width:auto;padding:0 12px;min-height:34px;font-size:11px">Cambiar</button>
+      </div>
+      <div class="overline">Pedido</div>
+      <div class="card">
+        <div class="pline"><div class="pi">🧊</div><div><div class="pn">Hielo 5 kg</div><div class="pp money">$25.00</div></div><div class="stepper"><div class="sb">−</div><div class="sq">60</div><div class="sb">+</div></div></div>
+        <div class="pline" style="border-bottom:none"><div class="pi">🍦</div><div><div class="pn">Helado 4 L vainilla</div><div class="pp money">$180.00</div></div><div class="stepper"><div class="sb">−</div><div class="sq">8</div><div class="sb">+</div></div></div>
+      </div>
+      <div class="overline">Fecha de entrega</div>
+      <div style="margin-bottom:8px">
+        <span class="reason">Mañana</span><span class="reason on">Jueves 13</span><span class="reason">+7 días</span><span class="reason">📅 Elegir</span>
+      </div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Valor del pedido</span><span class="r money">$2,940.00</span></div>
+        <div class="rowline"><span class="l">Cobro hoy</span><span class="r"><span class="chip mut">▢ No se cobra</span></span></div>
+        <div class="rowline"><span class="l">Tu camioneta</span><span class="r"><span class="chip mut">▢ No se descuenta</span></span></div>
+        <div class="rowline"><span class="l">Lo entrega</span><span class="r">Reparto · jue 13 ago</span></div>
+      </div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Registrar preventa</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 12. NUEVO PROSPECTO ============ -->
+<section data-name="12 · Nuevo prospecto" data-note='<h2>El negocio que viste en el camino</h2><p>Alta rápida de un punto de venta nuevo. En toda la interfaz se llama <b>prospecto</b> — la palabra "lead" desaparece (hoy sigue en ~8 pantallas).</p><div class="fix"><b>Ubicación automática</b> del GPS en el momento del alta — así el supervisor lo puede planear en ruta después.</div><div class="fix"><b>Mínimo para capturar de pie:</b> nombre, encargado, teléfono y giro; la foto de la fachada ayuda a reconocerlo en la siguiente vuelta.</div><div class="fix"><b>Funciona offline</b> y queda en cola — esto ya existe y se conserva.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>14:02</span><span>GPS activo · Offline</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Nuevo prospecto</span></div>
+    <div class="body">
+      <div class="overline">Datos del negocio</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input class="mock" value="Frutería Doña Lupita">
+        <input class="mock" placeholder="Nombre del encargado" value="Guadalupe Sánchez">
+        <input class="mock" placeholder="Teléfono" value="733 145 2210">
+      </div>
+      <div class="overline">Giro</div>
+      <div style="margin-bottom:6px">
+        <span class="reason">Abarrotes</span><span class="reason on">Frutería</span><span class="reason">Cremería</span><span class="reason">Restaurante</span><span class="reason">Otro</span>
+      </div>
+      <div class="overline">Ubicación</div>
+      <div class="card" style="padding:11px 15px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:12.5px;font-weight:700">📍 Capturada del GPS</div><div style="font-size:11px;color:var(--text-muted)">Av. Insurgentes esq. Morelos · precisión 8 m</div></div>
+        <span class="chip ok">✓ Lista</span>
+      </div>
+      <div class="overline">Foto de la fachada (opcional)</div>
+      <div class="photo" style="padding:14px">📷 Tomar foto</div>
+      <div style="height:120px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Guardar prospecto</button>
+      <div style="text-align:center;font-size:10.5px;color:var(--text-muted);margin-top:8px">Queda disponible para visita, conversión a cliente y planeación del supervisor</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 13. DATOS Y CONVERTIR ============ -->
+<section data-name="13 · Datos · Convertir a cliente" data-note='<h2>Editar datos y convertir con nombre propio</h2><p>La ficha del cliente/prospecto: teléfono, encargado, correo, congelador. Y la conversión de prospecto a cliente deja de ser un truco escondido: es un botón que dice lo que hace.</p><div class="fix"><b>Botón "Convertir a cliente":</b> hoy la conversión sucede implícitamente al guardar "Datos" y el vendedor tiene que adivinarlo. Ahora es explícito, y al convertir se habilita la venta de inmediato.</div><div class="fix"><b>Requisitos visibles:</b> qué le falta al prospecto para poder convertirse (teléfono ✓, ubicación ✓, giro ✓).</div><div class="fix"><b>Confirmación antes de sobrescribir</b> un teléfono existente — ya existe y se conserva.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>14:10</span><span>Prospecto · Miscelánea El Portal</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Miscelánea El Portal</span><span class="right"><span class="chip info" style="align-self:center">Prospecto</span></span></div>
+    <div class="body">
+      <div class="overline">Datos de contacto</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input class="mock" value="Miscelánea El Portal">
+        <input class="mock" value="Rosa Portillo — encargada">
+        <input class="mock" value="733 998 1104">
+        <input class="mock" placeholder="Correo (opcional)">
+      </div>
+      <div class="overline">Punto de venta</div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Congelador</span><span class="r">No tiene · interesada</span></div>
+        <div class="rowline"><span class="l">Competencia</span><span class="r">Marca X · 1 congelador</span></div>
+        <div class="rowline"><span class="l">Interés</span><span class="r"><span class="chip ok">Alto</span></span></div>
+      </div>
+      <div class="overline">Para convertir a cliente</div>
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Teléfono</span><span class="r"><span class="chip ok">✓ Completo</span></span></div>
+        <div class="rowline"><span class="l">Ubicación GPS</span><span class="r"><span class="chip ok">✓ Completa</span></span></div>
+        <div class="rowline"><span class="l">Giro y datos</span><span class="r"><span class="chip ok">✓ Completos</span></span></div>
+      </div>
+      <div style="height:130px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Convertir a cliente y habilitar venta</button>
+      <button class="ghost" style="margin-top:8px;min-height:40px;font-size:12px;border:none;box-shadow:none">Solo guardar cambios</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 14. DEVOLUCION ============ -->
+<section data-name="14 · Acuse de devolución" data-note='<h2>El flujo correcto de la devolución</h2><p>Al regresar al CEDIS, el <b>almacenista</b> separa la devolución buena y la merma en su sistema. El vendedor la <b>ve y da acuse</b> — hoy está invertido: el vendedor captura él mismo los números.</p><div class="fix"><b>Aceptar o Rechazar</b> el movimiento completo, con el detalle por producto de lo que va a almacén y lo que va a merma.</div><div class="fix">Si rechaza, motivo obligatorio y el movimiento regresa al almacenista — igual que el acuse de traspaso de la mañana.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>17:38</span><span>CEDIS Iguala · Wifi</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Devolución de ruta</span></div>
+    <div class="body">
+      <div class="card" style="border-color:rgba(180,83,9,.3);background:#FFFBF5">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:15px;font-weight:800">Movimiento WH/RET/00187</div><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">Capturado por: J. Ramírez (almacén) · 17:31</div></div>
+          <span class="chip warn">⚠ Por confirmar</span>
+        </div>
+      </div>
+      <div class="overline">Regresa a almacén de entregas</div>
+      <div class="card">
+        <div class="rowline"><span class="l">Paleta surtido</span><span class="r money">6 cajas</span></div>
+        <div class="rowline"><span class="l">Hielo 5 kg</span><span class="r money">3 bolsas</span></div>
+      </div>
+      <div class="overline">Va a merma</div>
+      <div class="card" style="border-color:rgba(180,83,9,.3)">
+        <div class="rowline"><span class="l">Bolis mango — bolsa rota</span><span class="r money">2 bolsas</span></div>
+      </div>
+      <div class="card" style="padding:11px 15px;display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--text-muted)">Total devuelto</span><span style="font-size:13px;font-weight:800" class="money">11 unidades · $312.00</span></div>
+      <div style="height:110px"></div>
+    </div>
+    <div class="fixedbar">
+      <div style="display:flex;gap:10px">
+        <button class="ghost" style="flex:1;color:#b91c1c;border-color:rgba(185,28,28,.35)">Rechazar</button>
+        <button class="cta" style="flex:2">Aceptar devolución</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 15. LIQUIDACION ============ -->
+<section data-name="15 · Cerrar visitas y liquidar" data-note='<h2>Cerrar el día sin sorpresas</h2><div class="fix"><b>"Cerrar visitas":</b> el corte muestra el inventario que debe quedar en 0, con la palabra ("Cuadrado") además del número.</div><div class="fix"><b>Crédito y efectivo separados,</b> con el efectivo capturado en un campo grande y la diferencia declarada con signo y palabra.</div><div class="fix"><b>Estados honestos:</b> lo pendiente dice "Pendiente", nunca "$0" ni "--" (regla null ≠ 0 de la casa).</div><div class="fix">Después de confirmar: administración revisa, imprime el corte y firman — la app muestra el estado "En revisión de administración".</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>17:52</span><span>CEDIS Iguala · Wifi</span></div>
+    <div class="hdr"><div class="iconbtn">←</div><span class="t">Cerrar visitas</span><div class="right"><svg class="gf-mini" viewBox="0 0 460 480"><use href="#gf-mark"/></svg></div></div>
+    <div class="body">
+      <div class="overline">Inventario de la camioneta</div>
+      <div class="card">
+        <div class="rowline"><span class="l">Cargado</span><span class="r money">412 pzas</span></div>
+        <div class="rowline"><span class="l">Vendido + regalado</span><span class="r money">−398 pzas</span></div>
+        <div class="rowline"><span class="l">Devuelto (aceptado)</span><span class="r money">−11 pzas</span></div>
+        <div class="rowline"><span class="l">Merma</span><span class="r money">−3 pzas</span></div>
+        <div class="rowline"><span class="l" style="font-weight:700;color:var(--text)">Diferencia</span><span class="r"><span class="chip ok">✓ Cuadrado · 0 pzas</span></span></div>
+      </div>
+      <div class="overline">Por liquidar</div>
+      <div class="card">
+        <div class="rowline"><span class="l">Ventas a crédito</span><span class="r money">$3,180.00</span></div>
+        <div class="rowline"><span class="l">Cobranza de facturas</span><span class="r money">$1,120.00</span></div>
+        <div class="rowline"><span class="l" style="font-weight:700;color:var(--text)">Efectivo esperado</span><span class="r money" style="font-size:15px">$5,240.00</span></div>
+      </div>
+      <div class="overline">Efectivo que entregas</div>
+      <input class="mock money" style="font-size:26px;font-weight:800;text-align:center;padding:16px" value="$5,240.00">
+      <div style="display:flex;justify-content:center;margin-top:8px"><span class="chip ok">✓ Sin diferencia</span></div>
+      <div style="height:110px"></div>
+    </div>
+    <div class="fixedbar">
+      <button class="cta">Confirmar liquidación</button>
+      <div style="text-align:center;font-size:10.5px;color:var(--text-muted);margin-top:8px">Después pasa con administración: revisión, impresión del corte y firma</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 16. PESTANA MI DIA ============ -->
+<section data-name="16 · Pestaña: Mi día" data-note='<h2>¿Qué sale en "Mi día"?</h2><p>Es el hub del día y CAMBIA según la hora: en la mañana muestra los pasos de salida (pantalla 1), durante la jornada muestra esto — el resumen vivo — y al regresar al CEDIS se convierte en los pasos de cierre.</p><div class="fix"><b>Tres bloques:</b> cómo va la jornada (avance, vendido, cobrado), el estado de sincronización por palabra, y accesos a lo que no es visita (incidencia, recarga, ranking).</div><div class="fix"><b>Un CTA que cambia:</b> "Continuar ruta" en jornada; al terminar la última visita se vuelve "Cerrar visitas".</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:10</span><span>Jornada en curso</span></div>
+    <div class="hdr" style="padding-top:16px"><div class="logo-lockup"><svg style="height:30px;width:auto" viewBox="0 0 460 480"><use href="#gf-mark"/></svg><div class="logo-word"><span class="w1" style="font-size:9px">GRUPO</span><span class="w2" style="font-size:11px">FRÍO</span></div></div><div class="right"><div class="iconbtn" style="border-radius:50%;width:36px;height:36px">JR</div></div></div>
+    <div class="body">
+      <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:16px;font-weight:800">Jornada en curso</div><div class="hmut" style="font-size:11.5px;margin-top:2px">Ruta Norte · V-08 · salió 8:47</div></div>
+          <span class="chip onhero">8 de 14 visitas</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <div style="flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden"><div style="width:57%;height:100%;background:#fff"></div></div>
+          <span class="hmut" style="font-size:11px;font-weight:700">57%</span>
+        </div>
+      </div>
+      <div class="overline">Cómo va el día</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">VENDIDO</div><div style="font-size:16px;font-weight:800;margin-top:2px" class="money">$8,420</div></div>
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">COBRADO (FACTURAS)</div><div style="font-size:16px;font-weight:800;margin-top:2px" class="money">$1,120</div></div>
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">EFECTIVIDAD</div><div style="font-size:16px;font-weight:800;margin-top:2px">6 de 8 <span style="font-size:11px;color:var(--text-muted)">con venta</span></div></div>
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">EN CAMIONETA</div><div style="font-size:16px;font-weight:800;margin-top:2px">148 pzas</div></div>
+      </div>
+      <div class="card" style="margin-top:12px;padding:11px 15px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--text-muted)">Sincronización</span>
+        <span class="chip warn">🕑 3 movimientos en cola · se envían con señal</span>
+      </div>
+      <div class="overline">Fuera de visita</div>
+      <div class="grid2">
+        <div class="act" style="min-height:64px"><span class="al">⚠️ Reportar incidencia</span></div>
+        <div class="act" style="min-height:64px"><span class="al">🚚 Pedir recarga</span></div>
+        <div class="act" style="min-height:64px"><span class="al">🏆 Mi ranking</span></div>
+        <div class="act" style="min-height:64px"><span class="al">📅 Preventa</span></div>
+      </div>
+      <div style="height:12px"></div>
+      <button class="cta">Continuar ruta → siguiente visita</button>
+      <div style="height:20px"></div>
+    </div>
+    <div class="navbar">
+      <div class="nv on"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h14V10"/></svg>Mi día</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5-8 12-8 12S4 15 4 10a8 8 0 0 1 8-8z"/></svg>Ruta</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Inventario</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Ventas</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Yo</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ============ 17. RUTA LISTA ============ -->
+<section data-name="17 · Pestaña: Ruta · Lista del plan" data-note='<h2>Aquí vive la lista completa del plan del día</h2><p>La pestaña Ruta tiene DOS vistas con un toggle arriba: <b>Mapa</b> (pantalla 2, la principal) y <b>Lista</b> — esta — con las 14 visitas en orden.</p><div class="fix"><b>Cada parada declara su resultado por palabra:</b> ✓ Venta $556 · ✓ No venta (razón) · ◈ Siguiente · ▢ Pendiente. Nada de solo colores.</div><div class="fix"><b>Tocar una parada pendiente</b> abre su ficha; tocar la siguiente ofrece "Ya llegué".</div><div class="fix"><b>Las visitas especiales</b> agregadas en el camino aparecen intercaladas con su chip.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:12</span><span>8 de 14 · En ruta</span></div>
+    <div class="hdr"><span class="t">Mi ruta</span>
+      <div class="right" style="background:#E0F3FC;border-radius:999px;padding:3px;display:flex;gap:2px">
+        <span style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:700;color:var(--blue3)">Mapa</span>
+        <span style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:700;background:#fff;color:var(--blue3);box-shadow:var(--sh-soft)">Lista</span>
+      </div>
+    </div>
+    <div class="body">
+      <div class="card" style="padding:10px 15px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;font-weight:700">Plan del día · 14 visitas</span>
+        <span style="font-size:11.5px;color:var(--text-muted)" class="money">Vendido: <b style="color:var(--success)">$8,420</b></span>
+      </div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">1 · Abarrotes El Faro</div><div style="font-size:10.5px;color:var(--text-muted)">8:52 · 12 min</div></div><span class="chip ok">✓ Venta · $1,240</span></div></div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">2 · Cremería Lupita</div><div style="font-size:10.5px;color:var(--text-muted)">9:18 · 8 min</div></div><span class="chip mut">✓ No venta · cerrado</span></div></div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">3 · Miscelánea La Esquina <span class="chip warn" style="font-size:9px;padding:1px 7px">Especial</span></div><div style="font-size:10.5px;color:var(--text-muted)">9:40 · fuera de plan</div></div><span class="chip ok">✓ Venta · $380</span></div></div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">4 · Súper Los Pinos</div><div style="font-size:10.5px;color:var(--text-muted)">10:05 · 14 min</div></div><span class="chip ok">✓ Consignación · $836</span></div></div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">5 · Abarrotes La Luz</div><div style="font-size:10.5px;color:var(--text-muted)">10:24 · 9 min</div></div><span class="chip ok">✓ Venta + cambio · $610</span></div></div>
+      <div class="card" style="padding:8px 15px;opacity:.75"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">6 · Abarrotes Doña Mary</div><div style="font-size:10.5px;color:var(--text-muted)">10:47 · 15 min</div></div><span class="chip ok">✓ Venta · $556</span></div></div>
+      <div class="card" style="padding:10px 15px;border-color:rgba(0,119,187,.45);background:#EAF6FE">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:13px;font-weight:800">7 · Cremería San José</div><div style="font-size:10.5px;color:var(--text-muted)">a 1.2 km · Contado</div></div>
+          <span class="chip info">◈ Siguiente</span>
+        </div>
+        <button class="cta" style="min-height:40px;margin-top:8px;font-size:12.5px">Ya llegué</button>
+      </div>
+      <div class="card" style="padding:8px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">8 · Frutas y Verduras Cha·Cha</div><div style="font-size:10.5px;color:var(--text-muted)">Crédito · congelador Kold</div></div><span class="chip mut">▢ Pendiente</span></div></div>
+      <div class="card" style="padding:8px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">9 · Restaurante El Mirador</div><div style="font-size:10.5px;color:var(--text-muted)">Crédito · pedidos grandes</div></div><span class="chip mut">▢ Pendiente</span></div></div>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);padding:6px 0 20px">… y 5 visitas más</div>
+    </div>
+    <div class="navbar">
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h14V10"/></svg>Mi día</div>
+      <div class="nv on"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5-8 12-8 12S4 15 4 10a8 8 0 0 1 8-8z"/></svg>Ruta</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Inventario</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Ventas</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Yo</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ============ 18. INVENTARIO ============ -->
+<section data-name="18 · Pestaña: Inventario" data-note='<h2>La existencia viva de la camioneta</h2><p>Exactamente lo que suponías: el inventario de la unidad en tiempo real, descontado LOCALMENTE con cada venta y regalo (aunque no haya señal) — hoy eso no pasa y el vendedor ve existencias viejas.</p><div class="fix"><b>Cargado − movido = disponible</b>, por producto y total, con los movimientos del día desglosados.</div><div class="fix"><b>El cambio aparece como "neto 0"</b> y la consignación como salida — cada regla de negocio visible.</div><div class="fix"><b>Alerta de agotamiento:</b> producto por acabarse se declara con palabra ("Quedan 4"), útil para pedir recarga a tiempo.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:15</span><span>Actualizado en tu teléfono · offline</span></div>
+    <div class="hdr"><span class="t">Inventario de mi unidad</span><div class="right"><div class="iconbtn">⟳</div></div></div>
+    <div class="body">
+      <div class="card" style="padding:11px 15px">
+        <div class="rowline"><span class="l">Cargado en la mañana</span><span class="r money">412 pzas</span></div>
+        <div class="rowline"><span class="l">Vendido</span><span class="r money">−226 pzas</span></div>
+        <div class="rowline"><span class="l">Regalado (venta $0)</span><span class="r money">−10 pzas</span></div>
+        <div class="rowline"><span class="l">En consignación</span><span class="r money">−22 pzas</span></div>
+        <div class="rowline"><span class="l">Cambios</span><span class="r"><span class="chip mut">Neto 0</span></span></div>
+        <div class="rowline"><span class="l">Merma recogida (a separar)</span><span class="r money">6 pzas</span></div>
+        <div class="rowline"><span class="l" style="font-weight:700;color:var(--text)">Disponible ahora</span><span class="r money" style="font-size:15px">148 pzas</span></div>
+      </div>
+      <div class="overline">Por producto</div>
+      <div class="card">
+        <div class="pline"><div class="pi">🍭</div><div><div class="pn">Paleta surtido</div><div class="pp">Cargadas 120 · vendidas 68</div></div><span class="chip ok" style="margin-left:auto">52 disp.</span></div>
+        <div class="pline"><div class="pi">🥭</div><div><div class="pn">Bolis mango</div><div class="pp">Cargadas 160 · vendidas 96</div></div><span class="chip ok" style="margin-left:auto">64 disp.</span></div>
+        <div class="pline"><div class="pi">🧊</div><div><div class="pn">Hielo 5 kg</div><div class="pp">Cargadas 40 · vendidas 36</div></div><span class="chip warn" style="margin-left:auto">⚠ Quedan 4</span></div>
+        <div class="pline" style="border-bottom:none"><div class="pi">🍦</div><div><div class="pn">Helado 1 L vainilla</div><div class="pp">Cargadas 24 · en consignación 10</div></div><span class="chip ok" style="margin-left:auto">14 disp.</span></div>
+      </div>
+      <div class="card" style="background:#FFFBF5;border-color:rgba(180,83,9,.3);padding:10px 14px;font-size:11.5px;color:#b45309;line-height:1.5">⚠ Hielo 5 kg por agotarse y quedan 6 visitas. ¿Pides recarga?</div>
+      <button class="ghost">🚚 Pedir recarga al CEDIS</button>
+      <div style="height:20px"></div>
+    </div>
+    <div class="navbar">
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h14V10"/></svg>Mi día</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5-8 12-8 12S4 15 4 10a8 8 0 0 1 8-8z"/></svg>Ruta</div>
+      <div class="nv on"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Inventario</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Ventas</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Yo</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ============ 19. VENTAS ============ -->
+<section data-name="19 · Pestaña: Ventas del día" data-note='<h2>Todos los movimientos del día, con su ticket</h2><p>La pestaña Ventas es el historial vivo de la jornada: cada venta, regalo, consignación y cobro, con su estado de sincronización por palabra y acceso al ticket para reimprimir.</p><div class="fix"><b>Totales arriba en rejilla real</b> (efectivo / crédito / total), separados igual que en la liquidación — así el vendedor sabe qué va a entregar antes de llegar al CEDIS.</div><div class="fix"><b>Cada movimiento declara su tipo con chip</b> (Venta, Regalo $0, Consignación, Cobro) y su sync (✓ Enviada · 🕑 En cola).</div><div class="fix"><b>Tocar un movimiento</b> reabre el ticket para reimprimir — ya existe y se conserva.</div>'>
+  <div class="screen">
+    <div class="statusbar"><span>13:18</span><span>8 visitas · 3 en cola de envío</span></div>
+    <div class="hdr"><span class="t">Mis ventas de hoy</span><div class="right"><div class="iconbtn">⟳</div></div></div>
+    <div class="body">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">EFECTIVO</div><div style="font-size:14px;font-weight:800;margin-top:2px" class="money">$4,120</div></div>
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">CRÉDITO</div><div style="font-size:14px;font-weight:800;margin-top:2px" class="money">$4,300</div></div>
+        <div class="kpi"><div style="font-size:10px;color:var(--text-muted)">TOTAL</div><div style="font-size:14px;font-weight:800;margin-top:2px;color:var(--success)" class="money">$8,420</div></div>
+      </div>
+      <div class="card" style="margin-top:12px;padding:10px 15px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:11.5px;color:var(--text-muted)">Meta diaria: $12,000</span>
+        <span class="chip info">70% · En camino</span>
+      </div>
+      <div class="overline">Movimientos (11)</div>
+      <div class="card" style="padding:10px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">Abarrotes Doña Mary</div><div style="font-size:10.5px;color:var(--text-muted)">11:02 · 40 pzas · <span class="chip info" style="font-size:9px;padding:1px 7px">Venta · crédito</span></div></div><div style="text-align:right"><div style="font-size:13px;font-weight:800" class="money">$556.00</div><span class="chip warn" style="font-size:9px;padding:1px 7px">🕑 En cola</span></div></div></div>
+      <div class="card" style="padding:10px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">Abarrotes Doña Mary</div><div style="font-size:10.5px;color:var(--text-muted)">11:04 · 10 pzas · <span class="chip mut" style="font-size:9px;padding:1px 7px">Regalo · $0</span></div></div><div style="text-align:right"><div style="font-size:13px;font-weight:800" class="money">$0.00</div><span class="chip warn" style="font-size:9px;padding:1px 7px">🕑 En cola</span></div></div></div>
+      <div class="card" style="padding:10px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">Súper Los Pinos</div><div style="font-size:10.5px;color:var(--text-muted)">10:18 · 22 pzas · <span class="chip info" style="font-size:9px;padding:1px 7px">Consignación</span></div></div><div style="text-align:right"><div style="font-size:13px;font-weight:800" class="money">$836.00</div><span class="chip ok" style="font-size:9px;padding:1px 7px">✓ Enviada</span></div></div></div>
+      <div class="card" style="padding:10px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">Abarrotes La Luz</div><div style="font-size:10.5px;color:var(--text-muted)">10:24 · <span class="chip mut" style="font-size:9px;padding:1px 7px">Cambio · neto 0</span></div></div><div style="text-align:right"><div style="font-size:11px;color:var(--text-muted)">3 ↔ 3 pzas</div><span class="chip ok" style="font-size:9px;padding:1px 7px">✓ Enviada</span></div></div></div>
+      <div class="card" style="padding:10px 15px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:12.5px;font-weight:700">Abarrotes El Faro</div><div style="font-size:10.5px;color:var(--text-muted)">8:52 · 58 pzas · <span class="chip info" style="font-size:9px;padding:1px 7px">Venta · efectivo</span></div></div><div style="text-align:right"><div style="font-size:13px;font-weight:800" class="money">$1,240.00</div><span class="chip ok" style="font-size:9px;padding:1px 7px">✓ Enviada</span></div></div></div>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);padding:6px 0 4px">Toca un movimiento para ver o reimprimir su ticket</div>
+      <div style="height:16px"></div>
+    </div>
+    <div class="navbar">
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h14V10"/></svg>Mi día</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5-8 12-8 12S4 15 4 10a8 8 0 0 1 8-8z"/></svg>Ruta</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Inventario</div>
+      <div class="nv on"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Ventas</div>
+      <div class="nv"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Yo</div>
+    </div>
+  </div>
+</section>
+
+</template>
+
+<script>
+const tpl=document.getElementById('screens');
+const sections=[...tpl.content.querySelectorAll('section')];
+const tabs=document.getElementById('tabs');
+const stage=document.getElementById('stage');
+function show(i){
+  [...tabs.children].forEach((t,j)=>t.classList.toggle('on',i===j));
+  stage.innerHTML='';
+  const s=sections[i];
+  const phone=document.createElement('div');phone.className='phone';
+  phone.innerHTML=s.innerHTML;
+  const note=document.createElement('div');note.className='note';
+  note.innerHTML=s.dataset.note;
+  stage.appendChild(phone);stage.appendChild(note);
+}
+sections.forEach((s,i)=>{
+  const b=document.createElement('button');b.className='tab';b.textContent=s.dataset.name;
+  b.onclick=()=>show(i);tabs.appendChild(b);
+});
+show(0);
+</script>
+</body>
+</html>

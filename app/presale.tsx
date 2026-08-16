@@ -46,9 +46,10 @@ import {
   createPresale, PresaleNotEnabledError, PRESALE_BACKEND_ENABLED, PRESALE_LEAD_SUPPORTED,
 } from '../src/services/presale';
 import { presaleOfflineBlockMessage } from '../src/services/secondaryFlowCopy';
+import { createUuidV4 } from '../src/utils/clientEvent';
 
 function makeOperationId(): string {
-  return `presale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return createUuidV4();
 }
 
 // F3.3: antes se generaba un operationId NUEVO en cada tap de "Confirmar" —

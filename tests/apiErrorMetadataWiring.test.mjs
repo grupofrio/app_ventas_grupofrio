@@ -31,8 +31,8 @@ test('postRest preserves structured response and transport error metadata', () =
   );
   assert.match(
     postRestBlock,
-    /throw makeApiResponseError\(resultError, msg, response\.status\);/,
-    'response failures must keep backend metadata and HTTP status',
+    /const responseErrorStatus = typeof \(resultError as \{ httpStatus\?: unknown \} \| undefined\)\?\.httpStatus === 'number'\s*\? \(resultError as \{ httpStatus: number \}\)\.httpStatus\s*:\s*response\.status;[\s\S]*?throw makeApiResponseError\(resultError, msg, responseErrorStatus\);/,
+    'response failures must prefer a deterministic status declared by the backend envelope',
   );
   assert.match(
     postRestBlock,
@@ -55,7 +55,7 @@ test('postRest preserves structured response and transport error metadata', () =
 test('getRest retains its legacy message-only error handling', () => {
   const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8').replace(/\r\n/g, '\n');
   const getRestBlock = api.match(
-    /export async function getRest[\s\S]*?(?=\n\/\*\*\n \* POST to an Odoo JSON-RPC endpoint)/,
+    /export async function getRest[\s\S]*$/,
   )?.[0] ?? '';
 
   assert.notEqual(getRestBlock, '', 'getRest block must be isolated for policy-scope assertions');
@@ -73,29 +73,5 @@ test('getRest retains its legacy message-only error handling', () => {
     getRestBlock,
     /makeApiResponseError|makeApiTransportError|resultError/,
     'structured request metadata is intentionally limited to postRest writes',
-  );
-});
-
-test('postRpc retains its legacy message-only error handling', () => {
-  const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8').replace(/\r\n/g, '\n');
-  const postRpcBlock = api.match(
-    /export async function postRpc[\s\S]*?(?=\n\/\*\*\n \* POST to the legacy \/jsonrpc endpoint)/,
-  )?.[0] ?? '';
-
-  assert.notEqual(postRpcBlock, '', 'postRpc block must be isolated for policy-scope assertions');
-  assert.match(
-    postRpcBlock,
-    /throw makeLoggedHttpError\(errMsg\);/,
-    'postRpc response failures must keep existing logged HTTP error handling',
-  );
-  assert.match(
-    postRpcBlock,
-    /catch \(error\) \{[\s\S]*?throw error;/,
-    'postRpc transport failures must continue to rethrow the original error',
-  );
-  assert.doesNotMatch(
-    postRpcBlock,
-    /makeApiResponseError|makeApiTransportError|responseStatus|resultError/,
-    'structured REST request metadata must not broaden to RPC calls',
   );
 });

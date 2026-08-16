@@ -73,9 +73,31 @@ function testPricelistEndpointUsesReadTimeout() {
   );
 }
 
+function testPricelistRejectsFailedOrMalformedEmployeeEnvelope() {
+  const pricelist = readFileSync(resolve(REPO_ROOT, 'src/services/pricelist.ts'), 'utf8');
+  const body = extractFunctionBody(pricelist, 'fetchServerSidePrices');
+
+  assert.match(
+    body,
+    /result\.ok !== true/,
+    'pricing/by_partner debe rechazar explícitamente un sobre { ok:false }',
+  );
+  assert.match(
+    body,
+    /Array\.isArray\(data\.prices\)/,
+    'pricing/by_partner debe exigir el arreglo prices del contrato employee',
+  );
+  assert.doesNotMatch(
+    body,
+    /data\?\.prices \?\? data\?\.price_map \?\? data\?\.items \?\? data/,
+    'una respuesta malformada no puede convertirse silenciosamente en un mapa vacío',
+  );
+}
+
 function main() {
   testPricelistUsesSecureBackendPricingEndpoint();
   testPricelistEndpointUsesReadTimeout();
+  testPricelistRejectsFailedOrMalformedEmployeeEnvelope();
   console.log('pricelist server endpoint tests: ok');
 }
 

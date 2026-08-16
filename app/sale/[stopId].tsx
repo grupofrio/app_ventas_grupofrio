@@ -49,6 +49,7 @@ import {
   canStartSaleWithRouteLoad,
 } from '../../src/services/routeLoadAcceptance';
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { buildLocalStockDelta } from '../../src/services/stockRollback';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import {
@@ -264,6 +265,12 @@ function SaleScreenInner() {
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
     if (saleSubmitting) return;
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
+      Alert.alert('Bundle vencido', safeUnknownErrorMessage(error, 'Renueva el bundle del día antes de vender.'));
+      return;
+    }
 
     if (!canStartSale) {
       const pending = routeLoadState.nextPendingLoad;

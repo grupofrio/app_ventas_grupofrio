@@ -45,9 +45,17 @@ import { OperationGate } from '../../src/components/OperationGate';
 import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlowCopy';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
+import { createUuidV4 } from '../../src/utils/clientEvent';
+import { getFieldDataSession } from '../../src/services/fieldDataSession';
+import {
+  clearConsignmentPendingOperation,
+  loadConsignmentPendingOperations,
+  saveConsignmentPendingOperation,
+  type ConsignmentOperationKind,
+} from '../../src/services/consignmentOperationPersistence';
 
-function makeOperationId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function makeOperationId(): string {
+  return createUuidV4();
 }
 
 // F3.3: antes se generaba un operationId NUEVO en cada tap de "Confirmar" en
@@ -61,10 +69,6 @@ function ConsignmentScreenInner() {
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
-  const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
-  const mobileLocationId = useRouteStore((s) => s.plan?.mobile_location_id ?? null);
-  const employeeId = useAuthStore((s) => s.employeeId);
-  const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const logout = useAuthStore((s) => s.logout);
   const isOnline = useSyncStore((s) => s.isOnline);
@@ -90,12 +94,42 @@ function ConsignmentScreenInner() {
   const [closing, setClosing] = useState(false); // toggle: visita vs cierre
   const paymentMethod: ConsignmentPaymentMethod = 'cash';
   const [submitting, setSubmitting] = useState(false);
+  const createOperationIdRef = useRef<string | null>(null);
   const visitOperationIdRef = useRef<string | null>(null);
   const closeOperationIdRef = useRef<string | null>(null);
+  function getCreateOperationId(): string {
+    if (!createOperationIdRef.current) createOperationIdRef.current = makeOperationId();
+    return createOperationIdRef.current;
+  }
   function getVisitOrCloseOperationId(isClosing: boolean): string {
     const ref = isClosing ? closeOperationIdRef : visitOperationIdRef;
-    if (!ref.current) ref.current = makeOperationId(isClosing ? 'consign-close' : 'consign-visit');
+    if (!ref.current) ref.current = makeOperationId();
     return ref.current;
+  }
+  function operationIdRefFor(kind: ConsignmentOperationKind) {
+    if (kind === 'create') return createOperationIdRef;
+    return kind === 'visit' ? visitOperationIdRef : closeOperationIdRef;
+  }
+  async function getConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<string> {
+    const ref = operationIdRefFor(kind);
+    if (ref.current) return ref.current;
+    const session = await getFieldDataSession();
+    if (!session) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+    const pending = await loadConsignmentPendingOperations(session);
+    const operationId = pending[kind] ?? (
+      kind === 'create' ? getCreateOperationId() : getVisitOrCloseOperationId(kind === 'close')
+    );
+    if (!pending[kind]) await saveConsignmentPendingOperation(session, kind, operationId);
+    ref.current = operationId;
+    return operationId;
+  }
+  async function clearConsignmentPendingOperationId(kind: ConsignmentOperationKind): Promise<void> {
+    const session = await getFieldDataSession();
+    if (!session) return;
+    await clearConsignmentPendingOperation(session, kind);
+    if (kind === 'create') createOperationIdRef.current = null; // siguiente create = nuevo id
+    if (kind === 'visit') visitOperationIdRef.current = null; // siguiente visita = nuevo id
+    if (kind === 'close') closeOperationIdRef.current = null; // siguiente cierre = nuevo id
   }
 
   // P1: si la API responde sesión expirada, ofrecer re-login en vez de dejar
@@ -131,7 +165,7 @@ function ConsignmentScreenInner() {
     setLoading(true);
     setError(null);
     try {
-      const a = await getActiveConsignment(partnerId, companyId);
+      const a = await getActiveConsignment(partnerId);
       setActive(a);
       setFromCache(false);
       // Read-through: guardar la consignación (o borrarla si ya no hay) para
@@ -159,7 +193,7 @@ function ConsignmentScreenInner() {
     } finally {
       setLoading(false);
     }
-  }, [partnerId, isOnline, companyId, promptReLogin]);
+  }, [partnerId, isOnline, promptReLogin]);
 
   React.useEffect(() => { void fetchActive(); }, [fetchActive]);
   React.useEffect(() => {
@@ -197,15 +231,13 @@ function ConsignmentScreenInner() {
     setSubmitting(true);
     (async () => {
       try {
+        const operationId = await getConsignmentPendingOperationId('create');
         const res = await createConsignment({
           partnerId,
-          companyId,
-          employeeId,
-          routePlanId: planId,
-          mobileLocationId,
-          vehicleId: null, // no disponible en el plan actual
+          operationId,
           lines: v.lines,
         });
+        await clearConsignmentPendingOperationId('create');
         const c = res.consignment;
         Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
           { text: 'OK', onPress: () => router.back() },
@@ -216,24 +248,6 @@ function ConsignmentScreenInner() {
         setSubmitting(false);
       }
     })();
-  }
-
-  function handleCreate() {
-    if (submitting || !partnerId) return;
-    // Backend necesita route_plan_id O mobile_location_id para saber de dónde
-    // bajar inventario (apply_inventory=true).
-    if (planId == null && mobileLocationId == null) {
-      Alert.alert(
-        'Sin ruta/ubicación',
-        'No hay plan de ruta ni ubicación de unidad. El backend puede no saber de dónde bajar el inventario. ¿Continuar de todos modos?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Continuar', onPress: runCreate },
-        ],
-      );
-      return;
-    }
-    runCreate();
   }
 
   // ── VISIT / CLOSE ───────────────────────────────────────────────────────────
@@ -255,21 +269,22 @@ function ConsignmentScreenInner() {
             setSubmitting(true);
             (async () => {
               try {
+                const operationId = await getConsignmentPendingOperationId(closing ? 'close' : 'visit');
                 const payload = {
                   consignmentId: active.id,
-                  operationId: getVisitOrCloseOperationId(closing),
+                  operationId,
                   paymentMethod,
                   counts: built.counts,
                 };
+                const res = closing
+                  ? await closeConsignment(payload)
+                  : await visitConsignment(payload);
+                await clearConsignmentPendingOperationId(closing ? 'close' : 'visit');
                 if (closing) {
-                  const res = await closeConsignment(payload);
-                  closeOperationIdRef.current = null; // siguiente cierre = nuevo id
                   Alert.alert(res.message || 'Consignación cerrada', 'El servidor registró el cobro y la devolución.', [
                     { text: 'OK', onPress: () => router.back() },
                   ]);
                 } else {
-                  const res = await visitConsignment(payload);
-                  visitOperationIdRef.current = null; // siguiente visita = nuevo id
                   Alert.alert(res.message || 'Visita registrada', 'El servidor cobró el faltante y resurtió al objetivo.', [
                     { text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } },
                   ]);
@@ -383,7 +398,7 @@ function ConsignmentScreenInner() {
 
           <Button
             label={submitting ? 'Creando…' : 'Confirmar consignación'}
-            variant="success" onPress={handleCreate} fullWidth
+            variant="success" onPress={runCreate} fullWidth
             disabled={submitting || cart.length === 0} loading={submitting}
           />
           <Text style={styles.footNote}>La consignación NO cobra al crear; el cobro ocurre en visitas/cierre.</Text>

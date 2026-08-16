@@ -25,6 +25,7 @@ import {
   createSaleRecoveryIntent,
   type SaleRecoveryIntentV1,
 } from '../services/saleRecoveryIntent';
+import { createUuidV4 } from '../utils/clientEvent';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -303,7 +304,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     if (get().saleConfirmed && existing) {
       return existing;
     }
-    const opId = `sale_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const opId = createUuidV4();
     set({
       saleConfirmed: true,
       saleOperationId: opId,

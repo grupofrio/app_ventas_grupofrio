@@ -10,25 +10,31 @@
 
 import type { ClientEventMeta } from '../utils/clientEvent';
 
-export type SyncItemType =
-  | 'sale_order'
-  | 'checkin'
-  | 'checkout'
-  | 'photo'
-  | 'no_sale'
-  | 'payment'
-  | 'prospection'
-  | 'offroute_visit_close'
-  | 'gps'
-  | 'gift'
+export const SYNC_ITEM_TYPES = [
+  'sale_order',
+  'checkin',
+  'checkout',
+  'photo',
+  'no_sale',
+  'payment',
+  'prospection',
+  'offroute_visit_close',
+  'gps',
+  'gift',
   // Checklist de unidad offline (política 2026-08-06: documenta, no detiene):
-  | 'vehicle_check'
-  | 'vehicle_checklist_complete'
-  // V2 additions:
-  | 'collection'
-  | 'transfer'
-  | 'customer_create'
-  | 'customer_update';
+  'vehicle_check',
+  'vehicle_checklist_complete',
+  'customer_update',
+] as const;
+
+export type SyncItemType = typeof SYNC_ITEM_TYPES[number];
+
+const syncItemTypeSet: ReadonlySet<string> = new Set(SYNC_ITEM_TYPES);
+
+/** Runtime allowlist for data restored from persistent storage. */
+export function isSyncItemType(value: unknown): value is SyncItemType {
+  return typeof value === 'string' && syncItemTypeSet.has(value);
+}
 
 /**
  * V2 status machine:
@@ -53,9 +59,6 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   sale_order: 1,
   no_sale: 1,
   payment: 1,
-  collection: 1,
-  transfer: 1,
-  customer_create: 1,
   customer_update: 1,
   prospection: 1,
   offroute_visit_close: 1,

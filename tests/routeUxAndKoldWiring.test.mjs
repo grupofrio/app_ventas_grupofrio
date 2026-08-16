@@ -75,8 +75,14 @@ function main() {
 
   assert.match(
     offrouteSearch,
-    /x_analytic_un_id/,
-    'la búsqueda de visita especial debe filtrar por plaza analítica',
+    /loadCurrentEmployeeDayBundle/,
+    'la búsqueda de visita especial debe leer primero el directorio del bundle cifrado',
+  );
+  assert.doesNotMatch(offrouteSearch, /directory\/search|postRest/);
+  assert.doesNotMatch(
+    offrouteSearch,
+    /x_analytic_un_id|analyticPlazaId|employee_id|company_id/,
+    'la búsqueda móvil no debe transportar selectores de autoridad; el backend deriva la plaza del Bearer',
   );
 
   // P1 review (Sebas): la tarjeta de la LISTA debe abrir el cliente vía

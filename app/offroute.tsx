@@ -8,10 +8,10 @@
  * 3. Virtual stop is created in route store
  * 4. Customers choose location or sale; leads route to prospection
  *
- * Uses Odoo search with authenticated fallback to /get_records.
+ * Uses the bounded employee directory search contract.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, ActivityIndicator, Alert, RefreshControl,
@@ -26,6 +26,7 @@ import { useVisitStore } from '../src/stores/useVisitStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { useProductStore } from '../src/stores/useProductStore';
+import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
@@ -59,10 +60,15 @@ export default function OffRouteScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
+  const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
+
+  useEffect(() => {
+    void hydrateDayBundle();
+  }, [hydrateDayBundle]);
 
   const doSearch = useCallback(async () => {
     const q = search.trim();
@@ -74,9 +80,7 @@ export default function OffRouteScreen() {
     setIsSearching(true);
     setHasSearched(true);
     try {
-      const searchResults = await searchOffrouteEntities(q, {
-        analyticPlazaId: employeeAnalyticPlazaId,
-      });
+      const searchResults = await searchOffrouteEntities(q);
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
@@ -84,7 +88,7 @@ export default function OffRouteScreen() {
     } finally {
       setIsSearching(false);
     }
-  }, [employeeAnalyticPlazaId, search]);
+  }, [search]);
   const refreshSearch = useCallback(async () => {
     const q = search.trim();
     if (!hasSearched || q.length < 3) return;
@@ -104,6 +108,10 @@ export default function OffRouteScreen() {
   }
 
   async function handleSelect(result: OffrouteSearchResult) {
+    if (!dayBundleAccess?.canRunActions) {
+      Alert.alert('Bundle vencido', 'La información del día solo está disponible para consulta. Renueva el bundle antes de iniciar una visita.');
+      return;
+    }
     const selectionKey = offrouteEntityKey(result);
     if (selectingKeyRef.current === selectionKey) return;
 

@@ -1,12 +1,10 @@
 /**
- * Product store V2 — truck inventory + product catalog.
+ * Product store V2 — employee-scoped truck inventory + context cache.
  *
  * V2 CHANGES:
  * - qty_reserved: tracks local deductions from pending sales
  * - qty_display: available - reserved (what vendor sees)
- * - _isGlobalFallback: flag when loaded from legacy global path
- * - inventorySource: tracks which fallback level loaded the data
- * - 3-level fallback chain when truck_stock has no catalog: stock.quant → global_legacy
+ * - inventorySource records the employee REST source only
  * - restoreStock: explicit restore for rollback
  * - refreshInventory preserves qty_reserved from pending operations
  *
@@ -15,7 +13,6 @@
 
 import { create } from 'zustand';
 import { Product } from '../types/product';
-import { odooRead } from '../services/odooRpc';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { fetchTruckStock } from '../services/gfLogistics';
 import { logInfo, logWarn } from '../utils/logger';
@@ -29,13 +26,13 @@ import { todayLocalISO } from '../utils/localDate';
 import { schedulePersistPriceCache } from '../services/offlineCache';
 import type { InventoryLoadResult } from '../services/legacyRefreshRunner';
 
-export type InventorySource = 'truck_stock' | 'stock_quant' | 'global_legacy';
+export type InventorySource = 'truck_stock';
 
 export interface TruckProduct extends Product {
   _totalKg: number;         // qty_available * weight
   qty_reserved: number;     // V2: pending deductions (positive = amount reserved)
   qty_display: number;      // V2: qty_available - qty_reserved
-  _isGlobalFallback: boolean; // V2: true if from legacy path
+  _isGlobalFallback: false;
 }
 
 interface ProductState {
@@ -53,10 +50,10 @@ interface ProductState {
    * sincronizado; false = el catálogo existe pero sin stock (situación
    * normal cuando aún no se procesa el llenado del camión). Reemplaza la
    * heurística client-side anterior ("todos los qty en 0 → asumir sin
-   * stock"). Si el backend no manda el flag (compat), por defecto true.
+   * stock"). El contrato employee exige este flag; un sobre incompleto se
+   * rechaza antes de mutar el catálogo contextual.
    *
-   * null cuando no se ha hecho carga aún o cuando el source no es
-   * truck_stock (stock_quant y global_legacy no tienen este flag).
+   * null cuando no se ha hecho carga aún.
    */
   hasStockData: boolean | null;
 
@@ -75,7 +72,7 @@ interface ProductState {
   /**
    * Carga de inventario con RESULTADO AUTORITATIVO explícito (P1-2). Envuelve
    * loadProducts y devuelve si la carga fue autoritativa para el warehouse
-   * esperado (fuente scoped, no `global_legacy`, sin error de red). El consumidor
+   * esperado (fuente employee-scoped, sin error de red). El consumidor
    * NO debe inferir éxito por Promise resuelta ni por `error === null`.
    */
   loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
@@ -114,13 +111,6 @@ function estimateWeight(name: string, existingWeight: number | undefined): numbe
   }
   return 1; // Default 1 kg
 }
-
-const PRODUCT_FIELDS = [
-  'id', 'name', 'default_code', 'list_price', 'qty_available',
-  'sale_ok', 'product_tmpl_id', 'weight', 'categ_id',
-  // BLD-20260409: removed image_128 — Odoo doesn't return binary fields
-  // via search_read/get_records. Images loaded via URL in ProductPicker.
-];
 
 // ── Perf Fase 2B: catálogo persistente de jornada ───────────────────────────
 // TTL holgado del sobre (cubre jornada larga); la invalidación primaria es la
@@ -190,117 +180,19 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
 
     try {
-      let rawProducts: Product[] | null = null;
-      let source: InventorySource = 'global_legacy';
-      // BLD-20260424-STOCKMETA: hasStockData arranca null (sin info).
-      // Lo poblamos solo cuando truck_stock contesta — los otros niveles
-      // de fallback (stock_quant, global) no exponen esta señal.
-      let hasStockData: boolean | null = null;
-
-      // ── LEVEL 1: truck_stock endpoint (BLD-013) ──
-      // BLD-20260424-STOCKMETA: la decisión "este catálogo no tiene stock
-      // sincronizado en el almacén" ahora la determina el backend vía el
-      // flag `has_stock_data` (commit dd78489 de Sebastián). El cliente
-      // solo lo lee y lo expone al store; ProductPicker decide la UI.
       const mobileLocationId = useAuthStore.getState().mobileLocationId;
       const scoped = await fetchTruckStock(warehouseId, mobileLocationId);
-      if (scoped && scoped.products.length > 0) {
-        rawProducts = scoped.products as Product[];
-        source = 'truck_stock';
-        hasStockData = scoped.hasStockData;
-        logInfo('inventory', scoped.hasStockData === false ? 'loaded_truck_stock_reference' : 'loaded_truck_stock', {
-          warehouse: warehouseId,
-          mobileLocationId,
-          count: rawProducts.length,
-          hasStockData: scoped.hasStockData,
-        });
-      } else if (scoped && scoped.products.length === 0) {
-        logWarn('inventory', 'truck_stock_empty_fallback', {
-          warehouse: warehouseId,
-          mobileLocationId,
-          count: 0,
-          message:
-            'truck_stock no devolvio productos; intentando stock.quant por ubicacion movil.',
-        });
-      }
+      const rawProducts = scoped.products as Product[];
+      const source: InventorySource = 'truck_stock';
+      const hasStockData = scoped.hasStockData;
+      logInfo('inventory', scoped.hasStockData === false ? 'loaded_truck_stock_reference' : 'loaded_truck_stock', {
+        warehouse: warehouseId,
+        mobileLocationId,
+        count: rawProducts.length,
+        hasStockData: scoped.hasStockData,
+      });
 
-      // ── LEVEL 2: stock.quant query by mobile location / warehouse ──
-      if (!rawProducts) {
-        try {
-          const locationDomain = mobileLocationId && mobileLocationId > 0
-            ? ['location_id', 'child_of', mobileLocationId]
-            : ['location_id.warehouse_id', '=', warehouseId];
-          const quants = await odooRead<any>('stock.quant', [
-            locationDomain,
-            ['quantity', '>', 0],
-            ['product_id.sale_ok', '=', true],
-            ['product_id.active', '=', true],
-          ], ['product_id', 'quantity', 'reserved_quantity'], 500);
-
-          if (quants && quants.length > 0) {
-            // stock.quant returns product_id as [id, name] tuple
-            // We need to load full product data for these products
-            const productIds = quants.map((q: any) =>
-              Array.isArray(q.product_id) ? q.product_id[0] : q.product_id
-            );
-            const products = await odooRead<Product>(
-              'product.product',
-              [['id', 'in', productIds]],
-              PRODUCT_FIELDS,
-              500
-            );
-
-            // Merge quant quantities into product data
-            const quantMap = new Map<number, number>();
-            for (const q of quants) {
-              const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
-              const available = (q.quantity || 0) - (q.reserved_quantity || 0);
-              quantMap.set(pid, (quantMap.get(pid) || 0) + available);
-            }
-
-            rawProducts = products.map((p) => ({
-              ...p,
-              qty_available: quantMap.get(p.id) ?? p.qty_available,
-            }));
-            source = 'stock_quant';
-            hasStockData = null;
-            logInfo('inventory', 'loaded_stock_quant', {
-              warehouse: warehouseId,
-              mobileLocationId,
-              count: rawProducts.length,
-            });
-          }
-        } catch (e) {
-          logWarn('inventory', 'stock_quant_fallback', {
-            warehouse: warehouseId,
-            mobileLocationId,
-            error: String(e),
-          });
-        }
-      }
-
-      // ── LEVEL 3: Legacy global (NO warehouse filter) ──
-      if (!rawProducts) {
-        logWarn('inventory', 'global_fallback', {
-          warehouse: warehouseId,
-          message: 'Using global product list — no warehouse filter',
-        });
-
-        rawProducts = await odooRead<Product>(
-          'product.product',
-          [
-            ['sale_ok', '=', true],
-            ['type', '!=', 'service'],
-            ['active', '=', true],
-          ],
-          PRODUCT_FIELDS,
-          200
-        );
-        source = 'global_legacy';
-      }
-
-      // Enrich with weight + V2 fields
-      const isGlobal = source === 'global_legacy';
+      // Enrich the scoped response with local, display-only reservation state.
       const products: TruckProduct[] = rawProducts
         .filter((p) => p.sale_ok)
         .map((p) => {
@@ -320,7 +212,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
             _totalKg: safeQty * weight,
             qty_reserved: reserved,
             qty_display: Math.max(0, safeQty - reserved),
-            _isGlobalFallback: isGlobal,
+            _isGlobalFallback: false as false,
           };
         })
         .sort((a, b) => b.qty_available - a.qty_available);
@@ -370,11 +262,9 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
   },
 
-  // P1-2: carga con resultado AUTORITATIVO explícito. loadProducts absorbe sus
-  // errores (setea `error`, resuelve) y puede terminar en `global_legacy` (lista
-  // global sin scope de almacén). Aquí NO inferimos éxito por Promise/error null:
-  // exigimos fuente scoped (truck_stock/stock_quant), sin error, y que el
-  // warehouseId cargado coincida con el solicitado.
+  // P1-2: solo la respuesta employee-scoped puede ser autoritativa. Un error
+  // explícito conserva el catálogo contextual ya rehidratado, sin consultar
+  // ninguna fuente alternativa.
   loadProductsAuthoritative: async (warehouseId: number): Promise<InventoryLoadResult> => {
     if (!warehouseId || warehouseId <= 0) {
       return { ok: false, authoritative: false, reason: 'missing_warehouse' };
@@ -393,13 +283,10 @@ export const useProductStore = create<ProductState>((set, get) => ({
     if (err) {
       return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
     }
-    if (source === 'global_legacy') {
-      return { ok: false, authoritative: false, reason: 'global_legacy_fallback', source };
-    }
     if (loadedWh !== warehouseId) {
       return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
     }
-    if (source === 'truck_stock' || source === 'stock_quant') {
+    if (source === 'truck_stock') {
       return { ok: true, authoritative: true, warehouseId, source };
     }
     return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };

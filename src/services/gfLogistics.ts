@@ -6,9 +6,6 @@
  * Checkout now also sends result_status so Odoo can close the stop.
  * Do NOT wrap with jsonrpc/params — that causes 400 errors.
  *
- * For Odoo JSON-RPC endpoints (/jsonrpc, /get_records, /api/create_update),
- * use odooRpc.ts or postRpc() from api.ts instead.
- *
  * Reference: useSyncStore.ts uses these same endpoints with plain payloads
  * and works correctly in production.
  */
@@ -35,6 +32,7 @@ import { fetchMyPlan } from './routePlanRefresh';
 import { validateSaleCreateResult } from './saleCreateResult';
 import type { SaleCreateResultData } from './saleCreateResult';
 import { buildFieldLeadCreatePayload } from './fieldLeadCreatePayload';
+import { parseTruckStockResponse, type TruckStockResponse } from './truckStockResponse';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -580,9 +578,8 @@ export async function uploadStopImage(
 
 // ═══ Sales & Payments (gf_logistics_ops) ═══
 //
-// Replaces the legacy `/api/create_update` path over `sale.order` /
-// `account.payment`, which required ACLs the driver user doesn't have
-// and had no server-side tolerance for obsolete stop_id.
+// These bounded employee routes keep sales and payments within the authenticated
+// employee scope and tolerate an obsolete stop ID on the server.
 //
 // Backend contract (already deployed):
 //   POST /gf/logistics/api/employee/sales/create
@@ -1243,12 +1240,9 @@ export async function signOut(): Promise<void> {
 
 // ═══ BLD-20260404-013 — Truck stock by warehouse ═══
 //
-// Tries the new gf_logistics_ops endpoint `/truck_stock` which returns
-// products scoped by the chofer's assigned warehouse. If the endpoint
-// does not exist yet (HTTP 404, gateway error, or empty/invalid payload)
-// the caller is expected to fall back to the legacy `odooRead` path.
+// The employee endpoint `/truck_stock` is the only fresh inventory source.
 //
-// Contract (expected from Sprint 3 P4, still not deployed in backend):
+// Contract:
 //   POST /gf/logistics/api/employee/truck_stock
 //   Body: { warehouse_id?: number, mobile_location_id?: number }
 //   Response: {
@@ -1262,8 +1256,6 @@ export async function signOut(): Promise<void> {
 //     }
 //   }
 //
-// Returns `null` when the endpoint is unavailable — caller must treat
-// `null` as "fall back to existing behaviour". NEVER throws.
 /**
  * BLD-20260424-STOCKMETA: la respuesta de /truck_stock ahora trae el flag
  * `has_stock_data` (commit dd78489 de Sebastián). El backend lo calcula
@@ -1278,35 +1270,15 @@ export async function signOut(): Promise<void> {
  * "Agotado/referencia" (BUG A original) en lugar de inferir desde
  * la heurística "todos en 0" del lado app.
  */
-export interface TruckStockResponse {
-  products: unknown[];
-  hasStockData: boolean;
-}
+export { type TruckStockResponse } from './truckStockResponse';
 
 export async function fetchTruckStock(
   warehouseId: number | null | undefined,
   mobileLocationId: number | null | undefined,
-): Promise<TruckStockResponse | null> {
-  try {
-    const body: Record<string, unknown> = {};
-    if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
-    if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
-    const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
-    if (!result || typeof result !== 'object') return null;
-    if (result.ok === false) return null;
-    const data = result.data !== undefined ? result.data : result;
-    const products = (data && Array.isArray(data.products)) ? data.products : null;
-    if (!products) return null;
-    // Si el backend no lo manda (compat), asumimos `true` (comportamiento
-    // legacy: aceptar la lista tal cual y dejar que el cliente decida).
-    const hasStockData = typeof data?.has_stock_data === 'boolean'
-      ? data.has_stock_data
-      : true;
-    return { products, hasStockData };
-  } catch (error) {
-    // Endpoint not deployed yet, auth issue, offline, etc.
-    // We swallow so the caller transparently falls back.
-    if (__DEV__) console.warn('[gfLogistics] truck_stock unavailable, falling back:', error);
-    return null;
-  }
+): Promise<TruckStockResponse> {
+  const body: Record<string, unknown> = {};
+  if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
+  if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
+  const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
+  return parseTruckStockResponse(result);
 }

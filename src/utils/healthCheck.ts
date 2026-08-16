@@ -79,9 +79,6 @@ export function getHealthStatus(): HealthStatus {
   if (!syncState.isOnline) {
     issues.push('Sin conexion');
   }
-  if (prodState.inventorySource === 'global_legacy') {
-    issues.push('Inventario global (sin filtro por unidad)');
-  }
   if (gpsAgeMinutes !== null && gpsAgeMinutes > 30) {
     issues.push(`GPS sin actualizar (${gpsAgeMinutes} min)`);
   }

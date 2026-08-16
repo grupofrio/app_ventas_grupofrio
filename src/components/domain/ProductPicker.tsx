@@ -98,15 +98,15 @@ function fuzzyMatch(text: string, query: string): boolean {
 }
 
 /** Format visible pricelist price exactly as backend returned it. */
-function displayPrice(basePrice: number): string {
-  return formatCurrency(getVisiblePricelistPrice(basePrice));
+function displayPrice(basePrice: number | null): string {
+  return typeof basePrice === 'number' ? formatCurrency(getVisiblePricelistPrice(basePrice)) : '—';
 }
 
 type EnrichedProduct = TruckProduct & {
   category: CategoryKey;
   isRecommended: boolean;
   isAlreadyAdded: boolean;
-  customerPrice: number; // price for this customer (may differ from list_price)
+  customerPrice: number | null; // null until the customer price response is authorized
   hasCustomPrice: boolean; // true when price comes from customer pricelist
 };
 
@@ -124,7 +124,6 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const isOnline = useSyncStore((s) => s.isOnline);
-  const isGlobalFallback = inventorySource === 'global_legacy';
 
   const [search, setSearch] = useState('');
   // Perf Fase 1: el filtro usa el valor debounced; el input sigue ligado a
@@ -137,6 +136,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Customer pricelist
   const [priceMap, setPriceMap] = useState<Map<number, number>>(new Map());
   const [priceLoading, setPriceLoading] = useState(false);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [hasAuthorizedPrices, setHasAuthorizedPrices] = useState(!partnerId);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
   // Load base URL for image URLs
@@ -156,21 +157,26 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     if (!visible || !partnerId) {
       setPriceMap(new Map());
       setPriceLoading(false);
+      setPriceError(null);
+      setHasAuthorizedPrices(true);
       return;
     }
     const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
+    setHasAuthorizedPrices(false);
     const cached = peekCachedCustomerPrices(partnerId, products, pricingOptions);
     if (cached) {
       setPriceMap(cached);
       setPriceLoading(false);
+      setPriceError(null);
+      setHasAuthorizedPrices(true);
       return;
     }
-    // Sin red y sin caché: NO disparar el RPC de precios (cuelga hasta el
-    // timeout de 45s → "se queda cargando al agregar productos"). Caemos a
-    // list_price; los precios reales se ven al reconectar/reabrir.
+    // Sin red y sin caché no hay un precio autorizado para esta venta.
     if (!isOnline) {
       setPriceMap(new Map());
       setPriceLoading(false);
+      setPriceError('Conéctate para consultar los precios autorizados de este cliente.');
+      setHasAuthorizedPrices(false);
       return;
     }
     let cancelled = false;
@@ -179,12 +185,18 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       if (!cancelled) {
         setPriceMap(map);
         setPriceLoading(false);
+        setPriceError(null);
+        setHasAuthorizedPrices(true);
       }
       // Perf Fase 2B: persistir el precio recién computado para lectura offline
       // tras un reinicio (partner no precargado en la preparación de ruta).
       schedulePersistPriceCache();
-    }).catch(() => {
-      if (!cancelled) setPriceLoading(false);
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setPriceLoading(false);
+        setPriceError(error instanceof Error ? error.message : 'No fue posible obtener los precios autorizados.');
+        setHasAuthorizedPrices(false);
+      }
     });
     return () => { cancelled = true; };
   }, [visible, partnerId, products, companyId, pricelistId, isOnline]);
@@ -204,6 +216,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     }
     setRefreshingCatalog(true);
     setPriceLoading(true);
+    setPriceError(null);
+    setHasAuthorizedPrices(!partnerId);
     clearPricelistCaches();
     try {
       await loadProducts(warehouseId);
@@ -211,10 +225,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         const pricingOptions = { companyId, fallbackPricelistId: pricelistId };
         const map = await computeCustomerPrices(partnerId, useProductStore.getState().products, pricingOptions);
         setPriceMap(map);
+        setPriceError(null);
+        setHasAuthorizedPrices(true);
         schedulePersistPriceCache();
       } else {
         setPriceMap(new Map());
       }
+    } catch (error) {
+      setPriceError(error instanceof Error ? error.message : 'No fue posible obtener los precios autorizados.');
+      setHasAuthorizedPrices(false);
     } finally {
       setPriceLoading(false);
       setRefreshingCatalog(false);
@@ -238,11 +257,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         category: categorizeProduct(p.name),
         isRecommended: recommendations.has(p.id),
         isAlreadyAdded: existingProductIds.includes(p.id),
-        customerPrice: custom ?? p.list_price,
+        customerPrice: !partnerId || hasAuthorizedPrices ? custom ?? p.list_price : null,
         hasCustomPrice: custom !== undefined,
       };
     });
-  }, [products, recommendations, existingProductIds, priceMap]);
+  }, [products, recommendations, existingProductIds, priceMap, partnerId, hasAuthorizedPrices]);
 
   // BLD-20260424-STOCKMETA: usamos el flag explícito hasStockData del
   // backend (commit dd78489 de Sebastián) en vez de la heurística
@@ -275,7 +294,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
       if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, debouncedSearch, isGlobalFallback, showOutOfStockAsReference]);
+  }, [enrichedProducts, activeCategory, debouncedSearch, showOutOfStockAsReference]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
@@ -300,6 +319,10 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
     if (existingProductIds.includes(product.id)) return;
+    if (partnerId && (priceLoading || !hasAuthorizedPrices || priceError)) {
+      Alert.alert('Precios no disponibles', priceError ?? 'Espera la respuesta de precios autorizados.');
+      return;
+    }
 
     const qty = quantities[product.id] || 1;
     // SaleLineItem.price = base price SIN IVA (for Odoo sync).
@@ -322,7 +345,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setSearch('');
     setQuantities({});
     onClose();
-  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose]);
+  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   // ═══ Product Image ═══
 
@@ -363,7 +386,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded;
+    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
     const qty = quantities[p.id] || 1;
 
     return (
@@ -411,14 +434,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   // ═══ Grid View Card ═══
 
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded;
+    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
     const qty = quantities[p.id] || 1;
 
     return (
@@ -475,7 +498,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty]);
+  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;
@@ -523,6 +546,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             </View>
           ) : null;
         })()}
+        {priceError ? (
+          <View style={styles.priceErrorBanner}>
+            <Text style={styles.priceErrorText}>{priceError}</Text>
+          </View>
+        ) : null}
 
         {/* Search */}
         <View style={styles.searchWrap}>
@@ -788,6 +816,12 @@ const styles = StyleSheet.create({
     marginBottom: 8, padding: 8, alignItems: 'center',
   },
   fallbackText: { fontSize: 11, color: '#F59E0B', fontWeight: '600' },
+  priceErrorBanner: {
+    backgroundColor: 'rgba(239,68,68,0.12)', borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.28)', borderRadius: radii.button,
+    marginHorizontal: spacing.screenPadding, marginBottom: 8, padding: 8,
+  },
+  priceErrorText: { fontSize: 11, color: '#FCA5A5', fontWeight: '600', textAlign: 'center' },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 30, alignItems: 'center', marginTop: 20,

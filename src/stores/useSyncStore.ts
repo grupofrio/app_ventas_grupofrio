@@ -31,7 +31,8 @@ import {
 import { storeLoad, storeSaveStrict, STORAGE_KEYS } from '../persistence/storage';
 import { selectPersistableQueue } from '../services/syncQueuePersistence';
 import { createSerializedPersistenceCoordinator } from '../services/serializedTaskRunner';
-import { postRest, postRpc } from '../services/api';
+import { postRest } from '../services/api';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
   readPhotoAsBase64,
   deletePhoto,
@@ -64,7 +65,10 @@ import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { shouldRetrySyncItemError } from '../services/syncRetryDecision';
+import {
+  shouldRetrySyncItemError,
+  transitionAgedItemsToManualReconciliation,
+} from '../services/syncRetryDecision';
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
@@ -95,6 +99,7 @@ import {
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
 import { promoteStoredSaleTicketOdooFolio } from '../services/saleTicketStorage';
+import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
 
 // ═══ Constants ═══
 
@@ -237,6 +242,8 @@ interface SyncState {
   // error item; fires processQueue when its backoff elapses).
   scheduleWake: () => void;
   clearWakeTimer: () => void;
+  /** Drops one employee's in-memory work before another session is established. */
+  resetForSessionChange: () => void;
 
   // Migración/guard de eventos legacy refill/unload. Async: la reparación
   // pendiente se persiste durablemente ANTES de retirar cola o tocar stock.
@@ -470,6 +477,26 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   setSyncing: (syncing) => set({ isSyncing: syncing }),
 
+  resetForSessionChange: () => {
+    if (_persistTimer) {
+      clearTimeout(_persistTimer);
+      _persistTimer = null;
+    }
+    if (_wakeTimer) {
+      clearTimeout(_wakeTimer);
+      _wakeTimer = null;
+    }
+    set({
+      queue: [],
+      isSyncing: false,
+      lastSyncAt: null,
+      ...computeCounts([]),
+      legacyMigrationNoticeCount: 0,
+      legacyRefreshPending: false,
+      lastCycleMetrics: null,
+    });
+  },
+
   clearDone: () => {
     const newQueue = get().queue.filter((i) => i.status !== 'done');
     set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -526,22 +553,25 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   rehydrateQueue: async () => {
-    const saved = await storeLoad<SyncQueueItem[]>(STORAGE_KEYS.SYNC_QUEUE);
-    if (saved && saved.length > 0) {
-      const restored = saved.map((item) => ({
-        ...item,
-        // V2: crash recovery — syncing items reset to pending
-        status: item.status === 'syncing' ? ('pending' as SyncItemStatus) : item.status,
-        // V2: ensure priority exists (migration from V1 items without priority)
-        priority: item.priority ?? (SYNC_PRIORITY_MAP[item.type] || 3),
-        // V2: ensure next_retry_at exists
-        next_retry_at: item.next_retry_at ?? null,
-      }));
+    const saved = await storeLoad<unknown[]>(STORAGE_KEYS.SYNC_QUEUE);
+    if (Array.isArray(saved) && saved.length > 0) {
+      const { queue: restored, discardedCount, syncingRecoveredCount } = restorePersistedSyncQueue(saved);
       set({ queue: restored, ...computeCounts(restored) });
       logInfo('sync', 'rehydrate', {
         total: restored.length,
-        syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
+        syncing_recovered: syncingRecoveredCount,
       });
+      if (discardedCount > 0) {
+        try {
+          await persistCurrentQueue();
+          logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+        } catch (error: unknown) {
+          logError('sync', 'rehydrate_discard_persist_failed', {
+            discardedCount,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     // Rehidrata la bandera DURABLE de refresh autoritativo pendiente: si una
     // migración previa retiró eventos legacy pero la app cerró (o el refresh
@@ -560,6 +590,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (!isOnline || isSyncing) return;
 
     const now = Date.now();
+    const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
+    if (queueAfterRetryAgeCutoff !== queue) {
+      set({ queue: queueAfterRetryAgeCutoff, ...computeCounts(queueAfterRetryAgeCutoff) });
+      schedulePersist();
+      logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
+        count: queue.filter((item, index) => item !== queueAfterRetryAgeCutoff[index]).length,
+      });
+    }
 
     // Items eligible for processing:
     // - pending with no backoff, OR
@@ -573,7 +611,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return false;
     };
 
-    const candidates = processingHolds.withoutHeld(queue).filter(isReady);
+    const candidates = processingHolds.withoutHeld(queueAfterRetryAgeCutoff).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -609,7 +647,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const p3 = candidates.filter((i) => i.priority === 3);
 
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
-      const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+      const orderedP1 = computeProcessingOrder(queueAfterRetryAgeCutoff, p1).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
         tally(item, await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,
@@ -1238,6 +1276,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
   const meta = item.meta ?? null;
 
+  if (['sale_order', 'checkout', 'customer_update', 'no_sale'].includes(type)) {
+    await assertCurrentEmployeeDayBundleAllowsActions();
+  }
+
   switch (type) {
     case 'sale_order':
       // Migrated to gf_logistics_ops REST endpoint. The legacy JSON-RPC
@@ -1383,43 +1425,11 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }, meta);
       break;
 
-    // NOTA: los antiguos case 'refill'/'unload' (que posteaban a los modelos van
-    // de recarga/descarga vía /api/create_update) se ELIMINARON. El flujo se
+    // NOTA: los antiguos case 'refill'/'unload' se ELIMINARON. El flujo se
     // retiró: la recarga la crea Almacén y el vendedor la acepta; la devolución
     // (vendible + merma) se captura en el Corte. Cualquier evento legacy que quede
     // en cola lo intercepta el guard de processOneItem (isLegacyRefillUnloadItem) y
     // se migra (revierte stock + descarta); nunca llega a este dispatcher.
-
-    // V2 types — basic dispatchers. Payloads follow the same
-    // postRpc pattern. Backend contracts TBD per endpoint.
-    case 'collection':
-      await postRpc('/api/create_update', {
-        model: 'account.payment',
-        method: 'create',
-        dict: {
-          partner_id: payload.partner_id,
-          amount: payload.amount,
-          payment_type: 'inbound',
-          journal_id: payload.journal_id || null,
-        },
-      });
-      break;
-
-    case 'transfer':
-      await postRpc('/api/create_update', {
-        model: 'stock.picking',
-        method: 'create',
-        dict: payload,
-      });
-      break;
-
-    case 'customer_create':
-      await postRpc('/api/create_update', {
-        model: 'res.partner',
-        method: 'create',
-        dict: payload,
-      });
-      break;
 
     case 'customer_update':
       await syncCustomerContactUpdate(payload as Record<string, unknown>);

@@ -1,27 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 interface OffrouteSearchModule {
-  BASIC_CUSTOMER_FIELDS: string[];
-  CUSTOMER_FIELDS: string[];
-  buildCustomerSearchDomain: (query: string, analyticPlazaId?: number | null) => unknown[];
-  readCustomersWithFieldFallback: (
-    readers: {
-      rpc: (fields: string[]) => Promise<Array<{
-        id: number;
-        name: string;
-        phone?: string;
-      }>>;
-      read: (fields: string[]) => Promise<Array<{
-        id: number;
-        name: string;
-        phone?: string;
-      }>>;
-    },
-  ) => Promise<Array<{
-    id: number;
-    name: string;
-    phone?: string;
-  }>>;
   buildOffrouteResults: (
     customers: Array<{
       id: number;
@@ -32,7 +13,6 @@ interface OffrouteSearchModule {
       mobile?: string;
       vat?: string;
       pricelist_id?: [number, string] | false;
-      property_product_pricelist?: [number, string] | false;
       partner_latitude?: number;
       partner_longitude?: number;
       google_maps_url?: string;
@@ -82,7 +62,6 @@ function testCustomerCarriesPricelist(module: OffrouteSearchModule) {
       id: 55251,
       name: 'Abarrotes May',
       pricelist_id: [90, 'IGUALA LOCAL (MXN)'],
-      property_product_pricelist: [1, 'Predeterminado (MXN)'],
     }],
     [],
   );
@@ -139,39 +118,35 @@ function testMixedResultsKeepTypes(module: OffrouteSearchModule) {
   );
 }
 
-async function testCustomerFieldFallbackKeepsResults(module: OffrouteSearchModule) {
-  const calls: string[][] = [];
-  const rows = await module.readCustomersWithFieldFallback({
-    rpc: async (fields) => {
-      calls.push(fields);
-      if (fields.includes('property_product_pricelist')) {
-        throw new Error('Invalid field property_product_pricelist');
-      }
-      return [{ id: 20, name: 'Cliente fallback', phone: '555' }];
-    },
-    read: async () => {
-      throw new Error('should not need /get_records when basic rpc works');
-    },
-  });
+function testDayBundleDirectoryWiring() {
+  const source = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearch.ts'), 'utf8');
+  const logic = readFileSync(resolve(process.cwd(), 'src/services/offrouteSearchLogic.ts'), 'utf8');
+  const screen = readFileSync(resolve(process.cwd(), 'app/offroute.tsx'), 'utf8');
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].name, 'Cliente fallback');
-  assert.deepEqual(calls, [module.CUSTOMER_FIELDS, module.BASIC_CUSTOMER_FIELDS]);
-}
-
-function testCustomerDomainSearchesMobileAndEmail(module: OffrouteSearchModule) {
-  const domain = module.buildCustomerSearchDomain('demo', 820);
-
-  assert.deepEqual(domain, [
-    '&',
-    ['x_analytic_un_id', '=', 820],
-    '|', '|', '|', '|',
-    ['name', 'ilike', 'demo'],
-    ['phone', 'ilike', 'demo'],
-    ['mobile', 'ilike', 'demo'],
-    ['vat', 'ilike', 'demo'],
-    ['email', 'ilike', 'demo'],
-  ]);
+  assert.match(source, /import\s*\{\s*loadCurrentEmployeeDayBundle\s*\}\s*from ['"]\.\/employeeDayBundle['"]/);
+  assert.match(source, /loaded\.record\.bundle\.directory/);
+  assert.match(source, /const q = query\.trim\(\)/);
+  assert.doesNotMatch(source, /directory\/search|postRest/);
+  assert.doesNotMatch(
+    source,
+    /odooRpc|odooRead|odooSession|call_kw|execute_kw|get_records|\/api\/create_update/,
+    'el directorio debe usar solo el bundle cifrado del empleado',
+  );
+  assert.doesNotMatch(
+    source,
+    /analyticPlazaId|employee_id|company_id/,
+    'la autoridad del directorio se deriva exclusivamente del Bearer',
+  );
+  assert.doesNotMatch(
+    screen,
+    /employeeAnalyticPlazaId|analyticPlazaId/,
+    'la pantalla no debe reenviar la plaza del empleado como autoridad de búsqueda',
+  );
+  assert.doesNotMatch(
+    logic,
+    /buildCustomerSearchDomain|readCustomersWithFieldFallback|BASIC_CUSTOMER_FIELDS|CUSTOMER_FIELDS|property_product_pricelist/,
+    'la lógica solo conserva DTOs REST y el mapeo de resultados, sin fallback genérico legado',
+  );
 }
 
 async function main() {
@@ -186,8 +161,7 @@ async function main() {
   testCustomerCarriesNavigationLocation(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
-  await testCustomerFieldFallbackKeepsResults(module);
-  testCustomerDomainSearchesMobileAndEmail(module);
+  testDayBundleDirectoryWiring();
   console.log('offroute search tests: ok');
 }
 

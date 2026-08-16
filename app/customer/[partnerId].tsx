@@ -11,18 +11,17 @@ import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import {
-  buildCustomerContactStopPatch,
   buildCustomerContactUpdatePayload,
   CustomerContactForm,
   phoneChanged,
   validateCustomerContactForm,
 } from '../../src/services/customerContactUpdate';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 
 export default function CustomerEditScreen() {
   const { partnerId, stopId } = useLocalSearchParams<{ partnerId: string; stopId?: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
-  const patchStop = useRouteStore((s) => s.patchStop);
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
 
@@ -40,7 +39,6 @@ export default function CustomerEditScreen() {
 
   const [form, setForm] = useState<CustomerContactForm>({
     name: currentStop?.customer_name ?? '',
-    contactName: currentStop?.contact_name ?? '',
     phone: currentStop?.phone ?? '',
     mobile: currentStop?.mobile ?? '',
     email: currentStop?.email ?? '',
@@ -56,15 +54,17 @@ export default function CustomerEditScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function doSave() {
+  async function doSave() {
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
+      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de editar el contacto.');
+      return;
+    }
     setSaving(true);
 
     const payload = buildCustomerContactUpdatePayload(numericPartnerId, form);
     enqueue('customer_update', payload);
-
-    if (currentStop) {
-      patchStop(currentStop.id, buildCustomerContactStopPatch(form));
-    }
 
     setSaving(false);
     Alert.alert(
@@ -142,15 +142,6 @@ export default function CustomerEditScreen() {
             placeholder="Nombre comercial"
             value={form.name}
             onChangeText={(value) => updateField('name', value)}
-          />
-        </View>
-
-        <View style={styles.fieldGroup}>
-          <Input
-            label="CONTACTO"
-            placeholder="Nombre del contacto"
-            value={form.contactName}
-            onChangeText={(value) => updateField('contactName', value)}
           />
         </View>
 

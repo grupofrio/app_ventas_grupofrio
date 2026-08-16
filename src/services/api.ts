@@ -1,6 +1,6 @@
 /**
  * HTTP helpers for KOLD Field.
- * Login still uses Axios, but postRest/postRpc use fetch on Android
+ * Login and REST transports use fetch on Android
  * to avoid native XHR failures that surfaced as generic "Network Error".
  */
 
@@ -9,7 +9,6 @@ import * as SecureStore from 'expo-secure-store';
 import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
-import { detectFunctionalErrorMessage } from '../utils/rpcEnvelope';
 import {
   getApiErrorMessage,
   getApiErrorCode,
@@ -18,11 +17,12 @@ import {
   makeApiTransportError,
 } from './apiRequestError';
 import { readPostRestResponseText } from './postRestResponse';
+import { createUuidV4 } from '../utils/clientEvent';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
-  API_KEY: 'kf_api_key',
   GF_TOKEN: 'kf_gf_token',
+  SESSION_ID: 'kf_employee_session_id',
 } as const;
 
 const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefined>)[
@@ -34,7 +34,7 @@ export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
 /**
  * Perf Fase 1B: timeout corto para LECTURAS (getRest). En red muerta, una
  * lectura cacheable no debe colgar 45s — falla rápido (10s) y el llamador usa
- * caché/fallback. Las MUTACIONES (postRest/postRpc: venta, pago, cierre)
+ * caché/fallback. Las mutaciones REST (venta, pago, cierre)
  * conservan el timeout conservador de 45s. No oculta errores: el timeout sigue
  * lanzando y el llamador lo maneja.
  */
@@ -123,17 +123,10 @@ async function buildHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json',
   };
 
-  const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
   const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
-  if (apiKey) {
-    headers['Api-Key'] = sanitizeHeaderValue(apiKey);
-  }
   if (gfToken) {
-    headers['X-GF-Employee-Token'] = sanitizeHeaderValue(gfToken);
-    // gf_salesops guard expects X-GF-Token (different from logistics).
-    // Send the same token under both names so both auth systems work.
-    headers['X-GF-Token'] = sanitizeHeaderValue(gfToken);
+    headers.Authorization = `Bearer ${sanitizeHeaderValue(gfToken)}`;
   }
 
   return headers;
@@ -150,25 +143,51 @@ export async function getBaseUrl(): Promise<string> {
   return _baseUrl;
 }
 
-export async function setAuthTokens(apiKey: string, gfToken: string) {
-  await SecureStore.setItemAsync(STORE_KEYS.API_KEY, apiKey);
-  await SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken);
+export async function setAuthTokens(gfToken: string) {
+  await Promise.all([
+    SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken),
+    SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, createUuidV4()),
+    // Clear the no-longer-used credential when upgrading an existing install.
+    SecureStore.deleteItemAsync('kf_api_key'),
+  ]);
 }
 
 export async function clearAuthTokens() {
   _baseUrl = DEFAULT_BASE_URL;
-  await SecureStore.deleteItemAsync(STORE_KEYS.API_KEY);
+  await SecureStore.deleteItemAsync('kf_api_key');
   await SecureStore.deleteItemAsync(STORE_KEYS.GF_TOKEN);
+  await SecureStore.deleteItemAsync(STORE_KEYS.SESSION_ID);
   await SecureStore.deleteItemAsync(STORE_KEYS.BASE_URL);
 }
 
-export async function hasAuthTokens(): Promise<boolean> {
-  const [apiKey, gfToken] = await Promise.all([
-    SecureStore.getItemAsync(STORE_KEYS.API_KEY),
+/**
+ * Stable only for the authenticated employee session currently held in
+ * SecureStore. Legacy restored sessions get a fresh scope before mutations.
+ */
+export async function getAuthSessionId(): Promise<string | null> {
+  const [gfToken, storedSessionId] = await Promise.all([
     SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN),
+    SecureStore.getItemAsync(STORE_KEYS.SESSION_ID),
   ]);
+  if (!gfToken) return null;
+  if (storedSessionId) return storedSessionId;
+  const sessionId = createUuidV4();
+  await SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, sessionId);
+  return sessionId;
+}
 
-  return !!apiKey && !!gfToken;
+/** Employee Bearer credential for bounded first-party REST transports. */
+export async function getEmployeeBearerToken(): Promise<string | null> {
+  const token = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
+  return token ? sanitizeHeaderValue(token) : null;
+}
+
+export async function hasAuthTokens(): Promise<boolean> {
+  const [gfToken] = await Promise.all([
+    SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN),
+    SecureStore.deleteItemAsync('kf_api_key'),
+  ]);
+  return !!gfToken;
 }
 
 /**
@@ -188,14 +207,10 @@ export function createApiClient(): AxiosInstance {
       config.url = `${baseUrl}/${config.url.replace(/^\//, '')}`;
     }
 
-    const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
     const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
-    if (apiKey) {
-      config.headers.set('Api-Key', sanitizeHeaderValue(apiKey));
-    }
     if (gfToken) {
-      config.headers.set('X-GF-Employee-Token', sanitizeHeaderValue(gfToken));
+      config.headers.set('Authorization', `Bearer ${sanitizeHeaderValue(gfToken)}`);
     }
 
     return config;
@@ -291,7 +306,10 @@ export async function postRest<T = any>(
     } else {
       logError('api', 'http_error', trace);
       const msg = errorMessage || parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
-      throw makeApiResponseError(resultError, msg, response.status);
+      const responseErrorStatus = typeof (resultError as { httpStatus?: unknown } | undefined)?.httpStatus === 'number'
+        ? (resultError as { httpStatus: number }).httpStatus
+        : response.status;
+      throw makeApiResponseError(resultError, msg, responseErrorStatus);
     }
 
     return resultPayload as T;
@@ -392,179 +410,6 @@ export async function getRest<T = any>(
       phase: 'error',
       channel: 'rest',
       method: 'GET',
-      url: absoluteUrl,
-      requestId,
-      durationMs: Date.now() - startedAt,
-      errorMessage: message,
-    }));
-    throw error;
-  }
-}
-
-/**
- * POST to an Odoo JSON-RPC endpoint (e.g. /jsonrpc, /get_records, /api/create_update).
- * Wraps params in { jsonrpc: '2.0', params: {...} }.
- * Returns the .result from the JSON-RPC response.
- */
-export async function postRpc<T = any>(
-  url: string,
-  params: Record<string, unknown> = {},
-  options: { timeoutMs?: number; allowFunctionalErrorResult?: boolean } = {},
-): Promise<T> {
-  const absoluteUrl = await buildAbsoluteUrl(url);
-  const headers = await buildHeaders();
-  const requestId = makeRequestId();
-  const requestBody = {
-    jsonrpc: '2.0',
-    params,
-  };
-  const startedAt = Date.now();
-
-  logInfo('api', 'http_request', buildHttpTraceData({
-    phase: 'request',
-    channel: 'rpc',
-    method: 'POST',
-    url: absoluteUrl,
-    requestId,
-    requestHeaders: headers,
-    requestBody,
-  }));
-
-  try {
-    const response = await fetchWithTimeout(absoluteUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-    }, options.timeoutMs);
-
-    const text = await response.text();
-    const parsed = safeParseJson(text);
-    const durationMs = Date.now() - startedAt;
-    // Native Odoo error channel (parsed.error.*) — surfaces ORM/server crashes.
-    const odooErrMsg = !response.ok
-      ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
-      : (parsed?.error?.data?.message || parsed?.error?.message);
-    // BLD-20260505-RPCENVELOPE: detect functional failure carried inside
-    // result envelope ({ ok:false, status>=400, case<0, error:"..." }).
-    // Without this the GPS batch (and any other postRpc('/api/create_update'))
-    // would treat HTTP 200 + ok:false as success and silently mark items done.
-    const functionalErr = !odooErrMsg
-      ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })
-      : null;
-    const errMsg = odooErrMsg || (options.allowFunctionalErrorResult ? null : functionalErr);
-
-    const trace = buildHttpTraceData({
-      phase: errMsg ? 'error' : 'response',
-      channel: 'rpc',
-      method: 'POST',
-      url: absoluteUrl,
-      requestId,
-      status: response.status,
-      durationMs,
-      responseBody: parsed,
-      errorMessage: errMsg ?? undefined,
-    });
-
-    if (errMsg) {
-      logError('api', 'http_error', trace);
-      throw makeLoggedHttpError(errMsg);
-    }
-
-    logInfo('api', 'http_response', trace);
-    return parsed?.result as T;
-  } catch (error) {
-    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    logError('api', 'http_error', buildHttpTraceData({
-      phase: 'error',
-      channel: 'rpc',
-      method: 'POST',
-      url: absoluteUrl,
-      requestId,
-      durationMs: Date.now() - startedAt,
-      errorMessage: message,
-    }));
-    throw error;
-  }
-}
-
-/**
- * POST to the legacy /jsonrpc endpoint using method: "call".
- */
-export async function postJsonRpc<T = any>(
-  url: string,
-  params: Record<string, unknown> = {},
-  options: { timeoutMs?: number } = {},
-): Promise<T> {
-  const absoluteUrl = await buildAbsoluteUrl(url);
-  const headers = await buildHeaders();
-  const requestId = makeRequestId();
-  const requestBody = {
-    jsonrpc: '2.0',
-    method: 'call',
-    params,
-  };
-  const startedAt = Date.now();
-
-  logInfo('api', 'http_request', buildHttpTraceData({
-    phase: 'request',
-    channel: 'jsonrpc',
-    method: 'POST',
-    url: absoluteUrl,
-    requestId,
-    requestHeaders: headers,
-    requestBody,
-  }));
-
-  try {
-    const response = await fetchWithTimeout(absoluteUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-    }, options.timeoutMs);
-
-    const text = await response.text();
-    const parsed = safeParseJson(text);
-    const durationMs = Date.now() - startedAt;
-    const odooErrMsg = !response.ok
-      ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
-      : (parsed?.error?.data?.message || parsed?.error?.message);
-    // Same envelope detection as postRpc — see BLD-20260505-RPCENVELOPE.
-    const functionalErr = !odooErrMsg
-      ? detectFunctionalErrorMessage(parsed?.result, { httpStatus: response.status })
-      : null;
-    const errMsg = odooErrMsg || functionalErr;
-
-    const trace = buildHttpTraceData({
-      phase: errMsg ? 'error' : 'response',
-      channel: 'jsonrpc',
-      method: 'POST',
-      url: absoluteUrl,
-      requestId,
-      status: response.status,
-      durationMs,
-      responseBody: parsed,
-      errorMessage: errMsg ?? undefined,
-    });
-
-    if (errMsg) {
-      logError('api', 'http_error', trace);
-      throw makeLoggedHttpError(errMsg);
-    }
-
-    logInfo('api', 'http_response', trace);
-    return parsed?.result as T;
-  } catch (error) {
-    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    logError('api', 'http_error', buildHttpTraceData({
-      phase: 'error',
-      channel: 'jsonrpc',
-      method: 'POST',
       url: absoluteUrl,
       requestId,
       durationMs: Date.now() - startedAt,

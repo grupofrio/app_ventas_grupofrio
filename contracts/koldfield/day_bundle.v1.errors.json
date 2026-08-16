@@ -1,0 +1,5 @@
+{
+  "no_active_plan": {"status": 404, "body": {"ok": false, "code": "no_active_plan"}},
+  "plan_not_found": {"status": 404, "body": {"ok": false, "code": "plan_not_found"}},
+  "ambiguous_active_plan": {"status": 409, "body": {"ok": false, "code": "ambiguous_active_plan"}}
+}

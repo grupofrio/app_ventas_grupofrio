@@ -38,10 +38,10 @@ function main() {
     /buildCustomerContactUpdatePayload/,
     'la pantalla debe usar el helper de payload de contacto',
   );
-  assert.match(
+  assert.doesNotMatch(
     customerEditScreen,
-    /patchStop\(currentStop\.id/,
-    'la pantalla debe parchear la parada local para reflejar cambios inmediatos',
+    /buildCustomerContactStopPatch|patchStop\(currentStop\.id|label="CONTACTO"|contactName/,
+    'el editor no debe ofrecer ni simular un contacto que el contrato REST no persiste',
   );
 
   // Aviso de teléfono faltante (captura en visita)
@@ -84,6 +84,25 @@ function main() {
 
   const contactServicePath = resolve(REPO_ROOT, 'src/services/customerContactUpdate.ts');
   const contactService = readFileSync(contactServicePath, 'utf8');
+  const contactLogic = readFileSync(resolve(REPO_ROOT, 'src/services/customerContactUpdateLogic.ts'), 'utf8');
+  assert.match(contactService, /import\s*\{\s*postRest\s*\}\s*from ['"]\.\/api['"]/);
+  assert.match(contactService, /\$\{EMPLOYEE_API_BASE\}\/customer\/contact\/update/);
+  assert.match(contactLogic, /partner_id:\s*partnerId/);
+  assert.match(contactLogic, /values:\s*\{/);
+  assert.doesNotMatch(
+    contactService,
+    /odooRpc|odooRead|odooSession|call_kw|execute_kw|get_records|\/api\/create_update/,
+    'la actualización de cliente debe usar solo REST Bearer acotado',
+  );
+  const updatePayload = contactLogic.match(
+    /export function buildCustomerContactUpdatePayload[\s\S]*?\n}/,
+  )?.[0] ?? '';
+  assert.notEqual(updatePayload, '', 'el payload de contacto debe estar definido');
+  assert.doesNotMatch(
+    updatePayload,
+    /employee_id|company_id|contact_name/,
+    'la petición solo puede enviar partner_id y los valores de contacto allowlisted',
+  );
   assert.doesNotMatch(
     contactService,
     /x_wa_phone/,

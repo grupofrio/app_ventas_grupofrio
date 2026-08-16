@@ -5,18 +5,16 @@ import { resolve } from 'node:path';
 const REPO_ROOT = process.cwd();
 
 const api = readFileSync(resolve(REPO_ROOT, 'src/services/api.ts'), 'utf8');
-const odooSession = readFileSync(resolve(REPO_ROOT, 'src/services/odooSession.ts'), 'utf8');
 const odooDatabase = readFileSync(resolve(REPO_ROOT, 'src/services/odooDatabase.ts'), 'utf8');
 const authStore = readFileSync(resolve(REPO_ROOT, 'src/stores/useAuthStore.ts'), 'utf8');
 const giftScreen = readFileSync(resolve(REPO_ROOT, 'app/gift/[stopId].tsx'), 'utf8');
 
 function main() {
-  // Pendiente auditoría julio: login y JSON-RPC corrían con fetch SIN timeout.
+  // Login must share the bounded timeout transport.
   assert.match(api, /export async function fetchWithTimeout\(/, 'fetchWithTimeout debe ser reutilizable');
   assert.match(api, /export const AUTH_TIMEOUT_MS = 15_000;/, 'timeout de auth definido');
 
-  // Cero fetch crudos en las rutas de sesión/login/DB.
-  assert.doesNotMatch(odooSession, /await fetch\(/, 'odooSession no debe usar fetch sin timeout');
+  // Cero fetch crudos en las rutas de login/DB.
   assert.match(
     odooDatabase,
     /controller\.abort\(\), DB_LIST_TIMEOUT_MS\)/,

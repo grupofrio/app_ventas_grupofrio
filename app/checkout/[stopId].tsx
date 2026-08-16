@@ -28,8 +28,8 @@ import { rearmSaleOrderForRetry } from '../../src/services/saleRetry';
 import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
-import { useAuthStore } from '../../src/stores/useAuthStore';
 import { createIncident } from '../../src/services/routeIncidents';
+import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -57,8 +57,6 @@ function CheckoutScreenInner() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
   const processQueue = useSyncStore((s) => s.processQueue);
-  const employeeId = useAuthStore((s) => s.employeeId);
-  const companyId = useAuthStore((s) => s.companyId);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
@@ -159,6 +157,12 @@ function CheckoutScreenInner() {
   async function handleCheckout(shouldNavigateToNextStop: boolean) {
     if (!stop) return;
     if (checkingOut) return; // Guard: prevent double-tap
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
+      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de cerrar la visita.');
+      return;
+    }
     setCheckingOut(true);
 
     let saleSyncState = getSaleSyncState(saleOperationId, queue);
@@ -277,23 +281,20 @@ function CheckoutScreenInner() {
     if (markingForReview || checkingOut) return;
     setMarkingForReview(true);
     try {
-      if (employeeId && companyId) {
-        try {
-          await createIncident(
-            {
-              incident_type: 'operation',
-              severity: 'high',
-              name: `Venta no sincronizada · parada ${stop.customer_name} (#${stop.id}) · operation_id=${saleOperationId ?? 'desconocido'} · ${liveSaleSyncState.message ?? 'sin detalle'}`,
-            },
-            employeeId,
-            companyId,
-          );
-        } catch (incidentError) {
-          // Best-effort: si el incidente no se pudo crear (ACL, offline),
-          // no debe bloquear la salida del vendedor — ya está atrapado por
-          // el problema original. Se avisa pero se continúa.
-          console.warn('[checkout] No se pudo crear el incidente de revisión:', incidentError);
-        }
+      try {
+        await createIncident(
+          {
+            incident_type: 'operation',
+            severity: 'high',
+            name: `Venta no sincronizada · parada ${stop.customer_name} (#${stop.id}) · operation_id=${saleOperationId ?? 'desconocido'} · ${liveSaleSyncState.message ?? 'sin detalle'}`,
+          },
+          stop.id,
+        );
+      } catch (incidentError) {
+        // Best-effort: si el incidente no se pudo crear (ACL, offline),
+        // no debe bloquear la salida del vendedor — ya está atrapado por
+        // el problema original. Se avisa pero se continúa.
+        console.warn('[checkout] No se pudo crear el incidente de revisión:', incidentError);
       }
 
       const lat = latitude || 0;

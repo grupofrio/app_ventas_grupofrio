@@ -19,7 +19,6 @@ import {
 } from '@expo-google-fonts/space-mono';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { hasAuthTokens } from '../src/services/api';
-import { setServiceCredentials } from '../src/services/odooSession';
 import { colors } from '../src/theme/tokens';
 import { GlobalRefreshButton } from '../src/components/ui/GlobalRefreshButton';
 import { GlobalHomeButton } from '../src/components/ui/GlobalHomeButton';
@@ -81,21 +80,11 @@ export default function RootLayout() {
             await clearTokens();
             // Don't set isAuthenticated — user will see login screen
           } else {
-            // 1.5. Initialize Odoo session credentials for pricelist access
-            // These are used by odooRpc → sessionRpc to authenticate with
-            // /web/dataset/call_kw, which requires a web session (not Api-Key).
-            setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
-
-            // 2. Perf Fase 1C: analytics del empleado + rehidratación (cola,
-            // ruta, productos) son independientes → en paralelo para acortar el
-            // arranque en redes lentas.
+            // Rehydrate the employee-scoped local state before starting GPS.
             console.log('[Init] Rehydrating app state...');
-            await Promise.all([
-              useAuthStore.getState().ensureEmployeeAnalytics().catch(e => console.error('Analytics failed', e)),
-              rehydrateAppState().catch(e => console.error('Rehydrate failed', e)),
-            ]);
+            await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
 
-            // 3. GPS Initialization
+            // GPS initialization
             console.log('[Init] Initializing GPS...');
             void initializeGPS()
               .then(() => {
@@ -130,13 +119,6 @@ export default function RootLayout() {
 
     const inAuthGroup = segments[0] === '(auth)';
     console.log('[Guard] Current segments:', segments, 'IsAuthenticated:', isAuthenticated);
-
-    // Ensure Odoo session credentials are configured whenever user is authenticated
-    // (covers both fresh login and app restart)
-    if (isAuthenticated) {
-      setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
-      void useAuthStore.getState().ensureEmployeeAnalytics();
-    }
 
     if (!isAuthenticated && !inAuthGroup) {
       console.log('[Guard] Redirecting to login');

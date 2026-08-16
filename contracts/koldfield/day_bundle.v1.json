@@ -1,0 +1,49 @@
+{
+  "schema_version": "day_bundle.v1",
+  "operational_date": "2026-08-14",
+  "expires_at": "2026-08-15 05:59:59",
+  "plan": {"id": 1, "date": "2026-08-14", "state": "in_progress", "route_id": 1, "vehicle_id": 1},
+  "stops": [{
+    "id": 1,
+    "sequence": 1,
+    "state": "pending",
+    "kind": "customer",
+    "customer": {"id": 2, "name": "Abarrotes Doña Mary"},
+    "payment_term": {"id": 3, "name": "15 días"},
+    "payment_policy": {
+      "mode": "credit_allowed",
+      "allowed_payment_methods": ["cash", "credit"],
+      "credit_limit": 5000.0,
+      "credit_used": 860.0,
+      "credit_available": 4140.0,
+      "credit_overdue": false,
+      "credit_over_limit": false,
+      "credit_hold": false,
+      "payment_term": {"id": 3, "name": "15 días"}
+    }
+  }],
+  "catalog": [{"id": 10, "name": "Producto controlado", "default_code": "P-010", "uom_id": 1, "stock_qty": 0.0, "effective_prices": [{"partner_id": 2, "price": 99.5}]}],
+  "directory": [{
+    "id": 2,
+    "name": "Abarrotes Doña Mary",
+    "payment_term": {"id": 3, "name": "15 días"},
+    "payment_policy": {
+      "mode": "credit_allowed",
+      "allowed_payment_methods": ["cash", "credit"],
+      "credit_limit": 5000.0,
+      "credit_used": 860.0,
+      "credit_available": 4140.0,
+      "credit_overdue": false,
+      "credit_over_limit": false,
+      "credit_hold": false,
+      "payment_term": {"id": 3, "name": "15 días"}
+    },
+    "zone": "Norte",
+    "address": "Av. Juárez 214, Iguala",
+    "latitude": 18.345,
+    "longitude": -99.540
+  }],
+  "no_sale_reasons": [{"code": "closed", "name": "Cerrado"}],
+  "gift_reasons": [{"code": "opening", "name": "Apertura de cliente"}],
+  "competitors": [{"code": "crystal", "name": "Crystal"}]
+}

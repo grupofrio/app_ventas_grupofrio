@@ -16,9 +16,8 @@
  *      sibling key (`_client_meta`) at the payload root, so any backend
  *      controller that extracts named fields explicitly will simply
  *      ignore it and keep working.
- *   5. Meta is NEVER injected into `dict` of /api/create_update calls,
- *      because Odoo `create()` rejects unknown fields — that path is
- *      preserved exactly as it works today.
+ *   5. Meta is never injected into server-owned records; bounded controllers
+ *      accept it only as a sibling payload key.
  *
  * Fields produced (Sprint 3 P1 naming):
  *   - x_client_event_at   : ISO 8601 UTC capture time
@@ -40,7 +39,8 @@ export const CLIENT_EVENT_SCHEMA = 'client-meta-1';
 const DEVICE_ID_KEY = 'kf_client_device_id';
 let _cachedDeviceId: string | null = null;
 
-function uuidV4(): string {
+/** Generate a RFC 4122 version-4 UUID for client idempotency keys. */
+export function createUuidV4(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
@@ -61,13 +61,13 @@ export async function getDeviceId(): Promise<string> {
       _cachedDeviceId = stored;
       return stored;
     }
-    const fresh = uuidV4();
+    const fresh = createUuidV4();
     await SecureStore.setItemAsync(DEVICE_ID_KEY, fresh);
     _cachedDeviceId = fresh;
     return fresh;
   } catch {
     // Fallback: non-persistent but non-crashing.
-    if (!_cachedDeviceId) _cachedDeviceId = `eph-${uuidV4()}`;
+    if (!_cachedDeviceId) _cachedDeviceId = `eph-${createUuidV4()}`;
     return _cachedDeviceId;
   }
 }

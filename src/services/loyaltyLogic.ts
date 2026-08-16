@@ -1,6 +1,6 @@
 /**
  * Lógica PURA de Lealtad (RN-free, node-testable). Separada de `loyalty.ts`
- * (que importa odooRpc) para poder probar el parseo/presentación en node.
+ * (que usa el adaptador REST de lealtad) para poder probar el parseo/presentación en node.
  *
  * Datos = campos de res.partner (gf_partner_loyalty): x_loyalty_level
  * (bronce/plata/oro), x_loyalty_streak (semanas), x_last_order_week (ISO week).

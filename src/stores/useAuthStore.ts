@@ -16,12 +16,22 @@ import {
   AUTH_TIMEOUT_MS,
 } from '../services/api';
 import { signOut } from '../services/gfLogistics';
-import { clearOdooSession } from '../services/odooSession';
 import { resolveOdooDatabase } from '../services/odooDatabase';
-import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
-import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
+import {
+  clearSensitiveFieldData,
+  storeSave,
+  storeLoad,
+  storeRemove,
+  STORAGE_KEYS,
+} from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
 import { isRestorableSession } from '../services/authOffline';
+import {
+  clearFieldDataIdentity,
+  getFieldDataSession,
+  setFieldDataIdentity,
+} from '../services/fieldDataSession';
 import { useSalesStore } from './useSalesStore';
 
 interface AuthState {
@@ -65,7 +75,6 @@ interface AuthState {
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   rehydrateAuth: () => Promise<boolean>;
-  ensureEmployeeAnalytics: () => Promise<void>;
 }
 
 // ============================================================
@@ -109,12 +118,42 @@ interface EmployeePayload {
 }
 
 async function clearRouteCache(): Promise<void> {
+  // Keep this deferred import explicit: route -> sync -> product already
+  // depends on auth, so a static import here would close that module cycle.
   const { useRouteStore } = await import('./useRouteStore');
+  const [
+    { useVisitStore },
+    { useProductStore },
+    { useSyncStore },
+  ] = await Promise.all([
+    import('./useVisitStore'),
+    import('./useProductStore'),
+    import('./useSyncStore'),
+  ]);
   useRouteStore.getState().reset();
+  useVisitStore.getState().resetVisit();
+  useProductStore.getState().reset();
+  useSyncStore.getState().resetForSessionChange();
   await Promise.all([
     storeRemove(STORAGE_KEYS.PLAN),
     storeRemove(STORAGE_KEYS.STOPS),
   ]);
+}
+
+async function clearCurrentEncryptedFieldData(): Promise<void> {
+  const { clearLegacyConsignmentPendingOperations } = await import(
+    '../services/consignmentOperationPersistence'
+  );
+  // This pre-envelope key is global to the install, so erase it before any
+  // operation that might fail while clearing the current session envelope.
+  await clearLegacyConsignmentPendingOperations();
+  const session = await getFieldDataSession();
+  if (session) {
+    const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
+    await clearEncryptedSession(session);
+  }
+  await clearSensitiveFieldData();
+  clearFieldDataIdentity();
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -149,53 +188,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   customerIds: [],
 
   setLoading: (loading) => set({ isLoading: loading }),
-
-  ensureEmployeeAnalytics: async () => {
-    const state = useAuthStore.getState();
-    if (!state.isAuthenticated || !state.employeeId || state.employeeAnalyticPlazaId) {
-      return;
-    }
-
-    try {
-      const plaza = await fetchEmployeeAnalyticPlaza(state.employeeId);
-      if (!plaza.id) return;
-
-      set({
-        employeeAnalyticPlazaId: plaza.id,
-        employeeAnalyticPlazaName: plaza.name,
-      });
-
-      const nextState = useAuthStore.getState();
-      await storeSave(STORAGE_KEYS.AUTH_STATE, {
-        employeeId: nextState.employeeId,
-        employeeName: nextState.employeeName,
-        companyId: nextState.companyId,
-        companyName: nextState.companyName,
-        warehouseId: nextState.warehouseId,
-        warehouseName: nextState.warehouseName,
-        mobileLocationId: nextState.mobileLocationId,
-        mobileLocationName: nextState.mobileLocationName,
-        employeeAnalyticPlazaId: nextState.employeeAnalyticPlazaId,
-        employeeAnalyticPlazaName: nextState.employeeAnalyticPlazaName,
-        parentId: nextState.parentId,
-        isSupervisor: nextState.isSupervisor,
-        allowCreateCustomer: nextState.allowCreateCustomer,
-        allowFreeVisitsMode: nextState.allowFreeVisitsMode,
-        allowConfirmPayment: nextState.allowConfirmPayment,
-        allowDeliveryScreen: nextState.allowDeliveryScreen,
-        allowSalesDirectInvoice: nextState.allowSalesDirectInvoice,
-        allowOffDateVisits: nextState.allowOffDateVisits,
-        allowOffDistanceVisits: nextState.allowOffDistanceVisits,
-        maxCashLimit: nextState.maxCashLimit,
-        stockValueLimit: nextState.stockValueLimit,
-        defaultPaymentJournalId: nextState.defaultPaymentJournalId,
-        defaultCashAccountId: nextState.defaultCashAccountId,
-        customerIds: nextState.customerIds,
-      });
-    } catch (error) {
-      console.warn('[auth] Could not hydrate employee analytic plaza:', error);
-    }
-  },
 
   /**
    * BLD-20260408-P0: Restore employee data from AsyncStorage.
@@ -248,6 +240,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: Array.isArray(saved.customerIds) ? saved.customerIds as number[] : [],
       });
 
+      const companyId = typeof saved.companyId === 'number' ? saved.companyId : null;
+      if (companyId && companyId > 0) {
+        setFieldDataIdentity({ companyId, employeeId });
+      }
+
       console.log(`[auth] Rehydrated: employee=${employeeId}, warehouse=${warehouseId}`);
       return true;
     } catch (error) {
@@ -281,7 +278,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       // BLD-20260404-007 (Fix 4): Use fetch instead of axios.
       // Axios XHR adapter fails with generic Network Error on some Android
-      // devices running React Native 0.76. The postRest/postRpc helpers already
+      // devices running React Native 0.76. The REST helpers already
       // use fetch for the same reason — login must too.
       let response: Response;
       try {
@@ -335,16 +332,19 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
 
       const result = payload?.result;
-      if (!result?.api_key) {
+      if (typeof result?.gf_employee_token !== 'string' || !result.gf_employee_token.trim()) {
         const backendMsg = result?.message || payload?.error?.data?.message;
         set({ error: backendMsg || 'Credenciales incorrectas', isLoading: false });
         return false;
       }
 
-      await setAuthTokens(result.api_key, result.gf_employee_token || '');
+      // Account switches must erase the prior employee's encrypted field data
+      // while its secure session reference is still available.
+      await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       clearPricelistCaches();
       useSalesStore.getState().reset();
+      await setAuthTokens(result.gf_employee_token);
 
       const emp: EmployeePayload = result.employee || {};
 
@@ -392,17 +392,9 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
       });
 
-      // Fetch plaza analytic from hr.employee if login response didn't include it.
-      // Runs synchronously before returning so the sale screen always has plaza set.
-      if (!analyticPlazaFromLogin.id && employeeId) {
-        try {
-          const plaza = await fetchEmployeeAnalyticPlaza(employeeId);
-          if (plaza.id) {
-            set({ employeeAnalyticPlazaId: plaza.id, employeeAnalyticPlazaName: plaza.name });
-          }
-        } catch {
-          console.warn('[auth] Could not fetch employee analytic plaza on login');
-        }
+      const companyId = useAuthStore.getState().companyId;
+      if (companyId && companyId > 0) {
+        setFieldDataIdentity({ companyId, employeeId });
       }
 
       // BLD-20260408-P0: Persist auth state so it survives app restart.
@@ -446,7 +438,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signOut();
     } finally {
-      clearOdooSession();
+      await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       useSalesStore.getState().reset();
       await clearAuthTokens();

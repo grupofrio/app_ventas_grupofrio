@@ -9,21 +9,21 @@ function main() {
     resolve(REPO_ROOT, 'src/stores/useProductStore.ts'),
     'utf8',
   );
-
-  assert.match(
-    productStore,
-    /scoped && scoped\.products\.length > 0\) \{/,
-    'truck_stock con productos debe poblar el store aunque hasStockData=false',
+  const gfLogistics = readFileSync(
+    resolve(REPO_ROOT, 'src/services/gfLogistics.ts'),
+    'utf8',
   );
+
+  assert.match(productStore, /scoped\.products/, 'truck_stock debe ser la única fuente de catálogo fresco');
   assert.doesNotMatch(
     productStore,
-    /scoped\.hasStockData !== false/,
-    'hasStockData=false no debe descartar el catalogo REST ni forzar get_records',
+    /\bodooRead\b|stock\.quant|product\.product|global_legacy|stock_quant/,
+    'el catálogo no debe caer a stock.quant, product.product ni catálogo global',
   );
   assert.match(
-    productStore,
-    /\['location_id', 'child_of', mobileLocationId\]/,
-    'stock.quant debe consultar por la ubicacion movil y sus sububicaciones',
+    gfLogistics,
+    /parseTruckStockResponse\(result\)/,
+    'truck_stock debe validar el sobre antes de devolverlo al store',
   );
   assert.match(
     productStore,

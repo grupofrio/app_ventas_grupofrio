@@ -20,6 +20,7 @@ const RELEASE_ENTRIES = [
   'app', 'src', 'config', 'android', 'ios', 'index.ts', 'app.json', 'app.config.js',
   'app.config.ts', 'eas.json', 'package.json',
 ];
+const GENERATED_DIRECTORY_NAMES = new Set(['.gradle', 'build']);
 
 function collectSourceFiles(entry) {
   const absolute = resolve(REPO_ROOT, entry);
@@ -33,6 +34,7 @@ function collectSourceFiles(entry) {
     for (const child of entries) {
       const childPath = join(current, child.name);
       if (child.isDirectory()) {
+        if (GENERATED_DIRECTORY_NAMES.has(child.name)) continue;
         pending.push(childPath);
       } else if (child.isFile()) {
         files.push(childPath);

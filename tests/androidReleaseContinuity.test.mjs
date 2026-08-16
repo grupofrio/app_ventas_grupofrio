@@ -26,8 +26,8 @@ assert.equal(
 );
 assert.equal(
   packageJson.scripts['build:field-update:android'],
-  'cd android && ./gradlew clean assembleRelease',
-  'field-update builds must clean stale native outputs before assembling release',
+  'npx expo prebuild --platform android --no-install && cd android && ./gradlew --no-daemon --no-parallel assembleRelease',
+  'field-update builds must regenerate native Android config and serialize Gradle before assembling release',
 );
 
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
@@ -40,6 +40,11 @@ assert.match(
   verifierSource,
   /versionName:\s*'1\.4\.1'/,
   'release verification must require Android versionName 1.4.1',
+);
+assert.doesNotMatch(
+  verifierSource,
+  /output-metadata\.json|metadataPath/,
+  'release verification must inspect the built APK, not optional Gradle metadata',
 );
 
 const nativeBuildGradle = resolve(repoRoot, 'android/app/build.gradle');

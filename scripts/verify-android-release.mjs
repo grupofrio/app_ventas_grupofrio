@@ -6,7 +6,6 @@ import { execFileSync } from 'node:child_process';
 
 const EXPECTED = {
   apkPath: path.resolve('android/app/build/outputs/apk/release/app-release.apk'),
-  metadataPath: path.resolve('android/app/build/outputs/apk/release/output-metadata.json'),
   applicationId: 'mx.grupofrio.koldfield',
   versionCode: '5',
   versionName: '1.4.1',
@@ -74,10 +73,6 @@ if (!existsSync(EXPECTED.apkPath)) {
   throw new Error(`APK no encontrado en ${EXPECTED.apkPath}. Ejecuta primero npm run build:field-update:android`);
 }
 
-if (!existsSync(EXPECTED.metadataPath)) {
-  throw new Error(`Metadata no encontrada en ${EXPECTED.metadataPath}.`);
-}
-
 const aapt = findAndroidTool('aapt');
 const apksigner = findAndroidTool('apksigner');
 
@@ -85,15 +80,11 @@ const badging = execFileSync(aapt, ['dump', 'badging', EXPECTED.apkPath], { enco
 const packageInfo = parseBadging(badging);
 const signerOutput = execFileSync(apksigner, ['verify', '--print-certs', EXPECTED.apkPath], { encoding: 'utf8' });
 const certSha256 = parseSigner(signerOutput);
-const metadata = JSON.parse(readFileSync(EXPECTED.metadataPath, 'utf8'));
-const outputElement = metadata.elements?.[0] ?? {};
 const apkSha256 = sha256File(EXPECTED.apkPath);
 
 assertEqual(packageInfo.applicationId, EXPECTED.applicationId, 'applicationId');
 assertEqual(packageInfo.versionCode, EXPECTED.versionCode, 'versionCode');
 assertEqual(packageInfo.versionName, EXPECTED.versionName, 'versionName');
-assertEqual(String(outputElement.versionCode), EXPECTED.versionCode, 'output-metadata versionCode');
-assertEqual(String(outputElement.versionName), EXPECTED.versionName, 'output-metadata versionName');
 assertEqual(certSha256, EXPECTED.certSha256, 'certificate SHA-256');
 
 console.log(JSON.stringify({

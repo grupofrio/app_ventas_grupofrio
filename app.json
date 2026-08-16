@@ -2,7 +2,7 @@
   "expo": {
     "name": "KOLD Field",
     "slug": "kold-field",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "orientation": "portrait",
     "icon": "./assets/grupofrio-icon.png",
     "userInterfaceStyle": "dark",
@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "mx.grupofrio.koldfield",
-      "versionCode": 4,
+      "versionCode": 5,
       "allowBackup": false,
       "config": {
         "googleMaps": {

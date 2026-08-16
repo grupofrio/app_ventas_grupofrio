@@ -51,6 +51,7 @@ import {
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { buildLocalStockDelta } from '../../src/services/stockRollback';
+import { applySaleStockViaLedger } from '../../src/services/inventoryLedgerAdapters';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import {
   buildSaleTicketSnapshot,
@@ -439,13 +440,19 @@ function SaleScreenInner() {
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
         _localStockDelta: localStockDelta,
+        _ledgerApplied: true,
       },
       stopId: stop.id,
       ticketSnapshot,
       photoUris: [...salePhotoUris],
     });
-    const deductLocalStockOptimistically = () => {
-      saleLines.forEach((l) => useProductStore.getState().updateLocalStock(l.productId, -l.qty));
+    const deductLocalStockOptimistically = async () => {
+      await applySaleStockViaLedger({
+        operationId,
+        lines: saleLines.map((l) => ({ product_id: l.productId, qty: l.qty })),
+        stopId: stop.id,
+        partnerId: salePartnerId,
+      });
     };
 
     logInfo('general', 'sale_confirm_payload', {
@@ -539,9 +546,21 @@ function SaleScreenInner() {
         );
         return;
       }
-      // F3.2: la venta quedó durablemente encolada — descuenta la camioneta
-      // local ahora (antes de esto, S1 no descontaba nada offline).
-      deductLocalStockOptimistically();
+      // F3.2 / POST-R1A: durable enqueue then ledger apply (fail-closed).
+      try {
+        await deductLocalStockOptimistically();
+      } catch (ledgerError) {
+        setSaleSubmitting(false);
+        logError('sync', 'sale_ledger_apply_failed_offline', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(ledgerError, 'Error al registrar inventario local.'),
+        });
+        Alert.alert(
+          'Inventario local no actualizado',
+          'El pedido quedó en cola, pero no pudimos registrar el movimiento de inventario. No repitas el pedido; sincroniza o contacta soporte.',
+        );
+        return;
+      }
       // checkout/ruta rastrean el pedido por el mismo id durable del lock.
       setLastSaleTicketId(operationId);
       setSaleSubmitting(false);
@@ -565,9 +584,8 @@ function SaleScreenInner() {
         recoveryIntent.ticketSnapshot,
         saleResult.name,
       );
-      // F3.2: Odoo ya confirmó — descuenta la camioneta local también aquí
-      // (no solo el refresh de loadProducts más abajo, que tarda en llegar).
-      deductLocalStockOptimistically();
+      // F3.2 / POST-R1A: Odoo confirmed — ledger apply for sellable projection.
+      await deductLocalStockOptimistically();
     } catch (error) {
       const outcome = classifySaleSubmissionError(error);
       const metadata = readSaleSubmissionErrorMetadata(error);
@@ -652,11 +670,15 @@ function SaleScreenInner() {
         return;
       }
 
-      // F3.2: respuesta ambigua (probablemente sí llegó a Odoo) — la venta
-      // queda encolada para verificación; descuenta la camioneta local igual
-      // que en la rama offline, con el mismo _localStockDelta como red de
-      // seguridad si termina en rechazo definitivo.
-      deductLocalStockOptimistically();
+      // F3.2 / POST-R1A: ambiguous path — ledger apply with same operation_id.
+      try {
+        await deductLocalStockOptimistically();
+      } catch (ledgerError) {
+        logError('sync', 'sale_ledger_apply_failed_ambiguous', {
+          operation_id: operationId,
+          message: safeUnknownErrorMessage(ledgerError, 'Error al registrar inventario local.'),
+        });
+      }
 
       void processQueue().catch((processError) => logError(
         'sync',

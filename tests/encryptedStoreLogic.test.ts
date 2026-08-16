@@ -124,8 +124,13 @@ test('bundle and queue records reject plaintext persistence', async () => {
     () => storage.assertEncryptedRecord('sync-queue', 'plaintext'),
     /must use encrypted storage/i,
   );
+  assert.throws(
+    () => storage.assertEncryptedRecord('inventory-ledger', 'plaintext'),
+    /must use encrypted storage/i,
+  );
   assert.doesNotThrow(() => storage.assertEncryptedRecord('thermal-printer', 'plaintext'));
   assert.doesNotThrow(() => storage.assertEncryptedRecord('day-bundle', 'encrypted'));
+  assert.doesNotThrow(() => storage.assertEncryptedRecord('inventory-ledger', 'encrypted'));
 });
 
 test('Android backups are disabled for the native encrypted field store', () => {

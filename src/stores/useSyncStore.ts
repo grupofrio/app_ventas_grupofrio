@@ -62,7 +62,7 @@ import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
 import { areSyncDependenciesSatisfied, cascadeDeadToDependents } from '../services/syncDependencies';
 import { useProductStore } from './useProductStore';
-import { makeClientEventMeta } from '../utils/clientEvent';
+import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
 import {
@@ -72,6 +72,12 @@ import {
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import { buildReversalMovements } from '../domain/inventory/buildMovements';
+import {
+  loadOrMigrateLedger,
+  recordInventoryMovements,
+} from '../services/inventoryLedger';
+import { movementsForOperation } from '../domain/inventory/ledgerState';
 import {
   isLegacyRefillUnloadItem,
   planLegacyReversal,
@@ -1453,6 +1459,43 @@ function markLocalStockRolledBack(id: string): void {
 
 function rollbackFailedOperation(item: SyncQueueItem): void {
   const updateLocalStock = useProductStore.getState().updateLocalStock;
+
+  // POST-R1A: ledger-applied ops reverse via ledger projection (no dual apply).
+  if (item.payload?._ledgerApplied === true) {
+    const operationId = String(
+      item.payload._operationId
+      || item.payload.operation_id
+      || item.payload.idempotency_key
+      || '',
+    );
+    if (operationId) {
+      void (async () => {
+        try {
+          const { state } = await loadOrMigrateLedger();
+          const originals = movementsForOperation(state, operationId).filter(
+            (m) => m.movement_type !== 'reversal',
+          );
+          if (originals.length > 0) {
+            const reversals = buildReversalMovements(originals, {
+              operation_id: operationId,
+              created_at: new Date().toISOString(),
+              movement_ids: originals.map(() => createUuidV4()),
+            });
+            await recordInventoryMovements(reversals);
+          }
+        } catch (error) {
+          logError('sync', 'rollback_ledger_failed', {
+            id: item.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          const fallback = computeLocalStockReversal(item.payload);
+          fallback.forEach((r) => updateLocalStock(r.product_id, r.qty));
+        }
+        markLocalStockRolledBack(item.id);
+      })();
+      return;
+    }
+  }
 
   // PR-3a: rollback GENÉRICO por `_localStockDelta`, independiente del `type`.
   // Idempotente: computeLocalStockReversal devuelve [] si ya se revirtió

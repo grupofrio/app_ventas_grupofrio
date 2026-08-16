@@ -157,10 +157,14 @@ assert(sync.includes('sale_order_dead_no_stock_rollback'),
 // el delta viajando en el payload encolado para rollback automático.
 assert(sale.includes("from '../../src/services/stockRollback'") && sale.includes('buildLocalStockDelta'),
   'venta debe construir el delta de stock local para el rollback genérico');
-assert(/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
-  'la venta debe descontar inventario local al confirmarse (S2)');
+assert(sale.includes('applySaleStockViaLedger'),
+  'la venta debe aplicar inventario vía ledger (POST-R1A)');
+assert.doesNotMatch(sale, /updateLocalStock\(l\.productId,\s*-l\.qty\)/,
+  'la venta no debe mutar stock con updateLocalStock directo');
 assert(/_localStockDelta:\s*localStockDelta/.test(sale),
   'el payload encolado debe llevar el delta de stock local para el rollback');
+assert(/_ledgerApplied:\s*true/.test(sale),
+  'el payload encolado debe marcar _ledgerApplied');
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
 assert.match(
   sale,

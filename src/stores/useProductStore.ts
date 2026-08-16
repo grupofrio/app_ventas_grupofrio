@@ -77,6 +77,13 @@ interface ProductState {
    */
   loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
   updateLocalStock: (productId: number, qtyChange: number) => void;
+  /**
+   * POST-R1A: apply ledger sellable projection without a second delta pass.
+   * For each product id present in the map, sets qty_display to projected
+   * sellable and derives qty_reserved from qty_available.
+   * Ids omitted from the map are left unchanged.
+   */
+  applySellableProjection: (sellableByProductId: Record<number, number>) => void;
   getProduct: (productId: number) => TruckProduct | undefined;
   /**
    * Perf Fase 2B: rehidrata el catálogo desde el caché persistente de jornada
@@ -322,6 +329,30 @@ export const useProductStore = create<ProductState>((set, get) => ({
     set({ products, totalStockKg: Math.round(totalKg) });
     // Perf Fase 2B: re-persistir el catálogo con las reservas locales para que
     // qty_reserved/qty_display sobrevivan un reinicio (display de lectura).
+    persistCatalogToDisk(
+      products,
+      get().inventorySource,
+      get().hasStockData,
+      useAuthStore.getState().warehouseId,
+    );
+  },
+
+  applySellableProjection: (sellableByProductId) => {
+    const products = get().products.map((p) => {
+      if (!Object.prototype.hasOwnProperty.call(sellableByProductId, p.id)) return p;
+      const sellable = sellableByProductId[p.id];
+      if (typeof sellable !== 'number' || !Number.isFinite(sellable) || sellable < 0) return p;
+      const newDisplay = sellable;
+      const newReserved = Math.max(0, p.qty_available - newDisplay);
+      return {
+        ...p,
+        qty_reserved: newReserved,
+        qty_display: newDisplay,
+        _totalKg: newDisplay * (p.weight || 1),
+      };
+    });
+    const totalKg = products.reduce((sum, p) => sum + p._totalKg, 0);
+    set({ products, totalStockKg: Math.round(totalKg) });
     persistCatalogToDisk(
       products,
       get().inventorySource,

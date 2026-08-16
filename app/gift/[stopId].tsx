@@ -31,6 +31,7 @@ import {
 } from '../../src/services/giftPayload';
 import { createGift } from '../../src/services/gfSalesOps';
 import { buildLocalStockDelta } from '../../src/services/stockRollback';
+import { applyGiftStockViaLedger } from '../../src/services/inventoryLedgerAdapters';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
@@ -243,14 +244,25 @@ export default function GiftScreen() {
       payloadLines.map((l) => ({ product_id: l.productId, qty: l.qty })),
       -1,
     );
-    const deductLocalStockOptimistically = () => {
-      payloadLines.forEach((l) => useProductStore.getState().updateLocalStock(l.productId, -l.qty));
+    const giftOperationId = String(payload.meta.idempotency_key);
+    const deductLocalStockOptimistically = async () => {
+      await applyGiftStockViaLedger({
+        operationId: giftOperationId,
+        lines: payloadLines.map((l) => ({ product_id: l.productId, qty: l.qty })),
+        stopId: stop.id,
+        partnerId,
+      });
     };
 
     const queueGift = () => {
       // El dispatcher 'gift' de useSyncStore postea este payload a
       // /gf/salesops/gift/create al recuperar conexión. No se pierde captura.
-      enqueue('gift', { ...payload, _localStockDelta: localStockDelta } as unknown as Record<string, unknown>);
+      enqueue('gift', {
+        ...payload,
+        _localStockDelta: localStockDelta,
+        _ledgerApplied: true,
+        _operationId: giftOperationId,
+      } as unknown as Record<string, unknown>);
     };
 
     setSubmitting(true);
@@ -258,12 +270,12 @@ export default function GiftScreen() {
       // Sin red: encolar directo (no perder la captura en ruta).
       if (!isOnline) {
         queueGift();
-        deductLocalStockOptimistically();
+        await deductLocalStockOptimistically();
         navigateAfter('Regalo guardado para sincronizar');
         return;
       }
       const result = await createGift(payload);
-      deductLocalStockOptimistically();
+      await deductLocalStockOptimistically();
       navigateAfter(result.userMessage);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo registrar el regalo.';
@@ -278,7 +290,7 @@ export default function GiftScreen() {
       }
       if (action === 'enqueue') {
         queueGift();
-        deductLocalStockOptimistically();
+        await deductLocalStockOptimistically();
         Alert.alert('Sincronización pendiente', 'El regalo quedó guardado y se sincronizará al reconectar.');
         navigateAfter('Regalo guardado para sincronizar');
         return;

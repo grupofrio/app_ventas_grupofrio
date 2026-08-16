@@ -1,6 +1,6 @@
 # Kold Field — Offline Architecture (as implemented / in flight)
 
-## Canonical path (PR #73)
+## Canonical path (PR #73 + POST-R1A)
 
 ```
 Bearer login
@@ -9,6 +9,7 @@ Bearer login
 → encrypted session persistence
 → atomic store hydration
 → screens / queue
+→ inventory ledger (encrypted) for stock-affecting ops
 ```
 
 ## Offline lease (`expires_at`)
@@ -28,24 +29,34 @@ Frontend (`evaluateStoredDayBundle`):
 - Network loss after a fresh download does **not** by itself revoke the lease
 - Security revocation / session invalid remain hard stops
 
-## Catalog vs truck inventory
+## Catalog vs truck inventory vs ledger
 
-`catalog[]` is truck inventory (quants ∪ load pickings), including `stock_qty = 0`
-for depleted loaded SKUs. Never-loaded authorized products are **excluded** (no
-preventa of unloaded SKUs in R0/R1).
+`catalog[]` / truck stock is the **server snapshot baseline**.
+
+POST-R1A inventory ledger:
+- append-only movements (`sale`, `gift`, `exchange_*`, …)
+- sellable display is a **projection** (`projectInventory`)
+- encrypted record key: `inventory-ledger`
+- see `INVENTORY_LEDGER.md`
+
+Migrated call sites (A1): sale · gift · exchange.
+`updateLocalStock` remains for legacy rollback paths without `_ledgerApplied`.
 
 ## Directory / Venta Especial
 
 `plan.offroute_directory` defaults **True**; plaza scope is the security boundary.
+See `ADR-offroute-directory-authorization.md`.
 
 ## Queue
 
 Mutable ops carry UUID v4 `operation_id`, persist across crash/restart, and reconcile
 ambiguous timeouts by replaying the same id (never minting a second op).
+Idempotency persistence failures roll back the commercial effect (fail-loud).
+Ledger-applied ops also set `_ledgerApplied` so dead-letter rollback reverses via ledger.
 
-## Remaining gaps (not this PR)
+## Remaining gaps
 
-- Full inventory ledger buckets
-- Consignment offline enqueue parity
-- Plaza directory incremental paging for large plazas
-- Returns / Mi Día
+- Load / refill baseline as first-class `initial_load` / `refill` movements (POST-R1B)
+- Consignment offline (POST-R1C)
+- Mi Día (POST-R1E)
+- Pilot: dual-PG concurrency, credential rotation, signed builds, device E2E

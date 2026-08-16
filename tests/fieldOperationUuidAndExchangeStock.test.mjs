@@ -34,7 +34,13 @@ for (const [file, pattern] of [
 const exchange = read('app/exchange/[stopId].tsx');
 assert.match(
   exchange,
-  /deliveryPayloadLines\.forEach\(\(line\) => updateLocalStock\(line\.product_id, -line\.qty\)\);/,
+  /applyExchangeStockViaLedger/,
+  'exchange must apply inventory via ledger adapter',
+);
+assert.doesNotMatch(
+  exchange,
+  /updateLocalStock\(line\.product_id/,
+  'exchange must not mutate sellable via updateLocalStock',
 );
 assert.doesNotMatch(
   exchange,

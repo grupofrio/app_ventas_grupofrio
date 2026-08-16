@@ -14,11 +14,15 @@ const gift = fs.readFileSync(path.join(root, 'app/gift/[stopId].tsx'), 'utf8');
 assert(gift.includes("from '../../src/services/stockRollback'") && gift.includes('buildLocalStockDelta'),
   'regalo debe construir el delta de stock local para el rollback genérico');
 
-assert(/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(gift),
-  'el regalo debe descontar inventario local al confirmarse (S2)');
+assert(gift.includes('applyGiftStockViaLedger'),
+  'el regalo debe aplicar inventario vía ledger (POST-R1A)');
+assert.doesNotMatch(gift, /updateLocalStock\(l\.productId,\s*-l\.qty\)/,
+  'el regalo no debe mutar stock con updateLocalStock directo');
 
 assert(/_localStockDelta:\s*localStockDelta/.test(gift),
   'el payload encolado debe llevar el delta de stock local para el rollback');
+assert(/_ledgerApplied:\s*true/.test(gift),
+  'el payload encolado debe marcar _ledgerApplied para rollback vía ledger');
 
 // El delta NO debe colarse en el payload que se postea directo (createGift
 // no whitelistea campos, a diferencia de buildSalesCreatePayload).
@@ -33,7 +37,7 @@ assert.doesNotMatch(
 // Los 3 puntos de commit (offline-enqueue, online-success, retry-enqueue)
 // deben deducir antes de navegar fuera de la pantalla.
 const submitBody = gift.slice(gift.indexOf('async function handleSubmit'));
-const deductCalls = submitBody.match(/deductLocalStockOptimistically\(\)/g) ?? [];
+const deductCalls = submitBody.match(/await deductLocalStockOptimistically\(\)/g) ?? [];
 assert.equal(deductCalls.length, 3,
   'debe descontar stock local en los 3 puntos de confirmación: offline, online-success y retry-enqueue');
 

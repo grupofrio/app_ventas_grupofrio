@@ -471,6 +471,80 @@ describe('INV-1 ledger rebase against server snapshot', () => {
     await rebaseLedgerFromServerSnapshot(ports, { 10: 12 }, new Set(), 'v3-refill');
     assert.equal(ports._sellable[10], 12);
   });
+
+  it('AMBIGUOUS ACK GAP: server already includes sale X but queue still pending → double-apply', async () => {
+    // Models: sale committed server-side, response lost, queue still pending/error,
+    // truck_stock refresh already reflects X, rebase keeps local movement X.
+    // Without a canonical ack protocol this over-subtracts until retry marks done.
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 10: 10 }, 'v0', 't0'),
+    );
+    await applySaleStockViaLedger({
+      operationId: OP,
+      lines: [{ product_id: 10, qty: 3 }],
+      ports,
+    });
+    assert.equal(ports._sellable[10], 7);
+
+    const { rebaseLedgerFromServerSnapshot } = await import(
+      '../src/services/inventoryLedgerLogic.ts'
+    );
+    // Server qty already 7 (sale incorporated). keep still has OP (ambiguous queue).
+    await rebaseLedgerFromServerSnapshot(ports, { 10: 7 }, new Set([OP]), 'v-ambiguous');
+    assert.equal(
+      ports._sellable[10],
+      4,
+      'documents known double-apply gap under ambiguous ack (7 server - 3 local again)',
+    );
+    assert.equal(ports._state?.movements.length, 1);
+  });
+
+  it('dead op not in keep set: after rollback reversals, rebase does not resurrect sale', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 10: 10 }, 'v0', 't0'),
+    );
+    await applySaleStockViaLedger({
+      operationId: OP,
+      lines: [{ product_id: 10, qty: 3 }],
+      ports,
+    });
+    const originals = ports._state!.movements.filter((m) => m.operation_id === OP);
+    const reversals = buildReversalMovements(originals, {
+      operation_id: OP,
+      created_at: '2026-08-16T12:00:00.000Z',
+    });
+    await recordInventoryMovements(reversals, ports);
+    assert.equal(ports._sellable[10], 10);
+
+    const {
+      rebaseLedgerFromServerSnapshot,
+      pendingLedgerOperationIdsFromQueue,
+    } = await import('../src/services/inventoryLedgerLogic.ts');
+    // Queue item is dead → not kept.
+    const keep = pendingLedgerOperationIdsFromQueue([
+      { id: OP, type: 'sale_order', status: 'dead' },
+    ]);
+    assert.equal(keep.has(OP), false);
+    // Server never saw the sale (definitive reject) → still 10.
+    await rebaseLedgerFromServerSnapshot(ports, { 10: 10 }, keep, 'v-dead');
+    assert.equal(ports._sellable[10], 10);
+    assert.equal(ports._state?.movements.length, 0);
+  });
+
+  it('pendingLedgerOperationIdsFromQueue keeps pending/syncing/error only', async () => {
+    const { pendingLedgerOperationIdsFromQueue } = await import(
+      '../src/services/inventoryLedgerLogic.ts'
+    );
+    const keep = pendingLedgerOperationIdsFromQueue([
+      { id: 'a', type: 'sale_order', status: 'pending' },
+      { id: 'b', type: 'gift', status: 'syncing' },
+      { id: 'c', type: 'sale_order', status: 'error' },
+      { id: 'd', type: 'sale_order', status: 'done' },
+      { id: 'e', type: 'sale_order', status: 'dead' },
+      { id: 'f', type: 'payment', status: 'pending' },
+    ]);
+    assert.deepEqual([...keep].sort(), ['a', 'b', 'c']);
+  });
 });
 
 describe('INV-6 stable movement identity under reorder', () => {

@@ -1,5 +1,7 @@
 /**
  * R1B-B load/refill accept flow — behavioral + contract tests.
+ *
+ * Refresh success requires EXPLICIT evidence (not Promise resolve / no-throw).
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -9,6 +11,8 @@ import { describe, it } from 'node:test';
 import {
   createPickingAcceptFlightGate,
   describeRouteLoadAcceptSuccess,
+  evaluateInventoryRefreshEvidence,
+  evaluatePlanRefreshEvidence,
   parseRouteLoadAcceptResponse,
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
@@ -25,6 +29,23 @@ import { migrateLegacySellableSnapshot } from '../src/domain/inventory/ledgerSta
 import { keepLedgerOperationIdsForSnapshot } from '../src/services/ambiguousAckReconcile.ts';
 
 const root = resolve(process.cwd());
+
+const okAccept = (planId: number, pickingId: number, extra: Record<string, unknown> = {}) => ({
+  ok: true as const,
+  idempotent_replay: false,
+  already_accepted: false,
+  plan_id: planId,
+  picking_id: pickingId,
+  ...extra,
+});
+
+const okPlan = async () => ({ ok: true as const });
+const okInventory = async (warehouseId: number) => ({
+  ok: true as const,
+  authoritative: true as const,
+  warehouseId,
+  source: 'truck_stock' as const,
+});
 
 describe('R1B-B parseRouteLoadAcceptResponse', () => {
   it('treats ok + idempotent_replay as success without string matching', () => {
@@ -54,10 +75,83 @@ describe('R1B-B parseRouteLoadAcceptResponse', () => {
       /fail/,
     );
   });
+
+  it('fail-closed on explicit plan/picking identity mismatch', () => {
+    assert.throws(
+      () => parseRouteLoadAcceptResponse(
+        { ok: true, data: { plan_id: 99, picking_id: 55 } },
+        { plan_id: 10, picking_id: 55 },
+      ),
+      /plan_id inconsistente/,
+    );
+    assert.throws(
+      () => parseRouteLoadAcceptResponse(
+        { ok: true, data: { plan_id: 10, picking_id: 77 } },
+        { plan_id: 10, picking_id: 55 },
+      ),
+      /picking_id inconsistente/,
+    );
+  });
+});
+
+describe('R1B-B refresh evidence helpers', () => {
+  it('plan: updated + matching plan_id → ok', () => {
+    assert.deepEqual(
+      evaluatePlanRefreshEvidence({
+        expectedPlanId: 10,
+        plan: { plan_id: 10 },
+        routeFreshness: 'updated',
+      }),
+      { ok: true },
+    );
+  });
+
+  it('plan: stale / mismatch → not ok (Promise resolve alone is insufficient)', () => {
+    assert.equal(
+      evaluatePlanRefreshEvidence({
+        expectedPlanId: 10,
+        plan: { plan_id: 10 },
+        routeFreshness: 'stale',
+      }).reason,
+      'stale',
+    );
+    assert.equal(
+      evaluatePlanRefreshEvidence({
+        expectedPlanId: 10,
+        plan: { plan_id: 11 },
+        routeFreshness: 'updated',
+      }).ok,
+      false,
+    );
+  });
+
+  it('inventory: only authoritative truck_stock for expected warehouse', () => {
+    assert.equal(
+      evaluateInventoryRefreshEvidence(
+        { ok: true, authoritative: true, warehouseId: 7, source: 'truck_stock' },
+        7,
+      ).ok,
+      true,
+    );
+    assert.equal(
+      evaluateInventoryRefreshEvidence(
+        { ok: false, authoritative: false, reason: 'network_error' },
+        7,
+      ).ok,
+      false,
+    );
+    assert.equal(
+      evaluateInventoryRefreshEvidence(
+        { ok: true, authoritative: true, warehouseId: 7, source: 'stock_quant' },
+        7,
+      ).ok,
+      false,
+    );
+  });
 });
 
 describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
-  it('A: first accept → plan + truck_stock refresh; no local invent', async () => {
+  it('A: happy authoritative refresh', async () => {
     const calls: string[] = [];
     const outcome = await runRouteLoadAcceptAndRefresh({
       planId: 100,
@@ -66,27 +160,160 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
       isOnline: true,
       accept: async (planId, pickingId) => {
         calls.push(`accept:${planId}:${pickingId}`);
-        return {
-          ok: true,
-          idempotent_replay: false,
-          already_accepted: false,
-          plan_id: planId,
-          picking_id: pickingId,
-        };
+        return okAccept(planId, pickingId);
       },
       refreshPlan: async () => {
         calls.push('plan');
+        return { ok: true };
       },
       refreshInventory: async (wid) => {
         calls.push(`inv:${wid}`);
+        return {
+          ok: true,
+          authoritative: true,
+          warehouseId: wid,
+          source: 'truck_stock',
+        };
       },
     });
     assert.deepEqual(calls, ['accept:100:200', 'plan', 'inv:7']);
     assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.planRefreshOk, true);
     assert.equal(outcome.inventoryRefreshOk, true);
+    const copy = describeRouteLoadAcceptSuccess({
+      isRefill: false,
+      pickingName: 'WH/OUT/1',
+      idempotentReplay: false,
+      inventoryRefreshOk: true,
+    });
+    assert.match(copy.body, /Inventario actualizado/i);
   });
 
-  it('C/D: lost-response retry uses SAME picking_id; replay is normal success', async () => {
+  it('B: inventory result false WITHOUT THROW → inventoryRefreshOk false', async () => {
+    let invCalls = 0;
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 5,
+      pickingId: 6,
+      warehouseId: 9,
+      isOnline: true,
+      accept: async () => okAccept(5, 6),
+      refreshPlan: okPlan,
+      refreshInventory: async () => {
+        invCalls += 1;
+        return {
+          ok: false,
+          authoritative: false,
+          reason: 'network_error',
+        };
+      },
+    });
+    assert.equal(invCalls, 1);
+    assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.planRefreshOk, true);
+    assert.equal(outcome.inventoryRefreshOk, false);
+    assert.equal(outcome.inventoryRefreshError, 'network_error');
+    const copy = describeRouteLoadAcceptSuccess({
+      isRefill: true,
+      pickingName: 'REFILL/2',
+      idempotentReplay: false,
+      inventoryRefreshOk: false,
+    });
+    assert.equal(copy.title, 'Recarga aceptada');
+    assert.match(copy.body, /no se pudo actualizar el inventario/i);
+    assert.doesNotMatch(copy.body, /Inventario actualizado/i);
+  });
+
+  it('C: plan result false WITHOUT THROW → planRefreshOk false; accept stays success', async () => {
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 10,
+      pickingId: 11,
+      warehouseId: 3,
+      isOnline: true,
+      accept: async () => okAccept(10, 11),
+      refreshPlan: async () => ({ ok: false, reason: 'stale' }),
+      refreshInventory: okInventory,
+    });
+    assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.planRefreshOk, false);
+    assert.equal(outcome.planRefreshReason, 'stale');
+    assert.equal(outcome.inventoryRefreshOk, true);
+    const copy = describeRouteLoadAcceptSuccess({
+      isRefill: false,
+      pickingName: 'WH/OUT/9',
+      idempotentReplay: false,
+      inventoryRefreshOk: outcome.inventoryRefreshOk && outcome.planRefreshOk,
+    });
+    assert.match(copy.body, /no se pudo actualizar el inventario/i);
+  });
+
+  it('D: missing warehouse → inventoryRefreshOk false; refreshInventory NOT called', async () => {
+    let invCalls = 0;
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 1,
+      pickingId: 2,
+      warehouseId: null,
+      isOnline: true,
+      accept: async () => okAccept(1, 2),
+      refreshPlan: okPlan,
+      refreshInventory: async () => {
+        invCalls += 1;
+        return okInventory(99);
+      },
+    });
+    assert.equal(invCalls, 0);
+    assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.inventoryRefreshOk, false);
+    assert.equal(outcome.inventoryRefreshError, 'missing_warehouse');
+  });
+
+  it('E: accept success + both refresh fail → accept stays success', async () => {
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 8,
+      pickingId: 9,
+      warehouseId: 4,
+      isOnline: true,
+      accept: async () => okAccept(8, 9),
+      refreshPlan: async () => ({ ok: false, reason: 'stale' }),
+      refreshInventory: async () => ({
+        ok: false,
+        authoritative: false,
+        reason: 'network_error',
+      }),
+    });
+    assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.planRefreshOk, false);
+    assert.equal(outcome.inventoryRefreshOk, false);
+  });
+
+  it('F: idempotent replay + authoritative refresh', async () => {
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 1,
+      pickingId: 99,
+      warehouseId: 3,
+      isOnline: true,
+      accept: async (planId, pickingId) => ({
+        ...okAccept(planId, pickingId),
+        idempotent_replay: true,
+        already_accepted: true,
+        load_kind: 'initial',
+      }),
+      refreshPlan: okPlan,
+      refreshInventory: okInventory,
+    });
+    assert.equal(outcome.accept.idempotent_replay, true);
+    assert.equal(outcome.inventoryRefreshOk, true);
+    assert.equal(outcome.planRefreshOk, true);
+    const copy = describeRouteLoadAcceptSuccess({
+      isRefill: false,
+      pickingName: 'WH/OUT/1',
+      idempotentReplay: true,
+      inventoryRefreshOk: true,
+    });
+    assert.match(copy.body, /ya estaba confirmada/i);
+    assert.match(copy.body, /Inventario actualizado/i);
+  });
+
+  it('lost-response retry uses SAME picking_id', async () => {
     const sent: Array<{ planId: number; pickingId: number }> = [];
     let attempt = 0;
     const accept = async (planId: number, pickingId: number) => {
@@ -94,12 +321,9 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
       attempt += 1;
       if (attempt === 1) throw new Error('network timeout');
       return {
-        ok: true,
+        ...okAccept(planId, pickingId),
         idempotent_replay: true,
         already_accepted: true,
-        plan_id: planId,
-        picking_id: pickingId,
-        load_kind: 'initial',
       };
     };
 
@@ -110,8 +334,8 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
         warehouseId: 3,
         isOnline: true,
         accept,
-        refreshPlan: async () => undefined,
-        refreshInventory: async () => undefined,
+        refreshPlan: okPlan,
+        refreshInventory: okInventory,
       }),
       /network timeout/,
     );
@@ -122,8 +346,8 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
       warehouseId: 3,
       isOnline: true,
       accept,
-      refreshPlan: async () => undefined,
-      refreshInventory: async () => undefined,
+      refreshPlan: okPlan,
+      refreshInventory: okInventory,
     });
     assert.deepEqual(sent, [
       { planId: 1, pickingId: 99 },
@@ -131,29 +355,16 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
     ]);
     assert.equal(replay.accept.idempotent_replay, true);
     assert.equal(replay.inventoryRefreshOk, true);
-    const copy = describeRouteLoadAcceptSuccess({
-      isRefill: false,
-      pickingName: 'WH/OUT/1',
-      idempotentReplay: true,
-      inventoryRefreshOk: true,
-    });
-    assert.match(copy.body, /ya estaba confirmada/i);
   });
 
-  it('E: accept success + inventory refresh failure does not invent qty / does not fail accept', async () => {
+  it('throwing inventory still treated as refresh fail (compat)', async () => {
     const outcome = await runRouteLoadAcceptAndRefresh({
       planId: 5,
       pickingId: 6,
       warehouseId: 9,
       isOnline: true,
-      accept: async () => ({
-        ok: true,
-        idempotent_replay: false,
-        already_accepted: false,
-        plan_id: 5,
-        picking_id: 6,
-      }),
-      refreshPlan: async () => undefined,
+      accept: async () => okAccept(5, 6),
+      refreshPlan: okPlan,
       refreshInventory: async () => {
         throw new Error('truck_stock down');
       },
@@ -161,14 +372,6 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
     assert.equal(outcome.accept.ok, true);
     assert.equal(outcome.inventoryRefreshOk, false);
     assert.match(outcome.inventoryRefreshError || '', /truck_stock/);
-    const copy = describeRouteLoadAcceptSuccess({
-      isRefill: true,
-      pickingName: 'REFILL/2',
-      idempotentReplay: false,
-      inventoryRefreshOk: false,
-    });
-    assert.equal(copy.title, 'Recarga aceptada');
-    assert.match(copy.body, /no se pudo actualizar el inventario/i);
   });
 
   it('offline blocks before accept', async () => {
@@ -180,16 +383,10 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
         isOnline: false,
         accept: async () => {
           accepted = true;
-          return {
-            ok: true,
-            idempotent_replay: false,
-            already_accepted: false,
-            plan_id: 1,
-            picking_id: 2,
-          };
+          return okAccept(1, 2);
         },
-        refreshPlan: async () => undefined,
-        refreshInventory: async () => undefined,
+        refreshPlan: okPlan,
+        refreshInventory: okInventory,
       }),
       /Sin conexión/,
     );
@@ -207,7 +404,7 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
 });
 
 describe('R1B-B multiple refills keep exact picking identity', () => {
-  it('A/B: pending cards retain independent picking_ids; payload always includes picking_id', () => {
+  it('H: pending cards retain independent picking_ids; payload always includes picking_id', () => {
     const state = buildRouteLoadAcceptanceState({
       load_picking_id: 10,
       load_pickings: [
@@ -241,7 +438,7 @@ describe('R1B-B multiple refills keep exact picking identity', () => {
 });
 
 describe('R1B-B inventory authority: truck_stock baseline, no local +qty load/refill', () => {
-  it('refill +20 via snapshot → 70; pending sale -5 → 65; never 90', async () => {
+  it('G: refill +20 via snapshot → 70; pending sale -5 → 65; never 90', async () => {
     const ports = createMemoryLedgerPorts(
       migrateLegacySellableSnapshot({ 1: 50 }, 'v0', 't0'),
     );
@@ -257,8 +454,6 @@ describe('R1B-B inventory authority: truck_stock baseline, no local +qty load/re
     });
     assert.equal(ports._sellable[1], 65);
 
-    // Keep-set without durable ACK would retain sale movement on stale snapshot;
-    // here we only prove load/refill did not add a second +20.
     const keep = keepLedgerOperationIdsForSnapshot(
       [{
         id: saleOp,
@@ -274,7 +469,7 @@ describe('R1B-B inventory authority: truck_stock baseline, no local +qty load/re
 });
 
 describe('R1B-B wiring contracts', () => {
-  it('accept paths always send picking_id and use shared refresh flow', () => {
+  it('accept paths use authoritative inventory + plan evidence', () => {
     const files = [
       'app/route-start.tsx',
       'app/refill-accept.tsx',
@@ -305,6 +500,9 @@ describe('R1B-B wiring contracts', () => {
     ] as const) {
       assert.match(src, /runRouteLoadAcceptAndRefresh/, `${name} uses shared accept+refresh flow`);
       assert.match(src, /requirePositivePickingId/, `${name} captures exact picking_id`);
+      assert.match(src, /loadProductsAuthoritative/, `${name} uses authoritative inventory loader`);
+      assert.match(src, /evaluatePlanRefreshEvidence/, `${name} evaluates plan freshness evidence`);
+      assert.match(src, /evaluateInventoryRefreshEvidence/, `${name} evaluates inventory evidence`);
       assert.doesNotMatch(
         src,
         /acceptRouteLoad\([^,]+\)\s*;/,
@@ -312,10 +510,18 @@ describe('R1B-B wiring contracts', () => {
       );
     }
 
+    // Card must not treat void loadProducts as refresh success evidence.
+    assert.doesNotMatch(card, /loadProducts=\{loadProducts\}/);
+    assert.match(card, /loadProductsAuthoritative/);
+
     const logistics = readFileSync(resolve(root, 'src/services/gfLogistics.ts'), 'utf8');
     assert.match(logistics, /buildRouteLoadAcceptPayload\(planId, exactPickingId\)/);
     assert.match(logistics, /parseRouteLoadAcceptResponse/);
     assert.match(logistics, /idempotent_replay/);
+
+    const flow = readFileSync(resolve(root, 'src/services/routeLoadAcceptFlow.ts'), 'utf8');
+    assert.match(flow, /missing_warehouse/);
+    assert.match(flow, /source === 'truck_stock'/);
   });
 
   it('online-only: no sync queue enqueue for load/refill accept', () => {

@@ -228,6 +228,16 @@ function testFrontendWiringUsesSharedAcceptanceFlow() {
   );
   assert.match(
     routeLoadAcceptanceCard,
+    /loadProductsAuthoritative/,
+    'La tarjeta debe refrescar inventario con evidencia autoritativa (truck_stock)',
+  );
+  assert.match(
+    routeLoadAcceptanceCard,
+    /evaluatePlanRefreshEvidence/,
+    'La tarjeta debe evaluar frescura del plan tras loadPlan (no Promise resolve)',
+  );
+  assert.match(
+    routeLoadAcceptanceCard,
     /Carga aceptada/,
     'La tarjeta debe mostrar el historial de cargas aceptadas',
   );

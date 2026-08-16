@@ -7,6 +7,7 @@
  * - Success = server ok/success (including idempotent_replay)
  * - Post-success: refresh plan + fresh truck_stock (no local +qty)
  * - Accept success + inventory refresh failure ≠ accept failure
+ * - Refresh success requires EXPLICIT evidence (not Promise resolved / no-throw)
  */
 
 export interface RouteLoadAcceptServerResult {
@@ -18,9 +19,28 @@ export interface RouteLoadAcceptServerResult {
   load_kind?: string;
 }
 
+/** Explicit plan refresh evidence — do not infer from Promise resolve. */
+export interface PlanRefreshEvidence {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Explicit inventory refresh evidence.
+ * Authoritative success requires truck_stock for the expected warehouse.
+ */
+export interface InventoryRefreshEvidence {
+  ok: boolean;
+  authoritative: boolean;
+  reason?: string;
+  warehouseId?: number;
+  source?: string;
+}
+
 export interface RouteLoadAcceptAndRefreshOutcome {
   accept: RouteLoadAcceptServerResult;
   planRefreshOk: boolean;
+  planRefreshReason: string | null;
   inventoryRefreshOk: boolean;
   inventoryRefreshError: string | null;
 }
@@ -41,6 +61,13 @@ export function requirePositivePlanId(planId: unknown): number {
   return Math.trunc(id);
 }
 
+function readPositiveId(value: unknown): number | null {
+  if (value == null || value === false || value === '') return null;
+  const id = Number(value);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return Math.trunc(id);
+}
+
 /** Normalize seal_load HTTP body into a typed accept result. */
 export function parseRouteLoadAcceptResponse(
   raw: unknown,
@@ -57,13 +84,97 @@ export function parseRouteLoadAcceptResponse(
       : 'No se pudo aceptar la carga.';
     throw new Error(message);
   }
+
+  // Fail-closed when server returns explicit IDs that disagree with the request.
+  // Omitted fields fall back to the requested identity (backend #92 always echoes both).
+  const responsePlanId = readPositiveId(data.plan_id);
+  const responsePickingId = readPositiveId(data.picking_id);
+  if (responsePlanId != null && responsePlanId !== fallback.plan_id) {
+    throw new Error('Respuesta de aceptación con plan_id inconsistente.');
+  }
+  if (responsePickingId != null && responsePickingId !== fallback.picking_id) {
+    throw new Error('Respuesta de aceptación con picking_id inconsistente.');
+  }
+
   return {
     ok: true,
     idempotent_replay: data.idempotent_replay === true || body.idempotent_replay === true,
     already_accepted: data.already_accepted === true || body.already_accepted === true,
-    picking_id: Number(data.picking_id || fallback.picking_id) || fallback.picking_id,
-    plan_id: Number(data.plan_id || fallback.plan_id) || fallback.plan_id,
+    picking_id: responsePickingId ?? fallback.picking_id,
+    plan_id: responsePlanId ?? fallback.plan_id,
     load_kind: typeof data.load_kind === 'string' ? data.load_kind : undefined,
+  };
+}
+
+/**
+ * Evaluate RouteStore snapshot AFTER loadPlan({ force: true }).
+ * Success requires matching plan_id and routeFreshness === 'updated'.
+ */
+export function evaluatePlanRefreshEvidence(args: {
+  expectedPlanId: number;
+  plan: { plan_id?: number | null } | null | undefined;
+  routeFreshness: string;
+}): PlanRefreshEvidence {
+  const expected = requirePositivePlanId(args.expectedPlanId);
+  if (!args.plan || args.plan.plan_id == null) {
+    return { ok: false, reason: 'missing_plan' };
+  }
+  const currentId = Number(args.plan.plan_id);
+  if (!Number.isFinite(currentId) || currentId !== expected) {
+    return { ok: false, reason: 'plan_mismatch' };
+  }
+  if (args.routeFreshness !== 'updated') {
+    return {
+      ok: false,
+      reason: args.routeFreshness === 'stale'
+        ? 'stale'
+        : (args.routeFreshness || 'not_updated'),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Inventory refresh is SUCCESS only for authoritative truck_stock of the
+ * expected warehouse. Promise resolve alone is never enough.
+ */
+export function evaluateInventoryRefreshEvidence(
+  result: {
+    ok: boolean;
+    authoritative: boolean;
+    warehouseId?: number;
+    source?: string;
+    reason?: string;
+  },
+  expectedWarehouseId: number,
+): InventoryRefreshEvidence {
+  const expected = Number(expectedWarehouseId);
+  if (
+    result.ok === true
+    && result.authoritative === true
+    && Number(result.warehouseId) === expected
+    && result.source === 'truck_stock'
+  ) {
+    return {
+      ok: true,
+      authoritative: true,
+      warehouseId: expected,
+      source: 'truck_stock',
+    };
+  }
+  let reason = result.reason || 'unknown';
+  if (!result.reason && result.source && result.source !== 'truck_stock') {
+    reason = 'not_truck_stock';
+  }
+  if (!result.reason && result.warehouseId != null && Number(result.warehouseId) !== expected) {
+    reason = 'warehouse_mismatch';
+  }
+  return {
+    ok: false,
+    authoritative: false,
+    reason,
+    warehouseId: result.warehouseId,
+    source: result.source,
   };
 }
 
@@ -90,13 +201,14 @@ export function describeRouteLoadAcceptSuccess(args: {
   }
   return {
     title,
-    body: `${args.pickingName} quedó confirmada para tu ruta.`,
+    body: `${args.pickingName} quedó confirmada para tu ruta. Inventario actualizado.`,
   };
 }
 
 /**
  * Accept then refresh plan + truck_stock. Never invents local +qty.
- * Accept errors throw. Refresh failures are reported in the outcome.
+ * Accept errors throw. Refresh failures are reported in the outcome via
+ * structured evidence (not throw/no-throw alone).
  */
 export async function runRouteLoadAcceptAndRefresh(args: {
   planId: number;
@@ -104,8 +216,8 @@ export async function runRouteLoadAcceptAndRefresh(args: {
   warehouseId?: number | null;
   isOnline: boolean;
   accept: (planId: number, pickingId: number) => Promise<RouteLoadAcceptServerResult>;
-  refreshPlan: () => Promise<void>;
-  refreshInventory: (warehouseId: number) => Promise<void>;
+  refreshPlan: () => Promise<PlanRefreshEvidence>;
+  refreshInventory: (warehouseId: number) => Promise<InventoryRefreshEvidence>;
   offlineMessage?: string;
 }): Promise<RouteLoadAcceptAndRefreshOutcome> {
   const planId = requirePositivePlanId(args.planId);
@@ -120,32 +232,44 @@ export async function runRouteLoadAcceptAndRefresh(args: {
   const accept = await args.accept(planId, pickingId);
 
   let planRefreshOk = false;
+  let planRefreshReason: string | null = null;
   try {
-    await args.refreshPlan();
-    planRefreshOk = true;
-  } catch {
+    const planEvidence = await args.refreshPlan();
+    planRefreshOk = planEvidence.ok === true;
+    planRefreshReason = planRefreshOk ? null : (planEvidence.reason || 'plan_refresh_failed');
+  } catch (error) {
     planRefreshOk = false;
+    planRefreshReason = error instanceof Error ? error.message : 'plan_refresh_threw';
   }
 
-  let inventoryRefreshOk = true;
+  let inventoryRefreshOk = false;
   let inventoryRefreshError: string | null = null;
-  if (args.warehouseId && Number(args.warehouseId) > 0) {
+  const warehouseId = args.warehouseId != null ? Number(args.warehouseId) : NaN;
+  if (!Number.isFinite(warehouseId) || warehouseId <= 0) {
+    inventoryRefreshOk = false;
+    inventoryRefreshError = 'missing_warehouse';
+  } else {
     try {
-      await args.refreshInventory(Number(args.warehouseId));
-      inventoryRefreshOk = true;
+      const invEvidence = await args.refreshInventory(warehouseId);
+      const evaluated = evaluateInventoryRefreshEvidence(invEvidence, warehouseId);
+      inventoryRefreshOk = evaluated.ok === true && evaluated.authoritative === true;
+      inventoryRefreshError = inventoryRefreshOk
+        ? null
+        : (evaluated.reason || 'inventory_refresh_failed');
     } catch (error) {
       inventoryRefreshOk = false;
-      inventoryRefreshError = error instanceof Error ? error.message : String(error);
+      inventoryRefreshError = error instanceof Error ? error.message : 'inventory_refresh_threw';
     }
   }
 
   return {
     accept,
     planRefreshOk,
+    planRefreshReason,
     inventoryRefreshOk,
     inventoryRefreshError: planRefreshOk
       ? inventoryRefreshError
-      : (inventoryRefreshError || 'No se pudo refrescar el plan.'),
+      : (inventoryRefreshError || planRefreshReason || 'No se pudo refrescar el plan.'),
   };
 }
 

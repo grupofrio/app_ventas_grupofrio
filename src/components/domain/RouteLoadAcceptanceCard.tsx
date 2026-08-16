@@ -11,12 +11,16 @@ import {
 } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
 import { acceptRouteLoad } from '../../services/gfLogistics';
+import type { InventoryLoadResult } from '../../services/legacyRefreshRunner';
 import {
   describeRouteLoadAcceptSuccess,
+  evaluateInventoryRefreshEvidence,
+  evaluatePlanRefreshEvidence,
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
 } from '../../services/routeLoadAcceptFlow';
 import { buildRouteLoadAcceptanceState, RouteLoadCard, RouteLoadLine } from '../../services/routeLoadAcceptance';
+import { useRouteStore } from '../../stores/useRouteStore';
 import type { GFPlan } from '../../types/plan';
 import { logWarn } from '../../utils/logger';
 
@@ -25,7 +29,8 @@ interface Props {
   isOnline: boolean;
   warehouseId?: number | null;
   loadPlan: (opts?: { force?: boolean }) => Promise<void>;
-  loadProducts: (warehouseId: number) => Promise<void> | void;
+  /** Authoritative inventory loader — Promise resolve is NOT success evidence. */
+  loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
   showLoadLines?: boolean;
   showAcceptedLoads?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -36,7 +41,7 @@ export function RouteLoadAcceptanceCard({
   isOnline,
   warehouseId,
   loadPlan,
-  loadProducts,
+  loadProductsAuthoritative,
   showLoadLines = false,
   showAcceptedLoads = false,
   style,
@@ -66,9 +71,18 @@ export function RouteLoadAcceptanceCard({
         warehouseId,
         isOnline: true,
         accept: acceptRouteLoad,
-        refreshPlan: () => loadPlan({ force: true }),
+        refreshPlan: async () => {
+          await loadPlan({ force: true });
+          const snap = useRouteStore.getState();
+          return evaluatePlanRefreshEvidence({
+            expectedPlanId: planId,
+            plan: snap.plan,
+            routeFreshness: snap.routeFreshness,
+          });
+        },
         refreshInventory: async (wid) => {
-          await loadProducts(wid);
+          const result = await loadProductsAuthoritative(wid);
+          return evaluateInventoryRefreshEvidence(result, wid);
         },
       });
       const copy = describeRouteLoadAcceptSuccess({
@@ -82,6 +96,7 @@ export function RouteLoadAcceptanceCard({
           plan_id: planId,
           picking_id: pickingId,
           plan_refresh_ok: outcome.planRefreshOk,
+          plan_refresh_reason: outcome.planRefreshReason,
           inventory_refresh_ok: outcome.inventoryRefreshOk,
           error: outcome.inventoryRefreshError,
         });
@@ -95,7 +110,15 @@ export function RouteLoadAcceptanceCard({
     } finally {
       setAcceptingPickingId(null);
     }
-  }, [acceptingPickingId, isOnline, loadPlan, loadProducts, pendingLoad, plan?.plan_id, warehouseId]);
+  }, [
+    acceptingPickingId,
+    isOnline,
+    loadPlan,
+    loadProductsAuthoritative,
+    pendingLoad,
+    plan?.plan_id,
+    warehouseId,
+  ]);
 
   const acceptedLoads = showAcceptedLoads ? routeLoadState.acceptedLoads : [];
 

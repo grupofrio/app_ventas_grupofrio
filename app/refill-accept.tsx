@@ -32,6 +32,8 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { acceptRouteLoad } from '../src/services/gfLogistics';
 import {
   describeRouteLoadAcceptSuccess,
+  evaluateInventoryRefreshEvidence,
+  evaluatePlanRefreshEvidence,
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
 } from '../src/services/routeLoadAcceptFlow';
@@ -51,6 +53,7 @@ export default function RefillAcceptScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
 
   const [accepting, setAccepting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -95,9 +98,18 @@ export default function RefillAcceptScreen() {
                 warehouseId,
                 isOnline: true,
                 accept: acceptRouteLoad,
-                refreshPlan: () => loadPlan({ force: true }),
+                refreshPlan: async () => {
+                  await loadPlan({ force: true });
+                  const snap = useRouteStore.getState();
+                  return evaluatePlanRefreshEvidence({
+                    expectedPlanId: planId,
+                    plan: snap.plan,
+                    routeFreshness: snap.routeFreshness,
+                  });
+                },
                 refreshInventory: async (wid) => {
-                  await loadProducts(wid);
+                  const result = await loadProductsAuthoritative(wid);
+                  return evaluateInventoryRefreshEvidence(result, wid);
                 },
               });
               const copy = describeRouteLoadAcceptSuccess({
@@ -111,6 +123,7 @@ export default function RefillAcceptScreen() {
                   plan_id: planId,
                   picking_id: pickingId,
                   plan_refresh_ok: outcome.planRefreshOk,
+                  plan_refresh_reason: outcome.planRefreshReason,
                   inventory_refresh_ok: outcome.inventoryRefreshOk,
                   error: outcome.inventoryRefreshError,
                 });

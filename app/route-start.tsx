@@ -38,6 +38,8 @@ import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad, startPlan } from '../src/services/gfLogistics';
 import {
   describeRouteLoadAcceptSuccess,
+  evaluateInventoryRefreshEvidence,
+  evaluatePlanRefreshEvidence,
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
 } from '../src/services/routeLoadAcceptFlow';
@@ -90,6 +92,7 @@ export default function RouteStartScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
   const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
   const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
 
@@ -225,9 +228,18 @@ export default function RouteStartScreen() {
                 warehouseId,
                 isOnline: true,
                 accept: acceptRouteLoad,
-                refreshPlan: () => loadPlan({ force: true }),
+                refreshPlan: async () => {
+                  await loadPlan({ force: true });
+                  const snap = useRouteStore.getState();
+                  return evaluatePlanRefreshEvidence({
+                    expectedPlanId: capturedPlanId,
+                    plan: snap.plan,
+                    routeFreshness: snap.routeFreshness,
+                  });
+                },
                 refreshInventory: async (wid) => {
-                  await loadProducts(wid);
+                  const result = await loadProductsAuthoritative(wid);
+                  return evaluateInventoryRefreshEvidence(result, wid);
                 },
                 offlineMessage: 'Conéctate al WiFi del CEDIS para aceptar la carga.',
               });
@@ -242,6 +254,7 @@ export default function RouteStartScreen() {
                   plan_id: capturedPlanId,
                   picking_id: pickingId,
                   plan_refresh_ok: outcome.planRefreshOk,
+                  plan_refresh_reason: outcome.planRefreshReason,
                   inventory_refresh_ok: outcome.inventoryRefreshOk,
                   error: outcome.inventoryRefreshError,
                 });

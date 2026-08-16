@@ -36,7 +36,15 @@ import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleSto
 import { ensureChecklistReady } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
 import { acceptRouteLoad, startPlan } from '../src/services/gfLogistics';
+import {
+  describeRouteLoadAcceptSuccess,
+  evaluateInventoryRefreshEvidence,
+  evaluatePlanRefreshEvidence,
+  requirePositivePickingId,
+  runRouteLoadAcceptAndRefresh,
+} from '../src/services/routeLoadAcceptFlow';
 import { buildInitialLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
+import { logWarn } from '../src/utils/logger';
 import {
   chooseAuthoritativeKm,
   isChecklistAnsweredForStart,
@@ -84,6 +92,7 @@ export default function RouteStartScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
   const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
   const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
 
@@ -192,13 +201,16 @@ export default function RouteStartScreen() {
     const capturedPlanId = planId;
     const pending = initialLoadState.nextPendingInitialLoad;
     if (!pending?.picking_id) return;
+    // Capture exact picking before any await / confirmation dialog.
+    const pickingId = requirePositivePickingId(pending.picking_id);
+    const pickingName = pending.name;
     if (!isOnline) {
       Alert.alert('Sin conexión', 'Conéctate al WiFi del CEDIS para aceptar la carga.');
       return;
     }
     Alert.alert(
       'Aceptar carga',
-      `¿Confirmas que recibiste el producto de "${pending.name}"?`,
+      `¿Confirmas que recibiste el producto de "${pickingName}"?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -210,9 +222,44 @@ export default function RouteStartScreen() {
             }
             setAcceptingLoad(true);
             try {
-              await acceptRouteLoad(capturedPlanId, pending.picking_id);
-              await loadPlan({ force: true });
-              if (warehouseId) await loadProducts(warehouseId);
+              const outcome = await runRouteLoadAcceptAndRefresh({
+                planId: capturedPlanId,
+                pickingId,
+                warehouseId,
+                isOnline: true,
+                accept: acceptRouteLoad,
+                refreshPlan: async () => {
+                  await loadPlan({ force: true });
+                  const snap = useRouteStore.getState();
+                  return evaluatePlanRefreshEvidence({
+                    expectedPlanId: capturedPlanId,
+                    plan: snap.plan,
+                    routeFreshness: snap.routeFreshness,
+                  });
+                },
+                refreshInventory: async (wid) => {
+                  const result = await loadProductsAuthoritative(wid);
+                  return evaluateInventoryRefreshEvidence(result, wid);
+                },
+                offlineMessage: 'Conéctate al WiFi del CEDIS para aceptar la carga.',
+              });
+              const copy = describeRouteLoadAcceptSuccess({
+                isRefill: false,
+                pickingName,
+                idempotentReplay: outcome.accept.idempotent_replay,
+                inventoryRefreshOk: outcome.inventoryRefreshOk && outcome.planRefreshOk,
+              });
+              if (!outcome.inventoryRefreshOk || !outcome.planRefreshOk) {
+                logWarn('inventory', 'route_load_accept_refresh_failed', {
+                  plan_id: capturedPlanId,
+                  picking_id: pickingId,
+                  plan_refresh_ok: outcome.planRefreshOk,
+                  plan_refresh_reason: outcome.planRefreshReason,
+                  inventory_refresh_ok: outcome.inventoryRefreshOk,
+                  error: outcome.inventoryRefreshError,
+                });
+              }
+              Alert.alert(copy.title, copy.body);
             } catch (err) {
               Alert.alert('Error al aceptar', err instanceof Error ? err.message : 'Intenta de nuevo.');
             } finally {

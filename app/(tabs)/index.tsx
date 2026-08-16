@@ -63,6 +63,7 @@ export default function HomeScreen() {
   const productsLastSync = useProductStore((s) => s.lastSync);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
   const routeStartReadiness = useRouteStartStore((s) => s.readiness);
 
   // Reload on auth identity changes so a previous employee's in-memory state is not reused.
@@ -314,7 +315,7 @@ export default function HomeScreen() {
               isOnline={isOnline}
               warehouseId={warehouseId}
               loadPlan={loadPlan}
-              loadProducts={loadProducts}
+              loadProductsAuthoritative={loadProductsAuthoritative}
             />
 
             {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}

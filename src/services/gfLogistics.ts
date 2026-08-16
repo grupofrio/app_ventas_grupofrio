@@ -25,6 +25,12 @@ import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientE
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
 import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
+import {
+  parseRouteLoadAcceptResponse,
+  requirePositivePickingId,
+  requirePositivePlanId,
+  type RouteLoadAcceptServerResult,
+} from './routeLoadAcceptFlow';
 import { isAlreadyConfirmedResponse } from './idempotentResponse';
 import { normalizePlanStopPayload, extractPlanStopsArray } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
@@ -641,12 +647,28 @@ export async function checkSaleDuplicate(
   };
 }
 
-export async function acceptRouteLoad(routePlanId: number, pickingId: number): Promise<boolean> {
-  const result = await postRest<{ ok?: boolean; success?: boolean }>(
+export async function acceptRouteLoad(
+  routePlanId: number,
+  pickingId: number,
+): Promise<RouteLoadAcceptServerResult> {
+  const planId = requirePositivePlanId(routePlanId);
+  const exactPickingId = requirePositivePickingId(pickingId);
+  const result = await postRest<Record<string, unknown>>(
     `${GF_BASE}/route_plan/seal_load`,
-    buildRouteLoadAcceptPayload(routePlanId, pickingId),
+    buildRouteLoadAcceptPayload(planId, exactPickingId),
   );
-  return result?.ok === true || result?.success === true || !!result;
+  const parsed = parseRouteLoadAcceptResponse(result, {
+    plan_id: planId,
+    picking_id: exactPickingId,
+  });
+  logInfo('inventory', 'route_load_accept_ok', {
+    plan_id: parsed.plan_id,
+    picking_id: parsed.picking_id,
+    load_kind: parsed.load_kind || null,
+    idempotent_replay: parsed.idempotent_replay,
+    already_accepted: parsed.already_accepted,
+  });
+  return parsed;
 }
 
 export async function createPayment(

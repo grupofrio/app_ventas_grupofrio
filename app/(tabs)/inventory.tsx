@@ -26,7 +26,7 @@ export default function InventoryScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const { plan, loadPlan } = useRouteStore();
   const {
-    products, totalStockKg, isLoading, error, loadProducts,
+    products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
     productCount, lastSync: productsLastSync,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
@@ -119,7 +119,7 @@ export default function InventoryScreen() {
           isOnline={isOnline}
           warehouseId={warehouseId}
           loadPlan={loadPlan}
-          loadProducts={loadProducts}
+          loadProductsAuthoritative={loadProductsAuthoritative}
           showLoadLines
           showAcceptedLoads
         />

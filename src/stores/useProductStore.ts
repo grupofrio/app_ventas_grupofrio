@@ -195,14 +195,12 @@ export const useProductStore = create<ProductState>((set, get) => ({
           '../services/ambiguousAckReconcileRuntime.ts'
         );
         const sync = useSyncStore.getState();
+        // Awaits durable ACK RMW (serialized) before truck_stock. Persist
+        // failure rejects → catch below → keep-set treats op as unacked.
         await reconcileAmbiguousLedgerOpsAgainstStore({
           queue: sync.queue as never,
-          replaceQueue: (queue) => {
-            useSyncStore.getState().replaceQueueFromDurable(queue as never);
-          },
-          persist: () => {
-            void useSyncStore.getState().persistQueue();
-          },
+          applyAcknowledgementsDurably: (intents) =>
+            useSyncStore.getState().applyServerAcknowledgementsDurably(intents),
         });
       } catch (reconcileErr) {
         logWarn('inventory', 'ambiguous_ack_reconcile_failed', {

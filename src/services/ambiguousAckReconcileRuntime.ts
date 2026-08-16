@@ -1,5 +1,9 @@
 /**
  * Production binding for INV-1B ambiguous ack reconcile.
+ *
+ * Ordering:
+ *   backend authority → ACK intents → durable latest-queue mutation → memory publish
+ * Caller then takes a fresh truck_stock (snapshotAtMs fence) and rebases the ledger.
  */
 
 import {
@@ -8,6 +12,7 @@ import {
   type AmbiguousAckStatus,
   type AmbiguousQueueItem,
   type ReconcileAmbiguousResult,
+  type ServerAckIntent,
 } from './ambiguousAckReconcile.ts';
 import { checkSaleDuplicate } from './gfLogistics.ts';
 import { createGift } from './gfSalesOps.ts';
@@ -36,8 +41,12 @@ function classifyGiftError(error: unknown): AmbiguousAckStatus {
 
 export async function reconcileAmbiguousLedgerOpsAgainstStore(args: {
   queue: AmbiguousQueueItem[];
-  replaceQueue: (queue: AmbiguousQueueItem[]) => void;
-  persist: () => void;
+  /**
+   * Serialized durable RMW: mutate matching ops on the *current* queue,
+   * persist, then publish memory. Must reject if durable write fails
+   * (no memory ACK publish on failure).
+   */
+  applyAcknowledgementsDurably: (intents: ServerAckIntent[]) => Promise<void>;
   nowMs?: () => number;
 }): Promise<ReconcileAmbiguousResult> {
   return runReconcileAmbiguousLedgerFlight(async () => {
@@ -53,9 +62,8 @@ export async function reconcileAmbiguousLedgerOpsAgainstStore(args: {
       classifyGiftError,
       classifySaleCheckError,
     });
-    if (result.acknowledgedIds.length > 0) {
-      args.replaceQueue(result.queue);
-      args.persist();
+    if (result.intents.length > 0) {
+      await args.applyAcknowledgementsDurably(result.intents);
     }
     return result;
   });

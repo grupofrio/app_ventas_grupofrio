@@ -19,14 +19,15 @@ R0/R1 left inventory as optimistic counter mutations (`updateLocalStock`). That 
 | Bucket | Meaning |
 |---|---|
 | `sellable` | Units available to sell/gift/deliver from the van (exact math; may be negative = deficit) |
-| `physical_van` | Derived: `sellable + return_good + damaged + pending` |
+| `net_van_projection` | Derived: `sellable + return_good + damaged + pending` |
 | `consigned` | At customer under consignment (**not** in van) |
 | `return_good` | Good returns awaiting CEDIS handling |
 | `damaged` | Damaged / merma awaiting CEDIS |
 | `pending` | In-flight / unknown separation (counted in van until clarified in later workstreams) |
 
-`physical_van` is a **projection**, not an independently mutated store.
-`consigned` is excluded from `physical_van` because it is physically at the customer.
+`net_van_projection` is a **projection**, not an independently mutated store.
+It may be negative when `sellable` is in deficit, so it is not asserted as a
+physical count. `consigned` is excluded because it is physically at the customer.
 
 ### Identities
 
@@ -79,7 +80,7 @@ created_at, sync_status, server_reference, metadata
 projectInventory({ initialSnapshot, movements })
 → per product_id: {
   sellable, consigned, return_good, damaged, pending,
-  physical_van, sellable_deficit
+  net_van_projection, sellable_deficit
 }
 ```
 

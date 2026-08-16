@@ -67,7 +67,7 @@ describe('projectInventory', () => {
     });
     assert.equal(projection['10'].sellable, 6);
     assert.equal(projection['10'].damaged, 1);
-    assert.equal(projection['10'].physical_van, 7);
+    assert.equal(projection['10'].net_van_projection, 7);
     assert.equal(projection['10'].sellable_deficit, 0);
   });
 
@@ -81,6 +81,7 @@ describe('projectInventory', () => {
       movements: sale,
     });
     assert.equal(afterSale['1'].sellable, -1);
+    assert.equal(afterSale['1'].net_van_projection, -1);
     assert.equal(afterSale['1'].sellable_deficit, 1);
 
     const reversals = buildReversalMovements(sale, {
@@ -336,6 +337,22 @@ describe('ledger persistence barrier', () => {
     const ledgerBranch = src.slice(start, end);
     assert.doesNotMatch(ledgerBranch, /\bupdateLocalStock\s*\(/);
     assert.match(ledgerBranch, /_ledgerReviewRequired/);
+  });
+
+  it('does not claim ledger rollback without an operation_id', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(
+      path.join(process.cwd(), 'src/stores/useSyncStore.ts'),
+      'utf8',
+    );
+    const start = src.indexOf("if (!operationId) {");
+    const end = src.indexOf('void (async () => {', start);
+    assert.ok(start >= 0 && end > start);
+    const missingOperationBranch = src.slice(start, end);
+    assert.match(missingOperationBranch, /_ledgerReviewRequired/);
+    assert.match(missingOperationBranch, /_ledgerRollbackEvidencePending/);
+    assert.doesNotMatch(missingOperationBranch, /markLocalStockRolledBack/);
   });
 
   it('inventory-ledger is a sensitive encrypted record', () => {

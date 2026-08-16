@@ -76,11 +76,11 @@ export interface ProductBucketBalances {
   damaged: number;
   pending: number;
   /**
-   * Derived van-held units: sellable + return_good + damaged + pending.
+   * Derived net projection: sellable + return_good + damaged + pending.
    * Consigned is NOT included (physically at customer).
-   * May be negative when sellable is in deficit.
+   * May be negative when sellable is in deficit, so it is not a physical count.
    */
-  physical_van: number;
+  net_van_projection: number;
   /** Convenience: max(0, -sellable). Projection never hides deficit as 0. */
   sellable_deficit: number;
 }
@@ -102,7 +102,7 @@ export const EMPTY_BALANCES = (): ProductBucketBalances => ({
   return_good: 0,
   damaged: 0,
   pending: 0,
-  physical_van: 0,
+  net_van_projection: 0,
   sellable_deficit: 0,
 });
 
@@ -126,7 +126,7 @@ export function assertUuid(value: string, label: string): void {
 }
 
 export function withDerivedFields(balances: ProductBucketBalances): ProductBucketBalances {
-  balances.physical_van =
+  balances.net_van_projection =
     balances.sellable + balances.return_good + balances.damaged + balances.pending;
   balances.sellable_deficit = balances.sellable < 0 ? -balances.sellable : 0;
   return balances;

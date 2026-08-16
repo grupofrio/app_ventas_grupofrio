@@ -1473,6 +1473,28 @@ function markLocalStockRolledBack(id: string): void {
   persistQueueInBackground('rollback_marker');
 }
 
+/**
+ * Ledger evidence is incomplete: retain the terminal queue item for human
+ * reconciliation and never assert that a reversal occurred.
+ */
+function markLedgerRollbackReviewRequired(id: string, rollbackError = false): void {
+  const queue = useSyncStore.getState().queue.map((i) =>
+    i.id === id
+      ? {
+          ...i,
+          payload: {
+            ...i.payload,
+            _ledgerReviewRequired: true,
+            _ledgerRollbackEvidencePending: true,
+            ...(rollbackError ? { _ledgerRollbackError: true } : {}),
+          },
+        }
+      : i,
+  );
+  useSyncStore.setState({ queue, ...computeCounts(queue) });
+  persistQueueInBackground('ledger_rollback_review');
+}
+
 function rollbackFailedOperation(item: SyncQueueItem): void {
   // POST-R1A: ledger-applied ops reverse via ledger only (no counter-mutation
   // fallback — that would create a second inventory source undone by hydrate).
@@ -1485,7 +1507,20 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
     );
     if (!operationId) {
       logError('sync', 'rollback_ledger_missing_operation_id', { id: item.id });
-      markLocalStockRolledBack(item.id);
+      const queue = useSyncStore.getState().queue.map((i) =>
+        i.id === item.id
+          ? {
+              ...i,
+              payload: {
+                ...i.payload,
+                _ledgerReviewRequired: true,
+                _ledgerRollbackEvidencePending: true,
+              },
+            }
+          : i,
+      );
+      useSyncStore.setState({ queue, ...computeCounts(queue) });
+      persistQueueInBackground('ledger_rollback_review');
       return;
     }
     void (async () => {
@@ -1510,21 +1545,7 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
           message: error instanceof Error ? error.message : String(error),
         });
         // Keep evidence; mark review_required — never fall back to counter mutation.
-        const queue = useSyncStore.getState().queue.map((i) =>
-          i.id === item.id
-            ? {
-                ...i,
-                payload: {
-                  ...i.payload,
-                  _ledgerReviewRequired: true,
-                  _ledgerRollbackError: true,
-                },
-                status: i.status === 'dead' ? i.status : i.status,
-              }
-            : i,
-        );
-        useSyncStore.setState({ queue, ...computeCounts(queue) });
-        persistQueueInBackground('ledger_rollback_review');
+        markLedgerRollbackReviewRequired(item.id, true);
       }
     })();
     return;

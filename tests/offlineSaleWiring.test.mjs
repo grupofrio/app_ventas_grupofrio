@@ -74,8 +74,8 @@ assert(sale.includes('await createSale('), 'venta online usa createSale directo'
 // offline. La rama offline va DESPUÉS de construir el payload (no antes de lock).
 assert.match(
   sale,
-  /if \(!isOnline\) \{[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?operationId:\s*recoveryIntent\.operationId/,
-  'offline debe materializar durablemente el intent con el mismo operationId',
+  /if \(!isOnline\) \{[\s\S]*?await commitQueuedSaleWithLedger\(\)/,
+  'offline debe materializar durablemente el intent con barrera queue+ledger',
 );
 assert.doesNotMatch(
   sale,
@@ -83,6 +83,8 @@ assert.doesNotMatch(
   'offline no corrige el operationId sólo en memoria después de encolar',
 );
 assert(sale.includes('persistAmbiguousSaleRecovery'), 'venta debe usar el lote durable compartido para pedido y evidencia');
+assert(sale.includes('commitQueuedOperationWithLedger') || sale.includes('commitQueuedSaleWithLedger'),
+  'venta offline/ambiguous usa commit atómico queue+ledger');
 assert(!sale.includes('salePhotoUris[0]'), 'venta debe encolar todas las fotos capturadas, no solo la primera');
 const offlineIdx = sale.indexOf('if (!isOnline) {');
 const createIdx = sale.indexOf('await createSale(');
@@ -94,11 +96,11 @@ const offlineTicketSaveIndex = offlineBranch.indexOf(
 );
 assert(offlineTicketSaveIndex >= 0, 'offline intenta guardar el comprobante del intent durable');
 const offlineRecoveryPersistIndex = offlineBranch.indexOf(
-  'await persistAmbiguousSaleRecovery({',
+  'await commitQueuedSaleWithLedger()',
 );
 assert(
   offlineRecoveryPersistIndex > offlineTicketSaveIndex,
-  'offline guarda el ticket pendiente antes de persistir y liberar la cola',
+  'offline guarda el ticket pendiente antes de persistir cola+ledger',
 );
 const offlineTicketTryIndex = offlineBranch.lastIndexOf('try {', offlineTicketSaveIndex);
 const offlineTicketCatchIndex = offlineBranch.indexOf('catch (ticketError)', offlineTicketSaveIndex);
@@ -157,10 +159,18 @@ assert(sync.includes('sale_order_dead_no_stock_rollback'),
 // el delta viajando en el payload encolado para rollback automático.
 assert(sale.includes("from '../../src/services/stockRollback'") && sale.includes('buildLocalStockDelta'),
   'venta debe construir el delta de stock local para el rollback genérico');
-assert(/updateLocalStock\(l\.productId,\s*-l\.qty\)/.test(sale),
-  'la venta debe descontar inventario local al confirmarse (S2)');
+assert(sale.includes('applySaleStockViaLedger') || sale.includes('commitQueuedOperationWithLedger'),
+  'la venta debe aplicar inventario vía ledger (POST-R1A)');
+assert(sale.includes('commitQueuedOperationWithLedger'),
+  'offline/ambiguous sale debe usar barrera atómica queue+ledger');
+assert(sale.includes('deferDurablePersist: true') || sale.includes('deferDurablePersist:true'),
+  'enqueue de venta offline debe diferir persist aislado de cola');
+assert.doesNotMatch(sale, /updateLocalStock\(l\.productId,\s*-l\.qty\)/,
+  'la venta no debe mutar stock con updateLocalStock directo');
 assert(/_localStockDelta:\s*localStockDelta/.test(sale),
   'el payload encolado debe llevar el delta de stock local para el rollback');
+assert(/_ledgerApplied:\s*true/.test(sale),
+  'el payload encolado debe marcar _ledgerApplied');
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
 assert.match(
   sale,

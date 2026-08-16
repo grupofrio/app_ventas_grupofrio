@@ -91,7 +91,7 @@ assert.match(
 );
 assert.match(
   enqueueBlock,
-  /if \(result\.action === ['"]inserted['"]\)[\s\S]*?makeClientEventMeta\(result\.id\)/,
+  /if \(result\.action === ['"]inserted['"](?: && !opts\?\.skipPersist)?\)[\s\S]*?makeClientEventMeta\(result\.id\)/,
   'client metadata is generated only for new insertions',
 );
 assert.match(

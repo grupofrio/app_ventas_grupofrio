@@ -298,20 +298,13 @@ assert.match(definitive.body, /return;/);
 
 const recoveryPhase = tryCatchContaining(
   createPhase.catchBody,
-  'await persistAmbiguousSaleRecovery({',
+  'await commitQueuedSaleWithLedger()',
 );
-assert.match(recoveryPhase.tryBody, /operationId:\s*recoveryIntent\.operationId/);
-assert.match(recoveryPhase.tryBody, /payload:\s*recoveryIntent\.queuePayload/);
-assert.match(recoveryPhase.tryBody, /customerName:\s*recoveryIntent\.ticketSnapshot\.customerName/);
-assert.match(recoveryPhase.tryBody, /total:\s*recoveryIntent\.ticketSnapshot\.total/);
-assert.match(recoveryPhase.tryBody, /stopId:\s*recoveryIntent\.stopId/);
-assert.match(recoveryPhase.tryBody, /photoUris:\s*recoveryIntent\.photoUris/);
-assert.match(recoveryPhase.tryBody, /enqueue,/);
-assert.match(recoveryPhase.tryBody, /persistQueue,/);
-assert.match(recoveryPhase.tryBody, /releaseProcessingHolds,/);
+assert.match(recoveryPhase.tryBody, /await saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)/);
+assert.match(recoveryPhase.tryBody, /await commitQueuedSaleWithLedger\(\)/);
 assert.match(
   recoveryPhase.catchBody,
-  /logError\(\s*['"]sync['"],\s*['"]ambiguous_sale_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
+  /logError\(\s*['"]sync['"],\s*['"]ambiguous_sale_queue_ledger_persist_failed['"],[\s\S]*?operation_id:\s*operationId[\s\S]*?message:/,
 );
 assert.match(recoveryPhase.catchBody, /setSaleSubmitting\(false\)/);
 assert.match(recoveryPhase.catchBody, /safeUnknownErrorMessage\(\s*persistError,/);
@@ -323,7 +316,7 @@ assert(
 );
 assert.match(
   recoveryPhase.catchBody,
-  /Alert\.alert\(\s*['"]No cierres la aplicación['"],\s*['"]No pudimos guardar de forma segura el pedido\. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente\.['"],?\s*\)/,
+  /Alert\.alert\(\s*['"]No cierres la aplicación['"],\s*['"]No pudimos guardar de forma atómica el pedido y el inventario local\. La operación permanece bloqueada; mantén abierta la aplicación e intenta sincronizar nuevamente\.['"],?\s*\)/,
 );
 assert.doesNotMatch(recoveryPhase.catchBody, /unlockSaleConfirm/);
 assert.doesNotMatch(
@@ -334,8 +327,8 @@ assert.doesNotMatch(
 assert.match(recoveryPhase.catchBody, /return;/);
 assert.match(
   recoveryPhase.tryBody,
-  /await saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)[\s\S]*?await persistAmbiguousSaleRecovery\(\{[\s\S]*?setSaleRecoveryPersistenceFailed\(false\)/,
-  'el ticket pendiente se guarda antes de persistir y liberar la cola ambigua',
+  /await saveSaleTicketSnapshot\(recoveryIntent\.ticketSnapshot\)[\s\S]*?await commitQueuedSaleWithLedger\(\)[\s\S]*?setSaleRecoveryPersistenceFailed\(false\)/,
+  'el ticket pendiente se guarda antes de persistir cola+ledger atómicamente',
 );
 assert.doesNotMatch(
   recoveryPhase.catchBody,
@@ -343,7 +336,7 @@ assert.doesNotMatch(
   'el error de persistencia unknown no debe inspeccionarse de forma insegura',
 );
 
-const recoveryCallIndex = createPhase.catchBody.indexOf('await persistAmbiguousSaleRecovery({');
+const recoveryCallIndex = createPhase.catchBody.indexOf('await commitQueuedSaleWithLedger()');
 const recoveryTicketSaveIndex = createPhase.catchBody.indexOf(
   'await saveSaleTicketSnapshot(recoveryIntent.ticketSnapshot)',
 );

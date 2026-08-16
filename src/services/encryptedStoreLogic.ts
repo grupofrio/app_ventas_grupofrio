@@ -19,11 +19,25 @@ export interface EncryptedStorageDriver {
   remove(key: string): Promise<void>;
 }
 
+export interface EncryptedRecordMutator {
+  getRecord<T>(key: string): T | null;
+  setRecord<T>(key: string, value: T): void;
+  removeRecord(key: string): void;
+}
+
 export interface EncryptedSessionStore {
   clear(session: EncryptedSessionIdentity): Promise<void>;
   load<T>(session: EncryptedSessionIdentity, key: string): Promise<T | null>;
   remove(session: EncryptedSessionIdentity, key: string): Promise<void>;
   save<T>(session: EncryptedSessionIdentity, key: string, value: T): Promise<void>;
+  /**
+   * Single serialized read-modify-write over the session envelope.
+   * Multiple records can be updated; one native put commits all or none.
+   */
+  updateRecords(
+    session: EncryptedSessionIdentity,
+    mutator: (api: EncryptedRecordMutator) => void | Promise<void>,
+  ): Promise<void>;
 }
 
 interface EncryptedEnvelope {
@@ -33,7 +47,12 @@ interface EncryptedEnvelope {
 
 const ENCRYPTED_STORE_PREFIX = 'kf-field-v1';
 const RECORD_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,95}$/;
-const SENSITIVE_RECORDS = new Set(['day-bundle', 'sync-queue']);
+const SENSITIVE_RECORDS = new Set([
+  'day-bundle',
+  'sync-queue',
+  'sync:queue',
+  'inventory-ledger',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -203,6 +222,42 @@ export function createEncryptedSessionStore(
     async clear(session: EncryptedSessionIdentity): Promise<void> {
       const storageKey = getEncryptedSessionStorageKey(session);
       await serialize(storageKey, () => driver.remove(storageKey));
+    },
+
+    async updateRecords(
+      session: EncryptedSessionIdentity,
+      mutator: (api: EncryptedRecordMutator) => void | Promise<void>,
+    ): Promise<void> {
+      const storageKey = getEncryptedSessionStorageKey(session);
+      await serialize(storageKey, async () => {
+        const envelope = decodeEnvelope(await driver.get(storageKey));
+        let dirty = false;
+        const api: EncryptedRecordMutator = {
+          getRecord<T>(key: string): T | null {
+            assertEncryptedRecord(key, 'encrypted');
+            const record = envelope.records[key];
+            return record === undefined ? null : decodeRecord<T>(record, key);
+          },
+          setRecord<T>(key: string, value: T): void {
+            assertEncryptedRecord(key, 'encrypted');
+            envelope.records[key] = serializeRecord(value);
+            dirty = true;
+          },
+          removeRecord(key: string): void {
+            assertEncryptedRecord(key, 'encrypted');
+            if (envelope.records[key] === undefined) return;
+            delete envelope.records[key];
+            dirty = true;
+          },
+        };
+        await mutator(api);
+        if (!dirty) return;
+        if (Object.keys(envelope.records).length === 0) {
+          await driver.remove(storageKey);
+          return;
+        }
+        await driver.put(storageKey, encodeEnvelope(envelope));
+      });
     },
   };
 }

@@ -62,7 +62,7 @@ import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
 import { areSyncDependenciesSatisfied, cascadeDeadToDependents } from '../services/syncDependencies';
 import { useProductStore } from './useProductStore';
-import { makeClientEventMeta } from '../utils/clientEvent';
+import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
 import {
@@ -72,6 +72,12 @@ import {
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import { buildReversalMovements } from '../domain/inventory/buildMovements';
+import {
+  loadOrMigrateLedger,
+  recordInventoryMovements,
+} from '../services/inventoryLedger';
+import { movementsForOperation } from '../domain/inventory/ledgerState';
 import {
   isLegacyRefillUnloadItem,
   planLegacyReversal,
@@ -233,6 +239,11 @@ interface SyncState {
 
   // Persistence
   persistQueue: () => Promise<void>;
+  /**
+   * Replace in-memory queue after a durable envelope commit that already
+   * wrote `sync:queue` (avoids a second plaintext race write).
+   */
+  replaceQueueFromDurable: (queue: SyncQueueItem[]) => void;
   rehydrateQueue: () => Promise<void>;
 
   // V2: Sync processor with priority
@@ -369,13 +380,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (result.action !== 'reused') {
       set({ queue: result.queue, ...computeCounts(result.queue) });
 
-      // Persist every queue mutation immediately (fire-and-forget).
-      persistQueueInBackground('enqueue');
+      // Persist every queue mutation immediately (fire-and-forget), unless the
+      // caller is about to commit queue + ledger atomically.
+      if (!opts?.skipPersist) {
+        persistQueueInBackground('enqueue');
+      }
       const priority = SYNC_PRIORITY_MAP[type] ?? 3;
       logInfo('sync', 'enqueue', { id: result.id, type, priority, action: result.action });
     }
 
-    if (result.action === 'inserted') {
+    if (result.action === 'inserted' && !opts?.skipPersist) {
       // BLD-008: client event metadata (async, never blocks enqueue)
       makeClientEventMeta(result.id)
         .then((meta) => {
@@ -550,6 +564,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       _persistTimer = null;
     }
     return persistCurrentQueue();
+  },
+
+  replaceQueueFromDurable: (queue) => {
+    if (_persistTimer) {
+      clearTimeout(_persistTimer);
+      _persistTimer = null;
+    }
+    set({ queue, ...computeCounts(queue) });
   },
 
   rehydrateQueue: async () => {
@@ -1451,10 +1473,88 @@ function markLocalStockRolledBack(id: string): void {
   persistQueueInBackground('rollback_marker');
 }
 
+/**
+ * Ledger evidence is incomplete: retain the terminal queue item for human
+ * reconciliation and never assert that a reversal occurred.
+ */
+function markLedgerRollbackReviewRequired(id: string, rollbackError = false): void {
+  const queue = useSyncStore.getState().queue.map((i) =>
+    i.id === id
+      ? {
+          ...i,
+          payload: {
+            ...i.payload,
+            _ledgerReviewRequired: true,
+            _ledgerRollbackEvidencePending: true,
+            ...(rollbackError ? { _ledgerRollbackError: true } : {}),
+          },
+        }
+      : i,
+  );
+  useSyncStore.setState({ queue, ...computeCounts(queue) });
+  persistQueueInBackground('ledger_rollback_review');
+}
+
 function rollbackFailedOperation(item: SyncQueueItem): void {
+  // POST-R1A: ledger-applied ops reverse via ledger only (no counter-mutation
+  // fallback — that would create a second inventory source undone by hydrate).
+  if (item.payload?._ledgerApplied === true) {
+    const operationId = String(
+      item.payload._operationId
+      || item.payload.operation_id
+      || item.payload.idempotency_key
+      || '',
+    );
+    if (!operationId) {
+      logError('sync', 'rollback_ledger_missing_operation_id', { id: item.id });
+      const queue = useSyncStore.getState().queue.map((i) =>
+        i.id === item.id
+          ? {
+              ...i,
+              payload: {
+                ...i.payload,
+                _ledgerReviewRequired: true,
+                _ledgerRollbackEvidencePending: true,
+              },
+            }
+          : i,
+      );
+      useSyncStore.setState({ queue, ...computeCounts(queue) });
+      persistQueueInBackground('ledger_rollback_review');
+      return;
+    }
+    void (async () => {
+      try {
+        const { state } = await loadOrMigrateLedger();
+        const originals = movementsForOperation(state, operationId).filter(
+          (m) => m.movement_type !== 'reversal',
+        );
+        if (originals.length > 0) {
+          const reversals = buildReversalMovements(originals, {
+            operation_id: operationId,
+            created_at: new Date().toISOString(),
+            // Stable ids derived from originals — retry-safe.
+          });
+          await recordInventoryMovements(reversals);
+        }
+        markLocalStockRolledBack(item.id);
+      } catch (error) {
+        logError('sync', 'rollback_ledger_failed_review_required', {
+          id: item.id,
+          operation_id: operationId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        // Keep evidence; mark review_required — never fall back to counter mutation.
+        markLedgerRollbackReviewRequired(item.id, true);
+      }
+    })();
+    return;
+  }
+
   const updateLocalStock = useProductStore.getState().updateLocalStock;
 
   // PR-3a: rollback GENÉRICO por `_localStockDelta`, independiente del `type`.
+  // Solo para operaciones OUT OF SCOPE del ledger (legacy / no-_ledgerApplied).
   // Idempotente: computeLocalStockReversal devuelve [] si ya se revirtió
   // (`_localStockRolledBack`), y aquí marcamos el flag tras revertir. Si hay
   // delta, esta ruta es autoritativa (no cae al switch por-type).

@@ -30,6 +30,7 @@ import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import { applyExchangeStockViaLedger } from '../../src/services/inventoryLedgerAdapters';
 
 type ExchangeSection = 'delivery' | 'merma';
 
@@ -97,7 +98,6 @@ export default function CambioProductoScreen() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
-  const updateLocalStock = useProductStore((s) => s.updateLocalStock);
   const enqueue = useSyncStore((s) => s.enqueue);
   const persistQueue = useSyncStore((s) => s.persistQueue);
 
@@ -301,10 +301,28 @@ export default function CambioProductoScreen() {
       );
     }
 
-    // Delivery: producto bueno sale de la van → resta stock vendible local.
-    // Merma/dañado NO vuelve al stock vendible (queda en bucket damaged/pending
-    // hasta la separación en CEDIS). No sumar merma a updateLocalStock.
-    deliveryPayloadLines.forEach((line) => updateLocalStock(line.product_id, -line.qty));
+    // POST-R1A: delivery −sellable; damaged/good returns go to ledger buckets
+    // (never +sellable for damaged). Atomic encrypted ledger persist.
+    try {
+      await applyExchangeStockViaLedger({
+        operationId: idempotencyKey,
+        delivery: deliveryPayloadLines.map((line) => ({
+          product_id: line.product_id,
+          qty: line.qty,
+        })),
+        returnDamaged: mermaPayloadLines.map((line) => ({
+          product_id: line.product_id,
+          qty: line.qty,
+        })),
+        stopId: currentStop.id,
+      });
+    } catch (ledgerError) {
+      const detail = ledgerError instanceof Error ? `\n\nDetalle: ${ledgerError.message}` : '';
+      Alert.alert(
+        'Inventario local no actualizado',
+        `Cambio registrado en servidor, pero el ledger local falló. No repitas el cambio.${detail}`,
+      );
+    }
 
     const deliverySnapshotLines: ExchangeSnapshotSourceLine[] = deliveryPayloadLines.map((line) => ({
       productId: line.product_id,

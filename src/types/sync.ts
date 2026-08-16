@@ -100,4 +100,9 @@ export interface SyncEnqueueOptions {
   dependsOn?: string[];
   operationId?: string;
   holdProcessing?: boolean;
+  /**
+   * When true, mutates in-memory queue only. Caller must persist via
+   * commitSyncQueueAndLedger (queue + ledger one envelope write).
+   */
+  skipPersist?: boolean;
 }

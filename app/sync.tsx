@@ -14,6 +14,7 @@ import { useSyncStore } from '../src/stores/useSyncStore';
 import { SyncQueueItem } from '../src/types/sync';
 import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
+import { describeProspectionSyncLabel } from '../src/services/prospectConvert';
 import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
 import { isProtectedPhysicalReviewItem } from '../src/services/consignmentPhysicalReview';
@@ -26,7 +27,7 @@ const typeIcons: Record<string, string> = {
 const typeLabels: Record<string, string> = {
   sale_order: 'Venta', checkin: 'Check-in', checkout: 'Check-out',
   photo: 'Foto', no_sale: 'No venta', payment: 'Cobro',
-  prospection: 'Operacion', gps: 'GPS',
+  prospection: 'Prospecto', gps: 'GPS',
 };
 
 const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' | 'red' | 'orange' | 'dim' }> = {
@@ -225,7 +226,9 @@ export default function SyncScreen() {
 
 function SyncItem({ item }: { item: SyncQueueItem }) {
   const icon = typeIcons[item.type] || '📦';
-  const label = typeLabels[item.type] || item.type;
+  const label = item.type === 'prospection'
+    ? describeProspectionSyncLabel(item)
+    : (typeLabels[item.type] || item.type);
   const orderDetail = describeSaleOrderItem(item);
   const badge = statusBadge[item.status] || statusBadge.pending;
   const physicalReview = isProtectedPhysicalReviewItem(item);

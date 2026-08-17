@@ -51,8 +51,8 @@ export default function NewCustomerScreen() {
 
     setSaved(true);
     Alert.alert(
-      'Prospecto guardado localmente',
-      `"${form.nombre.trim()}" está pendiente de sincronización con Odoo. Puedes continuar la ruta.`,
+      'Prospecto guardado. Pendiente de sincronizar.',
+      `"${form.nombre.trim()}" se sincronizará con Odoo cuando haya conexión. Puedes continuar la ruta.`,
       [{ text: 'OK', onPress: () => router.back() }],
     );
   }

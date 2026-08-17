@@ -52,6 +52,7 @@ const SENSITIVE_RECORDS = new Set([
   'sync-queue',
   'sync:queue',
   'inventory-ledger',
+  'invoice-collection:intents',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

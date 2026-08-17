@@ -1,0 +1,106 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+interface Session {
+  companyId: number;
+  employeeId: number;
+  sessionId: string;
+}
+
+interface EncryptedApi {
+  getRecord<T>(key: string): T | null;
+  setRecord<T>(key: string, value: T): void;
+}
+
+interface PersistenceModule {
+  INVOICE_COLLECTION_RECORD_KEY: string;
+  createInvoiceCollectionPersistence(deps: {
+    load: (session: Session, key: string) => Promise<unknown | null>;
+    update: (session: Session, mutator: (api: EncryptedApi) => void | Promise<void>) => Promise<void>;
+  }): {
+    list(session: Session): Promise<Array<{ operation_id: string; status: string }>>;
+    insert(session: Session, intent: Record<string, unknown>): Promise<void>;
+    transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number): Promise<void>;
+  };
+}
+
+async function loadPersistence(): Promise<PersistenceModule> {
+  return await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
+}
+
+function createEncryptedHarness() {
+  const records = new Map<string, unknown>();
+  let calls = 0;
+  return {
+    async load(_session: Session, key: string) {
+      return records.get(key) ?? null;
+    },
+    async update(_session: Session, mutator: (api: EncryptedApi) => void | Promise<void>) {
+      calls += 1;
+      await mutator({
+        getRecord: <T>(key: string) => (records.get(key) ?? null) as T | null,
+        setRecord: <T>(key: string, value: T) => { records.set(key, value); },
+      });
+    },
+    snapshot: () => structuredClone(records),
+    get calls() { return calls; },
+  };
+}
+
+const session = { companyId: 1, employeeId: 2, sessionId: 'current-session' };
+const intent = {
+  operation_id: '11111111-2222-4aaa-8bbb-333333333333', stop_id: 5, invoice_id: 8,
+  amount: 25, payment_method: 'cash', snapshot_residual: 30, snapshot_as_of: null,
+  status: 'dispatching', created_at_ms: 1, updated_at_ms: 1,
+};
+
+test('intent writes and state transitions are serialized inside the encrypted session envelope', async () => {
+  const mod = await loadPersistence();
+  const harness = createEncryptedHarness();
+  const store = mod.createInvoiceCollectionPersistence({ load: harness.load, update: harness.update });
+
+  await Promise.all([
+    store.insert(session, intent),
+    store.insert(session, { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333' }),
+  ]);
+  await store.transition(session, intent.operation_id, 'pending', 2);
+
+  assert.equal(harness.calls, 3);
+  assert.deepEqual(await store.list(session), [
+    { ...intent, status: 'pending', updated_at_ms: 2 },
+    { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333' },
+  ]);
+  const envelopeRecord = harness.snapshot().get(mod.INVOICE_COLLECTION_RECORD_KEY) as unknown;
+  assert.deepEqual(envelopeRecord, {
+    version: 1,
+    intents: [
+      { ...intent, status: 'pending', updated_at_ms: 2 },
+      { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333' },
+    ],
+  });
+});
+
+test('failed durable write exposes no in-memory success and restart rehydrates only persisted intents', async () => {
+  const mod = await loadPersistence();
+  let fail = true;
+  const persisted = new Map<string, unknown>();
+  const update = async (_session: Session, mutator: (api: EncryptedApi) => void | Promise<void>) => {
+    const staged = new Map(persisted);
+    await mutator({
+      getRecord: <T>(key: string) => (staged.get(key) ?? null) as T | null,
+      setRecord: <T>(key: string, value: T) => { staged.set(key, value); },
+    });
+    if (fail) throw new Error('encrypted write failed');
+    persisted.clear();
+    for (const [key, value] of staged) persisted.set(key, value);
+  };
+  const load = async (_session: Session, key: string) => persisted.get(key) ?? null;
+  const firstProcess = mod.createInvoiceCollectionPersistence({ load, update });
+  await assert.rejects(() => firstProcess.insert(session, intent), /encrypted write failed/);
+  assert.deepEqual(await firstProcess.list(session), []);
+
+  fail = false;
+  await firstProcess.insert(session, intent);
+  const restarted = mod.createInvoiceCollectionPersistence({ load, update });
+  assert.deepEqual(await restarted.list(session), [intent]);
+});

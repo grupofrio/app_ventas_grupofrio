@@ -116,10 +116,10 @@ describe('consignment ledger semantics', () => {
     );
   });
 
-  it('visit/close helpers match count math', () => {
+  it('visit/close helpers match count math from previous_qty', () => {
     const counts = [
-      { product_id: 1, target_qty: 10, physical_qty: 7, price_unit: 5 },
-      { product_id: 2, target_qty: 4, physical_qty: 4, price_unit: 1 },
+      { product_id: 1, physical_qty: 7, previous_qty: 10 },
+      { product_id: 2, physical_qty: 4, previous_qty: 4 },
     ];
     assert.deepEqual(countLinesToVisitSold(counts), [{ product_id: 1, qty: 3 }]);
     const visit = buildConsignmentVisitLedgerMovements({ operationId: OP, soldLines: countLinesToVisitSold(counts) });
@@ -133,16 +133,17 @@ describe('consignment ledger semantics', () => {
     assert.ok(close.some((m) => m.movement_type === 'consignment_sold'));
   });
 
-  it('sync create payload keeps operation_id and apply_inventory', () => {
+  it('sync create payload omits price and apply_inventory authority', () => {
     const payload = buildConsignmentCreateSyncPayload({
       partnerId: 99,
       operationId: OP,
       lines: [{ product_id: 1, target_qty: 2, price_unit: 10 }],
     });
     assert.equal(payload.operation_id, OP);
-    assert.equal(payload.apply_inventory, true);
+    assert.equal(payload.apply_inventory, undefined);
+    assert.deepEqual(payload.lines, [{ product_id: 1, target_qty: 2 }]);
     assert.equal(payload._ledgerApplied, true);
-    assert.deepEqual(createLinesToMovementLines(payload.lines as never), [
+    assert.deepEqual(createLinesToMovementLines([{ product_id: 1, target_qty: 2 }]), [
       { product_id: 1, qty: 2 },
     ]);
   });
@@ -157,5 +158,47 @@ describe('consignment ledger semantics', () => {
     assert.equal(movements[0].movement_type, 'consignment_out');
     assert.equal(movements[0].bucket_from, 'sellable');
     assert.equal(movements[0].bucket_to, 'consigned');
+  });
+});
+
+describe('INV-1B consignment keep-set before sync', () => {
+  it('offline create pending survives truck_stock refresh keep-set', async () => {
+    const { keepLedgerOperationIdsForSnapshot } = await import('../src/services/ambiguousAckReconcile.ts');
+    const queue = [{
+      id: OP,
+      type: 'consignment_create',
+      status: 'pending',
+      payload: { operation_id: OP, partner_id: 1, _ledgerApplied: true },
+    }];
+    const keep = keepLedgerOperationIdsForSnapshot(queue as never, Date.now());
+    assert.equal(keep.has(OP), true);
+  });
+
+  it('offline visit/close pending kept; post-ACK snapshot may retire', async () => {
+    const {
+      keepLedgerOperationIdsForSnapshot,
+      withServerAcknowledgedAtMs,
+    } = await import('../src/services/ambiguousAckReconcile.ts');
+    for (const type of ['consignment_visit', 'consignment_close'] as const) {
+      const pendingKeep = keepLedgerOperationIdsForSnapshot([{
+        id: OP,
+        type,
+        status: 'pending',
+        payload: { operation_id: OP, consignment_id: 9, _ledgerApplied: true },
+      }] as never, 5_000);
+      assert.equal(pendingKeep.has(OP), true, type);
+
+      const ackQueue = [{
+        id: OP,
+        type,
+        status: 'done',
+        payload: withServerAcknowledgedAtMs(
+          { operation_id: OP, consignment_id: 9, _ledgerApplied: true },
+          1_000,
+        ),
+      }];
+      assert.equal(keepLedgerOperationIdsForSnapshot(ackQueue as never, 999).has(OP), true);
+      assert.equal(keepLedgerOperationIdsForSnapshot(ackQueue as never, 1_000).has(OP), false);
+    }
   });
 });

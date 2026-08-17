@@ -2,8 +2,10 @@
  * INV-1B — Ambiguous acknowledgement reconciliation (operation-identity based).
  *
  * Protocol:
- * 1. For ambiguous ledger ops (sale_order/gift without _serverAcknowledgedAtMs),
- *    ask the backend by operation identity (sales: check_duplicate; gift: idempotent replay).
+ * 1. For ambiguous ledger ops (LEDGER_AFFECTING without _serverAcknowledgedAtMs),
+ *    ask the backend by operation identity:
+ *    - sales: check_duplicate
+ *    - gift / consignment_*: idempotent replay of the SAME endpoint + operation_id
  * 2. On COMMITTED → produce ACK intents (do NOT whole-replace a stale queue snapshot).
  * 3. Apply intents via serialized durable RMW on the *current* queue, then publish memory.
  * 4. Caller must then take a NEW truck_stock snapshot with snapshotAtMs >= ackAt.
@@ -15,6 +17,8 @@
  * Fail-safe: reconcile/network timeout or durable ACK persist failure → leave unacked
  * → keep local movement.
  */
+
+import { LEDGER_AFFECTING_SYNC_TYPES } from './inventoryLedgerLogic.ts';
 
 export const SERVER_ACK_AT_MS_KEY = '_serverAcknowledgedAtMs';
 
@@ -33,11 +37,19 @@ export interface AmbiguousQueueItem {
   next_retry_at?: number | null;
 }
 
+/** Ledger sync types that participate in INV-1B ACK / keep-set. */
+export type LedgerAckSyncType =
+  | 'sale_order'
+  | 'gift'
+  | 'consignment_create'
+  | 'consignment_visit'
+  | 'consignment_close';
+
 /** Intent produced after backend authority confirms COMMITTED. Applied later on current queue. */
 export interface ServerAckIntent {
   item_id: string;
   operation_id: string;
-  type: 'sale_order' | 'gift';
+  type: LedgerAckSyncType;
   acknowledged_at_ms: number;
 }
 
@@ -58,6 +70,9 @@ export interface AmbiguousAckReconcilePorts {
   replayGift: (payload: Record<string, unknown>) => Promise<void>;
   classifyGiftError: (error: unknown) => AmbiguousAckStatus;
   classifySaleCheckError: (error: unknown) => AmbiguousAckStatus;
+  /** Exact replay of consignment create/visit/close with the same operation_id. */
+  replayConsignment?: (item: AmbiguousQueueItem) => Promise<void>;
+  classifyConsignmentError?: (error: unknown) => AmbiguousAckStatus;
 }
 
 export function readServerAcknowledgedAtMs(
@@ -90,6 +105,10 @@ export function resolveQueueItemOperationId(item: AmbiguousQueueItem): string {
   return item.id;
 }
 
+export function isLedgerAckSyncType(type: string): type is LedgerAckSyncType {
+  return LEDGER_AFFECTING_SYNC_TYPES.has(type);
+}
+
 /**
  * Keep local ledger movements that are NOT yet confirmed by a snapshot
  * taken at-or-after server acknowledgement.
@@ -100,11 +119,12 @@ export function resolveQueueItemOperationId(item: AmbiguousQueueItem): string {
  * - otherwise → keep
  *
  * Note: snapshotAtMs is a client fence, not a server stock revision.
+ * Default ledgerTypes = LEDGER_AFFECTING_SYNC_TYPES (sale/gift/consignment_*).
  */
 export function keepLedgerOperationIdsForSnapshot(
   queue: AmbiguousQueueItem[],
   snapshotAtMs: number,
-  ledgerTypes: Set<string> = new Set(['sale_order', 'gift']),
+  ledgerTypes: Set<string> = LEDGER_AFFECTING_SYNC_TYPES,
 ): Set<string> {
   const keep = new Set<string>();
   for (const item of queue) {
@@ -136,7 +156,7 @@ export function keepLedgerOperationIdsForSnapshot(
 }
 
 export function isAmbiguousLedgerItem(item: AmbiguousQueueItem): boolean {
-  if (item.type !== 'sale_order' && item.type !== 'gift') return false;
+  if (!isLedgerAckSyncType(item.type)) return false;
   if (item.status === 'dead' || item.status === 'done') return false;
   if (readServerAcknowledgedAtMs(item.payload) !== null) return false;
   return item.status === 'pending' || item.status === 'error' || item.status === 'syncing';
@@ -257,6 +277,16 @@ export function collectSkippedServerAckIntents(
   return skipped;
 }
 
+function isConsignmentLedgerType(
+  type: string,
+): type is 'consignment_create' | 'consignment_visit' | 'consignment_close' {
+  return (
+    type === 'consignment_create'
+    || type === 'consignment_visit'
+    || type === 'consignment_close'
+  );
+}
+
 /**
  * Network reconciliation only: produce ACK intents for COMMITTED ops.
  * Does not mutate the live queue — caller must apply intents durably on current state.
@@ -269,7 +299,6 @@ export async function reconcileAmbiguousLedgerOperations(
 
   for (const item of queue) {
     if (!isAmbiguousLedgerItem(item)) continue;
-    if (item.type !== 'sale_order' && item.type !== 'gift') continue;
 
     try {
       if (item.type === 'sale_order') {
@@ -309,6 +338,27 @@ export async function reconcileAmbiguousLedgerOperations(
             item_id: item.id,
             operation_id: resolveQueueItemOperationId(item),
             type: 'gift',
+            acknowledged_at_ms: ackAt,
+          });
+        }
+        continue;
+      }
+
+      if (isConsignmentLedgerType(item.type)) {
+        if (!ports.replayConsignment) continue;
+        let status: AmbiguousAckStatus = 'ambiguous';
+        try {
+          await ports.replayConsignment(item);
+          status = 'committed';
+        } catch (error) {
+          status = ports.classifyConsignmentError?.(error) ?? 'ambiguous';
+        }
+        if (status === 'committed') {
+          const ackAt = ports.nowMs();
+          intents.push({
+            item_id: item.id,
+            operation_id: resolveQueueItemOperationId(item),
+            type: item.type,
             acknowledged_at_ms: ackAt,
           });
         }

@@ -2,9 +2,9 @@
  * Pure helpers for Consignación. No network, no RN — unit-testable.
  *
  * Reglas (preliminar en app; el backend es la fuente de verdad):
- *   vendido   = max(0, objetivo - existencia_física)
+ *   vendido   = max(0, current_qty(server) - existencia_física)
  *   resurtido = vendido
- *   importe   = vendido * precio
+ *   importe   = vendido * precio(server)
  */
 
 import type {
@@ -50,8 +50,9 @@ export function computeLineCalc(
   physicalQty: number,
 ): ConsignmentLineCalc {
   const target = n(line.target_qty);
+  const previous = n(line.current_qty);
   const physical = Math.max(0, n(physicalQty));
-  const sold = Math.max(0, target - physical);
+  const sold = Math.max(0, previous - physical);
   const price = n(line.price_unit);
   return {
     product_id: line.product_id,
@@ -77,7 +78,7 @@ export function computeVisitTotals(calcs: ConsignmentLineCalc[]): ConsignmentVis
   );
 }
 
-/** Valor consignado total al crear (objetivo * precio). */
+/** Valor consignado total al crear (objetivo * precio preliminar de catálogo). */
 export function computeConsignedValue(lines: CreateConsignmentLine[]): number {
   return Math.round(lines.reduce((s, l) => s + n(l.target_qty) * n(l.price_unit), 0) * 100) / 100;
 }
@@ -91,6 +92,24 @@ export function cartToCreateLines(cart: SaleLineItem[]): CreateConsignmentLine[]
       target_qty: l.qty,
       price_unit: Number.isFinite(l.price) ? l.price : 0,
     }));
+}
+
+/** Wire DTO for create — product_id + target_qty only. */
+export function toCreateWireLines(lines: CreateConsignmentLine[]): Array<{ product_id: number; target_qty: number }> {
+  return lines.map((l) => ({
+    product_id: l.product_id,
+    target_qty: l.target_qty,
+  }));
+}
+
+/** Wire DTO for visit/close counts — product_id + physical_qty only. */
+export function toCountWireLines(
+  counts: ConsignmentCountLine[],
+): Array<{ product_id: number; physical_qty: number }> {
+  return counts.map((c) => ({
+    product_id: c.product_id,
+    physical_qty: c.physical_qty,
+  }));
 }
 
 export type CreateValidation =
@@ -107,9 +126,7 @@ export function validateCreateLines(cart: SaleLineItem[]): CreateValidation {
 
 /**
  * Construye los `counts` (visit/close) desde el mapa {product_id: texto}.
- * Cada count lleva product_id, physical_qty, target_qty y price_unit (de la
- * línea activa); el backend recalcula vendido/cobro/resurtido.
- * Rechaza vacío, no numérico o negativo.
+ * Network DTO: product_id + physical_qty. previous_qty is local ledger only.
  */
 export type CountValidation =
   | { ok: true; counts: ConsignmentCountLine[] }
@@ -132,8 +149,7 @@ export function buildCountLines(
     counts.push({
       product_id: line.product_id,
       physical_qty: qty,
-      target_qty: n(line.target_qty),
-      price_unit: n(line.price_unit),
+      previous_qty: n(line.current_qty),
     });
   }
   if (counts.length === 0) return { ok: false, reason: 'No hay líneas para contar.' };

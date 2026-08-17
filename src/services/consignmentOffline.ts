@@ -10,6 +10,7 @@ import {
   buildConsignmentCreateLedgerMovements,
   buildConsignmentVisitLedgerMovements,
 } from './inventoryLedgerAdapters.ts';
+import { toCountWireLines, toCreateWireLines } from './consignmentLogic.ts';
 
 export type ConsignmentSyncKind = 'create' | 'visit' | 'close';
 
@@ -31,8 +32,7 @@ export function buildConsignmentCreateSyncPayload(args: {
   return {
     partner_id: args.partnerId,
     operation_id: args.operationId,
-    apply_inventory: true,
-    lines: args.lines,
+    lines: toCreateWireLines(args.lines),
     ...(args.notes && args.notes.trim() ? { notes: args.notes.trim() } : {}),
     _operationId: args.operationId,
     _ledgerApplied: true,
@@ -53,7 +53,7 @@ export function buildConsignmentCountSyncPayload(args: {
     consignment_id: args.consignmentId,
     operation_id: args.operationId,
     payment_method: args.paymentMethod,
-    counts: args.counts,
+    counts: toCountWireLines(args.counts),
     _operationId: args.operationId,
     _ledgerApplied: true,
     _stopId: args.stopId ?? null,
@@ -69,12 +69,12 @@ export function createLinesToMovementLines(lines: CreateConsignmentLine[]): Move
   }));
 }
 
-/** sold_qty = max(0, target − physical); return_qty = physical. */
+/** sold_qty = max(0, previous(server current) − physical). */
 export function countLinesToVisitSold(counts: ConsignmentCountLine[]): MovementLine[] {
   return counts
     .map((c) => ({
       product_id: c.product_id,
-      qty: Math.max(0, Number(c.target_qty) - Number(c.physical_qty)),
+      qty: Math.max(0, Number(c.previous_qty ?? 0) - Number(c.physical_qty)),
     }))
     .filter((l) => l.qty > 0);
 }

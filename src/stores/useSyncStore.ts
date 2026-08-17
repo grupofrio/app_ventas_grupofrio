@@ -37,6 +37,7 @@ import {
   type AmbiguousQueueItem,
   type ServerAckIntent,
 } from '../services/ambiguousAckReconcile';
+import { LEDGER_AFFECTING_SYNC_TYPES } from '../services/inventoryLedgerLogic';
 import { postRest } from '../services/api';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
@@ -440,7 +441,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const ackAt = Date.now();
     const newQueue = get().queue.map((i) => {
       if (i.id !== id) return i;
-      const isLedgerOp = i.type === 'sale_order' || i.type === 'gift';
+      const isLedgerOp = LEDGER_AFFECTING_SYNC_TYPES.has(i.type);
       const payload =
         isLedgerOp && typeof i.payload._serverAcknowledgedAtMs !== 'number'
           ? { ...i.payload, _serverAcknowledgedAtMs: ackAt }

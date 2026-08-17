@@ -1,6 +1,6 @@
 /**
  * Tests for consignmentLogic — Consignación pure helpers.
- * Regla: vendido = max(0, objetivo - físico); resurtido = vendido;
+ * Regla: vendido = max(0, current_qty - físico); resurtido = vendido;
  *        importe = vendido * precio.
  */
 
@@ -13,12 +13,16 @@ interface LogicModule {
     sold_qty: number; restock_qty: number; charge_amount: number; target_qty: number; physical_qty: number;
   };
   computeVisitTotals: (calcs: any[]) => { soldTotal: number; chargeTotal: number; restockTotal: number };
-  computeConsignedValue: (lines: Array<{ product_id: number; target_qty: number; price_unit: number }>) => number;
-  cartToCreateLines: (cart: SaleLineItem[]) => Array<{ product_id: number; target_qty: number; price_unit: number }>;
+  computeConsignedValue: (lines: Array<{ product_id: number; target_qty: number; price_unit?: number }>) => number;
+  cartToCreateLines: (cart: SaleLineItem[]) => Array<{ product_id: number; target_qty: number; price_unit?: number }>;
   validateCreateLines: (cart: SaleLineItem[]) => { ok: true; lines: any[] } | { ok: false; reason: string };
   buildCountLines: (lines: ConsignmentLine[], input: Record<number, string>) =>
-    { ok: true; counts: Array<{ product_id: number; physical_qty: number; target_qty: number; price_unit: number }> }
+    { ok: true; counts: Array<{ product_id: number; physical_qty: number; previous_qty?: number }> }
     | { ok: false; reason: string };
+  toCreateWireLines: (lines: Array<{ product_id: number; target_qty: number; price_unit?: number }>) =>
+    Array<{ product_id: number; target_qty: number }>;
+  toCountWireLines: (counts: Array<{ product_id: number; physical_qty: number; previous_qty?: number }>) =>
+    Array<{ product_id: number; physical_qty: number }>;
 }
 
 function cline(partial: Partial<ConsignmentLine> & Pick<ConsignmentLine, 'product_id' | 'target_qty' | 'price_unit'>): ConsignmentLine {
@@ -39,15 +43,20 @@ function sline(productId: number, qty: number, price: number): SaleLineItem {
 }
 
 function testLineCalc(m: LogicModule) {
-  // objetivo 10, físico 4 → vendido 6, resurtir 6, cobro 6*25=150
+  // current 10, físico 4 → vendido 6, resurtir 6, cobro 6*25=150
   const c = m.computeLineCalc(cline({ product_id: 10, target_qty: 10, price_unit: 25 }), 4);
   assert.equal(c.sold_qty, 6);
   assert.equal(c.restock_qty, 6);
   assert.equal(c.charge_amount, 150);
-  // físico >= objetivo → vendido 0 (sin negativos)
+  // sold from current, not client target
+  assert.equal(
+    m.computeLineCalc(cline({ product_id: 1, target_qty: 6, current_qty: 10, price_unit: 5 }), 6).sold_qty,
+    4,
+  );
+  // físico >= current → vendido 0
   assert.equal(m.computeLineCalc(cline({ product_id: 1, target_qty: 10, price_unit: 5 }), 12).sold_qty, 0);
   assert.equal(m.computeLineCalc(cline({ product_id: 1, target_qty: 10, price_unit: 5 }), 10).sold_qty, 0);
-  // físico negativo → tratado como 0 → vendido = objetivo
+  // físico negativo → tratado como 0 → vendido = current
   assert.equal(m.computeLineCalc(cline({ product_id: 1, target_qty: 8, price_unit: 1 }), -3).sold_qty, 8);
 }
 
@@ -74,25 +83,30 @@ function testCreateValidation(m: LogicModule) {
   assert.equal(m.validateCreateLines([sline(0, 5, 10)]).ok, false); // invalid product
   const ok = m.validateCreateLines([sline(10, 5, 25)]);
   assert.equal(ok.ok, true);
-  if (ok.ok) assert.deepEqual(ok.lines, [{ product_id: 10, target_qty: 5, price_unit: 25 }]);
+  if (ok.ok) {
+    assert.deepEqual(ok.lines, [{ product_id: 10, target_qty: 5, price_unit: 25 }]);
+    assert.deepEqual(m.toCreateWireLines(ok.lines), [{ product_id: 10, target_qty: 5 }]);
+  }
 }
 
 function testCountLines(m: LogicModule) {
   const lines = [cline({ product_id: 1, target_qty: 10, price_unit: 5 }), cline({ product_id: 2, target_qty: 5, price_unit: 3 })];
-  // missing one → fail
   assert.equal(m.buildCountLines(lines, { 1: '4' }).ok, false);
-  // empty string → fail (must capture)
   assert.equal(m.buildCountLines(lines, { 1: '4', 2: '' }).ok, false);
-  // invalid → fail
   assert.equal(m.buildCountLines(lines, { 1: '4', 2: 'abc' }).ok, false);
   assert.equal(m.buildCountLines(lines, { 1: '4', 2: '-1' }).ok, false);
-  // all valid → ok (0 allowed); counts incluyen target_qty + price_unit
   const ok = m.buildCountLines(lines, { 1: '4', 2: '0' });
   assert.equal(ok.ok, true);
-  if (ok.ok) assert.deepEqual(ok.counts, [
-    { product_id: 1, physical_qty: 4, target_qty: 10, price_unit: 5 },
-    { product_id: 2, physical_qty: 0, target_qty: 5, price_unit: 3 },
-  ]);
+  if (ok.ok) {
+    assert.deepEqual(ok.counts, [
+      { product_id: 1, physical_qty: 4, previous_qty: 10 },
+      { product_id: 2, physical_qty: 0, previous_qty: 5 },
+    ]);
+    assert.deepEqual(m.toCountWireLines(ok.counts), [
+      { product_id: 1, physical_qty: 4 },
+      { product_id: 2, physical_qty: 0 },
+    ]);
+  }
 }
 
 async function main() {

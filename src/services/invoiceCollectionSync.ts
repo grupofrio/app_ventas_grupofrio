@@ -67,6 +67,9 @@ export function classifyInvoiceCollectionError(error: unknown): InvoiceCollectio
   if (metadata.httpStatus === 401 || (code !== undefined && REAUTH_CODES.has(code))) {
     return publicOutcome('reauth_required');
   }
+  if (metadata.httpStatus === 408 || metadata.httpStatus === 429) {
+    return publicOutcome('pending');
+  }
   if (metadata.httpStatus !== undefined && metadata.httpStatus >= 400 && metadata.httpStatus <= 499) {
     return publicOutcome('review_required');
   }

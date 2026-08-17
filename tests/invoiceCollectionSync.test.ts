@@ -148,6 +148,14 @@ test('authenticated validation failure is terminal review while revoked credenti
     mod.classifyInvoiceCollectionError({ code: 'timeout', responseReceived: false }),
     { kind: 'pending', code: 'timeout' },
   );
+  assert.deepEqual(
+    mod.classifyInvoiceCollectionError({ httpStatus: 408, code: 'request_timeout', responseReceived: true }),
+    { kind: 'pending', code: 'request_timeout', httpStatus: 408 },
+  );
+  assert.deepEqual(
+    mod.classifyInvoiceCollectionError({ httpStatus: 429, code: 'rate_limit', responseReceived: true }),
+    { kind: 'pending', code: 'rate_limit', httpStatus: 429 },
+  );
 
   const persistence = createMemoryPersistence();
   const reviewProcessor = mod.createInvoiceCollectionSyncProcessor({

@@ -31,6 +31,7 @@ import { formatCurrency } from '../../src/utils/time';
 import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
 import { isStandardNoPlanError } from '../../src/services/routeLoadOutcome';
 import { legacyMigrationNoticeCopy } from '../../src/services/legacyRefillUnloadMigration';
+import { formatAuthoritativeStockKg } from '../../src/services/inventoryDisplay';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -59,6 +60,7 @@ export default function HomeScreen() {
   const products = useProductStore((s) => s.products);
   const productCount = useProductStore((s) => s.productCount);
   const totalStockKg = useProductStore((s) => s.totalStockKg);
+  const hasStockData = useProductStore((s) => s.hasStockData);
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productsLastSync = useProductStore((s) => s.lastSync);
   const productError = useProductStore((s) => s.error);
@@ -338,8 +340,14 @@ export default function HomeScreen() {
               <KPICard
                 style={styles.kpiCard}
                 label="EN CAMIONETA"
-                value={productCount > 0 ? `${totalStockKg} kg` : 'Sin dato'}
-                subtitle={productCount > 0 ? `${productCount} productos` : 'catálogo no cargado'}
+                value={formatAuthoritativeStockKg({ hasStockData, totalStockKg })}
+                subtitle={
+                  hasStockData === true
+                    ? `${productCount} productos`
+                    : productCount > 0
+                      ? 'stock no autorizado aún'
+                      : 'catálogo no cargado'
+                }
               />
               <KPICard
                 style={styles.kpiCard}

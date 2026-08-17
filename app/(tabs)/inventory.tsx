@@ -1,9 +1,11 @@
 /**
  * Inventory tab — s-inv in mockup (lines 323-348).
  * Truck stock overview, product list, action buttons.
+ *
+ * Display rule: hasStockData !== true → "Sin dato" (never present null/referential as 0 kg).
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -20,6 +22,13 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { describeStockTrust } from '../../src/services/trustSignals';
+import {
+  formatAuthoritativeStockKg,
+  formatForecastKg,
+  formatInventoryProductQty,
+  shouldListProductOnInventory,
+} from '../../src/services/inventoryDisplay';
 
 export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -27,7 +36,7 @@ export default function InventoryScreen() {
   const { plan, loadPlan } = useRouteStore();
   const {
     products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
-    productCount, lastSync: productsLastSync,
+    productCount, lastSync: productsLastSync, hasStockData,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
     const tasks: Promise<void>[] = [];
@@ -64,6 +73,21 @@ export default function InventoryScreen() {
     ? Math.min(100, Math.round((forecastKg / totalStockKg) * 100))
     : 0;
 
+  const stockTrust = describeStockTrust({ isOnline, hasStockData });
+  const stockTotalLabel = formatAuthoritativeStockKg({ hasStockData, totalStockKg });
+  const forecastLabel = formatForecastKg(forecastKg);
+
+  const listedProducts = useMemo(
+    () =>
+      products.filter((p) =>
+        shouldListProductOnInventory({
+          hasStockData,
+          qtyAvailable: p.qty_available,
+        }),
+      ),
+    [products, hasStockData],
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="📦 Camioneta" />
@@ -79,23 +103,31 @@ export default function InventoryScreen() {
           />
         }
       >
+        {stockTrust.tone === 'reference' ? (
+          <AlertBanner
+            icon="ℹ️"
+            variant="info"
+            message={`${stockTrust.label}: no se muestra 0 kg como inventario medido.`}
+          />
+        ) : null}
+
         {/* Stock summary card */}
         <Card style={styles.summaryCard}>
           <View style={styles.summaryRow}>
             <View>
               <Text style={styles.summaryLabel}>Stock total</Text>
-              <Text style={styles.summaryValue}>{totalStockKg} kg</Text>
+              <Text style={styles.summaryValue}>{stockTotalLabel}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.summaryLabel}>Forecast ruta</Text>
               <Text style={[styles.summaryValue, { color: colors.primary }]}>
-                {forecastKg > 0 ? `${forecastKg} kg` : '-- kg'}
+                {forecastLabel}
               </Text>
             </View>
           </View>
 
           {/* Progress bar */}
-          {forecastKg > 0 && (
+          {forecastKg > 0 && hasStockData === true && (
             <>
               <View style={styles.progressBar}>
                 <View style={[styles.progressFill, { width: `${fillPct}%` }]} />
@@ -124,7 +156,7 @@ export default function InventoryScreen() {
           showAcceptedLoads
         />
 
-        {/* Product list */}
+        {/* Product list — sellable view; ledger buckets remain projection-only until wired */}
         <Text style={styles.sectionTitle}>INVENTARIO FÍSICO REAL</Text>
         {isLoading ? (
           <Card><Text style={typography.dim}>Cargando productos...</Text></Card>
@@ -137,10 +169,15 @@ export default function InventoryScreen() {
               Acepta la carga o recarga asignada para reflejar inventario.
             </Text>
           </Card>
+        ) : listedProducts.length === 0 ? (
+          <Card>
+            <Text style={typography.dim}>Sin unidades sellable en camioneta</Text>
+            <Text style={[typography.dimSmall, { marginTop: 4 }]}>
+              El catálogo está cargado; el stock sellable autorizado es 0.
+            </Text>
+          </Card>
         ) : (
-          products
-            .filter((p) => p.qty_available > 0)
-            .map((p) => (
+          listedProducts.map((p) => (
               <View key={p.id} style={styles.productRow}>
                 <Text style={styles.productName} numberOfLines={1}>
                   {p.name.includes('Hielo') || p.name.includes('Barra') ? '🧊 ' : '🥤 '}
@@ -151,8 +188,12 @@ export default function InventoryScreen() {
                     {formatCatalogPrice(p.list_price)}
                   </Text>
                   <Text style={styles.productQty}>
-                    {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg
-                    {(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}
+                    {formatInventoryProductQty({
+                      hasStockData,
+                      qtyDisplay: p.qty_display,
+                      totalKg: p._totalKg,
+                      qtyReserved: (p as { qty_reserved?: number }).qty_reserved,
+                    })}
                   </Text>
                 </View>
               </View>

@@ -19,6 +19,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatCurrency } from '../../src/utils/time';
 import { Invoice } from '../../src/types/product';
 import { createCollectPaymentController } from '../../src/services/collectPaymentIntent';
+import { describeCollectPaymentAlert } from '../../src/services/collectPaymentCopy';
 
 const PAYMENT_METHODS = [
   { id: 'cash', label: '💵 Efectivo' },
@@ -81,17 +82,25 @@ export default function CollectScreen() {
         Alert.alert('Monto invalido', outcome.message);
         return;
       }
-      if (outcome.status === 'ignored_inflight' || outcome.status === 'ignored_done') {
-        return;
-      }
 
-      Alert.alert(
-        'Cobro registrado',
-        `${formatCurrency(numAmount)} registrado como ${paymentMethod}`,
-        [{ text: 'OK', onPress: () => router.back() }],
-      );
+      const copy = describeCollectPaymentAlert({
+        outcome,
+        amountLabel: formatCurrency(numAmount),
+      });
+      if (!copy) return;
+
+      const leaveAfterOk =
+        outcome.status === 'enqueued' || outcome.status === 'ignored_done';
+      Alert.alert(copy.title, copy.body, [
+        {
+          text: 'OK',
+          onPress: () => {
+            if (leaveAfterOk) router.back();
+          },
+        },
+      ]);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'No se pudo registrar el cobro';
+      const msg = err instanceof Error ? err.message : 'No se pudo encolar el cobro';
       Alert.alert('Error', msg);
     } finally {
       setSubmitting(false);
@@ -167,8 +176,11 @@ export default function CollectScreen() {
           keyboardType="numeric"
         />
 
-        {/* Payment method */}
-        <Text style={styles.inputLabel}>METODO DE PAGO</Text>
+        <Text style={styles.inputLabel}>METODO DE PAGO (nota local)</Text>
+        <Text style={[typography.dimSmall, { marginBottom: 6 }]}>
+          El servidor confirma el cobro por diario de pago, no por esta etiqueta.
+          El estado final aparece en Sync cuando Odoo responde.
+        </Text>
         <View style={styles.chipContainer}>
           {PAYMENT_METHODS.map((m) => (
             <TouchableOpacity
@@ -184,7 +196,7 @@ export default function CollectScreen() {
         </View>
 
         <Button
-          label="💰 Registrar Cobro"
+          label="💰 Encolar cobro"
           onPress={handleCollect}
           fullWidth
           disabled={submitting || !amount || parseFloat(amount) <= 0}

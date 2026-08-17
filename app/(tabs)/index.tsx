@@ -27,6 +27,7 @@ import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { preloadRouteCustomerPrices } from '../../src/services/pricelist';
 import { useSalesStore } from '../../src/stores/useSalesStore';
+import { useTasksStore } from '../../src/stores/useTasksStore';
 import { formatCurrency } from '../../src/utils/time';
 import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
 import { isStandardNoPlanError } from '../../src/services/routeLoadOutcome';
@@ -119,13 +120,24 @@ export default function HomeScreen() {
   // BLD-20260408: Use getAlerts() method (not s.alerts property which doesn't exist)
   const getAlerts = useKoldStore((s) => s.getAlerts);
   const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
+  const pendingTasks = useTasksStore((s) => s.pendingCount);
+  const loadTasks = useTasksStore((s) => s.loadTasks);
+  const unreadAlerts = koldAlerts.length;
   const refreshPlan = useCallback(async () => {
     await Promise.all([
       loadPlan({ force: true }),
       loadTodaySales(),
+      employeeId ? loadTasks(employeeId, companyId) : Promise.resolve(),
     ]);
-  }, [loadPlan, loadTodaySales]);
+  }, [loadPlan, loadTodaySales, loadTasks, employeeId, companyId]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated || !employeeId) return;
+      void loadTasks(employeeId, companyId);
+    }, [isAuthenticated, employeeId, companyId, loadTasks]),
+  );
 
   // Next stops (pending + in_progress, max 4)
   const nextStops = useMemo(() =>
@@ -177,18 +189,19 @@ export default function HomeScreen() {
       {/* Sync bar */}
       <SyncBar />
 
-      {/* Greeting + settings */}
+      {/* Greeting — Perfil/Ranking viven en tab Yo */}
       <View style={styles.greeting}>
         <GrupoFrioIcon size={30} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.greetLabel}>Buenos dias</Text>
+          <Text style={styles.greetLabel}>Mi día</Text>
           <Text style={styles.greetName}>{employeeName || 'Vendedor'}</Text>
         </View>
         <TouchableOpacity
           style={styles.settingsBtn}
-          onPress={() => router.push('/profile' as never)}
+          onPress={() => router.push('/(tabs)/me' as never)}
+          accessibilityLabel="Abrir Yo"
         >
-          <Ionicons name="settings-outline" size={18} color={colors.text} />
+          <Ionicons name="person-outline" size={18} color={colors.text} />
         </TouchableOpacity>
       </View>
 
@@ -356,30 +369,50 @@ export default function HomeScreen() {
               />
             </View>
 
-            {/* F1.11: accesos rápidos fuera de visita — no requieren estar
-                parados en un cliente. */}
-            <Text style={styles.sectionTitle}>FUERA DE VISITA</Text>
+            {/* Hub operativo: Tasks/Alerts viven bajo Mi día (no tabs primarias). */}
+            <Text style={styles.sectionTitle}>OPERACIÓN</Text>
             <View style={styles.quickGrid}>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/(tabs)/tasks' as never)}
+                accessibilityLabel={
+                  pendingTasks > 0
+                    ? `Tareas, ${pendingTasks} pendientes`
+                    : 'Tareas'
+                }
+              >
+                <Text style={styles.quickIcon}>✅</Text>
+                <Text style={styles.quickLabel}>
+                  Tareas{pendingTasks > 0 ? ` (${pendingTasks})` : ''}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.quickBtn}
+                onPress={() => router.push('/(tabs)/alerts' as never)}
+                accessibilityLabel={
+                  unreadAlerts > 0
+                    ? `Alertas, ${unreadAlerts} sin leer`
+                    : 'Alertas'
+                }
+              >
+                <Text style={styles.quickIcon}>🔔</Text>
+                <Text style={styles.quickLabel}>
+                  Alertas{unreadAlerts > 0 ? ` (${unreadAlerts})` : ''}
+                </Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.quickBtn}
                 onPress={() => router.push('/incident' as never)}
               >
                 <Text style={styles.quickIcon}>🚩</Text>
-                <Text style={styles.quickLabel}>Reportar incidencia</Text>
+                <Text style={styles.quickLabel}>Incidencia</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.quickBtn}
                 onPress={() => router.push('/refill-accept' as never)}
               >
                 <Text style={styles.quickIcon}>🔄</Text>
-                <Text style={styles.quickLabel}>Pedir recarga</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.quickBtn}
-                onPress={() => router.push('/ranking' as never)}
-              >
-                <Text style={styles.quickIcon}>🏆</Text>
-                <Text style={styles.quickLabel}>Mi ranking</Text>
+                <Text style={styles.quickLabel}>Recarga</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.quickBtn}

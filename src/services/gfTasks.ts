@@ -18,10 +18,14 @@ function normalize(input: unknown): TaskItem {
 
 /** Tareas derivadas de la identidad del empleado contenida en el Bearer token. */
 export async function fetchMyTasks(): Promise<TaskItem[]> {
-  const data = await getRest<{ tasks?: TaskItem[] } | TaskItem[]>(
+  const data = await getRest<{
+    data?: { count?: number; tasks?: TaskItem[] };
+    tasks?: TaskItem[];
+  } | TaskItem[]>(
     '/gf/logistics/api/employee/tasks',
   );
   const raw = Array.isArray(data) ? data
+    : Array.isArray(data?.data?.tasks) ? data.data.tasks
     : Array.isArray((data as { tasks?: TaskItem[] }).tasks) ? (data as { tasks: TaskItem[] }).tasks
     : [];
   return raw.map((t) => normalize(t));

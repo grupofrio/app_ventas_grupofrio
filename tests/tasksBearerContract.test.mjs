@@ -37,6 +37,15 @@ function testEmployeeTaskServiceHasNoClientSelectedAuthority() {
   }
 }
 
+function testEmployeeTaskListUnwrapsTheBoundedRestEnvelope() {
+  const list = section(service, 'export async function fetchMyTasks', '/** Marca una tarea');
+
+  assert.match(list, /data\?\.data\?\.tasks/,
+    'the employee task list must read tasks from the REST data envelope');
+  assert.match(list, /count\?:\s*number/,
+    'the task envelope shape must preserve the bounded count field');
+}
+
 function testTaskMutationsUseDedicatedEmployeeEndpointsAndAllowlistedBodies() {
   const complete = section(service, 'export async function completeMyTask', '/** Inicia una tarea');
   const start = section(service, 'export async function startMyTask', undefined);
@@ -82,6 +91,7 @@ function testStoreAndMiDiaOnlyUseTheScopedTaskAdapter() {
 }
 
 testEmployeeTaskServiceHasNoClientSelectedAuthority();
+testEmployeeTaskListUnwrapsTheBoundedRestEnvelope();
 testTaskMutationsUseDedicatedEmployeeEndpointsAndAllowlistedBodies();
 testStoreAndMiDiaOnlyUseTheScopedTaskAdapter();
 console.log('tasks Bearer contract tests: ok');

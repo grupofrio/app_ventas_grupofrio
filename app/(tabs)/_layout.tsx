@@ -1,6 +1,6 @@
 /**
- * Bottom tab navigator — 6 tabs.
- * "Tareas" tab shows a red badge when there are pending/in-progress tasks.
+ * Bottom tab navigator — 5 primary tabs.
+ * Tareas / Alertas remain routable under Mi Día (href: null).
  */
 
 import { Tabs } from 'expo-router';
@@ -8,31 +8,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors, sizes } from '../../src/theme/tokens';
 import { useTasksStore } from '../../src/stores/useTasksStore';
-
-type TabIcon = keyof typeof Ionicons.glyphMap;
-
-const tabs: { name: string; title: string; icon: TabIcon; iconActive: TabIcon }[] = [
-  { name: 'index',     title: 'Inicio',     icon: 'home-outline',          iconActive: 'home' },
-  { name: 'route',     title: 'Ruta',       icon: 'map-outline',           iconActive: 'map' },
-  { name: 'inventory', title: 'Inventario', icon: 'cube-outline',          iconActive: 'cube' },
-  { name: 'sales',     title: 'Ventas',     icon: 'cart-outline',          iconActive: 'cart' },
-  { name: 'tasks',     title: 'Tareas',     icon: 'checkbox-outline',      iconActive: 'checkbox' },
-  { name: 'alerts',    title: 'Alertas',    icon: 'notifications-outline', iconActive: 'notifications' },
-];
-
-/** Red dot badge shown on top of the tasks icon when count > 0. */
-function TasksBadge({ count, color, size }: { count: number; color: string; size: number }) {
-  return (
-    <View style={{ width: size + 12, height: size + 4, alignItems: 'center', justifyContent: 'center' }}>
-      <Ionicons name="checkbox" size={size || 22} color={color} />
-      {count > 0 && (
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{count > 9 ? '9+' : String(count)}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
+import {
+  KOLD_FIELD_ALL_TABS,
+  isPrimaryTab,
+} from '../../src/services/koldFieldNavigation';
 
 export default function TabsLayout() {
   const pendingCount = useTasksStore((s) => s.pendingCount);
@@ -57,23 +36,34 @@ export default function TabsLayout() {
         },
       }}
     >
-      {tabs.map((tab) => (
+      {KOLD_FIELD_ALL_TABS.map((tab) => (
         <Tabs.Screen
           key={tab.name}
           name={tab.name}
           options={{
             title: tab.title,
+            href: isPrimaryTab(tab.name) ? undefined : null,
             tabBarIcon: ({ focused, color, size }) => {
-              if (tab.name === 'tasks') {
-                const icon = focused ? 'checkbox' : 'checkbox-outline';
+              if (tab.name === 'index' && pendingCount > 0) {
                 return (
-                  <View style={{ width: (size || 22) + 12, height: (size || 22) + 4, alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons name={icon} size={size || 22} color={color} />
-                    {pendingCount > 0 && (
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>{pendingCount > 9 ? '9+' : String(pendingCount)}</Text>
-                      </View>
-                    )}
+                  <View
+                    style={{
+                      width: (size || 22) + 12,
+                      height: (size || 22) + 4,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Ionicons
+                      name={focused ? tab.iconActive : tab.icon}
+                      size={size || 22}
+                      color={color}
+                    />
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>
+                        {pendingCount > 9 ? '9+' : String(pendingCount)}
+                      </Text>
+                    </View>
                   </View>
                 );
               }

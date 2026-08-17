@@ -345,7 +345,7 @@ export default function HomeScreen() {
                   hasStockData === true
                     ? `${productCount} productos`
                     : productCount > 0
-                      ? 'stock no autorizado aún'
+                      ? 'Stock pendiente de actualizar'
                       : 'catálogo no cargado'
                 }
               />

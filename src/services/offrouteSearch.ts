@@ -1,5 +1,5 @@
 import { loadCurrentEmployeeDayBundle } from './employeeDayBundle';
-import { buildOffrouteResults } from './offrouteSearchLogic';
+import { buildOffrouteResults, matchesOffrouteDirectoryQuery } from './offrouteSearchLogic';
 import type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
 
 export type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
@@ -12,7 +12,6 @@ export async function searchOffrouteEntities(
   if (q.length < 3) return [];
   const loaded = await loadCurrentEmployeeDayBundle();
   if (!loaded) throw new Error('Prepara el bundle del día antes de buscar fuera de ruta.');
-  const normalized = q.toLocaleLowerCase();
   const customers: OffrouteCustomerRecord[] = loaded.record.bundle.directory.flatMap((entry) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return [];
     const item = entry as Record<string, unknown>;
@@ -20,7 +19,7 @@ export async function searchOffrouteEntities(
     const address = typeof item.address === 'string' ? item.address.trim() : '';
     const zone = typeof item.zone === 'string' ? item.zone.trim() : '';
     if (typeof item.id !== 'number' || item.id <= 0 || !name) return [];
-    if (![name, address, zone].some((value) => value.toLocaleLowerCase().includes(normalized))) return [];
+    if (!matchesOffrouteDirectoryQuery(q, { name, address, zone })) return [];
     return [{
       id: item.id,
       name,

@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 interface OffrouteSearchModule {
+  matchesOffrouteDirectoryQuery: (
+    query: string,
+    entry: { name: string; address?: string; zone?: string },
+  ) => boolean;
   buildOffrouteResults: (
     customers: Array<{
       id: number;
@@ -40,6 +44,19 @@ interface OffrouteSearchModule {
     customerLongitude: number | null;
     googleMapsUrl: string | null;
   }>;
+}
+
+function testDirectorySearchUsesNormalizedAllTokens(module: OffrouteSearchModule) {
+  const entry = {
+    name: 'Abarrotes Ñandú',
+    address: 'Calle de la Reforma 123',
+    zone: 'Centro Histórico',
+  };
+
+  assert.equal(module.matchesOffrouteDirectoryQuery('reforma abarrotes', entry), true);
+  assert.equal(module.matchesOffrouteDirectoryQuery('NANDU centro', entry), true);
+  assert.equal(module.matchesOffrouteDirectoryQuery('historico calle', entry), true);
+  assert.equal(module.matchesOffrouteDirectoryQuery('abarrotes inexistente', entry), false);
 }
 
 function testCustomerMapping(module: OffrouteSearchModule) {
@@ -126,6 +143,8 @@ function testDayBundleDirectoryWiring() {
   assert.match(source, /import\s*\{\s*loadCurrentEmployeeDayBundle\s*\}\s*from ['"]\.\/employeeDayBundle['"]/);
   assert.match(source, /loaded\.record\.bundle\.directory/);
   assert.match(source, /const q = query\.trim\(\)/);
+  assert.match(source, /import\s*\{[^}]*matchesOffrouteDirectoryQuery[^}]*\}\s*from ['"]\.\/offrouteSearchLogic['"]/);
+  assert.match(source, /matchesOffrouteDirectoryQuery\(q,\s*\{\s*name,\s*address,\s*zone\s*\}\)/);
   assert.doesNotMatch(source, /directory\/search|postRest/);
   assert.doesNotMatch(
     source,
@@ -161,6 +180,7 @@ async function main() {
   testCustomerCarriesNavigationLocation(module);
   testLeadMapping(module);
   testMixedResultsKeepTypes(module);
+  testDirectorySearchUsesNormalizedAllTokens(module);
   testDayBundleDirectoryWiring();
   console.log('offroute search tests: ok');
 }

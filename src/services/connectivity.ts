@@ -25,6 +25,7 @@ import { useAuthStore } from '../stores/useAuthStore';
 import { shouldWakeOnNetTransition, shouldWakeOnWarehouseTransition, NetSnapshot } from './syncWakeup';
 import { createLegacyRefreshRunner } from './legacyRefreshRunner';
 import { logWarn } from '../utils/logger';
+import { requestInvoiceCollectionSync } from './invoiceCollectionSync';
 
 let netUnsubscribe: (() => void) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
@@ -98,6 +99,7 @@ function wakeQueue(): void {
   store.processQueue();
   store.scheduleWake();
   requestLegacyAuthoritativeRefresh();
+  requestInvoiceCollectionSync();
 }
 
 export function startConnectivityMonitor(): void {

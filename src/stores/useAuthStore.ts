@@ -152,6 +152,8 @@ async function clearCurrentEncryptedFieldData(): Promise<void> {
     const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
     await clearEncryptedSession(session);
   }
+  const { resetInvoiceCollectionSync } = await import('../services/invoiceCollectionSync');
+  resetInvoiceCollectionSync();
   await clearSensitiveFieldData();
   clearFieldDataIdentity();
 }

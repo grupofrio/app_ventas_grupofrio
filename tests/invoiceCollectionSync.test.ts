@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 interface SyncModule {
+  classifyInvoiceCollectionError(error: unknown): { kind: string; code?: string; httpStatus?: number };
   createInvoiceCollectionSyncProcessor(deps: unknown): {
     capture(input: unknown): Promise<{ status: string; operationId: string }>;
     reconcile(): Promise<void>;
@@ -131,4 +132,44 @@ test('double tap shares one in-flight capture for the original UUID', async () =
     { status: 'applied', operationId: intent.operation_id },
     { status: 'applied', operationId: intent.operation_id },
   ]);
+});
+
+test('authenticated validation failure is terminal review while revoked credentials stay unchanged for reauth', async () => {
+  const mod = await loadSync();
+  assert.deepEqual(
+    mod.classifyInvoiceCollectionError({ httpStatus: 422, code: 'validation_error', responseReceived: true }),
+    { kind: 'review_required', code: 'validation_error', httpStatus: 422 },
+  );
+  assert.deepEqual(
+    mod.classifyInvoiceCollectionError({ httpStatus: 401, code: 'session_expired', responseReceived: true }),
+    { kind: 'reauth_required', code: 'session_expired', httpStatus: 401 },
+  );
+  assert.deepEqual(
+    mod.classifyInvoiceCollectionError({ code: 'timeout', responseReceived: false }),
+    { kind: 'pending', code: 'timeout' },
+  );
+
+  const persistence = createMemoryPersistence();
+  const reviewProcessor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 50,
+    transport: { collect: async () => { throw { httpStatus: 422, code: 'invoice_scope_denied', responseReceived: true }; } },
+  });
+  assert.deepEqual(await reviewProcessor.capture(intent), {
+    status: 'review_required', operationId: intent.operation_id, code: 'invoice_scope_denied', httpStatus: 422,
+  });
+  assert.equal(persistence.records[0].status, 'review_required');
+
+  const reauthPersistence = createMemoryPersistence();
+  const reauthProcessor = mod.createInvoiceCollectionSyncProcessor({
+    persistence: reauthPersistence,
+    isOnline: () => true,
+    now: () => 51,
+    transport: { collect: async () => { throw { httpStatus: 401, code: 'session_expired', responseReceived: true }; } },
+  });
+  assert.deepEqual(await reauthProcessor.capture(intent), {
+    status: 'reauth_required', operationId: intent.operation_id, code: 'session_expired', httpStatus: 401,
+  });
+  assert.equal(reauthPersistence.records[0].status, 'dispatching', 'reauth must not mutate the encrypted intent');
 });

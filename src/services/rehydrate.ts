@@ -32,6 +32,7 @@ import { todayLocalISO } from '../utils/localDate';
 import { requestLegacyAuthoritativeRefresh } from './connectivity';
 import { recoverPersistedSaleIntent } from './saleRehydrateRecovery';
 import { saveSaleTicketSnapshot } from './saleTicketStorage';
+import { bootstrapInvoiceCollectionSync } from './invoiceCollectionSync';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -50,6 +51,9 @@ export async function rehydrateAppState(): Promise<{
     // 1. Sync queue — CRITICAL: don't lose pending operations
     await useSyncStore.getState().rehydrateQueue();
     queueSize = useSyncStore.getState().pendingCount;
+    // Separate encrypted collection intents are never generic sync queue rows.
+    // Rehydrate/replay them through their singleton after auth is restored.
+    await bootstrapInvoiceCollectionSync();
 
     // 1b. Route start readiness (Sprint A): checklist/km/load flags so the
     // hub doesn't show "no preparado" after an app restart.

@@ -27,7 +27,7 @@ export function formatForecastKg(forecastKg: number): string {
 /**
  * When stock is not authoritative, keep catalog rows visible so the list
  * does not collapse to empty (false "sin productos").
- * When authoritative, hide zero-sellable rows as before.
+ * When authoritative, hide zero available-for-sale rows as before.
  */
 export function shouldListProductOnInventory(input: {
   hasStockData: boolean | null;

@@ -156,7 +156,7 @@ export default function InventoryScreen() {
           showAcceptedLoads
         />
 
-        {/* Product list — sellable view; ledger buckets remain projection-only until wired */}
+        {/* Product list — disponible para venta; buckets ledger aún no en UI */}
         <Text style={styles.sectionTitle}>INVENTARIO FÍSICO REAL</Text>
         {isLoading ? (
           <Card><Text style={typography.dim}>Cargando productos...</Text></Card>
@@ -171,9 +171,9 @@ export default function InventoryScreen() {
           </Card>
         ) : listedProducts.length === 0 ? (
           <Card>
-            <Text style={typography.dim}>Sin unidades sellable en camioneta</Text>
+            <Text style={typography.dim}>Sin unidades disponibles para venta</Text>
             <Text style={[typography.dimSmall, { marginTop: 4 }]}>
-              El catálogo está cargado; el stock sellable autorizado es 0.
+              El catálogo está cargado; el stock disponible para venta es 0.
             </Text>
           </Card>
         ) : (

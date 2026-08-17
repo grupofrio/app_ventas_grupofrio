@@ -122,7 +122,8 @@ export default function HomeScreen() {
   const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
   const pendingTasks = useTasksStore((s) => s.pendingCount);
   const loadTasks = useTasksStore((s) => s.loadTasks);
-  const unreadAlerts = koldAlerts.length;
+  // Alert count only — store has no unread flag; never claim "sin leer".
+  const alertCount = koldAlerts.length;
   const refreshPlan = useCallback(async () => {
     await Promise.all([
       loadPlan({ force: true }),
@@ -390,14 +391,14 @@ export default function HomeScreen() {
                 style={styles.quickBtn}
                 onPress={() => router.push('/(tabs)/alerts' as never)}
                 accessibilityLabel={
-                  unreadAlerts > 0
-                    ? `Alertas, ${unreadAlerts} sin leer`
+                  alertCount > 0
+                    ? `Alertas, ${alertCount}`
                     : 'Alertas'
                 }
               >
                 <Text style={styles.quickIcon}>🔔</Text>
                 <Text style={styles.quickLabel}>
-                  Alertas{unreadAlerts > 0 ? ` (${unreadAlerts})` : ''}
+                  Alertas{alertCount > 0 ? ` (${alertCount})` : ''}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity

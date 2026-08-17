@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ import {
   reviewRequiredMessage,
   type ProspectConvertResult,
 } from '../../src/services/prospectConvert';
+import { createConvertLeadIntentController } from '../../src/services/convertLeadIntent';
 import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { createUuidV4 } from '../../src/utils/clientEvent';
@@ -73,6 +74,9 @@ export default function ProspeccionScreen() {
   const [loadingStages, setLoadingStages] = useState(true);
   const [saving, setSaving] = useState(false);
   const [stageError, setStageError] = useState<string | null>(null);
+  const convertIntentRef = useRef(
+    createConvertLeadIntentController({ uuid: createUuidV4 }),
+  );
 
   const isLead = stop?._entityType === 'lead';
   const title = 'Datos';
@@ -217,15 +221,41 @@ export default function ProspeccionScreen() {
       return;
     }
 
+    // Crash/restart v1: if stop already has partner, treat as converted — no new mutation.
+    if (getLeadPartnerId(currentStop) != null) {
+      convertIntentRef.current.finalize('already_converted');
+      Alert.alert(
+        'Prospecto ya convertido',
+        'Este prospecto ya tiene cliente ligado. La venta está habilitada.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+      return;
+    }
+
+    const begun = convertIntentRef.current.begin({
+      stopId: currentStop.id,
+      leadId: currentStop._leadId ?? null,
+    });
+    if (begun.status === 'ignored_inflight') return;
+    const operationId = begun.operationId;
+
     setSaving(true);
     try {
       const convertResult = await convertLeadData({
-        operation_id: createUuidV4(),
+        operation_id: operationId,
         stop_id: currentStop.id,
         lead_id: currentStop._leadId ?? null,
       });
       if (!convertResult) {
-        Alert.alert('Conversión fallida', 'El servidor no confirmó la conversión.');
+        convertIntentRef.current.markAmbiguous();
+        Alert.alert(
+          'Confirmación pendiente',
+          'No pudimos confirmar si la conversión se completó.',
+          [
+            { text: 'Continuar visita', onPress: finalizeAfterSave },
+            { text: 'Reintentar', onPress: () => { void handleConvert(); } },
+          ],
+        );
         return;
       }
 
@@ -244,6 +274,7 @@ export default function ProspeccionScreen() {
         || getLeadPartnerId(nextStop) != null;
 
       if (!converted) {
+        convertIntentRef.current.finalize('rejected');
         Alert.alert(
           'Conversión pendiente',
           'El servidor no confirmó un cliente ligado. El prospecto se conserva.',
@@ -252,6 +283,9 @@ export default function ProspeccionScreen() {
         return;
       }
 
+      convertIntentRef.current.finalize(
+        status === 'already_converted' ? 'already_converted' : 'converted',
+      );
       Alert.alert(
         status === 'already_converted'
           ? 'Prospecto ya convertido'
@@ -263,6 +297,7 @@ export default function ProspeccionScreen() {
       );
     } catch (error) {
       if (isReviewRequiredDuplicateError(error)) {
+        convertIntentRef.current.finalize('review_required_duplicate');
         Alert.alert(
           'Revisión requerida',
           reviewRequiredMessage(error),
@@ -271,6 +306,19 @@ export default function ProspeccionScreen() {
         return;
       }
       const message = error instanceof Error ? error.message : 'No se pudo convertir el prospecto.';
+      if (isRetryableSyncErrorMessage(message)) {
+        convertIntentRef.current.markAmbiguous();
+        Alert.alert(
+          'Confirmación pendiente',
+          'No pudimos confirmar si la conversión se completó.',
+          [
+            { text: 'Continuar visita', onPress: finalizeAfterSave },
+            { text: 'Reintentar', onPress: () => { void handleConvert(); } },
+          ],
+        );
+        return;
+      }
+      convertIntentRef.current.finalize('rejected');
       Alert.alert('Conversión rechazada', message);
     } finally {
       setSaving(false);

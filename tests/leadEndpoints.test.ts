@@ -74,6 +74,12 @@ function main() {
     /Necesitas conexión para convertir este prospecto en cliente/,
   );
   assert.match(postvisit, /isReviewRequiredDuplicateError/);
+  assert.match(postvisit, /createConvertLeadIntentController/);
+  assert.match(postvisit, /markAmbiguous/);
+  assert.match(
+    postvisit,
+    /No pudimos confirmar si la conversión se completó/,
+  );
   assert.match(
     postvisit,
     /async function handleConvert\([\s\S]*?convertLeadData\([\s\S]*?async function handleSave\([\s\S]*?upsertLeadData\(/,
@@ -83,6 +89,11 @@ function main() {
     postvisit,
     /justConverted \? 'Prospecto convertido a cliente'/,
     'upsert path must not claim conversion success',
+  );
+  assert.doesNotMatch(
+    postvisit,
+    /operation_id: createUuidV4\(\)/,
+    'convert must not mint a fresh UUID on every press',
   );
 
   assert.match(

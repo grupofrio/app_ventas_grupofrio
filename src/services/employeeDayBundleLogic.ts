@@ -40,6 +40,26 @@ export interface DayBundle {
   no_sale_reasons: unknown[];
   gift_reasons: unknown[];
   competitors: unknown[];
+  /**
+   * Bounded, non-authoritative invoice selection data. Older v1 bundles do
+   * not carry this extension, so absence remains valid during rollout.
+   */
+  invoice_snapshots?: InvoiceSnapshot[];
+}
+
+export interface InvoiceSnapshot {
+  stop_id: number;
+  as_of: string | null;
+  invoices: OpenInvoiceSnapshot[];
+}
+
+export interface OpenInvoiceSnapshot {
+  invoice_id: number;
+  name: string;
+  invoice_date: string | null;
+  due_date: string | null;
+  currency: string;
+  amount_residual: number;
 }
 
 export interface DayBundleAccess {
@@ -103,6 +123,13 @@ function nonNegativeNumber(value: unknown, field: string): number {
   return value;
 }
 
+function positiveNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw invalid(`${field} debe ser un número positivo.`);
+  }
+  return value;
+}
+
 function optionalNumberInRange(value: unknown, field: string, min: number, max: number): void {
   if (value === undefined || value === null) return;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
@@ -119,6 +146,11 @@ function isoDate(value: unknown, field: string): string {
     throw invalid(`${field} debe ser una fecha ISO.`);
   }
   return value;
+}
+
+function nullableIsoDate(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  return isoDate(value, field);
 }
 
 function array(value: unknown, field: string, maxItems: number): unknown[] {
@@ -250,11 +282,37 @@ function validateDirectory(values: unknown[]): void {
   });
 }
 
+function validateInvoiceSnapshots(values: unknown[]): InvoiceSnapshot[] {
+  return values.map((value, index) => {
+    const field = `invoice_snapshots[${index}]`;
+    const snapshot = object(value, field);
+    allowOnly(snapshot, ['stop_id', 'as_of', 'invoices'], field);
+    const invoices = array(snapshot.invoices, `${field}.invoices`, 100).map((invoice, invoiceIndex) => {
+      const invoiceField = `${field}.invoices[${invoiceIndex}]`;
+      const entry = object(invoice, invoiceField);
+      allowOnly(entry, ['invoice_id', 'name', 'invoice_date', 'due_date', 'currency', 'amount_residual'], invoiceField);
+      return {
+        invoice_id: positiveInteger(entry.invoice_id, `${invoiceField}.invoice_id`),
+        name: text(entry.name, `${invoiceField}.name`, 256),
+        invoice_date: nullableIsoDate(entry.invoice_date, `${invoiceField}.invoice_date`),
+        due_date: nullableIsoDate(entry.due_date, `${invoiceField}.due_date`),
+        currency: text(entry.currency, `${invoiceField}.currency`, 16),
+        amount_residual: positiveNumber(entry.amount_residual, `${invoiceField}.amount_residual`),
+      };
+    });
+    return {
+      stop_id: positiveInteger(snapshot.stop_id, `${field}.stop_id`),
+      as_of: nullableText(snapshot.as_of, `${field}.as_of`, 32),
+      invoices,
+    };
+  });
+}
+
 function validateBundle(value: unknown): DayBundle {
   const data = object(value, 'bundle');
   allowOnly(data, [
     'schema_version', 'operational_date', 'expires_at', 'plan', 'stops', 'catalog', 'directory',
-    'no_sale_reasons', 'gift_reasons', 'competitors',
+    'no_sale_reasons', 'gift_reasons', 'competitors', 'invoice_snapshots',
   ], 'bundle');
   if (data.schema_version !== 'day_bundle.v1') throw invalid('schema_version no es day_bundle.v1.');
   const operationalDate = isoDate(data.operational_date, 'operational_date');
@@ -275,6 +333,9 @@ function validateBundle(value: unknown): DayBundle {
   const noSaleReasons = array(data.no_sale_reasons, 'no_sale_reasons', 200);
   const giftReasons = array(data.gift_reasons, 'gift_reasons', 200);
   const competitors = array(data.competitors, 'competitors', 1000);
+  const invoiceSnapshots = data.invoice_snapshots === undefined
+    ? undefined
+    : validateInvoiceSnapshots(array(data.invoice_snapshots, 'invoice_snapshots', 1000));
   validateStops(stops);
   validateCatalog(catalog);
   validateDirectory(directory);
@@ -299,6 +360,7 @@ function validateBundle(value: unknown): DayBundle {
     no_sale_reasons: noSaleReasons,
     gift_reasons: giftReasons,
     competitors,
+    ...(invoiceSnapshots === undefined ? {} : { invoice_snapshots: invoiceSnapshots }),
   };
 }
 

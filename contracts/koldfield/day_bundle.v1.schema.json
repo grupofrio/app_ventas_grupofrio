@@ -12,7 +12,8 @@
     "directory": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/directory_item"}},
     "no_sale_reasons": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/reason"}},
     "gift_reasons": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/reason"}},
-    "competitors": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/reason"}}
+    "competitors": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/reason"}},
+    "invoice_snapshots": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/invoice_snapshot"}}
   },
   "$defs": {
     "id": {"type": "integer", "minimum": 1}, "nullable_id": {"type": ["integer", "null"], "minimum": 1},
@@ -39,6 +40,8 @@
     "effective_price": {"type": "object", "additionalProperties": false, "required": ["partner_id", "price"], "properties": {"partner_id": {"$ref": "#/$defs/id"}, "price": {"type": "number", "minimum": 0}}},
     "catalog_item": {"type": "object", "additionalProperties": false, "required": ["id", "name", "default_code", "uom_id", "stock_qty", "effective_prices"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}, "default_code": {"type": ["string", "null"], "maxLength": 256}, "uom_id": {"$ref": "#/$defs/id"}, "stock_qty": {"type": "number", "minimum": 0}, "effective_prices": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/effective_price"}}}},
     "directory_item": {"type": "object", "additionalProperties": false, "required": ["id", "name", "payment_term", "payment_policy"], "properties": {"id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "maxLength": 512}, "payment_term": {"$ref": "#/$defs/payment_term"}, "payment_policy": {"$ref": "#/$defs/payment_policy"}, "zone": {"type": ["string", "null"], "maxLength": 256}, "address": {"type": ["string", "null"], "maxLength": 512}, "latitude": {"type": ["number", "null"], "minimum": -90, "maximum": 90}, "longitude": {"type": ["number", "null"], "minimum": -180, "maximum": 180}}},
-    "reason": {"type": "object", "additionalProperties": false, "required": ["code", "name"], "properties": {"code": {"type": "string", "minLength": 1, "maxLength": 128}, "name": {"type": "string", "maxLength": 256}}}
+    "reason": {"type": "object", "additionalProperties": false, "required": ["code", "name"], "properties": {"code": {"type": "string", "minLength": 1, "maxLength": 128}, "name": {"type": "string", "maxLength": 256}}},
+    "open_invoice": {"type": "object", "additionalProperties": false, "required": ["invoice_id", "name", "invoice_date", "due_date", "currency", "amount_residual"], "properties": {"invoice_id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "minLength": 1, "maxLength": 256}, "invoice_date": {"type": ["string", "null"], "format": "date"}, "due_date": {"type": ["string", "null"], "format": "date"}, "currency": {"type": "string", "minLength": 1, "maxLength": 16}, "amount_residual": {"type": "number", "exclusiveMinimum": 0}}},
+    "invoice_snapshot": {"type": "object", "additionalProperties": false, "required": ["stop_id", "invoices", "as_of"], "properties": {"stop_id": {"$ref": "#/$defs/id"}, "as_of": {"type": ["string", "null"], "maxLength": 32}, "invoices": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/open_invoice"}}}}
   }
 }

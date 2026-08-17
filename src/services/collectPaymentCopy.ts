@@ -1,6 +1,7 @@
 /**
  * Collect payment UX copy — RN-free.
  * Enqueue ≠ server-registered; never claim method confirmation from chips alone.
+ * operation_id stays internal (idempotency); never surface it to the seller here.
  */
 
 export type CollectPaymentUiOutcome =
@@ -15,20 +16,22 @@ export function describeCollectPaymentAlert(input: {
   if (input.outcome.status === 'ignored_inflight') {
     return {
       title: 'Cobro en proceso',
-      body: 'Ya hay un cobro enviándose. Espera un momento; no pulses de nuevo.',
+      body: 'Ya estamos procesando este cobro. Espera un momento; no pulses de nuevo.',
     };
   }
   if (input.outcome.status === 'ignored_done') {
     return {
-      title: 'Cobro ya en cola',
-      body: 'Este cobro ya quedó pendiente de sincronización. Revisa Sync si no aparece confirmado.',
+      title: 'Cobro ya guardado',
+      body:
+        'Este cobro ya quedó en el dispositivo pendiente de sincronizar. ' +
+        'Revisa Sync si aún no aparece confirmado en Odoo. No es éxito de servidor todavía.',
     };
   }
-  // enqueued — durable queue only; server ACK happens later via Sync.
+  // enqueued — durable local queue only; server ACK happens later via Sync.
   return {
     title: 'Cobro pendiente de sincronizar',
     body:
-      `${input.amountLabel} quedó en cola (operation ${input.outcome.operationId.slice(0, 8)}…). ` +
-      'Aún no está confirmado en Odoo. No lo vuelvas a registrar.',
+      `${input.amountLabel} guardado en el dispositivo. ` +
+      'Queda pendiente de sincronizar con Odoo. No es necesario capturarlo nuevamente.',
   };
 }

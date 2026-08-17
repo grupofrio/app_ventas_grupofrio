@@ -196,7 +196,7 @@ export default function CollectScreen() {
         </View>
 
         <Button
-          label="💰 Encolar cobro"
+          label="💰 Guardar cobro"
           onPress={handleCollect}
           fullWidth
           disabled={submitting || !amount || parseFloat(amount) <= 0}

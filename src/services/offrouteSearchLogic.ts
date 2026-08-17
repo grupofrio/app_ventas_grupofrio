@@ -25,6 +25,12 @@ export interface OffrouteLeadRecord {
   partner_id?: [number, string] | false;
 }
 
+export interface OffrouteDirectorySearchable {
+  name: string;
+  address?: string;
+  zone?: string;
+}
+
 export interface OffrouteSearchResult {
   id: number;
   entityType: 'customer' | 'lead';
@@ -46,6 +52,25 @@ export interface OffrouteSearchResult {
 
 function joinParts(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(', ');
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function matchesOffrouteDirectoryQuery(
+  query: string,
+  entry: OffrouteDirectorySearchable,
+): boolean {
+  const tokens = normalizeSearchText(query).split(' ').filter(Boolean);
+  if (tokens.length === 0) return false;
+  const searchable = normalizeSearchText([entry.name, entry.address ?? '', entry.zone ?? ''].join(' '));
+  return tokens.every((token) => searchable.includes(token));
 }
 
 function extractMany2oneId(value: [number, string] | number | false | null | undefined): number | null {

@@ -20,6 +20,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { formatInventoryKg } from '../../src/services/inventoryDisplay';
 
 export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -27,7 +28,7 @@ export default function InventoryScreen() {
   const { plan, loadPlan } = useRouteStore();
   const {
     products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
-    productCount, lastSync: productsLastSync,
+    productCount, lastSync: productsLastSync, hasStockData,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
     const tasks: Promise<void>[] = [];
@@ -84,7 +85,9 @@ export default function InventoryScreen() {
           <View style={styles.summaryRow}>
             <View>
               <Text style={styles.summaryLabel}>Stock total</Text>
-              <Text style={styles.summaryValue}>{totalStockKg} kg</Text>
+              <Text style={styles.summaryValue}>
+                {formatInventoryKg({ hasStockData, quantityKg: totalStockKg })}
+              </Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.summaryLabel}>Forecast ruta</Text>
@@ -151,8 +154,12 @@ export default function InventoryScreen() {
                     {formatCatalogPrice(p.list_price)}
                   </Text>
                   <Text style={styles.productQty}>
-                    {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg
-                    {(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}
+                    {hasStockData === true
+                      ? `${p.qty_display} disp. · ${formatInventoryKg({
+                        hasStockData,
+                        quantityKg: Math.round(p._totalKg),
+                      })}${(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}`
+                      : 'Sin dato'}
                   </Text>
                 </View>
               </View>

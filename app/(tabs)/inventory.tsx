@@ -20,6 +20,10 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import {
+  formatInventoryKg,
+  getInventoryProductListState,
+} from '../../src/services/inventoryDisplay';
 
 export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -27,7 +31,7 @@ export default function InventoryScreen() {
   const { plan, loadPlan } = useRouteStore();
   const {
     products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
-    productCount, lastSync: productsLastSync,
+    productCount, lastSync: productsLastSync, hasStockData,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
     const tasks: Promise<void>[] = [];
@@ -63,6 +67,11 @@ export default function InventoryScreen() {
   const fillPct = forecastKg > 0 && totalStockKg > 0
     ? Math.min(100, Math.round((forecastKg / totalStockKg) * 100))
     : 0;
+  const visibleProducts = products.filter((p) => p.qty_available > 0);
+  const productListState = getInventoryProductListState({
+    hasStockData,
+    visibleProductCount: visibleProducts.length,
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -84,7 +93,9 @@ export default function InventoryScreen() {
           <View style={styles.summaryRow}>
             <View>
               <Text style={styles.summaryLabel}>Stock total</Text>
-              <Text style={styles.summaryValue}>{totalStockKg} kg</Text>
+              <Text style={styles.summaryValue}>
+                {formatInventoryKg({ hasStockData, quantityKg: totalStockKg })}
+              </Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.summaryLabel}>Forecast ruta</Text>
@@ -130,7 +141,14 @@ export default function InventoryScreen() {
           <Card><Text style={typography.dim}>Cargando productos...</Text></Card>
         ) : error ? (
           <AlertBanner icon="❌" variant="critical" message={error} />
-        ) : products.length === 0 ? (
+        ) : productListState.kind === 'unknown' ? (
+          <Card>
+            <Text style={typography.dim}>{productListState.title}</Text>
+            <Text style={[typography.dimSmall, { marginTop: 4 }]}>
+              {productListState.detail}
+            </Text>
+          </Card>
+        ) : productListState.kind === 'empty' ? (
           <Card>
             <Text style={typography.dim}>Sin productos en camioneta</Text>
             <Text style={[typography.dimSmall, { marginTop: 4 }]}>
@@ -138,9 +156,7 @@ export default function InventoryScreen() {
             </Text>
           </Card>
         ) : (
-          products
-            .filter((p) => p.qty_available > 0)
-            .map((p) => (
+          visibleProducts.map((p) => (
               <View key={p.id} style={styles.productRow}>
                 <Text style={styles.productName} numberOfLines={1}>
                   {p.name.includes('Hielo') || p.name.includes('Barra') ? '🧊 ' : '🥤 '}
@@ -151,8 +167,12 @@ export default function InventoryScreen() {
                     {formatCatalogPrice(p.list_price)}
                   </Text>
                   <Text style={styles.productQty}>
-                    {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg
-                    {(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}
+                    {hasStockData === true
+                      ? `${p.qty_display} disp. · ${formatInventoryKg({
+                        hasStockData,
+                        quantityKg: Math.round(p._totalKg),
+                      })}${(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}`
+                      : 'Sin dato'}
                   </Text>
                 </View>
               </View>

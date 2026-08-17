@@ -1,6 +1,6 @@
 /**
  * Tasks screen — tareas asignadas al vendedor por su supervisor.
- * Endpoint: GET /pwa-supv/tasks?assignee_id=X
+ * El backend deriva el alcance del empleado del token Bearer.
  */
 
 import React, { useCallback } from 'react';
@@ -14,7 +14,6 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { fonts } from '../../src/theme/typography';
 import { useTasksStore } from '../../src/stores/useTasksStore';
-import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import type { TaskItem, TaskPriority, TaskState } from '../../src/types/tasks';
 
@@ -102,21 +101,11 @@ const TaskCard = React.memo(function TaskCard({
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function TasksScreen() {
-  const employeeId = useAuthStore((s) => s.employeeId);
-  const companyId  = useAuthStore((s) => s.companyId);
   const { tasks, loading, error, pendingCount, loadTasks, completeTask, startTask } = useTasksStore();
 
   const doLoad = useCallback(async () => {
-    if (!employeeId) {
-      useTasksStore.setState({
-        error: 'Sin sesión activa. Cierra sesión e ingresa de nuevo.',
-        loading: false,
-      });
-      return;
-    }
-    // companyId is optional: backend derives it from the employee when absent.
-    await loadTasks(employeeId, companyId);
-  }, [employeeId, companyId, loadTasks]);
+    await loadTasks();
+  }, [loadTasks]);
 
   useFocusEffect(useCallback(() => { void doLoad(); }, [doLoad]));
 

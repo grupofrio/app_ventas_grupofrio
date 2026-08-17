@@ -128,16 +128,16 @@ export default function HomeScreen() {
     await Promise.all([
       loadPlan({ force: true }),
       loadTodaySales(),
-      employeeId ? loadTasks(employeeId, companyId) : Promise.resolve(),
+      isAuthenticated ? loadTasks() : Promise.resolve(),
     ]);
-  }, [loadPlan, loadTodaySales, loadTasks, employeeId, companyId]);
+  }, [loadPlan, loadTodaySales, loadTasks, isAuthenticated]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
 
   useFocusEffect(
     useCallback(() => {
-      if (!isAuthenticated || !employeeId) return;
-      void loadTasks(employeeId, companyId);
-    }, [isAuthenticated, employeeId, companyId, loadTasks]),
+      if (!isAuthenticated) return;
+      void loadTasks();
+    }, [isAuthenticated, loadTasks]),
   );
 
   // Next stops (pending + in_progress, max 4)

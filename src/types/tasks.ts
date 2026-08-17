@@ -7,8 +7,6 @@ export interface TaskItem {
   description?: string | null;
   state: TaskState;
   priority: TaskPriority;
-  assignee_id?: number | null;
-  assignee_name?: string | null;
   due_date?: string | null;
   created_at?: string | null;
 }

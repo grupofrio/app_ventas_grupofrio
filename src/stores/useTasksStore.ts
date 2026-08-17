@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { fetchMyTasks, completeMyTask, updateMyTask } from '../services/gfTasks';
+import { fetchMyTasks, completeMyTask, startMyTask } from '../services/gfTasks';
 import type { TaskItem } from '../types/tasks';
 
 interface TasksStore {
@@ -11,7 +11,7 @@ interface TasksStore {
   /** Pending count — drives the red badge in the tab bar. */
   pendingCount: number;
 
-  loadTasks: (employeeId: number, companyId?: number | null) => Promise<void>;
+  loadTasks: () => Promise<void>;
   completeTask: (taskId: number, notes?: string) => Promise<void>;
   startTask: (taskId: number) => Promise<void>;
 }
@@ -23,10 +23,10 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
   lastFetchedAt: null,
   pendingCount: 0,
 
-  loadTasks: async (employeeId, companyId) => {
+  loadTasks: async () => {
     set({ loading: true, error: null });
     try {
-      const tasks = await fetchMyTasks(employeeId, companyId);
+      const tasks = await fetchMyTasks();
       const pendingCount = tasks.filter((t) => t.state === 'pending' || t.state === 'in_progress').length;
       set({ tasks, pendingCount, loading: false, lastFetchedAt: Date.now() });
     } catch (e) {
@@ -47,7 +47,7 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
 
   startTask: async (taskId) => {
     try {
-      const updated = await updateMyTask(taskId, { state: 'in_progress' });
+      const updated = await startMyTask(taskId);
       const tasks = get().tasks.map((t) => t.id === taskId ? updated : t);
       const pendingCount = tasks.filter((t) => t.state === 'pending' || t.state === 'in_progress').length;
       set({ tasks, pendingCount });

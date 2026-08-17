@@ -20,7 +20,10 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
-import { formatInventoryKg } from '../../src/services/inventoryDisplay';
+import {
+  formatInventoryKg,
+  getInventoryProductListState,
+} from '../../src/services/inventoryDisplay';
 
 export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -64,6 +67,11 @@ export default function InventoryScreen() {
   const fillPct = forecastKg > 0 && totalStockKg > 0
     ? Math.min(100, Math.round((forecastKg / totalStockKg) * 100))
     : 0;
+  const visibleProducts = products.filter((p) => p.qty_available > 0);
+  const productListState = getInventoryProductListState({
+    hasStockData,
+    visibleProductCount: visibleProducts.length,
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -133,7 +141,14 @@ export default function InventoryScreen() {
           <Card><Text style={typography.dim}>Cargando productos...</Text></Card>
         ) : error ? (
           <AlertBanner icon="❌" variant="critical" message={error} />
-        ) : products.length === 0 ? (
+        ) : productListState.kind === 'unknown' ? (
+          <Card>
+            <Text style={typography.dim}>{productListState.title}</Text>
+            <Text style={[typography.dimSmall, { marginTop: 4 }]}>
+              {productListState.detail}
+            </Text>
+          </Card>
+        ) : productListState.kind === 'empty' ? (
           <Card>
             <Text style={typography.dim}>Sin productos en camioneta</Text>
             <Text style={[typography.dimSmall, { marginTop: 4 }]}>
@@ -141,9 +156,7 @@ export default function InventoryScreen() {
             </Text>
           </Card>
         ) : (
-          products
-            .filter((p) => p.qty_available > 0)
-            .map((p) => (
+          visibleProducts.map((p) => (
               <View key={p.id} style={styles.productRow}>
                 <Text style={styles.productName} numberOfLines={1}>
                   {p.name.includes('Hielo') || p.name.includes('Barra') ? '🧊 ' : '🥤 '}

@@ -60,6 +60,11 @@ import {
 } from '../services/gfLogistics';
 import { createGift } from '../services/gfSalesOps';
 import {
+  createConsignment,
+  visitConsignment,
+  closeConsignment,
+} from '../services/consignment';
+import {
   submitVehicleCheck,
   completeVehicleChecklist,
 } from '../services/vehicleChecklist';
@@ -1447,6 +1452,36 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // meta.idempotency_key (estable por intento) — un retry no duplica.
       await createGift(payload as Record<string, unknown>);
       break;
+
+    case 'consignment_create': {
+      const partnerId = Number(payload.partner_id);
+      const operationId = String(payload.operation_id || payload._operationId || '');
+      const lines = Array.isArray(payload.lines) ? payload.lines : [];
+      await createConsignment({
+        partnerId,
+        operationId,
+        lines: lines as Parameters<typeof createConsignment>[0]['lines'],
+        notes: typeof payload.notes === 'string' ? payload.notes : undefined,
+      });
+      break;
+    }
+
+    case 'consignment_visit':
+    case 'consignment_close': {
+      const consignmentId = Number(payload.consignment_id);
+      const operationId = String(payload.operation_id || payload._operationId || '');
+      const paymentMethod = (payload.payment_method as 'cash') || 'cash';
+      const counts = Array.isArray(payload.counts) ? payload.counts : [];
+      const input = {
+        consignmentId,
+        operationId,
+        paymentMethod,
+        counts: counts as Parameters<typeof visitConsignment>[0]['counts'],
+      };
+      if (type === 'consignment_visit') await visitConsignment(input);
+      else await closeConsignment(input);
+      break;
+    }
 
     case 'photo': {
       let base64 = payload.image_base64 as string;

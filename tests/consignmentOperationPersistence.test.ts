@@ -157,6 +157,14 @@ test('consignment persists an operation id before dispatch and clears it only af
 
   assert.match(screen, /await getConsignmentPendingOperationId\('create'\)/, 'create must persist or restore its id before dispatch');
   assert.match(screen, /await clearConsignmentPendingOperationId\('create'\)/, 'create clears only after its request resolves');
-  assert.match(screen, /await getConsignmentPendingOperationId\(closing \? 'close' : 'visit'\)/, 'visit/close must restore their operation ids before dispatch');
-  assert.match(screen, /await clearConsignmentPendingOperationId\(closing \? 'close' : 'visit'\)/, 'visit/close clear only after their request resolves');
+  assert.match(
+    screen,
+    /await getConsignmentPendingOperationId\(kind\)/,
+    'visit/close must restore their operation ids before dispatch',
+  );
+  assert.match(
+    screen,
+    /await clearConsignmentPendingOperationId\(kind\)/,
+    'visit/close clear only after their request resolves',
+  );
 });

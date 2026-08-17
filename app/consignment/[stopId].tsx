@@ -5,8 +5,9 @@
  * - Con consignación activa → VISITA (capturar existencia física; preliminar
  *   vendido/cobro/resurtido) y opción de CERRAR.
  * - Backend es fuente de verdad (inventario, venta/cobro, resurtido, cierre).
+ * - Offline create/visit/close via durable sync queue + inventory ledger
+ *   (POST-R1C). Stable operation_id; backend gf_consignment is idempotent.
  * - Solo clientes de alta (no leads — gateado desde /stop/[id]).
- * - Online-first; sin cola offline → bloquea si no hay conexión.
  * - NO simula éxito. Carrito local (no contamina venta activa).
  */
 
@@ -42,7 +43,7 @@ import {
   consignmentPaymentLabel, computeReturnTotal,
 } from '../../src/services/consignmentLogic';
 import { OperationGate } from '../../src/components/OperationGate';
-import { consignmentOfflineBlockMessage } from '../../src/services/secondaryFlowCopy';
+import { consignmentPendingSyncMessage } from '../../src/services/secondaryFlowCopy';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
 import { createUuidV4 } from '../../src/utils/clientEvent';
@@ -53,6 +54,14 @@ import {
   saveConsignmentPendingOperation,
   type ConsignmentOperationKind,
 } from '../../src/services/consignmentOperationPersistence';
+import {
+  buildConsignmentCountSyncPayload,
+  buildConsignmentCreateSyncPayload,
+  buildConsignmentLedgerForKind,
+  consignmentSyncItemType,
+} from '../../src/services/consignmentOffline';
+import { commitQueuedOperationWithLedger } from '../../src/services/inventoryLedgerAdapters';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 
 function makeOperationId(): string {
   return createUuidV4();
@@ -213,8 +222,6 @@ function ConsignmentScreenInner() {
     if (submitting || !partnerId) return;
     const v = validateCreateLines(cart);
     if (!v.ok) { Alert.alert('Falta información', v.reason); return; }
-    // P2: no consignar más de lo disponible en la unidad. Reusa el validador de
-    // stock fresco (P0). Solo en CREATE — visit/close los recalcula el backend.
     const stockIssues = findFreshStockIssues(cart, products);
     if (stockIssues.length > 0) {
       Alert.alert(
@@ -227,21 +234,93 @@ function ConsignmentScreenInner() {
       );
       return;
     }
-    if (!isOnline) { const m = consignmentOfflineBlockMessage(); Alert.alert(m.title, m.body); return; }
     setSubmitting(true);
     (async () => {
+      const enqueueCreate = async (operationId: string) => {
+        const previousQueue = useSyncStore.getState().queue;
+        try {
+          const payload = buildConsignmentCreateSyncPayload({
+            partnerId,
+            operationId,
+            lines: v.lines,
+            stopId: stop?.id ?? null,
+          });
+          useSyncStore.getState().enqueue(
+            consignmentSyncItemType('create'),
+            payload,
+            { operationId, skipPersist: true },
+          );
+          const movements = buildConsignmentLedgerForKind({
+            kind: 'create',
+            operationId,
+            createLines: v.lines,
+            stopId: stop?.id ?? null,
+            partnerId,
+          });
+          if (movements.length === 0) {
+            throw new Error('Consignación sin movimientos de inventario');
+          }
+          await commitQueuedOperationWithLedger({
+            nextQueue: useSyncStore.getState().queue,
+            movements,
+          });
+        } catch (error) {
+          useSyncStore.getState().replaceQueueFromDurable(previousQueue);
+          throw error;
+        }
+      };
+
       try {
         const operationId = await getConsignmentPendingOperationId('create');
-        const res = await createConsignment({
-          partnerId,
-          operationId,
-          lines: v.lines,
-        });
-        await clearConsignmentPendingOperationId('create');
-        const c = res.consignment;
-        Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
+        if (!isOnline) {
+          await enqueueCreate(operationId);
+          await clearConsignmentPendingOperationId('create');
+          const pending = consignmentPendingSyncMessage();
+          Alert.alert(pending.title, pending.body, [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
+          return;
+        }
+        try {
+          const res = await createConsignment({
+            partnerId,
+            operationId,
+            lines: v.lines,
+          });
+          const movements = buildConsignmentLedgerForKind({
+            kind: 'create',
+            operationId,
+            createLines: v.lines,
+            stopId: stop?.id ?? null,
+            partnerId,
+          });
+          if (movements.length > 0) {
+            const { recordInventoryMovements } = await import('../../src/services/inventoryLedger');
+            await recordInventoryMovements(movements);
+          }
+          await clearConsignmentPendingOperationId('create');
+          const c = res.consignment;
+          if (c) void writeCachedConsignment(partnerId, c);
+          Alert.alert(res.message || 'Consignación creada', c?.name ? `Folio ${c.name}.` : 'Registrada.', [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
+        } catch (err) {
+          if (isSessionExpiredError(err)) {
+            handleApiError(err, 'No se pudo crear la consignación.');
+            return;
+          }
+          const message = err instanceof Error ? err.message : 'No se pudo crear la consignación.';
+          if (isRetryableSyncErrorMessage(message)) {
+            await enqueueCreate(operationId);
+            await clearConsignmentPendingOperationId('create');
+            const pending = consignmentPendingSyncMessage();
+            Alert.alert(pending.title, pending.body, [
+              { text: 'OK', onPress: () => router.back() },
+            ]);
+            return;
+          }
+          handleApiError(err, message);
+        }
       } catch (err) {
         handleApiError(err, 'No se pudo crear la consignación.');
       } finally {
@@ -255,7 +334,6 @@ function ConsignmentScreenInner() {
     if (submitting || !active) return;
     const built = buildCountLines(active.lines, physical);
     if (!built.ok) { Alert.alert('Falta información', built.reason); return; }
-    if (!isOnline) { const m = consignmentOfflineBlockMessage(); Alert.alert(m.title, m.body); return; }
 
     const action = closing ? 'cerrar' : 'registrar la visita de';
     Alert.alert(
@@ -268,29 +346,103 @@ function ConsignmentScreenInner() {
           onPress: () => {
             setSubmitting(true);
             (async () => {
+              const kind = closing ? 'close' as const : 'visit' as const;
+              const enqueueCount = async (operationId: string) => {
+                const previousQueue = useSyncStore.getState().queue;
+                try {
+                  const payload = buildConsignmentCountSyncPayload({
+                    kind,
+                    consignmentId: active.id,
+                    operationId,
+                    paymentMethod,
+                    counts: built.counts,
+                    stopId: stop?.id ?? null,
+                    partnerId,
+                  });
+                  useSyncStore.getState().enqueue(
+                    consignmentSyncItemType(kind),
+                    payload,
+                    { operationId, skipPersist: true },
+                  );
+                  const movements = buildConsignmentLedgerForKind({
+                    kind,
+                    operationId,
+                    counts: built.counts,
+                    stopId: stop?.id ?? null,
+                    partnerId,
+                  });
+                  if (movements.length === 0) {
+                    // Zero sold + zero return still needs durable queue without ledger.
+                    await useSyncStore.getState().persistQueue();
+                    return;
+                  }
+                  await commitQueuedOperationWithLedger({
+                    nextQueue: useSyncStore.getState().queue,
+                    movements,
+                  });
+                } catch (error) {
+                  useSyncStore.getState().replaceQueueFromDurable(previousQueue);
+                  throw error;
+                }
+              };
+
               try {
-                const operationId = await getConsignmentPendingOperationId(closing ? 'close' : 'visit');
-                const payload = {
-                  consignmentId: active.id,
-                  operationId,
-                  paymentMethod,
-                  counts: built.counts,
-                };
-                const res = closing
-                  ? await closeConsignment(payload)
-                  : await visitConsignment(payload);
-                await clearConsignmentPendingOperationId(closing ? 'close' : 'visit');
-                if (closing) {
-                  Alert.alert(res.message || 'Consignación cerrada', 'El servidor registró el cobro y la devolución.', [
+                const operationId = await getConsignmentPendingOperationId(kind);
+                if (!isOnline) {
+                  await enqueueCount(operationId);
+                  await clearConsignmentPendingOperationId(kind);
+                  const pending = consignmentPendingSyncMessage();
+                  Alert.alert(pending.title, pending.body, [
                     { text: 'OK', onPress: () => router.back() },
                   ]);
-                } else {
-                  Alert.alert(res.message || 'Visita registrada', 'El servidor cobró el faltante y resurtió al objetivo.', [
-                    { text: 'OK', onPress: () => { setPhysical({}); void fetchActive(); } },
+                  return;
+                }
+                try {
+                  const payload = {
+                    consignmentId: active.id,
+                    operationId,
+                    paymentMethod,
+                    counts: built.counts,
+                  };
+                  const res = closing
+                    ? await closeConsignment(payload)
+                    : await visitConsignment(payload);
+                  const movements = buildConsignmentLedgerForKind({
+                    kind,
+                    operationId,
+                    counts: built.counts,
+                    stopId: stop?.id ?? null,
+                    partnerId,
+                  });
+                  if (movements.length > 0) {
+                    const { recordInventoryMovements } = await import('../../src/services/inventoryLedger');
+                    await recordInventoryMovements(movements);
+                  }
+                  await clearConsignmentPendingOperationId(kind);
+                  if (closing) void writeCachedConsignment(partnerId!, null);
+                  else if (res.consignment) void writeCachedConsignment(partnerId!, res.consignment);
+                  Alert.alert(res.message || (closing ? 'Consignación cerrada' : 'Visita registrada'), '', [
+                    { text: 'OK', onPress: () => router.back() },
                   ]);
+                } catch (err) {
+                  if (isSessionExpiredError(err)) {
+                    handleApiError(err, 'No se pudo completar la consignación.');
+                    return;
+                  }
+                  const message = err instanceof Error ? err.message : 'No se pudo completar.';
+                  if (isRetryableSyncErrorMessage(message)) {
+                    await enqueueCount(operationId);
+                    await clearConsignmentPendingOperationId(kind);
+                    const pending = consignmentPendingSyncMessage();
+                    Alert.alert(pending.title, pending.body, [
+                      { text: 'OK', onPress: () => router.back() },
+                    ]);
+                    return;
+                  }
+                  handleApiError(err, message);
                 }
               } catch (err) {
-                handleApiError(err, 'No se pudo procesar la consignación.');
+                handleApiError(err, 'No se pudo completar la consignación.');
               } finally {
                 setSubmitting(false);
               }
@@ -310,25 +462,8 @@ function ConsignmentScreenInner() {
       </SafeAreaView>
     );
   }
-  // Perf Fase 2D-1: sin red y SIN consignación cacheada → requiere conexión.
-  // Si hay caché de lectura (active != null), caemos al render normal en modo
-  // lectura (banner "desde caché" + botones de mutación deshabilitados).
-  if (!isOnline && !active) {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <TopBar title="Consignación" showBack />
-        <View style={styles.center}>
-          <Text style={styles.emptyIcon}>📶</Text>
-          <Text style={styles.emptyTitle}>Requiere conexión</Text>
-          <Text style={styles.dim}>
-            Sin conexión y sin consignación en caché. Crear/visitar/cerrar
-            requiere servidor. Abre el cliente con señal para cachear su
-            consignación.
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // Offline create is allowed (queue + ledger). Visit/close need a known
+  // consignment id from cache or prior online fetch — handled in active branch.
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -449,9 +584,8 @@ function ConsignmentScreenInner() {
             {active.last_visit_date ? ` · última visita ${active.last_visit_date}` : ''}
           </Text>
           <Text style={styles.hint}>
-            {canMutate
-              ? 'Captura la existencia física actual por producto.'
-              : 'Vista de solo lectura. Conéctate para registrar visita o cierre.'}
+            Captura la existencia física actual por producto.
+            {!isOnline ? ' Sin conexión: se guardará localmente y sincronizará después.' : ''}
           </Text>
         </Card>
 
@@ -505,22 +639,16 @@ function ConsignmentScreenInner() {
         <Button
           label={submitting ? 'Procesando…' : (closing ? 'Confirmar cierre' : 'Registrar visita')}
           variant="success" onPress={handleVisitOrClose} fullWidth
-          disabled={submitting || !canMutate} loading={submitting} style={{ marginTop: 4 }}
+          disabled={submitting} loading={submitting} style={{ marginTop: 4 }}
         />
         <Button
           label={closing ? '← Volver a visita' : 'Cerrar consignación'}
           variant="secondary"
           onPress={() => setClosing((v) => !v)}
           fullWidth
-          disabled={submitting || !canMutate}
+          disabled={submitting}
           style={{ marginTop: 8 }}
         />
-        {!canMutate && (
-          <Text style={styles.footNote}>
-            Sin conexión: registrar visita y cerrar están deshabilitados. El
-            backend es la fuente de verdad de cobro e inventario.
-          </Text>
-        )}
       </ScrollView>
     </SafeAreaView>
   );

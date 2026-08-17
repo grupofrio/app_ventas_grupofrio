@@ -5,7 +5,7 @@
  *   - cache válido rehidrata la consignación del cliente;
  *   - cache stale invalida (status stale);
  *   - cache corrupto no crashea (selectConsignment/readCacheEnvelope → null/miss);
- *   - create/visit/close offline bloqueados (canMutateConsignment);
+ *   - create/visit/close permitidos online y offline (canMutateConsignment);
  *   - contextKey de jornada distingue día/usuario.
  *
  * El round-trip a disco (AsyncStorage) es RN y no se prueba en node; se valida
@@ -66,8 +66,8 @@ function run(cache: CacheMod, env: EnvMod) {
   const otherUser = cache.buildConsignmentsContextKey({ ...ctx, employeeId: 7 });
   assert.equal(env.readCacheEnvelope(envelope, otherUser, TTL, NOW + 1).status, 'miss', 'otro empleado → miss');
 
-  // create/visit/close offline bloqueados; online permitido.
-  assert.equal(cache.canMutateConsignment(false), false, 'offline → no mutaciones');
+  // create/visit/close permitidos online y offline (cola durable + ledger).
+  assert.equal(cache.canMutateConsignment(false), true, 'offline → mutaciones via cola');
   assert.equal(cache.canMutateConsignment(true), true, 'online → mutaciones permitidas');
 
   console.log('consignmentCache tests: ok');

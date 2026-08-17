@@ -3,12 +3,18 @@
  */
 
 import {
+  buildConsignmentOutMovements,
+  buildConsignmentReturnMovements,
+  buildConsignmentSoldMovements,
   buildExchangeMovements,
   buildGiftMovements,
   buildSaleMovements,
   type MovementLine,
 } from '../domain/inventory/buildMovements.ts';
 import {
+  consignmentOutSlot,
+  consignmentReturnSlot,
+  consignmentSoldSlot,
   exchangeDeliverySlot,
   exchangeReturnDamagedSlot,
   exchangeReturnGoodSlot,
@@ -108,6 +114,124 @@ export function buildGiftLedgerMovements(args: {
     },
     lines,
   );
+}
+
+function consignmentOutIds(operationId: string, lines: MovementLine[]): string[] {
+  return lines.map((line, index) =>
+    stableMovementId(operationId, consignmentOutSlot(line.product_id, index)),
+  );
+}
+
+function consignmentSoldIds(operationId: string, lines: MovementLine[]): string[] {
+  return lines.map((line, index) =>
+    stableMovementId(operationId, consignmentSoldSlot(line.product_id, index)),
+  );
+}
+
+function consignmentReturnIds(operationId: string, lines: MovementLine[]): string[] {
+  return lines.map((line, index) =>
+    stableMovementId(operationId, consignmentReturnSlot(line.product_id, index)),
+  );
+}
+
+/** Create: sellable → consigned. */
+export function buildConsignmentCreateLedgerMovements(args: {
+  operationId: string;
+  lines: MovementLine[];
+  stopId?: number | null;
+  partnerId?: number | null;
+  planId?: number | null;
+  createdAt?: string;
+}) {
+  const lines = canonicalizeMovementLines(args.lines);
+  return buildConsignmentOutMovements(
+    {
+      operation_id: args.operationId,
+      created_at: args.createdAt ?? new Date().toISOString(),
+      stop_id: args.stopId,
+      partner_id: args.partnerId,
+      plan_id: args.planId,
+      movement_ids: consignmentOutIds(args.operationId, lines),
+    },
+    lines,
+  );
+}
+
+/**
+ * Visit: restock (sellable→consigned) + sold (consigned→null).
+ * Net: sellable −sold, consigned unchanged.
+ */
+export function buildConsignmentVisitLedgerMovements(args: {
+  operationId: string;
+  soldLines: MovementLine[];
+  stopId?: number | null;
+  partnerId?: number | null;
+  planId?: number | null;
+  createdAt?: string;
+}) {
+  const sold = canonicalizeMovementLines(args.soldLines);
+  const createdAt = args.createdAt ?? new Date().toISOString();
+  const restock = buildConsignmentOutMovements(
+    {
+      operation_id: args.operationId,
+      created_at: createdAt,
+      stop_id: args.stopId,
+      partner_id: args.partnerId,
+      plan_id: args.planId,
+      movement_ids: consignmentOutIds(args.operationId, sold),
+    },
+    sold,
+  );
+  const consumed = buildConsignmentSoldMovements(
+    {
+      operation_id: args.operationId,
+      created_at: createdAt,
+      stop_id: args.stopId,
+      partner_id: args.partnerId,
+      plan_id: args.planId,
+      movement_ids: consignmentSoldIds(args.operationId, sold),
+    },
+    sold,
+  );
+  return [...restock, ...consumed];
+}
+
+/** Close: physical return consigned→sellable + sold consigned→null. */
+export function buildConsignmentCloseLedgerMovements(args: {
+  operationId: string;
+  returnLines: MovementLine[];
+  soldLines: MovementLine[];
+  stopId?: number | null;
+  partnerId?: number | null;
+  planId?: number | null;
+  createdAt?: string;
+}) {
+  const returned = canonicalizeMovementLines(args.returnLines);
+  const sold = canonicalizeMovementLines(args.soldLines);
+  const createdAt = args.createdAt ?? new Date().toISOString();
+  const ret = buildConsignmentReturnMovements(
+    {
+      operation_id: args.operationId,
+      created_at: createdAt,
+      stop_id: args.stopId,
+      partner_id: args.partnerId,
+      plan_id: args.planId,
+      movement_ids: consignmentReturnIds(args.operationId, returned),
+    },
+    returned,
+  );
+  const consumed = buildConsignmentSoldMovements(
+    {
+      operation_id: args.operationId,
+      created_at: createdAt,
+      stop_id: args.stopId,
+      partner_id: args.partnerId,
+      plan_id: args.planId,
+      movement_ids: consignmentSoldIds(args.operationId, sold),
+    },
+    sold,
+  );
+  return [...ret, ...consumed];
 }
 
 export function buildExchangeLedgerMovements(args: {

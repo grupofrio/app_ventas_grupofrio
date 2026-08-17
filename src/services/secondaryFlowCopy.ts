@@ -13,14 +13,23 @@ export interface OfflineCopy {
 }
 
 /**
- * Consignación: BLOQUEA offline (create/visit/close mutan inventario de la
- * camioneta —resurtido/cobro/devolución— y necesitan folio + conciliación en
- * tiempo real; no hay modelo local idempotente). Copy explica el porqué.
+ * Consignación: offline create/visit/close via durable sync queue + ledger
+ * (POST-R1C). Same operation_id on retry; Backend gf_consignment is idempotent.
  */
 export function consignmentOfflineBlockMessage(): OfflineCopy {
   return {
     title: 'Sin conexión',
-    body: 'La consignación requiere conexión para mantener el inventario trazable.',
+    body: 'La consignación se guardó localmente y se sincronizará al recuperar señal.',
+  };
+}
+
+/**
+ * Copy when an offline consignación was captured (not yet server-confirmed).
+ */
+export function consignmentPendingSyncMessage(): OfflineCopy {
+  return {
+    title: 'Consignación pendiente',
+    body: 'Quedó guardada en el dispositivo. Se enviará al recuperar conexión. Puedes continuar la ruta.',
   };
 }
 

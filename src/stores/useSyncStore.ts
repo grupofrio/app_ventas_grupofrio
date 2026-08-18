@@ -58,8 +58,10 @@ import {
   createFieldLeadData,
   upsertLeadData,
   closeOffrouteVisit,
+  createExchange,
 } from '../services/gfLogistics';
 import { createGift } from '../services/gfSalesOps';
+import { createPresale } from '../services/presale';
 import {
   createConsignment,
   visitConsignment,
@@ -260,6 +262,8 @@ interface SyncState {
    * wrote `sync:queue` (avoids a second plaintext race write).
    */
   replaceQueueFromDurable: (queue: SyncQueueItem[]) => void;
+  /** Publish one row already committed alongside its ledger movements. */
+  publishLedgerBackedQueueItem: (item: SyncQueueItem) => void;
   /**
    * INV-1B: apply server ACK intents onto the *current* queue via the existing
    * serialized persistence coordinator (transformAndPersist). Durable write
@@ -605,6 +609,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       clearTimeout(_persistTimer);
       _persistTimer = null;
     }
+    set({ queue, ...computeCounts(queue) });
+  },
+
+  publishLedgerBackedQueueItem: (item) => {
+    const current = get().queue;
+    if (current.some((candidate) => candidate.id === item.id)) return;
+    const queue = [...current, item];
     set({ queue, ...computeCounts(queue) });
   },
 
@@ -1458,6 +1469,17 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // lo postea a /gf/salesops/gift/create. La idempotencia la da
       // meta.idempotency_key (estable por intento) — un retry no duplica.
       await createGift(payload as Record<string, unknown>);
+      break;
+
+    case 'exchange':
+      // Flat capture fields are validated and scoped by createExchange. The queue
+      // operation id is stable, so an ambiguous retry is an idempotent replay.
+      await createExchange(payload as Record<string, unknown>, meta);
+      break;
+
+    case 'presale':
+      // Draft quotation only — it never changes truck stock.
+      await createPresale(payload as never);
       break;
 
     case 'consignment_create': {

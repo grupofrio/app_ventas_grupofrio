@@ -45,8 +45,11 @@ import { formatHumanDate } from '../src/services/calendarLogic';
 import {
   createPresale, PresaleNotEnabledError, PRESALE_BACKEND_ENABLED, PRESALE_LEAD_SUPPORTED,
 } from '../src/services/presale';
-import { presaleOfflineBlockMessage } from '../src/services/secondaryFlowCopy';
+import { presaleOfflineBlockMessage, presaleQueuedMessage } from '../src/services/secondaryFlowCopy';
 import { createUuidV4 } from '../src/utils/clientEvent';
+import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
+import { isSessionExpiredError } from '../src/services/sessionError';
+import { decideExchangeFailureAction } from '../src/services/exchangeSubmit';
 
 function makeOperationId(): string {
   return createUuidV4();
@@ -66,6 +69,8 @@ export default function PresaleScreen() {
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const stops = useRouteStore((s) => s.stops);
   const isOnline = useSyncStore((s) => s.isOnline);
+  const enqueue = useSyncStore((s) => s.enqueue);
+  const persistQueue = useSyncStore((s) => s.persistQueue);
   const products = useProductStore((s) => s.products);
   const loadProducts = useProductStore((s) => s.loadProducts);
 
@@ -200,8 +205,30 @@ export default function PresaleScreen() {
       return;
     }
     if (!isOnline) {
-      const m = presaleOfflineBlockMessage();
-      Alert.alert(m.title, m.body);
+      if (!partnerId) {
+        const m = presaleOfflineBlockMessage();
+        Alert.alert(m.title, m.body);
+        return;
+      }
+      setSubmitting(true);
+      try {
+        enqueue('presale', built.payload as unknown as Record<string, unknown>, {
+          operationId: built.payload.operation_id,
+        });
+        await persistQueue();
+        operationIdRef.current = null;
+        setCart([]);
+        setSelected(null);
+        setDeliveryDate(addDaysIso(today, 1));
+        const queued = presaleQueuedMessage();
+        Alert.alert(queued.title, queued.body, [
+          { text: 'Volver a Ruta', onPress: () => router.back() },
+        ]);
+      } catch (err) {
+        Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo guardar la preventa.');
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
     setSubmitting(true);
@@ -225,7 +252,28 @@ export default function PresaleScreen() {
           'La preventa está pendiente de habilitar en el backend. No se creó ninguna cotización.',
         );
       } else {
-        Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo registrar la preventa.');
+        const message = err instanceof Error ? err.message : 'No se pudo registrar la preventa.';
+        const action = decideExchangeFailureAction({
+          isSessionExpired: isSessionExpiredError(err),
+          isRetryable: isRetryableSyncErrorMessage(message),
+        });
+        if (action === 'session_relogin') {
+          Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar la preventa.');
+        } else if (action === 'enqueue' && partnerId) {
+          enqueue('presale', built.payload as unknown as Record<string, unknown>, {
+            operationId: built.payload.operation_id,
+          });
+          await persistQueue();
+          operationIdRef.current = null;
+          setCart([]);
+          setSelected(null);
+          const queued = presaleQueuedMessage();
+          Alert.alert(queued.title, queued.body, [
+            { text: 'Volver a Ruta', onPress: () => router.back() },
+          ]);
+        } else {
+          Alert.alert('Error', message);
+        }
       }
     } finally {
       setSubmitting(false);

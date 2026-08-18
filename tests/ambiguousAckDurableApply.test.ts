@@ -142,6 +142,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
       },
       replayGift: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      replayExchange: async () => undefined,
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
     };
 
@@ -234,6 +236,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
       },
       replayGift: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      replayExchange: async () => undefined,
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
     };
 
@@ -277,6 +281,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
       },
       replayGift: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      replayExchange: async () => undefined,
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
     };
 
@@ -318,6 +324,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
       },
       replayGift: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      replayExchange: async () => undefined,
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
     };
 
@@ -358,6 +366,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
           },
           replayGift: async () => undefined,
           classifyGiftError: () => 'ambiguous',
+          replayExchange: async () => undefined,
+          classifyExchangeError: () => 'ambiguous',
           classifySaleCheckError: () => 'ambiguous',
         });
         await harness.applyServerAcknowledgementsDurably(result.intents);
@@ -466,6 +476,8 @@ describe('INV-1B durable ACK + concurrent queue writers', () => {
           },
           replayGift: async () => undefined,
           classifyGiftError: () => 'ambiguous',
+          replayExchange: async () => undefined,
+          classifyExchangeError: () => 'ambiguous',
           classifySaleCheckError: () => 'ambiguous',
         },
       );

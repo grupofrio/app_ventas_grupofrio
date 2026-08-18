@@ -34,14 +34,22 @@ export function consignmentPendingSyncMessage(): OfflineCopy {
 }
 
 /**
- * Preventa: BLOQUEA offline (la cotización sale.order se genera en Odoo en el
- * momento y devuelve folio; además la búsqueda de cliente es en línea). Copy
- * honesto: no se guarda local, requiere conexión.
+ * Preventa: cotización draft sin inventario. Offline se permite cuando el
+ * cliente ya está seleccionado (p.ej. desde check-in). La búsqueda de
+ * cliente sigue requiriendo red.
  */
 export function presaleOfflineBlockMessage(): OfflineCopy {
   return {
     title: 'Sin conexión',
-    body: 'Conéctate para registrar la preventa: la cotización se genera en Odoo en el momento.',
+    body: 'Para buscar un cliente nuevo necesitas conexión. Si ya tienes cliente y productos, puedes guardar la preventa para sincronizar.',
+  };
+}
+
+/** Confirmación honesta: encolada, no folio Odoo todavía. */
+export function presaleQueuedMessage(): OfflineCopy {
+  return {
+    title: 'Preventa pendiente',
+    body: 'La preventa quedó guardada y se sincronizará al reconectar. Aún no hay folio de cotización en Odoo.',
   };
 }
 

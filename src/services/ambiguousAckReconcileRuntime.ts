@@ -19,7 +19,7 @@ import {
   createConsignment,
   visitConsignment,
 } from './consignment.ts';
-import { checkSaleDuplicate } from './gfLogistics.ts';
+import { checkSaleDuplicate, createExchange } from './gfLogistics.ts';
 import { createGift } from './gfSalesOps.ts';
 import { readSaleSubmissionErrorMetadata } from './saleSubmissionOutcome.ts';
 import { classifySaleSubmissionError } from './saleSubmissionOutcome.ts';
@@ -40,6 +40,14 @@ function classifyGiftError(error: unknown): AmbiguousAckStatus {
   const message = error instanceof Error ? error.message : String(error);
   // Known definitive validation codes from gift create.
   if (/UNAUTHORIZED|FORBIDDEN|VALIDATION_ERROR|missing_/i.test(message)) {
+    return 'definitive_failure';
+  }
+  return 'ambiguous';
+}
+
+function classifyExchangeError(error: unknown): AmbiguousAckStatus {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/UNAUTHORIZED|FORBIDDEN|VALIDATION_ERROR|SERVER_MISCONFIG|missing_/i.test(message)) {
     return 'definitive_failure';
   }
   return 'ambiguous';
@@ -132,7 +140,11 @@ export async function reconcileAmbiguousLedgerOpsAgainstStore(args: {
       replayGift: async (payload) => {
         await createGift(payload);
       },
+      replayExchange: async (payload) => {
+        await createExchange(payload);
+      },
       classifyGiftError,
+      classifyExchangeError,
       classifySaleCheckError,
       replayConsignment,
       classifyConsignmentError,

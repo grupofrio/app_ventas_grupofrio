@@ -30,7 +30,15 @@ import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 import { createUuidV4 } from '../../src/utils/clientEvent';
-import { applyExchangeStockViaLedger } from '../../src/services/inventoryLedgerAdapters';
+import {
+  applyExchangeStockViaLedger,
+  buildExchangeLedgerMovements,
+  buildLedgerBackedQueueItem,
+  commitQueuedOperationWithLedger,
+} from '../../src/services/inventoryLedgerAdapters';
+import { decideExchangeFailureAction } from '../../src/services/exchangeSubmit';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { isSessionExpiredError } from '../../src/services/sessionError';
 
 type ExchangeSection = 'delivery' | 'merma';
 
@@ -90,8 +98,6 @@ export default function CambioProductoScreen() {
   const router = useRouter();
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const mobileLocationId = useAuthStore((s) => s.mobileLocationId);
-  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const products = useProductStore((s) => s.products);
   const productCount = useProductStore((s) => s.productCount);
   const productsLastSync = useProductStore((s) => s.lastSync);
@@ -100,6 +106,7 @@ export default function CambioProductoScreen() {
   const loadProducts = useProductStore((s) => s.loadProducts);
   const enqueue = useSyncStore((s) => s.enqueue);
   const persistQueue = useSyncStore((s) => s.persistQueue);
+  const isOnline = useSyncStore((s) => s.isOnline);
 
   const [deliveryLines, setDeliveryLines] = useState<DraftLine[]>([]);
   const [mermaLines, setMermaLines] = useState<DraftLine[]>([]);
@@ -134,7 +141,6 @@ export default function CambioProductoScreen() {
   );
 
   const partnerId = stop ? (getLeadPartnerId(stop) ?? stop.customer_id) : null;
-  const resolvedMobileLocationId = mobileLocationId ?? warehouseId;
   const deliveryPayloadLines = useMemo(() => buildPayloadLines(deliveryLines), [deliveryLines]);
   const mermaPayloadLines = useMemo(() => buildPayloadLines(mermaLines), [mermaLines]);
   const hasAtLeastOneLine = deliveryPayloadLines.length > 0 || mermaPayloadLines.length > 0;
@@ -222,18 +228,6 @@ export default function CambioProductoScreen() {
       Alert.alert('Evidencia requerida', 'Toma al menos una foto antes de registrar el cambio.');
       return;
     }
-    if (!employeeAnalyticPlazaId) {
-      Alert.alert('Sucursal faltante', 'No hay sucursal activa configurada para este chofer.');
-      return;
-    }
-    if (!resolvedMobileLocationId) {
-      Alert.alert('Van faltante', 'No se pudo determinar la van activa para registrar el cambio.');
-      return;
-    }
-    if (!partnerId) {
-      Alert.alert('Cliente faltante', 'No se pudo determinar el cliente activo de la visita.');
-      return;
-    }
     if (hasIncompleteLines(deliveryLines) || hasIncompleteLines(mermaLines)) {
       Alert.alert('Líneas incompletas', 'Completa producto y cantidad en cada línea o elimínala.');
       return;
@@ -245,133 +239,210 @@ export default function CambioProductoScreen() {
 
     setSaving(true);
     const idempotencyKey = getExchangeIdempotencyKey();
-    let registeredMessage = 'Cambio procesado';
-    let response;
-    try {
-      response = await createExchange({
-        analytic_account_id: employeeAnalyticPlazaId,
-        idempotency_key: idempotencyKey,
-        mobile_location_id: resolvedMobileLocationId,
-        partner_id: partnerId,
-        visit_line_id: currentStop.visit_line_id ?? null,
-        delivery_lines: deliveryPayloadLines,
-        merma_lines: mermaPayloadLines,
-        notes,
-        validate: true,
-      });
-      registeredMessage = response.user_message || registeredMessage;
-      idempotencyKeyRef.current = null; // siguiente cambio = nueva key
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      let message: string;
-      switch (code) {
-        case 'LOCK_BUSY':
-          message = 'El sistema está ocupado. Reintenta en unos segundos.';
-          break;
-        case 'SERVER_MISCONFIG':
-          message = 'Falta configuración en Odoo. Avisa al administrador.';
-          break;
-        case 'FORBIDDEN':
-          message = 'La van no pertenece a la sucursal activa. Verifica tu asignación.';
-          break;
-        case 'VALIDATION_ERROR':
-          message = error instanceof Error ? error.message : 'Datos inválidos. Revisa las líneas del cambio.';
-          break;
-        default:
-          message = error instanceof Error ? error.message : 'No se pudo registrar el cambio.';
-      }
-      Alert.alert('Cambio no registrado', message);
-      setSaving(false);
-      return;
-    }
-
-    try {
-      enqueueVisitPhotos({
-        stopId: currentStop.id,
-        photoUris,
-        enqueue,
-        imageType: 'exchange',
-      });
-      await persistQueue();
-    } catch (error) {
-      const detail = error instanceof Error ? `\n\nDetalle: ${error.message}` : '';
-      Alert.alert(
-        'Evidencia pendiente',
-        `Cambio registrado, pero la evidencia quedó pendiente de guardar. No repitas el cambio.${detail}`,
-      );
-    }
-
-    // POST-R1A: delivery −sellable; damaged/good returns go to ledger buckets
-    // (never +sellable for damaged). Atomic encrypted ledger persist.
-    try {
-      await applyExchangeStockViaLedger({
-        operationId: idempotencyKey,
-        delivery: deliveryPayloadLines.map((line) => ({
-          product_id: line.product_id,
-          qty: line.qty,
-        })),
-        returnDamaged: mermaPayloadLines.map((line) => ({
-          product_id: line.product_id,
-          qty: line.qty,
-        })),
-        stopId: currentStop.id,
-      });
-    } catch (ledgerError) {
-      const detail = ledgerError instanceof Error ? `\n\nDetalle: ${ledgerError.message}` : '';
-      Alert.alert(
-        'Inventario local no actualizado',
-        `Cambio registrado en servidor, pero el ledger local falló. No repitas el cambio.${detail}`,
-      );
-    }
-
-    const deliverySnapshotLines: ExchangeSnapshotSourceLine[] = deliveryPayloadLines.map((line) => ({
-      productId: line.product_id,
-      productName: productMap.get(line.product_id)?.name,
+    const deliveryLedgerLines = deliveryPayloadLines.map((line) => ({
+      product_id: line.product_id,
       qty: line.qty,
     }));
-    const mermaSnapshotLines: ExchangeSnapshotSourceLine[] = mermaPayloadLines.map((line) => ({
-      productId: line.product_id,
-      productName: productMap.get(line.product_id)?.name,
+    const damagedLedgerLines = mermaPayloadLines.map((line) => ({
+      product_id: line.product_id,
       qty: line.qty,
     }));
-    const snapshot = buildExchangeTicketSnapshot({
-      snapshotId: idempotencyKey,
-      exchangeName: response.data.exchange_name,
-      exchangeId: response.data.exchange_id,
-      customerName: currentStop.customer_name,
-      createdAt: new Date().toISOString(),
-      deliveryLines: deliverySnapshotLines,
-      mermaLines: mermaSnapshotLines,
+    const exchangeCapturePayload: Record<string, unknown> = {
+      idempotency_key: idempotencyKey,
+      stop_id: currentStop.id,
+      delivery_lines: deliveryPayloadLines,
+      merma_lines: mermaPayloadLines,
       notes,
-    });
+      validate: true,
+    };
+
+    const queueExchangeWithLedger = async () => {
+      const movements = buildExchangeLedgerMovements({
+        operationId: idempotencyKey,
+        delivery: deliveryLedgerLines,
+        returnDamaged: damagedLedgerLines,
+        stopId: currentStop.id,
+        partnerId,
+      });
+      await commitQueuedOperationWithLedger({
+        queueItem: buildLedgerBackedQueueItem({
+          operationId: idempotencyKey,
+          type: 'exchange',
+          payload: {
+          ...exchangeCapturePayload,
+          _ledgerApplied: true,
+          },
+        }),
+        movements,
+      });
+    };
+
+    const enqueueEvidence = async () => {
+      try {
+        enqueueVisitPhotos({
+          stopId: currentStop.id,
+          photoUris,
+          enqueue,
+          imageType: 'exchange',
+          dependsOn: [idempotencyKey],
+        });
+        await persistQueue();
+      } catch (error) {
+        const detail = error instanceof Error ? `\n\nDetalle: ${error.message}` : '';
+        Alert.alert(
+          'Evidencia pendiente',
+          `Cambio guardado, pero la evidencia quedó pendiente de sincronizar. No repitas el cambio.${detail}`,
+        );
+      }
+    };
+
+    const finishWithTicket = async (args: {
+      exchangeName: string;
+      exchangeId: number | null;
+      registeredMessage: string;
+      clearIdempotency: boolean;
+    }) => {
+      if (args.clearIdempotency) {
+        idempotencyKeyRef.current = null; // siguiente cambio = nueva key
+      }
+      const deliverySnapshotLines: ExchangeSnapshotSourceLine[] = deliveryPayloadLines.map((line) => ({
+        productId: line.product_id,
+        productName: productMap.get(line.product_id)?.name,
+        qty: line.qty,
+      }));
+      const mermaSnapshotLines: ExchangeSnapshotSourceLine[] = mermaPayloadLines.map((line) => ({
+        productId: line.product_id,
+        productName: productMap.get(line.product_id)?.name,
+        qty: line.qty,
+      }));
+      const snapshot = buildExchangeTicketSnapshot({
+        snapshotId: idempotencyKey,
+        exchangeName: args.exchangeName,
+        exchangeId: args.exchangeId,
+        customerName: currentStop.customer_name,
+        createdAt: new Date().toISOString(),
+        deliveryLines: deliverySnapshotLines,
+        mermaLines: mermaSnapshotLines,
+        notes,
+      });
+      try {
+        await saveExchangeTicketSnapshot(snapshot);
+      } catch (error) {
+        const detail = error instanceof Error
+          ? error.message
+          : undefined;
+        const message = 'Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.';
+        Alert.alert(
+          'Ticket no preparado',
+          `${message}${detail ? `\n\nDetalle: ${detail}` : ''}`,
+        );
+        router.replace({
+          pathname: '/checkin/[stopId]',
+          params: {
+            stopId: String(currentStop.id),
+            exchangeMessage: args.registeredMessage,
+          },
+        } as never);
+        return;
+      }
+      router.replace({
+        pathname: '/print-exchange/[snapshotId]',
+        params: { snapshotId: snapshot.snapshotId },
+      } as never);
+    };
 
     try {
-      await saveExchangeTicketSnapshot(snapshot);
-    } catch (error) {
-      const detail = error instanceof Error
-        ? error.message
-        : undefined;
-      const message = 'Cambio registrado, pero no se pudo preparar el ticket. No repitas el cambio.';
-      Alert.alert(
-        'Ticket no preparado',
-        `${message}${detail ? `\n\nDetalle: ${detail}` : ''}`,
-      );
-      router.replace({
-        pathname: '/checkin/[stopId]',
-        params: {
-          stopId: String(currentStop.id),
-          exchangeMessage: registeredMessage,
-        },
-      } as never);
-      return;
-    }
+      if (!isOnline) {
+        await queueExchangeWithLedger();
+        await enqueueEvidence();
+        await finishWithTicket({
+          exchangeName: `PENDIENTE/${idempotencyKey.slice(0, 8)}`,
+          exchangeId: null,
+          registeredMessage: 'Cambio guardado para sincronizar',
+          clearIdempotency: true,
+        });
+        return;
+      }
 
-    router.replace({
-      pathname: '/print-exchange/[snapshotId]',
-      params: {
-        snapshotId: snapshot.snapshotId,
-      },
-    } as never);
+      let registeredMessage = 'Cambio procesado';
+      let response;
+      try {
+        response = await createExchange(exchangeCapturePayload);
+        registeredMessage = response.user_message || registeredMessage;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        const message = error instanceof Error ? error.message : 'No se pudo registrar el cambio.';
+        const action = decideExchangeFailureAction({
+          isSessionExpired: isSessionExpiredError(error),
+          isRetryable: isRetryableSyncErrorMessage(message) || code === 'LOCK_BUSY',
+        });
+        if (action === 'session_relogin') {
+          Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar el cambio.');
+          return;
+        }
+        if (action === 'enqueue') {
+          await queueExchangeWithLedger();
+          await enqueueEvidence();
+          Alert.alert(
+            'Sincronización pendiente',
+            'No pudimos confirmar si el cambio se completó. Quedó guardado con el mismo identificador para reintento.',
+          );
+          await finishWithTicket({
+            exchangeName: `PENDIENTE/${idempotencyKey.slice(0, 8)}`,
+            exchangeId: null,
+            registeredMessage: 'Cambio guardado para sincronizar',
+            clearIdempotency: true,
+          });
+          return;
+        }
+        let friendly = message;
+        switch (code) {
+          case 'LOCK_BUSY':
+            friendly = 'El sistema está ocupado. Reintenta en unos segundos.';
+            break;
+          case 'SERVER_MISCONFIG':
+            friendly = 'Falta configuración en Odoo. Avisa al administrador.';
+            break;
+          case 'FORBIDDEN':
+            friendly = 'La van no pertenece a la sucursal activa. Verifica tu asignación.';
+            break;
+          case 'VALIDATION_ERROR':
+            friendly = message;
+            break;
+          default:
+            break;
+        }
+        Alert.alert('Cambio no registrado', friendly);
+        return;
+      }
+
+      // Online success: evidence + ledger (post-hoc; server already committed).
+      await enqueueEvidence();
+      try {
+        await applyExchangeStockViaLedger({
+          operationId: idempotencyKey,
+          delivery: deliveryLedgerLines,
+          returnDamaged: damagedLedgerLines,
+          stopId: currentStop.id,
+          partnerId,
+        });
+      } catch (ledgerError) {
+        const detail = ledgerError instanceof Error ? `\n\nDetalle: ${ledgerError.message}` : '';
+        Alert.alert(
+          'Inventario local no actualizado',
+          `Cambio registrado en servidor, pero el ledger local falló. No repitas el cambio.${detail}`,
+        );
+      }
+
+      await finishWithTicket({
+        exchangeName: response.data.exchange_name,
+        exchangeId: response.data.exchange_id,
+        registeredMessage,
+        clearIdempotency: true,
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   function renderSection(
@@ -459,7 +530,7 @@ export default function CambioProductoScreen() {
             Registra producto nuevo entregado y producto dañado recogido. No se genera cobro.
           </Text>
           <Text style={styles.contextMeta}>
-            Cliente #{partnerId || '--'} · Van #{resolvedMobileLocationId || '--'}
+            Parada #{currentStop.id}
           </Text>
         </Card>
 

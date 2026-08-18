@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 interface Mod {
   consignmentOfflineBlockMessage: () => { title: string; body: string };
   presaleOfflineBlockMessage: () => { title: string; body: string };
+  presaleQueuedMessage: () => { title: string; body: string };
   insufficientStockActionHint: () => string;
 }
 
@@ -17,11 +18,17 @@ function run(m: Mod) {
   assert.match(consign.body, /local|sincronizar|señal/i);
   assert.doesNotMatch(consign.body, /confirmad/i);
 
-  // Preventa: bloqueo, explica que la cotización se genera en Odoo.
+  // Preventa: búsqueda de cliente puede requerir red; captura offline se permite
+  // cuando el cliente ya está seleccionado (mensaje ya no bloquea cotización).
   const presale = m.presaleOfflineBlockMessage();
   assert.match(presale.title, /sin conexión/i);
-  assert.match(presale.body, /cotización/i);
-  assert.doesNotMatch(presale.body, /registrad[ao]\b(?!.*Odoo)/i);
+  assert.match(presale.body, /buscar|cliente|sincronizar/i);
+  assert.doesNotMatch(presale.body, /\bregistrad[ao]\b/i);
+
+  const queued = m.presaleQueuedMessage();
+  assert.match(queued.title, /pendiente/i);
+  assert.match(queued.body, /sincronizar/i);
+  assert.doesNotMatch(queued.body, /\bcreada\b/i);
 
   // insufficient_stock: deja claro que NO se confirmó + acción.
   const hint = m.insufficientStockActionHint();

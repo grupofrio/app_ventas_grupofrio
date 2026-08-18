@@ -151,13 +151,10 @@ export function buildPaymentsCreatePayload(payload: Record<string, unknown>): Re
 }
 
 export function buildExchangeCreatePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const analyticAccountId = asPositiveNumber(payload.analytic_account_id);
   const idempotencyKey =
     asNonEmptyString(payload.idempotency_key) ??
     pickOperationId(payload);
-  const mobileLocationId = asPositiveNumber(payload.mobile_location_id);
-  const partnerId = asPositiveNumber(payload.partner_id);
-  const visitLineId = asPositiveNumber(payload.visit_line_id);
+  const stopId = asPositiveNumber(payload.stop_id);
   const notes = asNonEmptyString(payload.notes);
   const validate = payload.validate === false ? false : true;
   const deliveryLines = Array.isArray(payload.delivery_lines)
@@ -178,16 +175,13 @@ export function buildExchangeCreatePayload(payload: Record<string, unknown>): Re
   const meta: Record<string, unknown> = {
     idempotency_key: idempotencyKey,
   };
-  if (analyticAccountId) meta.analytic_account_id = analyticAccountId;
 
   const data: Record<string, unknown> = {
-    mobile_location_id: mobileLocationId,
-    partner_id: partnerId,
+    stop_id: stopId,
     delivery_lines: deliveryLines,
     merma_lines: mermaLines,
     validate,
   };
-  if (visitLineId) data.visit_line_id = visitLineId;
   if (notes) data.notes = notes;
 
   return { meta, data };

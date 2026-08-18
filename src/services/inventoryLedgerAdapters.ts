@@ -23,10 +23,13 @@ import {
   stableMovementId,
 } from '../domain/inventory/stableIds.ts';
 import {
+  commitQueueItemAndLedger,
   commitSyncQueueAndLedger,
   recordInventoryMovements,
   type InventoryLedgerPorts,
+  type LedgerQueueItem,
 } from './inventoryLedger.ts';
+import type { SyncItemType, SyncQueueItem } from '../types/sync.ts';
 
 /**
  * INV-6: Canonicalize line order before assigning semantic slots so retries
@@ -260,6 +263,28 @@ export function buildExchangeLedgerMovements(args: {
   );
 }
 
+/** Build the one durable queue row paired atomically with ledger movements. */
+export function buildLedgerBackedQueueItem(args: {
+  operationId: string;
+  type: SyncItemType;
+  payload: Record<string, unknown>;
+  createdAt?: number;
+}): SyncQueueItem {
+  const operationId = args.operationId.trim();
+  if (!operationId) throw new Error('Ledger-backed queue operation requires operationId');
+  return {
+    id: operationId,
+    type: args.type,
+    payload: { ...args.payload, _operationId: operationId },
+    status: 'pending',
+    created_at: args.createdAt ?? Date.now(),
+    retries: 0,
+    error_message: null,
+    priority: 1,
+    next_retry_at: null,
+  };
+}
+
 /** Ledger-only path (online confirmed ops with no new queue row). */
 export async function applySaleStockViaLedger(args: {
   operationId: string;
@@ -306,12 +331,24 @@ export async function applyExchangeStockViaLedger(args: {
  * in one encrypted envelope write. Used after enqueue(..., { skipPersist: true }).
  */
 export async function commitQueuedOperationWithLedger(args: {
-  nextQueue: unknown[];
+  nextQueue?: unknown[];
+  queueItem?: LedgerQueueItem;
   movements: ReturnType<typeof buildSaleLedgerMovements>;
   ports?: InventoryLedgerPorts;
 }): Promise<void> {
   if (args.movements.length === 0) {
     throw new Error('commitQueuedOperationWithLedger requires movements');
+  }
+  if (args.queueItem) {
+    await commitQueueItemAndLedger({
+      item: args.queueItem,
+      movements: args.movements,
+      ports: args.ports,
+    });
+    return;
+  }
+  if (!args.nextQueue) {
+    throw new Error('commitQueuedOperationWithLedger requires queueItem or nextQueue');
   }
   await commitSyncQueueAndLedger(args.nextQueue, args.movements, args.ports);
 }

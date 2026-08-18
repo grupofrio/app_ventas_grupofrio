@@ -41,6 +41,7 @@ export interface AmbiguousQueueItem {
 export type LedgerAckSyncType =
   | 'sale_order'
   | 'gift'
+  | 'exchange'
   | 'consignment_create'
   | 'consignment_visit'
   | 'consignment_close';
@@ -68,7 +69,9 @@ export interface AmbiguousAckReconcilePorts {
   nowMs: () => number;
   checkSaleDuplicate: (payload: Record<string, unknown>) => Promise<SaleDuplicateCheckResult>;
   replayGift: (payload: Record<string, unknown>) => Promise<void>;
+  replayExchange: (payload: Record<string, unknown>) => Promise<void>;
   classifyGiftError: (error: unknown) => AmbiguousAckStatus;
+  classifyExchangeError: (error: unknown) => AmbiguousAckStatus;
   classifySaleCheckError: (error: unknown) => AmbiguousAckStatus;
   /** Exact replay of consignment create/visit/close with the same operation_id. */
   replayConsignment?: (item: AmbiguousQueueItem) => Promise<void>;
@@ -96,6 +99,9 @@ export function resolveQueueItemOperationId(item: AmbiguousQueueItem): string {
   }
   if (typeof item.payload._operationId === 'string' && item.payload._operationId.trim()) {
     return item.payload._operationId.trim();
+  }
+  if (typeof item.payload.idempotency_key === 'string' && item.payload.idempotency_key.trim()) {
+    return item.payload.idempotency_key.trim();
   }
   const meta = item.payload.meta;
   if (meta && typeof meta === 'object') {
@@ -338,6 +344,26 @@ export async function reconcileAmbiguousLedgerOperations(
             item_id: item.id,
             operation_id: resolveQueueItemOperationId(item),
             type: 'gift',
+            acknowledged_at_ms: ackAt,
+          });
+        }
+        continue;
+      }
+
+      if (item.type === 'exchange') {
+        let status: AmbiguousAckStatus = 'ambiguous';
+        try {
+          await ports.replayExchange(item.payload);
+          status = 'committed';
+        } catch (error) {
+          status = ports.classifyExchangeError(error);
+        }
+        if (status === 'committed') {
+          const ackAt = ports.nowMs();
+          intents.push({
+            item_id: item.id,
+            operation_id: resolveQueueItemOperationId(item),
+            type: 'exchange',
             acknowledged_at_ms: ackAt,
           });
         }

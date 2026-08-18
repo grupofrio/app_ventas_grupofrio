@@ -4,6 +4,7 @@
 
 import type { InventoryMovement, LedgerState } from '../domain/inventory/types.ts';
 import {
+  commitQueueItemAndLedger as commitQueueItemAndLedgerWithPorts,
   commitSyncQueueAndLedger as commitSyncQueueAndLedgerWithPorts,
   ensureLedgerHydrated as ensureLedgerHydratedWithPorts,
   LEDGER_RECORD_KEY,
@@ -13,6 +14,7 @@ import {
   recordInventoryMovements as recordInventoryMovementsWithPorts,
   reverseInventoryOperation as reverseInventoryOperationWithPorts,
   type InventoryLedgerPorts,
+  type LedgerQueueItem,
 } from './inventoryLedgerLogic.ts';
 import { assertEncryptedRecord } from './encryptedStoreLogic.ts';
 import {
@@ -27,7 +29,7 @@ export {
   pendingLedgerOperationIdsFromQueue,
   LEDGER_AFFECTING_SYNC_TYPES,
 } from './inventoryLedgerLogic.ts';
-export type { InventoryLedgerPorts } from './inventoryLedgerLogic.ts';
+export type { InventoryLedgerPorts, LedgerQueueItem } from './inventoryLedgerLogic.ts';
 export {
   keepLedgerOperationIdsForSnapshot,
   SERVER_ACK_AT_MS_KEY,
@@ -69,6 +71,9 @@ async function productionPorts(): Promise<InventoryLedgerPorts> {
     publishQueue: (queue) => {
       useSyncStore.getState().replaceQueueFromDurable(queue as never);
     },
+    publishQueueItem: (item) => {
+      useSyncStore.getState().publishLedgerBackedQueueItem(item as never);
+    },
   };
 }
 
@@ -93,6 +98,18 @@ export async function commitSyncQueueAndLedger(
   ports?: InventoryLedgerPorts,
 ): Promise<LedgerState> {
   return commitSyncQueueAndLedgerWithPorts(nextQueue, movements, await resolvePorts(ports));
+}
+
+export async function commitQueueItemAndLedger(args: {
+  item: LedgerQueueItem;
+  movements: InventoryMovement[];
+  ports?: InventoryLedgerPorts;
+}): Promise<LedgerState> {
+  return commitQueueItemAndLedgerWithPorts({
+    item: args.item,
+    movements: args.movements,
+    ports: await resolvePorts(args.ports),
+  });
 }
 
 export async function reverseInventoryOperation(

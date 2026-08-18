@@ -256,3 +256,64 @@ Expected: every command passes and the isolated worktree is clean.
 - [ ] **Step 3: Request review and open/update the small frontend PR**
 
 Report the GF #110 dependency, exact test results and remaining pilot gates: physical Android online/offline, kill/restart, response-loss and cash-close/liquidation E2E. Do not merge automatically.
+
+## Task 7: Close auth, cash-close and offline-startup integrity gates
+
+**Files:**
+- Modify: `src/services/invoiceCollectionPersistence.ts`
+- Modify: `src/services/invoiceCollectionSync.ts`
+- Modify: `src/stores/useAuthStore.ts`
+- Modify: `src/services/rehydrate.ts`
+- Modify: `app/_layout.tsx`
+- Modify: `src/services/connectivity.ts` only if required for a nonblocking initial connectivity handoff
+- Modify: `app/cashclose.tsx`
+- Modify: `app/route-close.tsx`
+- Modify: `app/collect/[stopId].tsx`
+- Create or modify focused auth, startup, collection-summary, cash-close, route-close and copy tests.
+
+- [ ] **Step 1: Write failing cross-feature regressions**
+
+Add tests for all of these behaviors:
+
+1. A 401 leaves the original encrypted collection UUID intact; same
+   employee/company reauthentication transfers it to the new session and
+   reconnect replays it. Account switch clears it without transfer.
+2. Pending/review collection summaries block liquidation and route close, but
+   do not enter the generic queue. Applied intents do not block.
+3. Startup with unknown/offline connectivity does not call collection transport
+   or await the mutation timeout before the app becomes usable; confirmed
+   connectivity wakes the existing reconciler.
+4. The collection UI exposes and tests exact Spanish labels: Confirmado,
+   Pendiente de confirmación, Revisión requerida and Inicia sesión de nuevo.
+
+- [ ] **Step 2: Run RED**
+
+Run the new focused tests. Expected: FAIL because current session rotation
+clears collection evidence, close gates ignore its encrypted record, and
+rehydration can send while online is only a default assumption.
+
+- [ ] **Step 3: Implement minimal session-safe handoff and status summary**
+
+Keep the existing destructive logout/account-switch behavior. Add a narrowly
+scoped, same-principal reauthentication handoff for collection intents only:
+the old session can be read while its identity is still available; after the
+new authenticated identity is known, copy only validated records when employee
+and company match, then delete the old copy. Never migrate across principals or
+store plaintext.
+
+Expose a read-only collection status summary from encrypted persistence. Wire
+pending/review counts into cash-close and route-close gates without adding a
+generic queue item or changing server authority.
+
+- [ ] **Step 4: Implement nonblocking connectivity ordering and exact copy**
+
+Initialize/verify connectivity before requesting a replay and schedule
+reconciliation off the critical rehydration path. Preserve the existing
+singleton reconnect wake. Update UI copy to the exact state labels, including
+an explicit sign-in action for `reauth_required`.
+
+- [ ] **Step 5: Run GREEN and commit**
+
+Run focused tests, full `npm test`, `npm run typecheck`, `git diff --check`,
+and inspect `git status`. Commit the minimal cross-feature repair as one or
+more atomic commits with no unrelated cleanup.

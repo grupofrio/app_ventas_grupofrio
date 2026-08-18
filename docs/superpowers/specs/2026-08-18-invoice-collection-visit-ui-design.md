@@ -70,7 +70,22 @@ No se crea una pestaña de navegación ni un flujo de cobro manual paralelo.
 
 Un pendiente no bloquea iniciar la siguiente visita. Los pendientes y revisiones
 de dinero sí participan en el gate de liquidación/cierre, no en la navegación
-normal de ruta.
+normal de ruta. El resumen de estos intents es dedicado; no se mezclan con la
+cola genérica.
+
+## Recuperación de sesión y conectividad
+
+- Ante `reauth_required`, la UI indica explícitamente **Inicia sesión de
+  nuevo**. La reautenticación del mismo empleado y compañía conserva/migra
+  exclusivamente los intents de cobranza cifrados y sus UUID originales hacia
+  la nueva sesión; al cambiar de empleado o compañía se conserva el borrado
+  destructivo y no se migra evidencia entre cuentas.
+- El arranque no envía intents antes de conocer conectividad. La reconciliación
+  de red se programa después de inicializar NetInfo/estado real y nunca bloquea
+  rehydration ni la entrada a ruta en modo avión.
+- Los estados visibles usan exactamente: **Confirmado**, **Pendiente de
+  confirmación**, **Revisión requerida** e **Inicia sesión de nuevo**. Ningún
+  estado pendiente presenta recibo, pago confirmado o fallo definitivo.
 
 ## Contrato móvil
 

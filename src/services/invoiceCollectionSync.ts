@@ -145,7 +145,8 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       reconciliation = (async () => {
         if (!deps.isOnline()) return;
         for (const intent of await deps.persistence.list()) {
-          if (!isTerminal(intent.status)) await sendOnce(intent);
+          const current = (await deps.persistence.list()).find((candidate) => candidate.operation_id === intent.operation_id);
+          if (current && !isTerminal(current.status)) await sendOnce(current);
         }
       })().finally(() => { reconciliation = null; });
       return reconciliation;

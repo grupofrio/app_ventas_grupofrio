@@ -251,6 +251,43 @@ test('capture joins an in-flight reconcile replay for its effective UUID', async
   assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 44 }]);
 });
 
+test('reconcile skips a stale later row that capture already durably applied', async () => {
+  const mod = await loadSync();
+  const later = { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333', invoice_id: 9, status: 'pending' };
+  const persistence = createMemoryPersistence([{ ...intent, status: 'pending' }, later]);
+  const sent: string[] = [];
+  let releaseFirst!: () => void;
+  const firstResponse = new Promise<{ status: 'applied'; operation_id: string }>((resolve) => {
+    releaseFirst = () => resolve({ status: 'applied', operation_id: intent.operation_id });
+  });
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 45,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        return request.operation_id === intent.operation_id
+          ? firstResponse
+          : { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+
+  const outerReconcile = processor.reconcile();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sent, [intent.operation_id]);
+  await processor.capture(later);
+  releaseFirst();
+  await outerReconcile;
+
+  assert.deepEqual(sent, [intent.operation_id, later.operation_id]);
+  assert.deepEqual(persistence.records, [
+    { ...intent, status: 'applied', updated_at_ms: 45 },
+    { ...later, status: 'applied', updated_at_ms: 45 },
+  ]);
+});
+
 test('authenticated validation failure is terminal review while revoked credentials stay unchanged for reauth', async () => {
   const mod = await loadSync();
   assert.deepEqual(

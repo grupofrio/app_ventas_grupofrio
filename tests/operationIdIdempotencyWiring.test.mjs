@@ -19,20 +19,22 @@ function read(relPath) {
 }
 
 function main() {
-  // ── nosale: id estable + guard doble-tap + operation_id en todos los envíos ──
+  // ── nosale: durable encrypted intent + single-flight + checkout operation_id ──
   const nosale = read('app/nosale/[stopId].tsx');
-  assert(/const operationIdRef = useRef<string \| null>\(null\)/.test(nosale),
-    'no-venta debe generar un operation_id estable vía ref (mismo patrón que gift/sale)');
-  assert(/if \(submitting\) return; \/\/ guard doble-tap/.test(nosale),
-    'no-venta debe bloquear un segundo tap mientras el primero está en curso');
-  assert(/reportIncident\(\s*\n\s*stop\.id,[\s\S]{0,200}operationId,\s*\n\s*\);/.test(nosale),
-    'la llamada online a reportIncident debe mandar el operation_id estable');
+  assert(/persistOpenNoSaleIntent/.test(nosale),
+    'no-venta debe persistir operation_id cifrado antes de mutar');
+  assert(/createSaleConfirmationSingleFlight/.test(nosale),
+    'no-venta debe bloquear doble-tap con single-flight');
+  assert(/!singleFlightRef\.current\.tryAcquire\(\)/.test(nosale),
+    'no-venta debe adquirir single-flight al guardar');
+  assert(!/await reportIncident\(/.test(nosale),
+    'no-venta canónica no debe llamar reportIncident (checkout es la autoridad)');
   assert(/checkOut\(\s*\n\s*checkoutPayload\.stop_id,[\s\S]{0,400}operationId,\s*\n\s*\);/.test(nosale),
     'la llamada online a checkOut debe mandar el operation_id estable');
-  assert(/enqueue\('no_sale', \{[\s\S]{0,200}operation_id: operationId,/.test(nosale),
-    'el no_sale encolado debe llevar el mismo operation_id que el intento online');
-  assert(/operationIdRef\.current = null; \/\/ siguiente no-venta = nuevo id/.test(nosale),
-    'el id se regenera solo tras finalizar (éxito), no en cada intento');
+  assert(/enqueue\(\s*\n\s*'checkout',[\s\S]{0,200}operation_id: operationId,/.test(nosale),
+    'el checkout encolado debe llevar el mismo operation_id que el intento online');
+  assert(!/enqueue\('no_sale'/.test(nosale),
+    'el flujo nuevo no encola sync type no_sale (histórico se mantiene en dispatcher)');
 
   // ── gfLogistics: reportIncident/checkOut aceptan y mandan operation_id ──
   const gfLogistics = read('src/services/gfLogistics.ts');
@@ -43,8 +45,8 @@ function main() {
 
   // ── useSyncStore: el dispatcher reenvía operation_id desde el payload ──
   const syncStore = read('src/stores/useSyncStore.ts');
-  assert(/case 'no_sale':[\s\S]{0,300}payload\.operation_id as string \| undefined,/.test(syncStore),
-    'el dispatcher de no_sale debe reenviar operation_id desde el item encolado');
+  assert(/case 'no_sale':[\s\S]{0,800}payload\.operation_id as string \| undefined,/.test(syncStore),
+    'el dispatcher de no_sale histórico debe reenviar operation_id desde el item encolado');
   assert(/case 'checkout':[\s\S]{0,600}payload\.operation_id as string \| undefined,/.test(syncStore),
     'el dispatcher de checkout debe reenviar operation_id desde el item encolado');
 

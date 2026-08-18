@@ -1448,6 +1448,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'no_sale':
+      // Historical queue only. Canonical structured No Venta is checkout
+      // (no_sale_* on gf.route.stop). New FE paths no longer enqueue `no_sale`.
+      // Keep incident_create for already-queued items; it is idempotent by
+      // operation_id and must not be treated as a second authority write.
       await reportIncident(
         payload.stop_id as number,
         (payload.reason_id as number) || 1,
@@ -1556,6 +1560,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         latitude: payload.latitude,
         longitude: payload.longitude,
         notes: payload.notes,
+        operation_id: payload.operation_id,
       }, meta);
       break;
 

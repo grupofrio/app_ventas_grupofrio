@@ -9,31 +9,28 @@ const gfLogistics = readFileSync(resolve(REPO_ROOT, 'src/services/gfLogistics.ts
 const syncStore = readFileSync(resolve(REPO_ROOT, 'src/stores/useSyncStore.ts'), 'utf8');
 
 function main() {
-  // La pantalla de no-venta arma el checkout con el detalle estructurado.
   assert.match(
     noSaleScreen,
-    /noSaleReasonCode: reason\?\.code/,
-    'el motivo debe viajar como código estable del catálogo, no como id',
+    /noSaleReasonCode: capturedReasonCode/,
+    'el motivo reenviado debe ser el código estable congelado en el intent',
   );
   assert.match(
     noSaleScreen,
-    /noSaleNotes: notes/,
-    'las notas del vendedor deben viajar en el checkout',
+    /noSaleNotes: capturedNotes/,
+    'el checkout debe reutilizar las notas ligadas al operation_id original',
   );
   assert.match(
     noSaleScreen,
-    /noSaleCompetitor: selectedReasonId === competitorReasonId \? selectedCompetitor : null/,
-    'el competidor solo viaja cuando el motivo es competidor',
+    /noSaleCompetitor: capturedCompetitor/,
+    'el competidor reenviado debe permanecer ligado al operation_id original',
   );
 
-  // Ruta online: checkOut recibe el detalle.
   assert.match(
     noSaleScreen,
     /no_sale_reason_code: checkoutPayload\.no_sale_reason_code/,
     'el checkout online debe reenviar el motivo estructurado',
   );
 
-  // Ruta encolada: el dispatcher de la cola reenvía las claves del payload.
   assert.match(
     syncStore,
     /no_sale_reason_code: payload\.no_sale_reason_code as string \| undefined/,
@@ -45,7 +42,6 @@ function main() {
     'el dispatcher de checkout debe reenviar el competidor desde la cola',
   );
 
-  // El servicio HTTP incluye las claves solo cuando tienen contenido.
   assert.match(
     gfLogistics,
     /noSaleDetail\?\.no_sale_reason_code/,

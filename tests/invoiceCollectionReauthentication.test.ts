@@ -22,6 +22,7 @@ interface PersistenceModule {
   }): {
     list(session: Session): Promise<Array<Record<string, unknown>>>;
     insert(session: Session, intent: Record<string, unknown>): Promise<void>;
+    findOrInsert(session: Session, intent: Record<string, unknown>): Promise<Record<string, unknown>>;
     transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number): Promise<void>;
     transferForSamePrincipal(
       oldSession: Session,
@@ -36,6 +37,7 @@ interface PersistenceModule {
 
 interface SyncModule {
   createInvoiceCollectionSyncProcessor(deps: unknown): {
+    capture(intent: Record<string, unknown>): Promise<{ status: string; operationId: string }>;
     reconcile(): Promise<void>;
   };
 }
@@ -87,7 +89,34 @@ test('same employee and company reauthentication transfers the encrypted UUID an
   const harness = createEncryptedHarness();
   const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
 
-  await persistence.insert(oldSession, intent);
+  const beforeReauthentication = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: {
+      list: () => persistence.list(oldSession),
+      insert: (candidate: Record<string, unknown>) => persistence.insert(oldSession, candidate),
+      findOrInsert: (candidate: Record<string, unknown>) => persistence.findOrInsert(oldSession, candidate),
+      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number) =>
+        persistence.transition(oldSession, operationId, status, nowMs),
+    },
+    isOnline: () => true,
+    now: () => 3,
+    transport: {
+      collect: async () => {
+        throw Object.assign(new Error('token revoked'), {
+          httpStatus: 401,
+          code: 'token_revoked',
+          responseReceived: true,
+        });
+      },
+    },
+  });
+  assert.deepEqual(await beforeReauthentication.capture(intent), {
+    status: 'reauth_required',
+    operationId: intent.operation_id,
+    code: 'token_revoked',
+    httpStatus: 401,
+  });
+  assert.deepEqual(await persistence.list(oldSession), [intent], '401 must leave the original durable UUID untouched');
+
   let activated = false;
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, newSession, async () => {
     activated = true;

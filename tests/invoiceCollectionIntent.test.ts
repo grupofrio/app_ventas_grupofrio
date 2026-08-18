@@ -3,7 +3,7 @@ import test from 'node:test';
 
 interface InvoiceCollectionLogic {
   createInvoiceCollectionIntent(input: unknown): unknown;
-  parseOpenInvoicesResponse(input: unknown): unknown;
+  parseOpenInvoicesResponse(input: unknown, expectedStopId: number): unknown;
   parseInvoiceCollectionServerResult(input: unknown, operationId: string): unknown;
 }
 
@@ -75,7 +75,7 @@ test('invoice parsers normalize successful GF envelopes', async () => {
         amount_residual: 125.5,
       }],
     },
-  }), [{
+  }, 42), [{
     invoice_id: 99,
     name: 'INV/2026/00099',
     invoice_date: '2026-08-01',
@@ -88,6 +88,43 @@ test('invoice parsers normalize successful GF envelopes', async () => {
     ok: true,
     data: { state: 'applied', operation_id: operationId },
   }, operationId), { status: 'applied', operation_id: operationId });
+});
+
+test('open-invoice parser rejects missing or mismatched server stop scope', async () => {
+  const logic = await loadLogic();
+  const invoice = {
+    invoice_id: 99,
+    name: 'INV/2026/00099',
+    invoice_date: '2026-08-01',
+    due_date: null,
+    currency: 'MXN',
+    amount_residual: 125.5,
+  };
+
+  assert.throws(
+    () => logic.parseOpenInvoicesResponse({ ok: true, data: { invoices: [invoice] } }, 42),
+    /respuesta de facturas/i,
+  );
+  assert.throws(
+    () => logic.parseOpenInvoicesResponse({ ok: true, data: { stop_id: 43, invoices: [invoice] } }, 42),
+    /respuesta de facturas/i,
+  );
+});
+
+test('invoice parsers reject malformed envelopes with a server-response error', async () => {
+  const logic = await loadLogic();
+  const malformedResponses = [null, { ok: true }, { ok: true, data: null }];
+
+  for (const response of malformedResponses) {
+    assert.throws(
+      () => logic.parseOpenInvoicesResponse(response, 42),
+      /respuesta de facturas no es válida/i,
+    );
+    assert.throws(
+      () => logic.parseInvoiceCollectionServerResult(response, operationId),
+      /respuesta de cobranza no es válida/i,
+    );
+  }
 });
 
 test('invoice parsers reject GF error envelopes so review responses remain sync errors', async () => {
@@ -103,9 +140,19 @@ test('invoice parsers reject GF error envelopes so review responses remain sync 
     /respuesta de cobranza/i,
   );
 
-  const sync = await import('../src/services/invoiceCollectionSync.ts');
+  const [{ unwrapRestResult }, { makeApiResponseError }, sync] = await Promise.all([
+    import('../src/utils/apiResult.ts'),
+    import('../src/services/apiRequestError.ts'),
+    import('../src/services/invoiceCollectionSync.ts'),
+  ]);
+  let apiError: unknown;
+  try {
+    unwrapRestResult(reviewResponse, 409);
+  } catch (error) {
+    apiError = makeApiResponseError(error, 'Error de solicitud', 409);
+  }
   assert.deepEqual(
-    sync.classifyInvoiceCollectionError({ httpStatus: 409, code: 'review_required', responseReceived: true }),
+    sync.classifyInvoiceCollectionError(apiError),
     { kind: 'review_required', code: 'review_required', httpStatus: 409 },
   );
 });

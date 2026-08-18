@@ -109,13 +109,17 @@ export function requestFromIntent(intent: InvoiceCollectionIntent): InvoiceColle
 }
 
 function successfulEnvelopeData(value: unknown, message: string): Record<string, unknown> {
-  const envelope = plainRecord(value);
-  if (envelope.ok !== true) throw new Error(message);
-  return plainRecord(envelope.data);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
+  const envelope = value as Record<string, unknown>;
+  if (envelope.ok !== true || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+    throw new Error(message);
+  }
+  return envelope.data as Record<string, unknown>;
 }
 
-export function parseOpenInvoicesResponse(value: unknown): OpenInvoice[] {
+export function parseOpenInvoicesResponse(value: unknown, expectedStopId: number): OpenInvoice[] {
   const data = successfulEnvelopeData(value, 'La respuesta de facturas no es válida.');
+  if (data.stop_id !== expectedStopId) throw new Error('La respuesta de facturas no es válida.');
   const rows = Array.isArray(data.invoices) ? data.invoices : null;
   if (!rows) throw new Error('La respuesta de facturas no es válida.');
   return rows.map((row) => {
@@ -146,7 +150,7 @@ export async function fetchOpenInvoices(stopId: number): Promise<OpenInvoice[]> 
   positiveInteger(stopId, 'stop_id');
   const { getRest } = await import('./api.ts');
   const response = await getRest<unknown>(`/gf/logistics/api/employee/payments/open_invoices?stop_id=${stopId}`);
-  return parseOpenInvoicesResponse(response);
+  return parseOpenInvoicesResponse(response, stopId);
 }
 
 /** Strict Employee-Bearer POST: serialize only the immutable five-field DTO. */

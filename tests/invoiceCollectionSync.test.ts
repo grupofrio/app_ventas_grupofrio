@@ -551,3 +551,32 @@ test('authenticated validation failure is terminal review while revoked credenti
   });
   assert.equal(reauthPersistence.records[0].status, 'dispatching', 'reauth must not mutate the encrypted intent');
 });
+
+test('the first reauth response pauses the processor and stops the remaining replay pass', async () => {
+  const mod = await loadSync();
+  const secondIntent = {
+    ...intent,
+    operation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    stop_id: 6,
+    invoice_id: 9,
+  };
+  const persistence = createMemoryPersistence([intent, secondIntent]);
+  const sent: string[] = [];
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 52,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        throw { httpStatus: 401, code: 'session_expired', responseReceived: true };
+      },
+    },
+  });
+
+  await processor.reconcile();
+  assert.deepEqual(sent, [intent.operation_id], 'the first revoked response must stop this replay pass');
+
+  await processor.reconcile();
+  assert.deepEqual(sent, [intent.operation_id], 'the revoked processor must stay paused until auth replaces it');
+});

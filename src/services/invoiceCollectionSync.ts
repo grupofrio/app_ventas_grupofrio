@@ -126,6 +126,7 @@ function isTerminal(status: InvoiceCollectionIntent['status']): boolean {
 
 export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSyncDeps) {
   let reconciliation: Promise<void> | null = null;
+  let reauthenticationRequired = false;
   const operations = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
   function reconciliationPending(intent: InvoiceCollectionIntent): InvoiceCollectionCaptureResult {
     return { status: 'pending', operationId: intent.operation_id, needsReconciliation: true };
@@ -142,7 +143,9 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       };
       if (outcome.kind === 'reauth_required') {
         // Invalid/revoked credentials cannot be reconciled safely. Keep the
-        // durable intent untouched for a later authenticated replay.
+        // durable intent untouched and pause this session-owned processor.
+        // Successful login replaces the production runtime before replay.
+        reauthenticationRequired = true;
         return { status: 'reauth_required', operationId: intent.operation_id, ...errorDetails };
       }
       const status: PersistedStatus = outcome.kind === 'review_required' ? 'review_required' : 'pending';
@@ -195,6 +198,9 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         if (effective.status === 'review_required') {
           return { status: 'review_required' as const, operationId: effective.operation_id };
         }
+        if (reauthenticationRequired) {
+          return { status: 'reauth_required' as const, operationId: effective.operation_id };
+        }
         if (!deps.isOnline()) {
           try {
             await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
@@ -209,10 +215,14 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
     reconcile(): Promise<void> {
       if (reconciliation) return reconciliation;
       reconciliation = (async () => {
-        if (!deps.isOnline()) return;
+        if (reauthenticationRequired || !deps.isOnline()) return;
         for (const intent of await deps.persistence.list()) {
+          if (reauthenticationRequired || !deps.isOnline()) break;
           const current = (await deps.persistence.list()).find((candidate) => candidate.operation_id === intent.operation_id);
-          if (current && !isTerminal(current.status)) await sendOnce(current);
+          if (current && !isTerminal(current.status)) {
+            const result = await sendOnce(current);
+            if (result.status === 'reauth_required') break;
+          }
         }
       })().finally(() => { reconciliation = null; });
       return reconciliation;
@@ -321,15 +331,16 @@ let productionCapture: ReturnType<typeof createInvoiceCollectionGatedCapture> | 
 function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSyncRuntime> {
   productionRuntime ??= createInvoiceCollectionSyncRuntime({
     createProcessor: async () => {
-      const [persistence, { submitInvoiceCollection }, { useSyncStore }] = await Promise.all([
+      const [persistence, { submitInvoiceCollection }, { useSyncStore }, { useAuthStore }] = await Promise.all([
         import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
         import('./invoiceCollection.ts'),
         import('../stores/useSyncStore.ts'),
+        import('../stores/useAuthStore.ts'),
       ]);
       return createInvoiceCollectionSyncProcessor({
         persistence,
         transport: { collect: submitInvoiceCollection },
-        isOnline: () => useSyncStore.getState().isOnline,
+        isOnline: () => useSyncStore.getState().isOnline && useAuthStore.getState().isAuthenticated,
         now: () => Date.now(),
       });
     },

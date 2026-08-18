@@ -88,6 +88,7 @@ test('same employee and company reauthentication transfers the encrypted UUID an
   const syncModule = await import('../src/services/invoiceCollectionSync.ts') as unknown as SyncModule;
   const harness = createEncryptedHarness();
   const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
+  let revokedAttempts = 0;
 
   const beforeReauthentication = syncModule.createInvoiceCollectionSyncProcessor({
     persistence: {
@@ -101,6 +102,7 @@ test('same employee and company reauthentication transfers the encrypted UUID an
     now: () => 3,
     transport: {
       collect: async () => {
+        revokedAttempts += 1;
         throw Object.assign(new Error('token revoked'), {
           httpStatus: 401,
           code: 'token_revoked',
@@ -116,6 +118,8 @@ test('same employee and company reauthentication transfers the encrypted UUID an
     httpStatus: 401,
   });
   assert.deepEqual(await persistence.list(oldSession), [intent], '401 must leave the original durable UUID untouched');
+  await beforeReauthentication.reconcile();
+  assert.equal(revokedAttempts, 1, 'a reconnect before successful login must not POST with revoked credentials');
 
   let activated = false;
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, newSession, async () => {

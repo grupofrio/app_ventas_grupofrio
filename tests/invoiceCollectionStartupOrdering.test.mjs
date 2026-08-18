@@ -10,15 +10,13 @@ const syncStore = readFileSync(resolve('src/stores/useSyncStore.ts'), 'utf8');
 const collectionSync = readFileSync(resolve('src/services/invoiceCollectionSync.ts'), 'utf8');
 
 test('production startup establishes conservative connectivity before critical rehydration', () => {
-  const startIndex = layout.indexOf('startConnectivityMonitor()');
-  const checkIndex = layout.indexOf('await checkConnectivity()');
+  const orchestrationIndex = layout.indexOf('runNonblockingAppInitialization({');
   const rehydrateIndex = layout.indexOf('await rehydrateAppState()');
-  const collectionWakeIndex = layout.indexOf('requestInvoiceCollectionSync()');
 
-  assert(startIndex >= 0);
-  assert(checkIndex > startIndex);
-  assert(rehydrateIndex > checkIndex);
-  assert(collectionWakeIndex > rehydrateIndex);
+  assert(orchestrationIndex >= 0);
+  assert(rehydrateIndex > orchestrationIndex);
+  assert.match(layout, /runNonblockingAppInitialization\(\{\s*startConnectivityMonitor,\s*checkConnectivity,/);
+  assert.doesNotMatch(layout, /await checkConnectivity\(\)/);
   assert.doesNotMatch(layout, /await requestInvoiceCollectionSync\(\)/);
   assert.doesNotMatch(rehydrate, /bootstrapInvoiceCollectionSync|requestInvoiceCollectionSync/);
 });

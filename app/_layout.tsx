@@ -28,6 +28,7 @@ import { startConnectivityMonitor, checkConnectivity } from '../src/services/con
 import { initializeGPS, startLocationWatch } from '../src/services/gps';
 import { startBackgroundTracking } from '../src/services/gpsBackground';
 import { requestInvoiceCollectionSync } from '../src/services/invoiceCollectionSync';
+import { runNonblockingAppInitialization } from '../src/services/appInitialization';
 
 // F2.7: tope global de escala de fuente por accesibilidad del sistema. Sin
 // esto, un vendedor con "texto grande" activado en el teléfono puede romper
@@ -64,18 +65,18 @@ export default function RootLayout() {
   const fontsLoaded = dmLoaded && monoLoaded;
 
   useEffect(() => {
-    async function initApp() {
-      console.log('[Init] Starting app initialization...');
-      try {
-        // Establish conservative connectivity before any recovery path can
-        // consider an outgoing mutation. Reachability `null` remains offline.
-        console.log('[Init] Starting connectivity monitor...');
-        startConnectivityMonitor();
-        await checkConnectivity().catch(e => {
-          console.log('Connectivity check failed', e);
-          return false;
-        });
-
+    void runNonblockingAppInitialization({
+      startConnectivityMonitor,
+      checkConnectivity,
+      onConfirmedOnline: requestInvoiceCollectionSync,
+      onConnectivityError: (error) => console.log('Connectivity check failed', error),
+      onInitializationError: (error) => console.error('[Init] Critical error during init:', error),
+      onReady: () => {
+        console.log('[Init] App ready set to true');
+        setIsReady(true);
+      },
+      initializeAppState: async () => {
+        console.log('[Init] Starting app initialization...');
         // 1. Check auth tokens + restore employee data
         const hasTokens = await hasAuthTokens();
         console.log('[Init] Auth tokens found:', hasTokens);
@@ -108,15 +109,8 @@ export default function RootLayout() {
               .catch(e => console.log('[gps] GPS startup not available', e));
           }
         }
-
-      } catch (error) {
-        console.error('[Init] Critical error during init:', error);
-      } finally {
-        console.log('[Init] App ready set to true');
-        setIsReady(true);
-      }
-    }
-    initApp();
+      },
+    });
   }, []);
 
   // Auth guard

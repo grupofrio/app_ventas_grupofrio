@@ -130,6 +130,11 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       return (async () => {
         // This awaited encrypted write is the commit point before first send.
         const effective = await deps.persistence.findOrInsert(intent);
+        const inFlight = operations.get(effective.operation_id);
+        if (inFlight) return inFlight;
+        if (effective.status === 'applied') {
+          return { status: 'applied' as const, operationId: effective.operation_id };
+        }
         if (effective.status === 'review_required') {
           return { status: 'review_required' as const, operationId: effective.operation_id };
         }

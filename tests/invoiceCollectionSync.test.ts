@@ -251,6 +251,39 @@ test('capture joins an in-flight reconcile replay for its effective UUID', async
   assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 44 }]);
 });
 
+test('offline capture does not overwrite an applied reconcile acknowledgement', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence([{ ...intent, status: 'pending' }]);
+  let online = true;
+  let releaseFind!: () => void;
+  const findGate = new Promise<void>((resolve) => { releaseFind = resolve; });
+  persistence.findOrInsert = async () => {
+    await findGate;
+    return { ...persistence.records[0] };
+  };
+  let releaseServer!: () => void;
+  const server = new Promise<{ status: 'applied'; operation_id: string }>((resolve) => {
+    releaseServer = () => resolve({ status: 'applied', operation_id: intent.operation_id });
+  });
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => online,
+    now: () => 45,
+    transport: { collect: async () => server },
+  });
+
+  const replay = processor.reconcile();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  online = false;
+  const capture = processor.capture(intent);
+  releaseServer();
+  await replay;
+  releaseFind();
+
+  assert.deepEqual(await capture, { status: 'applied', operationId: intent.operation_id });
+  assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 45 }]);
+});
+
 test('reconcile skips a stale later row that capture already durably applied', async () => {
   const mod = await loadSync();
   const later = { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333', invoice_id: 9, status: 'pending' };

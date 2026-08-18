@@ -1,4 +1,4 @@
-import type { EncryptedRecordMutator, EncryptedSessionIdentity } from './encryptedStoreLogic.ts';
+import { isSameEncryptedPrincipal, type EncryptedRecordMutator, type EncryptedSessionIdentity } from './encryptedStoreLogic.ts';
 import { requestFromIntent, type InvoiceCollectionIntent, type InvoiceCollectionStatus } from './invoiceCollection.ts';
 
 export const INVOICE_COLLECTION_RECORD_KEY = 'invoice-collection:intents';
@@ -154,9 +154,7 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       newSession: EncryptedSessionIdentity,
       activateDestination: () => Promise<void>,
     ): Promise<{ transferred: boolean; count: number }> {
-      const samePrincipal = oldSession.companyId === newSession.companyId
-        && oldSession.employeeId === newSession.employeeId;
-      if (!samePrincipal || oldSession.sessionId === newSession.sessionId) {
+      if (!isSameEncryptedPrincipal(oldSession, newSession) || oldSession.sessionId === newSession.sessionId) {
         return { transferred: false, count: 0 };
       }
       if (!deps.remove) throw new Error('La migración cifrada de cobranza no está disponible.');

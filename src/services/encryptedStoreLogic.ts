@@ -13,6 +13,14 @@ export interface EncryptedSessionIdentity {
   sessionId: string;
 }
 
+export function isSameEncryptedPrincipal(
+  current: EncryptedSessionIdentity,
+  candidate: EncryptedSessionIdentity,
+): boolean {
+  return current.companyId === candidate.companyId
+    && current.employeeId === candidate.employeeId;
+}
+
 export interface EncryptedStorageDriver {
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;

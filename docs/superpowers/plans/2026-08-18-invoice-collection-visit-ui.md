@@ -284,9 +284,10 @@ Add tests for all of these behaviors:
    or await an unresolved connectivity probe/mutation timeout before the app becomes usable; confirmed
    connectivity wakes the existing reconciler.
 4. A 401 from foreground **or background reconciliation** persists an explicit
-   reauth-required view state with UUID/binding intact, stops the batch, and
-   exposes the same sign-in action; same-principal handoff converts it back to
-   pending for original-UUID replay.
+reauth-required view state with UUID/binding intact, stops the batch, and
+exposes the same sign-in action; same-principal handoff converts it back to
+pending for original-UUID replay. If persisting the intent marker itself fails,
+a separate durable session reauth latch must still block replay after restart.
 5. The collection UI exposes and tests exact Spanish labels: Confirmado,
    Pendiente de confirmación, Revisión requerida and Inicia sesión de nuevo.
 
@@ -317,7 +318,10 @@ confirmed online state. Preserve the existing singleton reconnect wake. Persist
 background 401 as `reauth_required` metadata/status without changing UUID or
 binding; same-principal handoff resets it to pending. Update UI copy to the
 exact state labels, including an explicit sign-in action for any
-`reauth_required` state.
+`reauth_required` state. If the intent-record update fails, persist a minimal
+session/principal-bound reauth latch separately; bootstrap must observe it
+before any collection replay and same-principal handoff clears it only after
+the pending intent transfer is durable.
 
 - [ ] **Step 5: Run GREEN and commit**
 

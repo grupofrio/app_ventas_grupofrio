@@ -85,6 +85,12 @@ cola genérica.
   misma acción de inicio de sesión que una captura en primer plano. Tras un
   handoff de mismo principal, vuelve a ser pendiente para reintentar con el
   UUID original.
+- Si la escritura del estado del intent falla tras un 401, se persiste un
+  **latch de sesión de reautenticación** separado del record de cobranza. Ese
+  latch bloquea bootstrap y replay tras reinicio hasta que se renueve la
+  credencial; no contiene importe, factura ni datos de cobro. Sólo después del
+  handoff seguro de mismo principal se limpia y vuelve a permitir el UUID
+  original.
 - El arranque no envía intents antes de conocer conectividad. La reconciliación
   de red se programa después de inicializar NetInfo/estado real y nunca bloquea
   rehydration ni la entrada a ruta en modo avión.

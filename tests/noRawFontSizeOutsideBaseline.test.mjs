@@ -30,7 +30,6 @@ const BASELINE = new Set([
   'app/(tabs)/tasks.tsx',
   'app/analytics.tsx',
   'app/checklist/[planId].tsx',
-  'app/collect/[partnerId].tsx',
   'app/incident.tsx',
   'app/loyalty/[partnerId].tsx',
   'app/print-exchange/[snapshotId].tsx',

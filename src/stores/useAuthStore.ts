@@ -36,6 +36,7 @@ import {
 } from '../services/fieldDataSession';
 import { useSalesStore } from './useSalesStore';
 import { createUuidV4 } from '../utils/clientEvent';
+import { transferEmployeeDayBundleForReauthentication } from '../services/employeeDayBundle';
 
 interface AuthState {
   // Auth status
@@ -444,6 +445,12 @@ export const useAuthStore = create<AuthState>((set) => ({
           () => setAuthTokens(result.gf_employee_token, nextSession.sessionId),
           () => resetInvoiceCollectionSync(),
         );
+        // Fase Capa 1 (fix/daily-bundle-validation): the encrypted storage key
+        // includes sessionId, so this same-principal rotation would otherwise
+        // orphan a still-valid day bundle under the old key. Transfer it before
+        // the old envelope is destroyed below — same handoff shape as the
+        // invoice-collection transfer above, minus a live processor to retire.
+        await transferEmployeeDayBundleForReauthentication(previousSession, nextSession);
         // Collection transfer committed and removed its old record. Remove the
         // rest of the obsolete envelope; no other feature crosses sessions.
         const [

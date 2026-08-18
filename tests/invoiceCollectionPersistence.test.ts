@@ -22,6 +22,11 @@ interface PersistenceModule {
     insert(session: Session, intent: Record<string, unknown>): Promise<void>;
     findOrInsert(session: Session, intent: Record<string, unknown>): Promise<Record<string, unknown>>;
     transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number): Promise<void>;
+    summary(session: Session): Promise<{
+      pendingCount: number;
+      reviewRequiredCount: number;
+      blockingCount: number;
+    }>;
   };
 }
 
@@ -137,4 +142,36 @@ test('find-or-insert rejects a globally reused UUID with a different immutable b
   );
   await store.transition(session, intent.operation_id, 'pending', 2);
   assert.deepEqual(await store.list(session), [{ ...intent, status: 'pending', updated_at_ms: 2 }]);
+});
+
+test('durable summary blocks only dispatching, pending, and review-required collection intents', async () => {
+  const mod = await loadPersistence();
+  const harness = createEncryptedHarness();
+  const store = mod.createInvoiceCollectionPersistence({ load: harness.load, update: harness.update });
+
+  await store.insert(session, intent);
+  await store.insert(session, {
+    ...intent,
+    operation_id: '44444444-2222-4aaa-8bbb-333333333333',
+    invoice_id: 9,
+    status: 'pending',
+  });
+  await store.insert(session, {
+    ...intent,
+    operation_id: '55555555-2222-4aaa-8bbb-333333333333',
+    invoice_id: 10,
+    status: 'review_required',
+  });
+  await store.insert(session, {
+    ...intent,
+    operation_id: '66666666-2222-4aaa-8bbb-333333333333',
+    invoice_id: 11,
+    status: 'applied',
+  });
+
+  assert.deepEqual(await store.summary(session), {
+    pendingCount: 2,
+    reviewRequiredCount: 1,
+    blockingCount: 3,
+  });
 });

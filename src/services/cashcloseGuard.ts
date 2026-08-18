@@ -23,6 +23,9 @@ export interface CashCloseGuardInput {
    */
   errorCount?: number;
   deadCount?: number;
+  invoiceCollectionPendingCount?: number;
+  invoiceCollectionReviewCount?: number;
+  invoiceCollectionSummaryReady?: boolean;
 }
 
 /**
@@ -37,6 +40,9 @@ export function canConfirmLiquidation(input: CashCloseGuardInput): boolean {
   if (input.pendingCount > 0) return false;
   if ((input.errorCount ?? 0) > 0) return false;
   if ((input.deadCount ?? 0) > 0) return false;
+  if (input.invoiceCollectionSummaryReady === false) return false;
+  if ((input.invoiceCollectionPendingCount ?? 0) > 0) return false;
+  if ((input.invoiceCollectionReviewCount ?? 0) > 0) return false;
   if (input.isSyncing) return false;
   if (!input.liquidationAvailable) return false;
   return true;
@@ -54,6 +60,15 @@ export function describeBlockingReason(input: CashCloseGuardInput): string | nul
   const failed = (input.errorCount ?? 0) + (input.deadCount ?? 0);
   if (failed > 0) {
     return `Hay ${failed} operacion(es) con error sin sincronizar. Resuélvelas antes de liquidar.`;
+  }
+  if (input.invoiceCollectionSummaryReady === false) {
+    return 'No se pudo verificar la cobranza pendiente.';
+  }
+  if ((input.invoiceCollectionPendingCount ?? 0) > 0) {
+    return `Hay ${input.invoiceCollectionPendingCount} operación(es) de cobranza pendientes de confirmación.`;
+  }
+  if ((input.invoiceCollectionReviewCount ?? 0) > 0) {
+    return `Hay ${input.invoiceCollectionReviewCount} cobro(s) por factura que requieren revisión.`;
   }
   if (input.isSyncing) {
     return 'Sincronizando…';
@@ -81,6 +96,9 @@ export interface LiquidationButtonState {
   errorCount?: number;
   deadCount?: number;
   isSyncing: boolean;
+  invoiceCollectionPendingCount?: number;
+  invoiceCollectionReviewCount?: number;
+  invoiceCollectionSummaryReady?: boolean;
 }
 
 export function describeLiquidationButtonBlock(s: LiquidationButtonState): string | null {
@@ -94,6 +112,15 @@ export function describeLiquidationButtonBlock(s: LiquidationButtonState): strin
   const failed = (s.errorCount ?? 0) + (s.deadCount ?? 0);
   if (failed > 0) {
     return `Hay ${failed} operación(es) con error sin sincronizar. Resuélvelas antes de liquidar.`;
+  }
+  if (s.invoiceCollectionSummaryReady === false) {
+    return 'No se pudo verificar la cobranza pendiente. Reabre la pantalla e intenta de nuevo.';
+  }
+  if ((s.invoiceCollectionPendingCount ?? 0) > 0) {
+    return `Hay ${s.invoiceCollectionPendingCount} operación(es) de cobranza pendientes de confirmación.`;
+  }
+  if ((s.invoiceCollectionReviewCount ?? 0) > 0) {
+    return `Hay ${s.invoiceCollectionReviewCount} cobro(s) por factura que requieren revisión.`;
   }
   if (s.isSyncing) return 'Sincronizando…';
   if (!s.corteConfirmed) {

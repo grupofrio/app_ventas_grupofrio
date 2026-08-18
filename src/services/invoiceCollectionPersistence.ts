@@ -14,6 +14,12 @@ export interface InvoiceCollectionPersistenceDeps {
   remove?: (session: EncryptedSessionIdentity, key: typeof INVOICE_COLLECTION_RECORD_KEY) => Promise<void>;
 }
 
+export interface InvoiceCollectionDurableSummary {
+  readonly pendingCount: number;
+  readonly reviewRequiredCount: number;
+  readonly blockingCount: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -79,10 +85,19 @@ function isNonterminal(intent: InvoiceCollectionIntent): boolean {
   return intent.status === 'dispatching' || intent.status === 'pending' || intent.status === 'review_required';
 }
 
+function summarize(intents: readonly InvoiceCollectionIntent[]): InvoiceCollectionDurableSummary {
+  const pendingCount = intents.filter((intent) => intent.status === 'dispatching' || intent.status === 'pending').length;
+  const reviewRequiredCount = intents.filter((intent) => intent.status === 'review_required').length;
+  return { pendingCount, reviewRequiredCount, blockingCount: pendingCount + reviewRequiredCount };
+}
+
 export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersistenceDeps) {
   return {
     async list(session: EncryptedSessionIdentity): Promise<InvoiceCollectionIntent[]> {
       return parseStored(await deps.load(session, INVOICE_COLLECTION_RECORD_KEY)).intents.map((intent) => ({ ...intent }));
+    },
+    async summary(session: EncryptedSessionIdentity): Promise<InvoiceCollectionDurableSummary> {
+      return summarize(parseStored(await deps.load(session, INVOICE_COLLECTION_RECORD_KEY)).intents);
     },
     async insert(session: EncryptedSessionIdentity, intent: InvoiceCollectionIntent): Promise<void> {
       const validated = validateStoredIntent(intent);
@@ -181,10 +196,17 @@ export async function createCurrentInvoiceCollectionPersistence() {
   });
   return {
     list: () => persistence.list(session),
+    summary: () => persistence.summary(session),
     insert: (intent: InvoiceCollectionIntent) => persistence.insert(session, intent),
     findOrInsert: (intent: InvoiceCollectionIntent) => persistence.findOrInsert(session, intent),
     transition: (operationId: string, status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required'>, nowMs: number) => persistence.transition(session, operationId, status, nowMs),
   };
+}
+
+/** Read-only, encrypted closure-gate projection; never creates queue work. */
+export async function readCurrentInvoiceCollectionSummary(): Promise<InvoiceCollectionDurableSummary> {
+  const persistence = await createCurrentInvoiceCollectionPersistence();
+  return persistence.summary();
 }
 
 /** Reauth-only encrypted handoff. Cross-principal calls are a no-op. */

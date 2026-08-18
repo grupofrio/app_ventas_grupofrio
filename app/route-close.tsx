@@ -47,6 +47,10 @@ import {
 import { clearPersistedPriceCache, clearPersistedCatalog } from '../src/services/offlineCache';
 import { clearCachedConsignments } from '../src/services/consignmentCache';
 import { OperationGate } from '../src/components/OperationGate';
+import {
+  readCurrentInvoiceCollectionSummary,
+  type InvoiceCollectionDurableSummary,
+} from '../src/services/invoiceCollectionPersistence';
 
 type StepStatus = 'pending' | 'done' | 'skip';
 
@@ -71,8 +75,17 @@ function RouteCloseScreenInner() {
   const errorCount = useSyncStore((s) => s.errorCount);
   const deadCount = useSyncStore((s) => s.deadCount);
   const isSyncing = useSyncStore((s) => s.isSyncing);
+  const [invoiceCollectionSummary, setInvoiceCollectionSummary] = useState<InvoiceCollectionDurableSummary | null>(null);
   const resetPreparation = useRoutePreparationStore((s) => s.resetPreparation);
-  const syncInput = { pendingCount, errorCount, deadCount, isSyncing };
+  const syncInput = {
+    pendingCount,
+    errorCount,
+    deadCount,
+    isSyncing,
+    invoiceCollectionPendingCount: invoiceCollectionSummary?.pendingCount ?? 0,
+    invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
+    invoiceCollectionSummaryReady: invoiceCollectionSummary !== null,
+  };
   const closeAllowedBySync = canCloseRoute(syncInput);
   const syncBlockMsg = describeCloseSyncBlock(syncInput);
 
@@ -96,6 +109,10 @@ function RouteCloseScreenInner() {
   // so re-opening the hub doesn't make a saved KM look lost (Sprint C.1).
   useFocusEffect(
     useCallback(() => {
+      setInvoiceCollectionSummary(null);
+      void readCurrentInvoiceCollectionSummary()
+        .then(setInvoiceCollectionSummary)
+        .catch(() => {});
       if (isOnline) {
         void loadPlan({ force: true }).then(() => {
           const freshPlan = useRouteStore.getState().plan;

@@ -7,6 +7,7 @@ export interface InvoiceCollectionIntentPersistence {
   insert(intent: InvoiceCollectionIntent): Promise<void>;
   findOrInsert(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent>;
   transition(operationId: string, status: PersistedStatus, nowMs: number): Promise<void>;
+  markReauthenticationRequired?(): Promise<void>;
 }
 
 export interface InvoiceCollectionTransport {
@@ -149,6 +150,13 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         try {
           await deps.persistence.transition(intent.operation_id, 'reauth_required', deps.now());
         } catch {
+          try {
+            await deps.persistence.markReauthenticationRequired?.();
+          } catch {
+            // No restart-safe claim is possible when both independent durable
+            // writes fail. The runtime latch above still prevents fail-open
+            // sends until authentication resets this processor.
+          }
           return {
             status: 'reauth_required',
             operationId: intent.operation_id,

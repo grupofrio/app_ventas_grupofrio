@@ -151,7 +151,11 @@ async function clearCurrentEncryptedFieldData(): Promise<void> {
   await clearLegacyConsignmentPendingOperations();
   const session = await getFieldDataSession();
   if (session) {
-    const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
+    const [{ clearEncryptedSession }, { clearInvoiceCollectionReauthenticationRequired }] = await Promise.all([
+      import('../services/encryptedStore.ts'),
+      import('../services/invoiceCollectionReauthLatch.ts'),
+    ]);
+    await clearInvoiceCollectionReauthenticationRequired(session);
     await clearEncryptedSession(session);
   }
   const { resetInvoiceCollectionSync } = await import('../services/invoiceCollectionSync');
@@ -380,10 +384,16 @@ export const useAuthStore = create<AuthState>((set) => ({
         );
         // Collection transfer committed and removed its old record. Remove the
         // rest of the obsolete envelope; no other feature crosses sessions.
-        const [{ clearEncryptedSession }, { resetInvoiceCollectionSync }] = await Promise.all([
+        const [
+          { clearEncryptedSession },
+          { resetInvoiceCollectionSync },
+          { clearInvoiceCollectionReauthenticationRequired },
+        ] = await Promise.all([
           import('../services/encryptedStore.ts'),
           import('../services/invoiceCollectionSync.ts'),
+          import('../services/invoiceCollectionReauthLatch.ts'),
         ]);
+        await clearInvoiceCollectionReauthenticationRequired(previousSession);
         await clearEncryptedSession(previousSession);
         resetInvoiceCollectionSync();
         await clearSensitiveFieldData();

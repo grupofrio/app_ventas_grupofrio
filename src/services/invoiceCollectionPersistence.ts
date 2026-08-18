@@ -20,6 +20,21 @@ export interface InvoiceCollectionDurableSummary {
   readonly blockingCount: number;
 }
 
+type PersistedTransitionStatus = Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required' | 'reauth_required'>;
+
+interface SessionBoundInvoiceCollectionPersistence {
+  list(): Promise<InvoiceCollectionIntent[]>;
+  summary(): Promise<InvoiceCollectionDurableSummary>;
+  insert(intent: InvoiceCollectionIntent): Promise<void>;
+  findOrInsert(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent>;
+  transition(operationId: string, status: PersistedTransitionStatus, nowMs: number): Promise<void>;
+}
+
+interface SessionBoundInvoiceCollectionReauthLatch {
+  isRequired(): Promise<boolean>;
+  markRequired(): Promise<void>;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -93,6 +108,36 @@ function summarize(intents: readonly InvoiceCollectionIntent[]): InvoiceCollecti
   return { pendingCount, reviewRequiredCount, blockingCount: pendingCount + reviewRequiredCount };
 }
 
+function projectReauthenticationRequired(
+  intent: InvoiceCollectionIntent,
+  required: boolean,
+): InvoiceCollectionIntent {
+  if (!required || (intent.status !== 'dispatching' && intent.status !== 'pending')) return { ...intent };
+  return { ...intent, status: 'reauth_required' };
+}
+
+/** Read projection over an independent credential-state latch; it never mutates an intent. */
+export function createInvoiceCollectionReauthAwarePersistence(
+  persistence: SessionBoundInvoiceCollectionPersistence,
+  latch: SessionBoundInvoiceCollectionReauthLatch,
+) {
+  return {
+    async list(): Promise<InvoiceCollectionIntent[]> {
+      const [intents, required] = await Promise.all([persistence.list(), latch.isRequired()]);
+      return intents.map((intent) => projectReauthenticationRequired(intent, required));
+    },
+    summary: () => persistence.summary(),
+    insert: (intent: InvoiceCollectionIntent) => persistence.insert(intent),
+    async findOrInsert(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent> {
+      const effective = await persistence.findOrInsert(intent);
+      return projectReauthenticationRequired(effective, await latch.isRequired());
+    },
+    transition: (operationId: string, status: PersistedTransitionStatus, nowMs: number) =>
+      persistence.transition(operationId, status, nowMs),
+    markReauthenticationRequired: () => latch.markRequired(),
+  };
+}
+
 export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersistenceDeps) {
   return {
     async list(session: EncryptedSessionIdentity): Promise<InvoiceCollectionIntent[]> {
@@ -136,7 +181,7 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
     async transition(
       session: EncryptedSessionIdentity,
       operationId: string,
-      status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required' | 'reauth_required'>,
+      status: PersistedTransitionStatus,
       nowMs: number,
     ): Promise<void> {
       await deps.update(session, (api) => {
@@ -187,8 +232,14 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
 
 /** Production composition stays session-scoped and never touches plaintext storage. */
 export async function createCurrentInvoiceCollectionPersistence() {
-  const [{ getFieldDataSession }, { loadEncrypted, removeEncrypted, updateEncryptedRecords }] = await Promise.all([
-    import('./fieldDataSession.ts'), import('./encryptedStore.ts'),
+  const [
+    { getFieldDataSession },
+    { loadEncrypted, removeEncrypted, updateEncryptedRecords },
+    { isInvoiceCollectionReauthenticationRequired, markInvoiceCollectionReauthenticationRequired },
+  ] = await Promise.all([
+    import('./fieldDataSession.ts'),
+    import('./encryptedStore.ts'),
+    import('./invoiceCollectionReauthLatch.ts'),
   ]);
   const session = await getFieldDataSession();
   if (!session) throw new Error('La sesión cifrada de cobranza no está disponible.');
@@ -197,13 +248,17 @@ export async function createCurrentInvoiceCollectionPersistence() {
     update: updateEncryptedRecords,
     remove: removeEncrypted,
   });
-  return {
+  return createInvoiceCollectionReauthAwarePersistence({
     list: () => persistence.list(session),
     summary: () => persistence.summary(session),
     insert: (intent: InvoiceCollectionIntent) => persistence.insert(session, intent),
     findOrInsert: (intent: InvoiceCollectionIntent) => persistence.findOrInsert(session, intent),
-    transition: (operationId: string, status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required' | 'reauth_required'>, nowMs: number) => persistence.transition(session, operationId, status, nowMs),
-  };
+    transition: (operationId: string, status: PersistedTransitionStatus, nowMs: number) =>
+      persistence.transition(session, operationId, status, nowMs),
+  }, {
+    isRequired: () => isInvoiceCollectionReauthenticationRequired(session),
+    markRequired: () => markInvoiceCollectionReauthenticationRequired(session),
+  });
 }
 
 /** Read-only, encrypted closure-gate projection; never creates queue work. */

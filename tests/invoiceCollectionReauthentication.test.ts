@@ -33,6 +33,36 @@ interface PersistenceModule {
       count: number;
     }>;
   };
+  createInvoiceCollectionReauthAwarePersistence(
+    persistence: {
+      list(): Promise<Array<Record<string, unknown>>>;
+      insert(intent: Record<string, unknown>): Promise<void>;
+      findOrInsert(intent: Record<string, unknown>): Promise<Record<string, unknown>>;
+      transition(operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number): Promise<void>;
+    },
+    latch: {
+      isRequired(): Promise<boolean>;
+      markRequired(): Promise<void>;
+    },
+  ): {
+    list(): Promise<Array<Record<string, unknown>>>;
+    insert(intent: Record<string, unknown>): Promise<void>;
+    findOrInsert(intent: Record<string, unknown>): Promise<Record<string, unknown>>;
+    transition(operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number): Promise<void>;
+    markReauthenticationRequired(): Promise<void>;
+  };
+}
+
+interface LatchModule {
+  createInvoiceCollectionReauthLatch(driver: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    remove(key: string): Promise<void>;
+  }): {
+    isRequired(session: Session): Promise<boolean>;
+    markRequired(session: Session): Promise<void>;
+    clear(session: Session): Promise<void>;
+  };
 }
 
 interface SyncModule {
@@ -216,6 +246,113 @@ test('background 401 reenters with reauth action and same-principal handoff repl
   assert.equal((await persistence.list(newSession))[0].status, 'applied');
 });
 
+test('a separate session latch survives processor restart when the 401 intent marker cannot commit', async () => {
+  const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
+  const latchModule = await import('../src/services/invoiceCollectionReauthLatchLogic.ts') as unknown as LatchModule;
+  const syncModule = await import('../src/services/invoiceCollectionSync.ts') as unknown as SyncModule;
+  const visitModule = await import('../src/services/invoiceCollectionVisit.ts') as unknown as VisitModule;
+  const harness = createEncryptedHarness();
+  const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
+  const latchRecords = new Map<string, string>();
+  const latch = latchModule.createInvoiceCollectionReauthLatch({
+    async get(key) { return latchRecords.get(key) ?? null; },
+    async set(key, value) { latchRecords.set(key, value); },
+    async remove(key) { latchRecords.delete(key); },
+  });
+  const secondIntent = {
+    ...intent,
+    operation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    stop_id: 6,
+    invoice_id: 9,
+  };
+  await persistence.insert(oldSession, intent);
+  await persistence.insert(oldSession, secondIntent);
+
+  function bound(session: Session, failReauthMarker = false) {
+    return persistenceModule.createInvoiceCollectionReauthAwarePersistence({
+      list: () => persistence.list(session),
+      insert: (candidate) => persistence.insert(session, candidate),
+      findOrInsert: (candidate) => persistence.findOrInsert(session, candidate),
+      transition: (operationId, status, nowMs) => {
+        if (failReauthMarker && status === 'reauth_required') {
+          return Promise.reject(new Error('invoice envelope write failed'));
+        }
+        return persistence.transition(session, operationId, status, nowMs);
+      },
+    }, {
+      isRequired: () => latch.isRequired(session),
+      markRequired: () => latch.markRequired(session),
+    });
+  }
+
+  const sentWithRevokedToken: string[] = [];
+  const beforeRestart = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: bound(oldSession, true),
+    isOnline: () => true,
+    now: () => 3,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sentWithRevokedToken.push(request.operation_id);
+        throw Object.assign(new Error('token revoked'), {
+          httpStatus: 401,
+          code: 'token_revoked',
+          responseReceived: true,
+        });
+      },
+    },
+  });
+  await beforeRestart.reconcile();
+  assert.deepEqual(sentWithRevokedToken, [intent.operation_id]);
+  assert.equal(await latch.isRequired(oldSession), true);
+  assert.equal((await persistence.list(oldSession))[0].status, 'pending', 'the invoice marker write really failed');
+
+  const projected = await bound(oldSession).list();
+  assert.equal(projected[0].status, 'reauth_required');
+  assert.equal(
+    visitModule.buildVisitCollectionState(bundle, intent.stop_id, projected).invoices[0].collection_state,
+    'reauth_required',
+  );
+
+  const afterRestart = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: bound(oldSession),
+    isOnline: () => true,
+    now: () => 4,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sentWithRevokedToken.push(request.operation_id);
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+  await afterRestart.reconcile();
+  assert.deepEqual(sentWithRevokedToken, [intent.operation_id], 'restart must observe the latch before any POST');
+
+  await persistence.transferForSamePrincipal(oldSession, newSession, async () => {});
+  await latch.clear(oldSession);
+  assert.equal(await latch.isRequired(oldSession), false);
+  assert.deepEqual(
+    (await persistence.list(newSession)).map((candidate) => candidate.status),
+    ['pending', 'pending'],
+    'the destination is durable and replayable before the old latch is cleared',
+  );
+
+  const replayed: string[] = [];
+  const afterReauthentication = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: bound(newSession),
+    isOnline: () => true,
+    now: () => 5,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        replayed.push(request.operation_id);
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+  await afterReauthentication.reconcile();
+  assert.deepEqual(replayed, [intent.operation_id, secondIntent.operation_id]);
+  assert.equal((await persistence.list(newSession))[0].operation_id, intent.operation_id);
+});
+
 test('account switch never transfers invoice collection data and destructive cleanup removes the old record', async () => {
   const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
   const harness = createEncryptedHarness();
@@ -262,6 +399,10 @@ test('failed destination-session activation keeps the old encrypted copy recover
 test('auth wiring chooses handoff only after the new principal is known and logout remains destructive', () => {
   const source = readFileSync(resolve('src/stores/useAuthStore.ts'), 'utf8');
   const api = readFileSync(resolve('src/services/api.ts'), 'utf8');
+  const destructiveClear = source.slice(
+    source.indexOf('async function clearCurrentEncryptedFieldData'),
+    source.indexOf('export const useAuthStore'),
+  );
   const login = source.slice(source.indexOf('login: async'), source.indexOf('logout: async'));
   const logout = source.slice(source.indexOf('logout: async'));
 
@@ -272,8 +413,20 @@ test('auth wiring chooses handoff only after the new principal is known and logo
   assert(login.indexOf('const companyId') < login.indexOf('samePrincipalReauthentication'));
   assert(login.indexOf('const nextSession') < login.indexOf('transferCurrentInvoiceCollectionsForReauthentication'));
   assert(login.indexOf('transferCurrentInvoiceCollectionsForReauthentication') < login.indexOf('clearEncryptedSession'));
+  assert.match(login, /clearInvoiceCollectionReauthenticationRequired/);
+  assert(
+    login.lastIndexOf('clearInvoiceCollectionReauthenticationRequired')
+      > login.indexOf('await transferCurrentInvoiceCollectionsForReauthentication'),
+    'the old latch clears only after the destination intent transfer is durable',
+  );
   assert.match(login, /setAuthTokens\(result\.gf_employee_token, nextSession\.sessionId\)/);
   assert.match(api, /setAuthTokens\(gfToken: string, sessionId = createUuidV4\(\)\)/);
   assert.match(api, /setItemAsync\(STORE_KEYS\.SESSION_ID, sessionId\)/);
   assert.match(logout, /await clearCurrentEncryptedFieldData\(\)/);
+  assert.match(destructiveClear, /clearInvoiceCollectionReauthenticationRequired/);
+  assert(
+    destructiveClear.lastIndexOf('await clearInvoiceCollectionReauthenticationRequired')
+      < destructiveClear.lastIndexOf('await clearEncryptedSession'),
+    'logout/account-switch cleanup must destroy the session latch while the old identity is readable',
+  );
 });

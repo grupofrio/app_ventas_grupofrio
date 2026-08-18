@@ -602,8 +602,13 @@ test('a failed reauth marker write fails closed for the rest of the processor li
     invoice_id: 9,
   };
   const stored = createMemoryPersistence([intent, secondIntent]);
+  let latchWriteAttempts = 0;
   const persistence = {
     ...stored,
+    async markReauthenticationRequired() {
+      latchWriteAttempts += 1;
+      throw new Error('independent reauth latch failed');
+    },
     async transition(operationId: string, status: string, nowMs: number) {
       if (status === 'reauth_required') throw new Error('encrypted transition failed');
       await stored.transition(operationId, status, nowMs);
@@ -629,6 +634,7 @@ test('a failed reauth marker write fails closed for the rest of the processor li
   await processor.reconcile();
 
   assert.deepEqual(sent, [intent.operation_id], 'a known revoked token must never fail open to another POST');
+  assert.equal(latchWriteAttempts, 1, 'the independent durable latch is attempted before relying on memory only');
   assert.equal(stored.records[0].status, 'dispatching', 'the failed encrypted write must not invent durable reauth');
   assert.equal(stored.records[1].status, 'dispatching');
 });

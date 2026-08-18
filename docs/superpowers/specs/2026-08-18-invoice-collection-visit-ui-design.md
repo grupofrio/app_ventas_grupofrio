@@ -20,6 +20,9 @@ No se crea una pestaña de navegación ni un flujo de cobro manual paralelo.
   `partnerId` como autoridad.
 - La pantalla lee el bundle del día cifrado para esa sesión y toma únicamente
   `invoice_snapshots` de ese `stop_id`.
+- Antes de persistir o enviar un cobro, la acción exige el gate de bundle
+  actual que habilita mutaciones. Un bundle stale puede orientar al vendedor,
+  pero no permite capturar una operación de dinero.
 - Si el bundle no tiene un snapshot válido de la parada, la pantalla informa
   que no hay facturas disponibles para cobrar y ofrece reintentar la
   preparación/sincronización del día. No consulta clientes ni facturas por
@@ -48,9 +51,13 @@ No se crea una pestaña de navegación ni un flujo de cobro manual paralelo.
    recibo. El vendedor puede continuar la ruta.
 7. Al reabrir la app o recuperar conexión, el reconciliador existente reintenta
    sólo los intents pendientes con el mismo UUID. No usa la cola genérica.
-8. Si ya existe un intent no terminal para esa misma parada y factura, la UI
+8. Si ya existe un intent no terminal (`dispatching`, `pending` o
+   `review_required`) para esa misma parada y factura, la UI
    muestra su estado y no crea otro UUID ni otro cobro. `pending` reutiliza su
    reconciliación; `review_required` permanece visible para revisión humana.
+9. Tras `applied`, la pantalla deja de aceptar otra selección con el snapshot
+   anterior: actualiza el bundle o sale de la acción hasta que haya datos
+   frescos.
 
 ## Estados y mensajes
 
@@ -92,7 +99,10 @@ un `payment` de la cola genérica, ni `updateLocalStock`.
   campos no entran al cuerpo REST.
 - La escritura cifrada es el punto de commit local. Si falla, la pantalla no
   afirma que guardó ni envía una solicitud.
-- Un doble toque comparte el mismo vuelo e `operation_id`.
+- Un doble toque y dos capturas concurrentes de la misma factura convergen en
+  el intent efectivo persistido y su mismo `operation_id`.
+- Si GF confirma pero falla el ACK cifrado local, tras reinicio se repite ese
+  UUID; la UI no publica `applied` antes de que el ACK sea durable.
 - Reiniciar después de un timeout conserva y reutiliza el intent no terminal
   de esa factura; no permite otro intento paralelo con un UUID nuevo.
 - Tras una respuesta perdida, el servidor recupera por UUID y devuelve el

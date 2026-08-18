@@ -84,6 +84,10 @@ import {
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import {
+  isProtectedPhysicalReviewItem,
+  requiresConsignmentPhysicalReview,
+} from '../services/consignmentPhysicalReview';
 import { buildReversalMovements } from '../domain/inventory/buildMovements';
 import {
   loadOrMigrateLedger,
@@ -555,7 +559,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // operador sin necesidad de consultar el queue de vuelta.
   clearDead: () => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter((i) => i.status !== 'dead');
+    const newQueue = get().queue.filter(
+      (i) => i.status !== 'dead' || isProtectedPhysicalReviewItem(i),
+    );
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -1579,10 +1585,36 @@ function markLedgerRollbackReviewRequired(id: string, rollbackError = false): vo
   persistQueueInBackground('ledger_rollback_review');
 }
 
+function markConsignmentPhysicalDeliveryReviewRequired(id: string): void {
+  const queue = useSyncStore.getState().queue.map((i) =>
+    i.id === id
+      ? {
+          ...i,
+          payload: {
+            ...i.payload,
+            _ledgerReviewRequired: true,
+            _consignmentPhysicalDeliveryReviewRequired: true,
+            _ledgerRollbackEvidencePending: true,
+          },
+        }
+      : i,
+  );
+  useSyncStore.setState({ queue, ...computeCounts(queue) });
+  persistQueueInBackground('consignment_physical_delivery_review');
+}
+
 function rollbackFailedOperation(item: SyncQueueItem): void {
   // POST-R1A: ledger-applied ops reverse via ledger only (no counter-mutation
   // fallback — that would create a second inventory source undone by hydrate).
   if (item.payload?._ledgerApplied === true) {
+    if (requiresConsignmentPhysicalReview(item)) {
+      markConsignmentPhysicalDeliveryReviewRequired(item.id);
+      logWarn('sync', 'consignment_physical_delivery_review_required', {
+        id: item.id,
+        type: item.type,
+      });
+      return;
+    }
     const operationId = String(
       item.payload._operationId
       || item.payload.operation_id

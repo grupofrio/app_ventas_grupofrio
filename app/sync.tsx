@@ -16,6 +16,7 @@ import { describeSyncQueueState } from '../src/services/syncStatusCopy';
 import { describeSaleOrderItem } from '../src/services/pendingOrders';
 import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
+import { isProtectedPhysicalReviewItem } from '../src/services/consignmentPhysicalReview';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -45,6 +46,8 @@ export default function SyncScreen() {
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
+  const physicalReview = dead.filter(isProtectedPhysicalReviewItem);
+  const purgeableDead = dead.filter((item) => !isProtectedPhysicalReviewItem(item));
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
@@ -58,10 +61,16 @@ export default function SyncScreen() {
   // red, etc.) que ya no van a sincronizar y solo ensucian el SyncBar.
   // La confirmación evita borrados accidentales.
   function handleClearDead() {
-    if (deadCount === 0) return;
+    if (purgeableDead.length === 0) {
+      Alert.alert(
+        'Revisión requerida',
+        'Hay una consignación física pendiente de conciliación. No se puede borrar desde el historial.',
+      );
+      return;
+    }
     Alert.alert(
       'Limpiar historial de errores',
-      `Se eliminarán ${deadCount} operación(es) que fallaron permanentemente y ya no volverán a intentarse. Esta acción no se puede deshacer.\n\n¿Continuar?`,
+      `Se eliminarán ${purgeableDead.length} operación(es) que fallaron permanentemente y ya no volverán a intentarse. Esta acción no se puede deshacer.\n\n¿Continuar?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -129,9 +138,9 @@ export default function SyncScreen() {
         {/* BLD-20260424-PURGE: botón visible y diferenciado para limpiar
             items DEAD. Solo aparece cuando hay items fallidos permanentemente
             para no añadir ruido cuando la cola está sana. */}
-        {deadCount > 0 ? (
+        {purgeableDead.length > 0 ? (
           <Button
-            label={`🚮 Limpiar Historial de Errores (${deadCount})`}
+            label={`🚮 Limpiar Historial de Errores (${purgeableDead.length})`}
             variant="danger"
             onPress={handleClearDead}
             fullWidth
@@ -165,13 +174,25 @@ export default function SyncScreen() {
             Estos ya agotaron sus reintentos y no se van a sincronizar
             nunca más. Mostrarlos visibles motiva al operador a usar el
             botón de limpiar arriba. */}
-        {dead.length > 0 && (
+        {physicalReview.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({dead.length})</Text>
+            <Text style={styles.sectionTitle}>REVISIÓN REQUERIDA ({physicalReview.length})</Text>
+            <Text style={styles.deadHint}>
+              La entrega física de consignación no fue confirmada por el servidor. No se puede borrar desde el historial: concíliala con Almacén.
+            </Text>
+            {physicalReview.map((item) => (
+              <SyncItem key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {purgeableDead.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({purgeableDead.length})</Text>
             <Text style={styles.deadHint}>
               No se completarán: agotaron sus reintentos o dependían de una venta que falló. Reintenta la venta desde su visita, o usa "Limpiar Historial" arriba para borrarlas (padre y dependientes juntos) y quitar la alerta roja.
             </Text>
-            {dead.map((item) => (
+            {purgeableDead.map((item) => (
               <SyncItem key={item.id} item={item} />
             ))}
           </>
@@ -207,6 +228,7 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
   const label = typeLabels[item.type] || item.type;
   const orderDetail = describeSaleOrderItem(item);
   const badge = statusBadge[item.status] || statusBadge.pending;
+  const physicalReview = isProtectedPhysicalReviewItem(item);
   // BLD-20260617-DEAD-CASCADE: un dependiente (p.ej. foto) que murió porque su
   // padre (la venta) falló. No debe parecer un pendiente normal: se explica la
   // causa real y se evita duplicar el mensaje en la línea de hora.
@@ -236,13 +258,18 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
             ⚠ {item.error_message || 'No enviada: depende de una venta que falló'}. Reintenta la venta o limpia el historial de errores.
           </Text>
         )}
+        {physicalReview && (
+          <Text style={styles.syncBlockedLine}>
+            ⚠ Entrega física pendiente de conciliación. No se revirtió el inventario local.
+          </Text>
+        )}
         <Text style={styles.syncTime}>
           {time}
           {item.retries > 0 ? ` · Intento ${item.retries}/3` : ''}
           {item.error_message && !blockedByParent ? ` · ${item.error_message}` : ''}
         </Text>
       </View>
-      <Badge label={badge.label} variant={badge.variant} />
+      <Badge label={physicalReview ? 'Revisión' : badge.label} variant={physicalReview ? 'red' : badge.variant} />
     </View>
   );
 }

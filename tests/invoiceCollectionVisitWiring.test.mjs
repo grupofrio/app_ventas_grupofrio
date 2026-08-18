@@ -31,15 +31,29 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.match(source, /collectionCaptureFailureNotice/);
   assert.match(source, /collectionCaptureResultNotice/);
   assert.match(source, /const \[reconciliationPending, setReconciliationPending\] = useState\(false\)/);
+  assert.match(source, /label="Actualizar estado" onPress=\{\(\) => void loadVisit\(true\)\}/);
   assert.match(source, /collection\.customer_name/);
   assert.doesNotMatch(source, /Recibo:/);
   assert.match(source, /Operación: \$\{outcome\.operationId\}/);
   assert.match(source, /label="Reintentar" onPress=\{\(\) => void loadVisit\(true\)\}/);
   assert.match(source, /createVisitCollectionLifecycle/);
   assert.doesNotMatch(source, /useSyncStore|defaultPaymentJournalId|collectPaymentIntent|payments\/create|postRpc|odooRpc/);
-  assert(action.indexOf('assertCurrentEmployeeDayBundleAllowsActions') < action.indexOf('captureCurrentInvoiceCollection'), 'the mutation gate must run before direct capture');
-  assert.match(action, /captureStarted && \(!isInvoiceCollectionCaptureFailure\(captureError\) \|\| captureError\.durableIntent\)/);
+  assert.doesNotMatch(source, /assertCurrentEmployeeDayBundleAllowsActions/);
+  assert.doesNotMatch(action, /captureStarted/);
+  assert.match(action, /isInvoiceCollectionCaptureFailure\(captureError\) \? captureError\.durableIntent : true/);
   assert.match(action, /setReconciliationPending\(true\);/);
+});
+
+test('the production capture gate remains before intent creation and direct capture', () => {
+  const source = readFileSync(resolve('src/services/invoiceCollectionSync.ts'), 'utf8');
+  const gated = source.slice(
+    source.indexOf('export function createInvoiceCollectionGatedCapture'),
+    source.indexOf('export interface InvoiceCollectionSyncBootstrapDeps'),
+  );
+
+  assert(gated.indexOf('assertCurrentEmployeeDayBundleAllowsActions') < gated.indexOf('createIntent'));
+  assert(gated.indexOf('createIntent') < gated.indexOf('captureIntent'));
+  assert.match(gated, /preCommitCaptureFailure/);
 });
 
 test('direct collection capture delegates to capture rather than a queue or reconnect runner', () => {

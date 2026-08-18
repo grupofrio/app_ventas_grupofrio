@@ -84,7 +84,7 @@ test('direct capture uses its shared processor to persist before the strict coll
   assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 9 }]);
 });
 
-test('a stale day bundle prevents intent creation, encrypted persistence, and transport', async () => {
+test('a stale day bundle is a typed non-durable failure before intent creation, encrypted persistence, or transport', async () => {
   const mod = await loadSync();
   let intentCreations = 0;
   let captures = 0;
@@ -102,9 +102,63 @@ test('a stale day bundle prevents intent creation, encrypted persistence, and tr
     },
   });
 
-  await assert.rejects(() => capture(intent), /bundle vencido/);
+  await assert.rejects(
+    () => capture(intent),
+    (error: unknown) => {
+      assert.equal(mod.isInvoiceCollectionCaptureFailure(error), true);
+      assert.equal((error as { durableIntent: boolean }).durableIntent, false);
+      assert.match((error as Error).message, /bundle vencido/);
+      return true;
+    },
+  );
   assert.equal(intentCreations, 0);
   assert.equal(captures, 0);
+});
+
+test('a second pre-commit intent validation failure is typed and never reaches capture', async () => {
+  const mod = await loadSync();
+  let captures = 0;
+  const capture = mod.createInvoiceCollectionGatedCapture({
+    assertCurrentEmployeeDayBundleAllowsActions: async () => {},
+    createIntent: () => { throw new Error('snapshot residual inválido'); },
+    captureIntent: async () => {
+      captures += 1;
+      return { status: 'applied', operationId: intent.operation_id };
+    },
+  });
+
+  await assert.rejects(
+    () => capture(intent),
+    (error: unknown) => {
+      assert.equal(mod.isInvoiceCollectionCaptureFailure(error), true);
+      assert.equal((error as { durableIntent: boolean }).durableIntent, false);
+      assert.match((error as Error).message, /snapshot residual inválido/);
+      return true;
+    },
+  );
+  assert.equal(captures, 0);
+});
+
+test('processor initialization failure is typed non-durable and cannot capture an intent', async () => {
+  const mod = await loadSync();
+  let processorCaptures = 0;
+  const directCapture = mod.createInvoiceCollectionDirectCapture({
+    createProcessor: async () => {
+      processorCaptures += 1;
+      throw new Error('SecureStore no disponible');
+    },
+  });
+
+  await assert.rejects(
+    () => directCapture(intent),
+    (error: unknown) => {
+      assert.equal(mod.isInvoiceCollectionCaptureFailure(error), true);
+      assert.equal((error as { durableIntent: boolean }).durableIntent, false);
+      assert.match((error as Error).message, /SecureStore no disponible/);
+      return true;
+    },
+  );
+  assert.equal(processorCaptures, 1);
 });
 
 test('capture arms the shared reconnect runtime so an offline intent replays without restart', async () => {

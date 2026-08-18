@@ -250,8 +250,13 @@ export function createInvoiceCollectionDirectCapture(deps: InvoiceCollectionDire
 /** Applies the authoritative day-bundle gate before an intent can exist. */
 export function createInvoiceCollectionGatedCapture(deps: InvoiceCollectionGatedCaptureDeps) {
   return async (input: unknown): Promise<InvoiceCollectionCaptureResult> => {
-    await deps.assertCurrentEmployeeDayBundleAllowsActions();
-    const intent = deps.createIntent(input);
+    let intent: InvoiceCollectionIntent;
+    try {
+      await deps.assertCurrentEmployeeDayBundleAllowsActions();
+      intent = deps.createIntent(input);
+    } catch (error) {
+      throw preCommitCaptureFailure(error);
+    }
     return deps.captureIntent(intent);
   };
 }
@@ -338,17 +343,21 @@ function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSy
  * send the strict collection POST.
  */
 export async function captureCurrentInvoiceCollection(input: unknown): Promise<InvoiceCollectionCaptureResult> {
-  if (!productionCapture) {
-    const [{ assertCurrentEmployeeDayBundleAllowsActions }, { createInvoiceCollectionIntent }] = await Promise.all([
-      import('./dayBundleMutationGate.ts'), import('./invoiceCollection.ts'),
-    ]);
-    productionCapture = createInvoiceCollectionGatedCapture({
-      assertCurrentEmployeeDayBundleAllowsActions,
-      createIntent: createInvoiceCollectionIntent,
-      captureIntent: (intent) => currentProductionRuntime().capture(intent),
-    });
+  try {
+    if (!productionCapture) {
+      const [{ assertCurrentEmployeeDayBundleAllowsActions }, { createInvoiceCollectionIntent }] = await Promise.all([
+        import('./dayBundleMutationGate.ts'), import('./invoiceCollection.ts'),
+      ]);
+      productionCapture = createInvoiceCollectionGatedCapture({
+        assertCurrentEmployeeDayBundleAllowsActions,
+        createIntent: createInvoiceCollectionIntent,
+        captureIntent: (intent) => currentProductionRuntime().capture(intent),
+      });
+    }
+    return await productionCapture(input);
+  } catch (error) {
+    throw preCommitCaptureFailure(error);
   }
-  return productionCapture(input);
 }
 
 /** Creates the production processor after auth/session restoration, then rehydrates its encrypted intents. */

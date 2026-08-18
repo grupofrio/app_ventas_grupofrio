@@ -9,7 +9,6 @@ import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { formatCurrency } from '../../src/utils/time';
 import { loadCurrentEmployeeDayBundle, prepareCurrentEmployeeDayBundle } from '../../src/services/employeeDayBundle';
-import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { createCurrentInvoiceCollectionPersistence } from '../../src/services/invoiceCollectionPersistence';
 import { captureCurrentInvoiceCollection, isInvoiceCollectionCaptureFailure } from '../../src/services/invoiceCollectionSync';
 import { assertVisitCollectionAmount, buildVisitCollectionState, collectionCaptureFailureNotice, collectionCaptureResultNotice, createVisitCollectionLifecycle, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
@@ -124,14 +123,16 @@ export default function CollectScreen() {
 
   async function handleCollect() {
     if (!selectedInvoice || !canCollect) return;
-    setSubmitting(true);
-    let captureStarted = false;
+    let validAmount: number;
     try {
-      const validAmount = assertVisitCollectionAmount(selectedInvoice.invoice, numericAmount);
-      // This screen-level action gate prevents an intent write or POST from a
-      // stale bundle. The production capture entry point enforces it again.
-      await assertCurrentEmployeeDayBundleAllowsActions();
-      captureStarted = true;
+      validAmount = assertVisitCollectionAmount(selectedInvoice.invoice, numericAmount);
+    } catch {
+      const notice = collectionCaptureFailureNotice(false);
+      Alert.alert(notice.title, notice.message);
+      return;
+    }
+    setSubmitting(true);
+    try {
       const outcome = await captureCurrentInvoiceCollection({
         operation_id: uuidV4(),
         stop_id: numericStopId,
@@ -179,8 +180,7 @@ export default function CollectScreen() {
       Alert.alert('Sesión requerida', 'No se pudo confirmar el cobro porque la sesión debe renovarse. El intent queda pendiente; no se emitió recibo.');
     } catch (captureError) {
       if (lifecycle.isActive()) {
-        const durableIntent =
-          captureStarted && (!isInvoiceCollectionCaptureFailure(captureError) || captureError.durableIntent);
+        const durableIntent = isInvoiceCollectionCaptureFailure(captureError) ? captureError.durableIntent : true;
         if (durableIntent) {
           setReconciliationPending(true);
           setSelectedInvoiceId(null);
@@ -234,6 +234,7 @@ export default function CollectScreen() {
           <Card style={styles.notice}>
             <Text style={typography.body}>El resultado del cobro sigue pendiente de reconciliación.</Text>
             <Text style={typography.dim}>No registres otro pago para esta factura hasta que la app actualice su estado.</Text>
+            <Button label="Actualizar estado" onPress={() => void loadVisit(true)} loading={refreshing} variant="secondary" />
           </Card>
         ) : null}
 

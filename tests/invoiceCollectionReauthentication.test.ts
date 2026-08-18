@@ -28,6 +28,7 @@ interface PersistenceModule {
       oldSession: Session,
       newSession: Session,
       activateDestination: () => Promise<void>,
+      retireSource: () => Promise<void>,
     ): Promise<{
       transferred: boolean;
       count: number;
@@ -69,6 +70,7 @@ interface SyncModule {
   createInvoiceCollectionSyncProcessor(deps: unknown): {
     capture(intent: Record<string, unknown>): Promise<{ status: string; operationId: string }>;
     reconcile(): Promise<void>;
+    retire(): Promise<void>;
   };
 }
 
@@ -233,7 +235,7 @@ test('background 401 reenters with reauth action and same-principal handoff repl
   let activated = false;
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, newSession, async () => {
     activated = true;
-  }), {
+  }, async () => {}), {
     transferred: true,
     count: 1,
   });
@@ -347,7 +349,7 @@ test('a separate session latch survives processor restart when the 401 intent ma
   await afterRestart.reconcile();
   assert.deepEqual(sentWithRevokedToken, [intent.operation_id], 'restart must observe the latch before any POST');
 
-  await persistence.transferForSamePrincipal(oldSession, newSession, async () => {});
+  await persistence.transferForSamePrincipal(oldSession, newSession, async () => {}, async () => {});
   await latch.clear(oldSession);
   assert.equal(await latch.isRequired(oldSession), false);
   assert.deepEqual(
@@ -383,6 +385,8 @@ test('account switch never transfers invoice collection data and destructive cle
   await persistence.insert(oldSession, reauthIntent);
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, otherPrincipal, async () => {
     assert.fail('cross-principal handoff must not activate the destination session');
+  }, async () => {
+    assert.fail('cross-principal handoff must not retire the current source runtime');
   }), {
     transferred: false,
     count: 0,
@@ -404,12 +408,68 @@ test('failed destination-session activation keeps the old encrypted copy recover
   await assert.rejects(
     () => persistence.transferForSamePrincipal(oldSession, newSession, async () => {
       throw new Error('SecureStore rotation failed');
-    }),
+    }, async () => {}),
     /SecureStore rotation failed/,
   );
 
   assert.deepEqual(await persistence.list(oldSession), [reauthIntent]);
   assert.deepEqual(await persistence.list(newSession), [], 'failed activation must roll back its staged destination');
+});
+
+test('same-principal handoff drains an old-session mutation before snapshot and source deletion', async () => {
+  const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
+  const syncModule = await import('../src/services/invoiceCollectionSync.ts') as unknown as SyncModule;
+  const harness = createEncryptedHarness();
+  const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
+  const secondIntent = {
+    ...intent,
+    operation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    stop_id: 6,
+    invoice_id: 9,
+  };
+  await persistence.insert(oldSession, intent);
+
+  let releaseMutation!: () => void;
+  let mutationStarted!: () => void;
+  const mutationGate = new Promise<void>((resolve) => { releaseMutation = resolve; });
+  const started = new Promise<void>((resolve) => { mutationStarted = resolve; });
+  const processor = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: {
+      list: () => persistence.list(oldSession),
+      insert: (candidate: Record<string, unknown>) => persistence.insert(oldSession, candidate),
+      async findOrInsert(candidate: Record<string, unknown>) {
+        mutationStarted();
+        await mutationGate;
+        return persistence.findOrInsert(oldSession, candidate);
+      },
+      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number) =>
+        persistence.transition(oldSession, operationId, status, nowMs),
+    },
+    isOnline: () => false,
+    now: () => 7,
+    transport: { collect: async () => assert.fail('retired source mutation must never send') },
+  });
+
+  const capture = processor.capture(secondIntent);
+  await started;
+  let activated = false;
+  const handoff = persistence.transferForSamePrincipal(
+    oldSession,
+    newSession,
+    async () => { activated = true; },
+    () => processor.retire(),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(activated, false, 'destination activation cannot start before old durable writes drain');
+
+  releaseMutation();
+  await Promise.all([capture, handoff]);
+  harness.clear(oldSession); // mirrors the remaining old-envelope cleanup in login
+
+  assert.deepEqual(
+    (await persistence.list(newSession)).map((candidate) => candidate.operation_id),
+    [intent.operation_id, secondIntent.operation_id],
+  );
 });
 
 test('auth wiring chooses handoff only after the new principal is known and logout remains destructive', () => {
@@ -425,6 +485,7 @@ test('auth wiring chooses handoff only after the new principal is known and logo
 
   assert.match(login, /samePrincipalReauthentication/);
   assert.match(login, /transferCurrentInvoiceCollectionsForReauthentication/);
+  assert.match(login, /\(\) => resetInvoiceCollectionSync\(\),\s*\);/);
   assert.match(login, /else\s*\{\s*set\(\{ isAuthenticated: false \}\);\s*await clearCurrentEncryptedFieldData\(\)/);
   assert(login.indexOf('const employeeId') < login.indexOf('samePrincipalReauthentication'));
   assert(login.indexOf('const companyId') < login.indexOf('samePrincipalReauthentication'));

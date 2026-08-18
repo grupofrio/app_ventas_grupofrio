@@ -434,24 +434,24 @@ export const useAuthStore = create<AuthState>((set) => ({
         // rotation whose auth projection was never made durable.
         await storeSaveStrict(STORAGE_KEYS.AUTH_STATE, authenticatedEmployeeState);
         const nextSession = { companyId, employeeId, sessionId: createUuidV4() };
-        const { transferCurrentInvoiceCollectionsForReauthentication } = await import(
-          '../services/invoiceCollectionPersistence.ts'
-        );
+        const [{ transferCurrentInvoiceCollectionsForReauthentication }, { resetInvoiceCollectionSync }] = await Promise.all([
+          import('../services/invoiceCollectionPersistence.ts'),
+          import('../services/invoiceCollectionSync.ts'),
+        ]);
         await transferCurrentInvoiceCollectionsForReauthentication(
           previousSession,
           nextSession,
           () => setAuthTokens(result.gf_employee_token, nextSession.sessionId),
+          () => resetInvoiceCollectionSync(),
         );
         // Collection transfer committed and removed its old record. Remove the
         // rest of the obsolete envelope; no other feature crosses sessions.
         const [
           { clearEncryptedSession },
-          { resetInvoiceCollectionSync },
           { clearInvoiceCollectionReauthenticationRequired },
           { retireAndClearInvoiceCollectionSessionState },
         ] = await Promise.all([
           import('../services/encryptedStore.ts'),
-          import('../services/invoiceCollectionSync.ts'),
           import('../services/invoiceCollectionReauthLatch.ts'),
           import('../services/invoiceCollectionReauthLatchLogic.ts'),
         ]);

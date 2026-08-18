@@ -203,11 +203,15 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       oldSession: EncryptedSessionIdentity,
       newSession: EncryptedSessionIdentity,
       activateDestination: () => Promise<void>,
+      retireSource: () => Promise<void>,
     ): Promise<{ transferred: boolean; count: number }> {
       if (!isSameEncryptedPrincipal(oldSession, newSession) || oldSession.sessionId === newSession.sessionId) {
         return { transferred: false, count: 0 };
       }
       if (!deps.remove) throw new Error('La migración cifrada de cobranza no está disponible.');
+      // Freeze and drain the old runtime before observing its source record.
+      // The lifecycle remains suspended until auth resumes the new identity.
+      await retireSource();
       const source = parseStored(await deps.load(oldSession, INVOICE_COLLECTION_RECORD_KEY));
       const destinationRaw = await deps.load(newSession, INVOICE_COLLECTION_RECORD_KEY);
       const destinationBefore = parseStored(destinationRaw);
@@ -293,11 +297,12 @@ export async function transferCurrentInvoiceCollectionsForReauthentication(
   oldSession: EncryptedSessionIdentity,
   newSession: EncryptedSessionIdentity,
   activateDestination: () => Promise<void>,
+  retireSource: () => Promise<void>,
 ): Promise<{ transferred: boolean; count: number }> {
   const { loadEncrypted, removeEncrypted, updateEncryptedRecords } = await import('./encryptedStore.ts');
   return createInvoiceCollectionPersistence({
     load: loadEncrypted,
     update: updateEncryptedRecords,
     remove: removeEncrypted,
-  }).transferForSamePrincipal(oldSession, newSession, activateDestination);
+  }).transferForSamePrincipal(oldSession, newSession, activateDestination, retireSource);
 }

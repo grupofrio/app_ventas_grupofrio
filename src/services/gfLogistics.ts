@@ -1052,15 +1052,8 @@ export async function fetchAnalyticsOptions(
   }
 }
 
-export async function fetchLeadStages(
-  companyId?: number | null,
-): Promise<Array<{ id: number; name: string; sequence?: number }>> {
-  const body: Record<string, unknown> = {};
-  if (typeof companyId === 'number' && companyId > 0) {
-    body.company_id = companyId;
-  }
-
-  const result = await postRest<any>(`${GF_BASE}/lead/stages`, body);
+export async function fetchLeadStages(): Promise<Array<{ id: number; name: string; sequence?: number }>> {
+  const result = await postRest<any>(`${GF_BASE}/lead/stages`, {});
   if (!result || typeof result !== 'object') return [];
   const data = result.data !== undefined ? result.data : result;
   if (Array.isArray(data?.stages)) return data.stages;

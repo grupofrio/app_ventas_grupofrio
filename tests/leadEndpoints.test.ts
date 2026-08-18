@@ -32,6 +32,12 @@ function main() {
 
   assert.match(gfLogistics, /export async function fetchLeadStages\(/);
   assert.match(gfLogistics, /\$\{GF_BASE\}\/lead\/stages/);
+  const stageFetch = gfLogistics.slice(
+    gfLogistics.indexOf('export async function fetchLeadStages('),
+    gfLogistics.indexOf('export async function upsertLeadData('),
+  );
+  assert.doesNotMatch(stageFetch, /companyId|company_id/,
+    'stage lookup must derive company scope from Bearer');
   assert.match(gfLogistics, /export async function upsertLeadData\(/);
   assert.match(gfLogistics, /\$\{GF_BASE\}\/lead\/upsert/);
   assert.match(gfLogistics, /export async function createFieldLeadData\(/);
@@ -69,6 +75,12 @@ function main() {
   assert.match(postvisit, /convertLeadData\(/);
   assert.match(postvisit, /handleConvert/);
   assert.match(postvisit, /Convertir a cliente/);
+  assert.doesNotMatch(postvisit, /DEFAULT_LEAD_COMPANY_ID|effectiveCompanyId|companyId:/,
+    'Datos must not select or transport the company; GF derives it from Bearer');
+  assert.match(postvisit, /const hasPhoneReq = hasContactPhone\(currentStop\);/,
+    'Convertir must require a phone already persisted by Guardar Datos');
+  assert.match(postvisit, /const hasLocationReq = hasPersistedLeadLocation\(currentStop\);/,
+    'Convertir must require persisted coordinates, not unsaved form state');
   assert.match(
     postvisit,
     /Necesitas conexión para convertir este prospecto en cliente/,

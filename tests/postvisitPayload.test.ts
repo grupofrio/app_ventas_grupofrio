@@ -20,7 +20,6 @@ interface PostvisitPayloadModule {
       notes: string;
     };
     stageId: number;
-    companyId: number;
   }) => Record<string, unknown>;
 }
 
@@ -43,13 +42,12 @@ function testExistingLeadBuildsUpsertPayload(module: PostvisitPayloadModule) {
       notes: 'Quiere demo esta semana',
     },
     stageId: 15,
-    companyId: 34,
   });
 
   assert.equal(payload.stop_id, 4333);
   assert.equal(payload.lead_id, 51);
   assert.equal(payload.partner_id, 777);
-  assert.equal(payload.company_id, 34);
+  assert.equal('company_id' in payload, false);
   assert.equal(payload.stage_id, 15);
   assert.equal(payload.contact_name, 'Ana');
   assert.equal(payload.priority, '3');
@@ -75,7 +73,6 @@ function testCustomerBuildsNewLeadPayload(module: PostvisitPayloadModule) {
       notes: 'Sin decision hoy',
     },
     stageId: 12,
-    companyId: 34,
   });
 
   assert.equal(payload.stop_id, 9876);
@@ -83,7 +80,7 @@ function testCustomerBuildsNewLeadPayload(module: PostvisitPayloadModule) {
   assert.equal(payload.partner_id, null);
   assert.equal(payload.customer_name, 'Abarrotes Centro');
   assert.equal(payload.stage_id, 12);
-  assert.equal(payload.company_id, 34);
+  assert.equal('company_id' in payload, false);
   assert.equal(payload.priority, '2');
 }
 

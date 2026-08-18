@@ -21,7 +21,6 @@ import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
-import { useAuthStore } from '../../src/stores/useAuthStore';
 import { closeOffrouteVisit, convertLeadData, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
 import { applyLeadUpsertToStop, getLeadPartnerId, LeadStageOption } from '../../src/services/leadVisit';
 import {
@@ -35,13 +34,18 @@ import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { createUuidV4 } from '../../src/utils/clientEvent';
 
-const DEFAULT_LEAD_COMPANY_ID = 34;
-
 const INTEREST_OPTIONS = [
   { value: 'high', label: 'Alto' },
   { value: 'medium', label: 'Medio' },
   { value: 'low', label: 'Bajo' },
 ] as const;
+
+function hasPersistedLeadLocation(stop: { customer_latitude?: unknown; customer_longitude?: unknown }) {
+  return typeof stop.customer_latitude === 'number'
+    && Number.isFinite(stop.customer_latitude)
+    && typeof stop.customer_longitude === 'number'
+    && Number.isFinite(stop.customer_longitude);
+}
 
 const FREEZER_OPTIONS = [
   { value: 'yes', label: 'Sí' },
@@ -58,7 +62,6 @@ export default function ProspeccionScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const resetVisit = useVisitStore((s) => s.resetVisit);
   const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
-  const companyId = useAuthStore((s) => s.companyId);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
@@ -80,8 +83,6 @@ export default function ProspeccionScreen() {
 
   const isLead = stop?._entityType === 'lead';
   const title = 'Datos';
-  const effectiveCompanyId = companyId ?? DEFAULT_LEAD_COMPANY_ID;
-
   const canSave = useMemo(() => {
     return selectedStageId != null;
   }, [selectedStageId]);
@@ -100,7 +101,7 @@ export default function ProspeccionScreen() {
       setLoadingStages(true);
       setStageError(null);
       try {
-        const response = await fetchLeadStages(effectiveCompanyId);
+        const response = await fetchLeadStages();
         if (cancelled) return;
         const normalized = [...response].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
         setStages(normalized);
@@ -120,7 +121,7 @@ export default function ProspeccionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveCompanyId, isOnline]);
+  }, [isOnline]);
 
   if (!stop) {
     return (
@@ -138,8 +139,8 @@ export default function ProspeccionScreen() {
   // Conversión usa /lead/convert (online-only). Guardar Datos usa /lead/upsert
   // solo para actualizar prospecto / partner ya ligado — nunca para crear cliente.
   const alreadyCustomer = !isLead || getLeadPartnerId(currentStop) != null;
-  const hasPhoneReq = hasContactPhone(currentStop) || phone.trim().length > 0;
-  const hasLocationReq = typeof currentStop.customer_latitude === 'number' && typeof currentStop.customer_longitude === 'number';
+  const hasPhoneReq = hasContactPhone(currentStop);
+  const hasLocationReq = hasPersistedLeadLocation(currentStop);
   const readyToConvert = isLead && !alreadyCustomer && hasPhoneReq && hasLocationReq;
 
   function finalizeAfterSave() {
@@ -344,7 +345,6 @@ export default function ProspeccionScreen() {
         notes,
       },
       stageId: selectedStageId as number,
-      companyId: effectiveCompanyId,
     });
 
     if (!isOnline) {

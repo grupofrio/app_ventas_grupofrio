@@ -301,9 +301,11 @@ rehydration can send while online is only a default assumption.
 
 Keep the existing destructive logout/account-switch behavior. Add a narrowly
 scoped, same-principal reauthentication handoff for collection intents only:
-the old session can be read while its identity is still available; after the
-new authenticated identity is known, copy only validated records when employee
-and company match, then delete the old copy. Never migrate across principals or
+the old runtime is synchronously suspended and drained before its session is
+read; after the new authenticated identity is known, copy only validated
+records when employee and company match, then delete the old copy before
+resuming. Add a concurrent old-session write regression proving no intent can
+commit between source snapshot and delete. Never migrate across principals or
 store plaintext.
 
 Expose a read-only collection status summary from encrypted persistence. Wire

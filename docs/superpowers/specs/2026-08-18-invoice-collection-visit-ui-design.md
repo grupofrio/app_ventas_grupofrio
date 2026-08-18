@@ -80,6 +80,10 @@ cola genérica.
   exclusivamente los intents de cobranza cifrados y sus UUID originales hacia
   la nueva sesión; al cambiar de empleado o compañía se conserva el borrado
   destructivo y no se migra evidencia entre cuentas.
+- El handoff suspende y drena el runtime de la sesión anterior antes de tomar
+  su snapshot cifrado, y lo mantiene suspendido hasta transferir y borrar la
+  fuente. Ningún intent puede comprometerse en la fuente entre snapshot y
+  eliminación.
 - Un `reauth_required` producido por reconciliación en segundo plano persiste
   esa señal visible sobre el intent (sin cambiar UUID ni binding) y ofrece la
   misma acción de inicio de sesión que una captura en primer plano. Tras un

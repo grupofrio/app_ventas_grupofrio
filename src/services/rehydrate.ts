@@ -50,7 +50,6 @@ export async function rehydrateAppState(): Promise<{
     // 1. Sync queue — CRITICAL: don't lose pending operations
     await useSyncStore.getState().rehydrateQueue();
     queueSize = useSyncStore.getState().pendingCount;
-
     // 1b. Route start readiness (Sprint A): checklist/km/load flags so the
     // hub doesn't show "no preparado" after an app restart.
     await useRouteStartStore.getState().hydrate();

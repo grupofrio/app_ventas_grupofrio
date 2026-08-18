@@ -22,9 +22,15 @@ import { AppState, AppStateStatus } from 'react-native';
 import { useSyncStore } from '../stores/useSyncStore';
 import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
-import { shouldWakeOnNetTransition, shouldWakeOnWarehouseTransition, NetSnapshot } from './syncWakeup';
+import {
+  isConfirmedOnline,
+  shouldWakeOnNetTransition,
+  shouldWakeOnWarehouseTransition,
+  NetSnapshot,
+} from './syncWakeup';
 import { createLegacyRefreshRunner } from './legacyRefreshRunner';
 import { logWarn } from '../utils/logger';
+import { requestInvoiceCollectionSync } from './invoiceCollectionSync';
 
 let netUnsubscribe: (() => void) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
@@ -43,7 +49,7 @@ function toSnapshot(state: NetInfoState): NetSnapshot {
 }
 
 function isOnlineFromState(state: NetInfoState | NetSnapshot): boolean {
-  return !!(state.isConnected && state.isInternetReachable !== false);
+  return isConfirmedOnline(state);
 }
 
 /**
@@ -98,6 +104,7 @@ function wakeQueue(): void {
   store.processQueue();
   store.scheduleWake();
   requestLegacyAuthoritativeRefresh();
+  requestInvoiceCollectionSync();
 }
 
 export function startConnectivityMonitor(): void {

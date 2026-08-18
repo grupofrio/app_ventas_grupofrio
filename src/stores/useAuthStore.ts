@@ -20,19 +20,22 @@ import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
 import {
   clearSensitiveFieldData,
-  storeSave,
+  storeSaveStrict,
   storeLoad,
   storeRemove,
+  storeRemoveStrict,
   STORAGE_KEYS,
 } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
 import { isRestorableSession } from '../services/authOffline';
+import { commitAuthStateBeforeSync } from '../services/authCredentialCleanup';
 import {
   clearFieldDataIdentity,
   getFieldDataSession,
   setFieldDataIdentity,
 } from '../services/fieldDataSession';
 import { useSalesStore } from './useSalesStore';
+import { createUuidV4 } from '../utils/clientEvent';
 
 interface AuthState {
   // Auth status
@@ -72,6 +75,7 @@ interface AuthState {
 
   // Actions
   login: (baseUrl: string, barcode: string, pin: string, db?: string | null) => Promise<boolean>;
+  beginReauthentication: () => void;
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   rehydrateAuth: () => Promise<boolean>;
@@ -141,19 +145,50 @@ async function clearRouteCache(): Promise<void> {
 }
 
 async function clearCurrentEncryptedFieldData(): Promise<void> {
-  const { clearLegacyConsignmentPendingOperations } = await import(
-    '../services/consignmentOperationPersistence'
-  );
-  // This pre-envelope key is global to the install, so erase it before any
-  // operation that might fail while clearing the current session envelope.
-  await clearLegacyConsignmentPendingOperations();
-  const session = await getFieldDataSession();
-  if (session) {
-    const { clearEncryptedSession } = await import('../services/encryptedStore.ts');
-    await clearEncryptedSession(session);
+  try {
+    const session = await getFieldDataSession();
+    const [
+      { clearLegacyConsignmentPendingOperations },
+      { clearEncryptedSession },
+      { clearInvoiceCollectionReauthenticationRequired },
+      { retireAndClearInvoiceCollectionSessionState },
+      { resetInvoiceCollectionSync },
+    ] = await Promise.all([
+      import('../services/consignmentOperationPersistence'),
+      import('../services/encryptedStore.ts'),
+      import('../services/invoiceCollectionReauthLatch.ts'),
+      import('../services/invoiceCollectionReauthLatchLogic.ts'),
+      import('../services/invoiceCollectionSync'),
+    ]);
+    if (session) {
+      await retireAndClearInvoiceCollectionSessionState({
+        retireProcessor: () => resetInvoiceCollectionSync(),
+        clearPreEnvelopeState: () => clearLegacyConsignmentPendingOperations(),
+        clearEncryptedSession: async () => { await clearEncryptedSession(session); },
+        clearReauthenticationLatch: () => clearInvoiceCollectionReauthenticationRequired(session),
+      });
+    } else {
+      await resetInvoiceCollectionSync();
+      await clearLegacyConsignmentPendingOperations();
+    }
+    await clearSensitiveFieldData();
+  } finally {
+    // Destructive logout/account switch must not retain the old credential
+    // even when encrypted field cleanup reports a storage failure.
+    let cleanupFailure: unknown;
+    try {
+      await clearAuthTokens();
+    } catch (error) {
+      cleanupFailure = error;
+    }
+    try {
+      await storeRemoveStrict(STORAGE_KEYS.AUTH_STATE);
+    } catch (error) {
+      cleanupFailure ??= error;
+    }
+    clearFieldDataIdentity();
+    if (cleanupFailure !== undefined) throw cleanupFailure;
   }
-  await clearSensitiveFieldData();
-  clearFieldDataIdentity();
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -188,6 +223,11 @@ export const useAuthStore = create<AuthState>((set) => ({
   customerIds: [],
 
   setLoading: (loading) => set({ isLoading: loading }),
+
+  // Preserve the current principal/session as a handoff candidate. The root
+  // auth guard routes to login; only a successful same-principal login may
+  // transfer the validated collection record to its new encrypted session.
+  beginReauthentication: () => set({ isAuthenticated: false, error: null }),
 
   /**
    * BLD-20260408-P0: Restore employee data from AsyncStorage.
@@ -254,6 +294,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   login: async (baseUrl, barcode, pin, db) => {
+    let destructiveSessionActivation = false;
     set({ isLoading: true, error: null });
     try {
       await setBaseUrl(baseUrl);
@@ -338,14 +379,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         return false;
       }
 
-      // Account switches must erase the prior employee's encrypted field data
-      // while its secure session reference is still available.
-      await clearCurrentEncryptedFieldData();
-      await clearRouteCache();
-      clearPricelistCaches();
-      useSalesStore.getState().reset();
-      await setAuthTokens(result.gf_employee_token);
-
       const emp: EmployeePayload = result.employee || {};
 
       // Accept both camelCase (legacy mock) and snake_case (real Odoo) field names.
@@ -359,14 +392,17 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Try to extract plaza from login response (fast path)
       const analyticPlazaFromLogin = extractEmployeeAnalyticPlaza(emp);
       const employeeId = (pick<number>(emp, 'employeeId', 'id') as number) ?? null;
-
-      set({
-        isAuthenticated: true,
-        isLoading: false,
-        error: null,
+      const companyId = extractId(companyRaw);
+      const previousSession = await getFieldDataSession();
+      const samePrincipalReauthentication = previousSession !== null
+        && typeof employeeId === 'number' && employeeId > 0
+        && typeof companyId === 'number' && companyId > 0
+        && previousSession.employeeId === employeeId
+        && previousSession.companyId === companyId;
+      const authenticatedEmployeeState = {
         employeeId,
         employeeName: (pick<string>(emp, 'employeeName', 'name') as string) ?? '',
-        companyId: extractId(companyRaw),
+        companyId,
         companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
         warehouseId: extractId(warehouseRaw),
         warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
@@ -385,64 +421,113 @@ export const useAuthStore = create<AuthState>((set) => ({
         allowOffDistanceVisits: !!pick(emp, 'allowOffDistanceVisits', 'allow_offdistance_visits', 'allow_off_distance_visits'),
         maxCashLimit: (pick<number>(emp, 'maxCashLimit', 'max_cash_limit') as number) ?? 0,
         stockValueLimit: (pick<number>(emp, 'stockValueLimit', 'stock_value_limit') as number) ?? 0,
-        mustTakePhotosToEndVisit: true, // ALWAYS TRUE
-        blockSaleIfUnpaidInvoices: false, // WARNING only
+        mustTakePhotosToEndVisit: true,
+        blockSaleIfUnpaidInvoices: false,
         defaultPaymentJournalId: extractId(paymentJournalRaw),
         defaultCashAccountId: extractId(cashAccountRaw),
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
-      });
+      };
 
-      const companyId = useAuthStore.getState().companyId;
+      if (samePrincipalReauthentication) {
+        // Persist while the old same-principal credential/session is still
+        // intact. A failure cannot strand the transferred UUID under a token
+        // rotation whose auth projection was never made durable.
+        await storeSaveStrict(STORAGE_KEYS.AUTH_STATE, authenticatedEmployeeState);
+        const nextSession = { companyId, employeeId, sessionId: createUuidV4() };
+        const [{ transferCurrentInvoiceCollectionsForReauthentication }, { resetInvoiceCollectionSync }] = await Promise.all([
+          import('../services/invoiceCollectionPersistence.ts'),
+          import('../services/invoiceCollectionSync.ts'),
+        ]);
+        await transferCurrentInvoiceCollectionsForReauthentication(
+          previousSession,
+          nextSession,
+          () => setAuthTokens(result.gf_employee_token, nextSession.sessionId),
+          () => resetInvoiceCollectionSync(),
+        );
+        // Collection transfer committed and removed its old record. Remove the
+        // rest of the obsolete envelope; no other feature crosses sessions.
+        const [
+          { clearEncryptedSession },
+          { clearInvoiceCollectionReauthenticationRequired },
+          { retireAndClearInvoiceCollectionSessionState },
+        ] = await Promise.all([
+          import('../services/encryptedStore.ts'),
+          import('../services/invoiceCollectionReauthLatch.ts'),
+          import('../services/invoiceCollectionReauthLatchLogic.ts'),
+        ]);
+        await retireAndClearInvoiceCollectionSessionState({
+          retireProcessor: () => resetInvoiceCollectionSync(),
+          clearEncryptedSession: async () => { await clearEncryptedSession(previousSession); },
+          clearReauthenticationLatch: () => clearInvoiceCollectionReauthenticationRequired(previousSession),
+        });
+        await clearSensitiveFieldData();
+        clearFieldDataIdentity();
+      } else {
+        set({ isAuthenticated: false });
+        await clearCurrentEncryptedFieldData();
+        // Actual logout/account switch remains destructive while the prior
+        // session reference is still readable, and never transfers evidence.
+        destructiveSessionActivation = true;
+        await setBaseUrl(baseUrl);
+        await setAuthTokens(result.gf_employee_token);
+      }
+      await clearRouteCache();
+      clearPricelistCaches();
+      useSalesStore.getState().reset();
+
+      set({ isAuthenticated: true, isLoading: false, error: null, ...authenticatedEmployeeState });
+
       if (companyId && companyId > 0) {
         setFieldDataIdentity({ companyId, employeeId });
       }
 
-      // BLD-20260408-P0: Persist auth state so it survives app restart.
-      const state = useAuthStore.getState();
-      await storeSave(STORAGE_KEYS.AUTH_STATE, {
-        employeeId: state.employeeId,
-        employeeName: state.employeeName,
-        companyId: state.companyId,
-        companyName: state.companyName,
-        warehouseId: state.warehouseId,
-        warehouseName: state.warehouseName,
-        mobileLocationId: state.mobileLocationId,
-        mobileLocationName: state.mobileLocationName,
-        employeeAnalyticPlazaId: state.employeeAnalyticPlazaId,
-        employeeAnalyticPlazaName: state.employeeAnalyticPlazaName,
-        parentId: state.parentId,
-        isSupervisor: state.isSupervisor,
-        allowCreateCustomer: state.allowCreateCustomer,
-        allowFreeVisitsMode: state.allowFreeVisitsMode,
-        allowConfirmPayment: state.allowConfirmPayment,
-        allowDeliveryScreen: state.allowDeliveryScreen,
-        allowSalesDirectInvoice: state.allowSalesDirectInvoice,
-        allowOffDateVisits: state.allowOffDateVisits,
-        allowOffDistanceVisits: state.allowOffDistanceVisits,
-        maxCashLimit: state.maxCashLimit,
-        stockValueLimit: state.stockValueLimit,
-        defaultPaymentJournalId: state.defaultPaymentJournalId,
-        defaultCashAccountId: state.defaultCashAccountId,
-        customerIds: state.customerIds,
-      });
+      const { resumeInvoiceCollectionSync, requestInvoiceCollectionSync } = await import(
+        '../services/invoiceCollectionSync'
+      );
+      const resumeSync = () => {
+        resumeInvoiceCollectionSync();
+        requestInvoiceCollectionSync();
+      };
+      if (samePrincipalReauthentication) {
+        resumeSync();
+      } else {
+        // Account switches cannot reuse the old projection. Keep sync suspended
+        // until this strict write pairs the new credential with its principal.
+        await commitAuthStateBeforeSync({
+          persist: () => storeSaveStrict(STORAGE_KEYS.AUTH_STATE, authenticatedEmployeeState),
+          rollback: async () => {
+            destructiveSessionActivation = false;
+            await clearCurrentEncryptedFieldData();
+          },
+          resume: resumeSync,
+        });
+      }
+      destructiveSessionActivation = false;
 
       return true;
     } catch (error: unknown) {
+      if (destructiveSessionActivation) {
+        try {
+          await clearCurrentEncryptedFieldData();
+        } catch {
+          // The cleanup path attempts credentials and AUTH_STATE independently;
+          // keep the original login failure for the operator.
+        }
+      }
       const msg = error instanceof Error ? error.message : 'Error de conexion';
-      set({ error: msg, isLoading: false });
+      set({ isAuthenticated: false, error: msg, isLoading: false });
       return false;
     }
   },
 
   logout: async () => {
+    set({ isAuthenticated: false });
     try {
       await signOut();
     } finally {
       await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       useSalesStore.getState().reset();
-      await clearAuthTokens();
-      await storeRemove(STORAGE_KEYS.AUTH_STATE);
       set({
         isAuthenticated: false,
         employeeId: null,

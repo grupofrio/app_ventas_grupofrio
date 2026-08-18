@@ -68,6 +68,10 @@ import {
 } from '../src/services/cashcloseGuard';
 import { describeCashDifference } from '../src/services/trustSignals';
 import { createUuidV4 } from '../src/utils/clientEvent';
+import {
+  readCurrentInvoiceCollectionSummary,
+  type InvoiceCollectionDurableSummary,
+} from '../src/services/invoiceCollectionPersistence';
 
 interface SummaryLine {
   label: string;
@@ -129,6 +133,19 @@ export default function CashCloseScreen() {
   const processQueue = useSyncStore((s) => s.processQueue);
   const errorCount = useSyncStore((s) => s.errorCount);
   const deadCount = useSyncStore((s) => s.deadCount);
+  const [invoiceCollectionSummary, setInvoiceCollectionSummary] = useState<InvoiceCollectionDurableSummary | null>(null);
+
+  const loadInvoiceCollectionSummary = useCallback(async (): Promise<InvoiceCollectionDurableSummary | null> => {
+    setInvoiceCollectionSummary(null);
+    try {
+      const summary = await readCurrentInvoiceCollectionSummary();
+      setInvoiceCollectionSummary(summary);
+      return summary;
+    } catch {
+      // Final money closure fails closed until this encrypted record is read.
+      return null;
+    }
+  }, []);
 
   // BLD-20260505-CLOSESYNC: Sincronización local de UI. NO emite alerts
   // automáticas; sólo se levanta una alerta si el usuario presionó
@@ -203,9 +220,10 @@ export default function CashCloseScreen() {
       void loadTodaySales();
       void loadLiquidation();
       void loadReconciliation();
+      void loadInvoiceCollectionSummary();
       setCorteConfirmed(Boolean(plan?.corte_validated));
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
-    }, [loadTodaySales, loadLiquidation, loadReconciliation, plan?.corte_validated, plan?.liquidacion_done_at]),
+    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at]),
   );
 
   useEffect(() => {
@@ -243,12 +261,13 @@ export default function CashCloseScreen() {
       // Refrescar liquidación porque pudo cambiar tras drenar pagos.
       await loadLiquidation();
       await loadReconciliation();
-      if (after === 0) {
+      const collectionAfter = await loadInvoiceCollectionSummary();
+      if (after === 0 && collectionAfter?.blockingCount === 0) {
         setPostSyncMessage('Todo sincronizado.');
       } else {
         Alert.alert(
-          'Quedan pendientes',
-          'No se pudo sincronizar todo. Revisa tu conexión e intenta de nuevo.',
+          'Quedan pendientes o en revisión',
+          'Revisa la conexión y cualquier cobro que requiera revisión antes de liquidar.',
         );
       }
     } catch (err) {
@@ -257,7 +276,7 @@ export default function CashCloseScreen() {
     } finally {
       setSyncBusy(false);
     }
-  }, [syncBusy, processQueue, loadLiquidation, loadReconciliation]);
+  }, [syncBusy, processQueue, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const liquidationAvailable = liquidation !== null && !liquidationError;
@@ -273,6 +292,9 @@ export default function CashCloseScreen() {
     deadCount,
     isSyncing: isSyncing || syncBusy,
     liquidationAvailable: !!hasLiquidationData,
+    invoiceCollectionPendingCount: invoiceCollectionSummary?.pendingCount ?? 0,
+    invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
+    invoiceCollectionSummaryReady: invoiceCollectionSummary !== null,
   };
   const canConfirm = canConfirmLiquidation(guardInput);
   const blockingReason = describeBlockingReason(guardInput);
@@ -329,6 +351,15 @@ export default function CashCloseScreen() {
   const opsLines: SummaryLine[] = [
     { label: 'Devoluciones', value: 'Pendiente backend', pending: true },
     { label: 'Ops. sincronizadas', value: `${totalItems - pendingCount}/${totalItems}` },
+    {
+      label: 'Cobros por factura',
+      value: invoiceCollectionSummary === null
+        ? 'Verificando…'
+        : invoiceCollectionSummary.blockingCount > 0
+          ? `${invoiceCollectionSummary.blockingCount} pendiente(s) / revisión`
+          : 'Confirmados',
+      pending: invoiceCollectionSummary === null || invoiceCollectionSummary.blockingCount > 0,
+    },
   ];
 
   // Color del valor de Diferencia efectivo (sólo si liquidation está)
@@ -351,13 +382,17 @@ export default function CashCloseScreen() {
 
   const corteAlreadyConfirmed = corteConfirmed || Boolean(plan?.corte_validated);
   const liquidationAlreadyConfirmed = Boolean(liquidationConfirmedAt || plan?.liquidacion_done_at);
+  const invoiceCollectionBlockingCount = invoiceCollectionSummary?.blockingCount ?? 0;
+  const invoiceCollectionSummaryReady = invoiceCollectionSummary !== null;
   const canValidateCorte = !corteBusy
     && !corteAlreadyConfirmed
     && pendingCount === 0
     && !isSyncing
     && !syncBusy
     && !!reconciliation
-    && !reconciliationLoading;
+    && !reconciliationLoading
+    && invoiceCollectionSummaryReady
+    && invoiceCollectionBlockingCount === 0;
   const canConfirmFinalLiquidation = canConfirm
     && !liquidationBusy
     && !liquidationAlreadyConfirmed
@@ -373,6 +408,9 @@ export default function CashCloseScreen() {
     errorCount,
     deadCount,
     isSyncing: isSyncing || syncBusy,
+    invoiceCollectionPendingCount: invoiceCollectionSummary?.pendingCount ?? 0,
+    invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
+    invoiceCollectionSummaryReady,
   });
   const canSaveCorteAdjustments = !adjustmentsBusy
     && !corteAlreadyConfirmed
@@ -380,7 +418,9 @@ export default function CashCloseScreen() {
     && !isSyncing
     && !syncBusy
     && !!reconciliation
-    && !reconciliationLoading;
+    && !reconciliationLoading
+    && invoiceCollectionSummaryReady
+    && invoiceCollectionBlockingCount === 0;
 
   const setCorteAdjustmentValue = useCallback((
     productId: number,
@@ -553,7 +593,7 @@ export default function CashCloseScreen() {
             Visible siempre — refleja el estado real de la cola y guía al
             vendedor a sincronizar con WiFi del CEDIS antes de revisar
             cobranza. NO añade botón "Confirmar Liquidación" todavía. */}
-        {(pendingCount > 0 || errorCount > 0 || deadCount > 0) ? (
+        {(pendingCount > 0 || errorCount > 0 || deadCount > 0 || !invoiceCollectionSummaryReady || invoiceCollectionBlockingCount > 0) ? (
           <View style={[styles.syncCard, styles.syncCardPending]}>
             <View style={styles.syncHeader}>
               <Text style={styles.syncIcon}>📡</Text>
@@ -565,6 +605,9 @@ export default function CashCloseScreen() {
             <Text style={styles.syncMetric}>
               Pendientes: {pendingCount}
               {errorCount > 0 ? `  ·  Con error: ${errorCount}` : ''}
+              {invoiceCollectionSummaryReady
+                ? `  ·  Cobranza pendiente/revisión: ${invoiceCollectionBlockingCount}`
+                : '  ·  Cobranza: verificando'}
             </Text>
             <TouchableOpacity
               style={[

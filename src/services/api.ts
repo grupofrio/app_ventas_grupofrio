@@ -6,6 +6,7 @@
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { deleteAllAuthCredentialKeys, replaceAuthCredentialValues } from './authCredentialCleanup';
 import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
@@ -143,21 +144,28 @@ export async function getBaseUrl(): Promise<string> {
   return _baseUrl;
 }
 
-export async function setAuthTokens(gfToken: string) {
-  await Promise.all([
-    SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken),
-    SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, createUuidV4()),
-    // Clear the no-longer-used credential when upgrading an existing install.
-    SecureStore.deleteItemAsync('kf_api_key'),
-  ]);
+export async function setAuthTokens(gfToken: string, sessionId = createUuidV4()) {
+  await replaceAuthCredentialValues([
+    { key: STORE_KEYS.GF_TOKEN, value: gfToken },
+    // Clear the no-longer-used credential before committing the new scope.
+    { key: 'kf_api_key', value: null },
+    // SESSION_ID is the final pointer that makes the replacement scope active.
+    { key: STORE_KEYS.SESSION_ID, value: sessionId },
+  ], {
+    get: (key) => SecureStore.getItemAsync(key),
+    set: (key, value) => SecureStore.setItemAsync(key, value),
+    remove: (key) => SecureStore.deleteItemAsync(key),
+  });
 }
 
 export async function clearAuthTokens() {
   _baseUrl = DEFAULT_BASE_URL;
-  await SecureStore.deleteItemAsync('kf_api_key');
-  await SecureStore.deleteItemAsync(STORE_KEYS.GF_TOKEN);
-  await SecureStore.deleteItemAsync(STORE_KEYS.SESSION_ID);
-  await SecureStore.deleteItemAsync(STORE_KEYS.BASE_URL);
+  await deleteAllAuthCredentialKeys([
+    'kf_api_key',
+    STORE_KEYS.GF_TOKEN,
+    STORE_KEYS.SESSION_ID,
+    STORE_KEYS.BASE_URL,
+  ], (key) => SecureStore.deleteItemAsync(key));
 }
 
 /**

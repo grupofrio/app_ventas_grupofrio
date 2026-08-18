@@ -35,6 +35,15 @@ function runGuard(m: GuardMod) {
   assert.equal(m.unsyncedCount({ ...CLEAN, errorCount: 1, deadCount: 2 }), 3);
   assert.ok(m.describeCloseSyncBlock({ ...CLEAN, errorCount: 2 })?.includes('error'));
 
+  // Dedicated encrypted Invoice Collection intents block without becoming
+  // generic queue rows. Applied intents are absent from these blocking counts.
+  assert.equal(m.canCloseRoute({ ...CLEAN, invoiceCollectionPendingCount: 1 }), false);
+  assert.ok(m.describeCloseSyncBlock({ ...CLEAN, invoiceCollectionPendingCount: 1 })?.toLowerCase().includes('cobranza'));
+  assert.equal(m.canCloseRoute({ ...CLEAN, invoiceCollectionReviewCount: 1 }), false);
+  assert.ok(m.describeCloseSyncBlock({ ...CLEAN, invoiceCollectionReviewCount: 1 })?.toLowerCase().includes('revisi'));
+  assert.equal(m.canCloseRoute({ ...CLEAN, invoiceCollectionSummaryReady: false }), false);
+  assert.equal(m.canCloseRoute({ ...CLEAN, invoiceCollectionPendingCount: 0, invoiceCollectionReviewCount: 0 }), true);
+
   // syncing → bloquea con mensaje de "sincronizando".
   const syncing = { ...CLEAN, isSyncing: true };
   assert.equal(m.canCloseRoute(syncing), false);

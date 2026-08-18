@@ -13,6 +13,14 @@ export interface EncryptedSessionIdentity {
   sessionId: string;
 }
 
+export function isSameEncryptedPrincipal(
+  current: EncryptedSessionIdentity,
+  candidate: EncryptedSessionIdentity,
+): boolean {
+  return current.companyId === candidate.companyId
+    && current.employeeId === candidate.employeeId;
+}
+
 export interface EncryptedStorageDriver {
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;
@@ -52,6 +60,7 @@ const SENSITIVE_RECORDS = new Set([
   'sync-queue',
   'sync:queue',
   'inventory-ledger',
+  'invoice-collection:intents',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

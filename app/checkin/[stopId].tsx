@@ -523,7 +523,7 @@ export default function CheckinScreen() {
             <TouchableOpacity
               style={styles.actionBtn}
               onPress={() => {
-                if (stop) router.push(`/collect/${stop.customer_id}` as never);
+                if (stop) router.push(`/collect/${stop.id}` as never);
               }}
             >
               <Text style={typography.stateIcon}>💰</Text>

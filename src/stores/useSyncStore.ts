@@ -332,7 +332,9 @@ function computeCounts(queue: SyncQueueItem[]) {
 
 export const useSyncStore = create<SyncState>((set, get) => ({
   queue: [],
-  isOnline: true,
+  // Unknown startup connectivity is deliberately mutation-safe. NetInfo is
+  // the only authority that promotes this to true after confirmed reachability.
+  isOnline: false,
   isSyncing: false,
   lastSyncAt: null,
   pendingCount: 0,

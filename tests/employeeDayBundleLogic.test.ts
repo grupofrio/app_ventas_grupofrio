@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const CONTRACT_ROOT = resolve('contracts/koldfield');
-const EXPECTED_SCHEMA_SHA256 = 'ec160335cd9f3fe2a328d701b43ff130deb5d91dc95fbdb343606e554270e7b5';
+const EXPECTED_SCHEMA_SHA256 = '394648af216001a44563add00d07417043001e8e10eca2f9bf03085304ba9df9';
 
 interface DayBundleLogic {
   evaluateStoredDayBundle: (record: unknown, context: {
@@ -44,14 +44,36 @@ async function loadLogic(): Promise<DayBundleLogic> {
   return await import('../src/services/employeeDayBundleLogic.ts') as DayBundleLogic;
 }
 
-test('day-bundle contract artifact matches the pinned backend schema hash', () => {
+test('day-bundle contract artifact pins the mobile schema and backend-compatible invoice DTO', () => {
   const schema = readFileSync(resolve(CONTRACT_ROOT, 'day_bundle.v1.schema.json'));
-  const fixture = JSON.parse(readFileSync(resolve(CONTRACT_ROOT, 'day_bundle.v1.json'), 'utf8')) as {
-    schema_version?: string;
+  const fixture = JSON.parse(readFileSync(resolve(CONTRACT_ROOT, 'day_bundle.v1.json'), 'utf8')) as Record<string, unknown>;
+  const schemaDocument = JSON.parse(schema.toString('utf8')) as {
+    required: string[];
+    properties: Record<string, { maxItems?: number }>;
+    $defs: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
   };
 
   assert.equal(createHash('sha256').update(schema).digest('hex'), EXPECTED_SCHEMA_SHA256);
   assert.equal(fixture.schema_version, 'day_bundle.v1');
+  assert.equal(schemaDocument.required.includes('invoice_snapshots'), false);
+  assert.equal(schemaDocument.properties.invoice_snapshots.maxItems, 1000);
+  assert.deepEqual(schemaDocument.$defs.invoice_snapshot.required, ['stop_id', 'invoices', 'as_of']);
+  assert.deepEqual(schemaDocument.$defs.open_invoice.required, [
+    'invoice_id', 'name', 'invoice_date', 'due_date', 'currency', 'amount_residual',
+  ]);
+  assert.equal('commercial_partner_id' in (schemaDocument.$defs.open_invoice.properties ?? {}), false);
+  assert.deepEqual((fixture.invoice_snapshots as Array<Record<string, unknown>>)[0], {
+    stop_id: 1,
+    as_of: '2026-08-14 12:00:00',
+    invoices: [{
+      invoice_id: 9,
+      name: 'FAC/2026/0009',
+      invoice_date: '2026-08-01',
+      due_date: '2026-08-16',
+      currency: 'MXN',
+      amount_residual: 250,
+    }],
+  });
 });
 
 test('day bundle rejects another employee and malformed expiry; soft-date keeps lease until expires_at', async () => {
@@ -118,6 +140,70 @@ test('day bundle rejects schema-drift fields and capped arrays before persistenc
     () => logic.replaceDayBundleAtomically(validRecord({ bundle: { ...validRecord().bundle as object, stops: Array.from({ length: 1001 }, () => ({})) } }), context),
     /stops.*1000/i,
   );
+});
+
+test('day bundle accepts the optional bounded invoice snapshots extension', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+  const record = validRecord({
+    bundle: {
+      ...validRecord().bundle as object,
+      invoice_snapshots: [{
+        stop_id: 1,
+        as_of: '2026-08-14 12:00:00',
+        invoices: [{
+          invoice_id: 9,
+          name: 'FAC/2026/0009',
+          invoice_date: '2026-08-01',
+          due_date: '2026-08-16',
+          currency: 'MXN',
+          amount_residual: 250,
+        }],
+      }],
+    },
+  });
+
+  const accepted = logic.replaceDayBundleAtomically(record, context) as { bundle: Record<string, unknown> };
+  assert.deepEqual(accepted.bundle.invoice_snapshots, (record.bundle as Record<string, unknown>).invoice_snapshots);
+});
+
+test('day bundle accepts older v1 bodies that do not include invoice snapshots', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+
+  const accepted = logic.replaceDayBundleAtomically(validRecord(), context) as { bundle: Record<string, unknown> };
+  assert.equal('invoice_snapshots' in accepted.bundle, false);
+});
+
+test('day bundle rejects malformed, overlarge, or authority-bearing invoice snapshots', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+  const base = validRecord().bundle as Record<string, unknown>;
+  const validSnapshot = {
+    stop_id: 1,
+    as_of: null,
+    invoices: [{
+      invoice_id: 9,
+      name: 'FAC/2026/0009',
+      invoice_date: null,
+      due_date: null,
+      currency: 'MXN',
+      amount_residual: 1,
+    }],
+  };
+
+  for (const snapshots of [
+    Array.from({ length: 1001 }, () => validSnapshot),
+    [{ ...validSnapshot, company_id: 34 }],
+    [{ ...validSnapshot, invoices: [{ ...validSnapshot.invoices[0], journal_id: 10 }] }],
+    [{ ...validSnapshot, invoices: [{ ...validSnapshot.invoices[0], amount_residual: 0 }] }],
+    [{ ...validSnapshot, invoices: Array.from({ length: 101 }, () => validSnapshot.invoices[0]) }],
+  ]) {
+    assert.throws(
+      () => logic.replaceDayBundleAtomically(validRecord({ bundle: { ...base, invoice_snapshots: snapshots } }), context),
+      /invoice_snapshots|campo|positivo/i,
+    );
+  }
 });
 
 test('day bundle rejects malformed nested stop, catalog, directory, and reason records', async () => {

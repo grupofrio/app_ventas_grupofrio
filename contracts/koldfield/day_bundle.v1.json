@@ -45,5 +45,10 @@
   }],
   "no_sale_reasons": [{"code": "closed", "name": "Cerrado"}],
   "gift_reasons": [{"code": "opening", "name": "Apertura de cliente"}],
-  "competitors": [{"code": "crystal", "name": "Crystal"}]
+  "competitors": [{"code": "crystal", "name": "Crystal"}],
+  "invoice_snapshots": [{
+    "stop_id": 1,
+    "as_of": "2026-08-14 12:00:00",
+    "invoices": [{"invoice_id": 9, "name": "FAC/2026/0009", "invoice_date": "2026-08-01", "due_date": "2026-08-16", "currency": "MXN", "amount_residual": 250.0}]
+  }]
 }

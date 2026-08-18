@@ -6,15 +6,19 @@ import assert from 'node:assert/strict';
 interface GuardModule {
   canConfirmLiquidation: (input: {
     pendingCount: number; isSyncing: boolean; liquidationAvailable: boolean;
-    errorCount?: number; deadCount?: number;
+    errorCount?: number; deadCount?: number; invoiceCollectionPendingCount?: number;
+    invoiceCollectionReviewCount?: number; invoiceCollectionSummaryReady?: boolean;
   }) => boolean;
   describeBlockingReason: (input: {
     pendingCount: number; isSyncing: boolean; liquidationAvailable: boolean;
-    errorCount?: number; deadCount?: number;
+    errorCount?: number; deadCount?: number; invoiceCollectionPendingCount?: number;
+    invoiceCollectionReviewCount?: number; invoiceCollectionSummaryReady?: boolean;
   }) => string | null;
   describeLiquidationButtonBlock: (s: {
     alreadyConfirmed: boolean; corteConfirmed: boolean; liquidationAvailable: boolean;
     pendingCount: number; errorCount?: number; deadCount?: number; isSyncing: boolean;
+    invoiceCollectionPendingCount?: number; invoiceCollectionReviewCount?: number;
+    invoiceCollectionSummaryReady?: boolean;
   }) => string | null;
 }
 
@@ -37,6 +41,11 @@ function run(m: GuardModule) {
   assert.equal(m.canConfirmLiquidation({ ...ok, liquidationAvailable: false }), false);
   // back-compat: omitting error/dead defaults to 0 → allowed
   assert.equal(m.canConfirmLiquidation({ pendingCount: 0, isSyncing: false, liquidationAvailable: true }), true);
+  assert.equal(m.canConfirmLiquidation({ ...ok, invoiceCollectionPendingCount: 1 }), false);
+  assert.match(m.describeBlockingReason({ ...ok, invoiceCollectionPendingCount: 1 }) ?? '', /cobranza/i);
+  assert.equal(m.canConfirmLiquidation({ ...ok, invoiceCollectionReviewCount: 1 }), false);
+  assert.match(m.describeBlockingReason({ ...ok, invoiceCollectionReviewCount: 1 }) ?? '', /revisi/i);
+  assert.equal(m.canConfirmLiquidation({ ...ok, invoiceCollectionSummaryReady: false }), false);
 
   // ── describeLiquidationButtonBlock (fix "botón no funciona") ──────────────
   const ready = {
@@ -54,6 +63,9 @@ function run(m: GuardModule) {
   // Error/dead con pendingCount 0 (antes la card decía "Todo sincronizado").
   assert.match(m.describeLiquidationButtonBlock({ ...ready, errorCount: 1 }) ?? '', /error/i);
   assert.match(m.describeLiquidationButtonBlock({ ...ready, deadCount: 2 }) ?? '', /error/i);
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, invoiceCollectionPendingCount: 1 }) ?? '', /cobranza/i);
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, invoiceCollectionReviewCount: 1 }) ?? '', /revisi/i);
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, invoiceCollectionSummaryReady: false }) ?? '', /cobranza/i);
   // Sincronizando.
   assert.match(m.describeLiquidationButtonBlock({ ...ready, isSyncing: true }) ?? '', /sincroniz/i);
   // Corte no confirmado → causa más común; debe guiar a confirmar el corte.

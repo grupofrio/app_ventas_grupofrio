@@ -33,6 +33,7 @@ import {
   setFieldDataIdentity,
 } from '../services/fieldDataSession';
 import { useSalesStore } from './useSalesStore';
+import { createUuidV4 } from '../utils/clientEvent';
 
 interface AuthState {
   // Auth status
@@ -340,14 +341,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         return false;
       }
 
-      // Account switches must erase the prior employee's encrypted field data
-      // while its secure session reference is still available.
-      await clearCurrentEncryptedFieldData();
-      await clearRouteCache();
-      clearPricelistCaches();
-      useSalesStore.getState().reset();
-      await setAuthTokens(result.gf_employee_token);
-
       const emp: EmployeePayload = result.employee || {};
 
       // Accept both camelCase (legacy mock) and snake_case (real Odoo) field names.
@@ -361,6 +354,43 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Try to extract plaza from login response (fast path)
       const analyticPlazaFromLogin = extractEmployeeAnalyticPlaza(emp);
       const employeeId = (pick<number>(emp, 'employeeId', 'id') as number) ?? null;
+      const companyId = extractId(companyRaw);
+      const previousSession = await getFieldDataSession();
+      const samePrincipalReauthentication = previousSession !== null
+        && typeof employeeId === 'number' && employeeId > 0
+        && typeof companyId === 'number' && companyId > 0
+        && previousSession.employeeId === employeeId
+        && previousSession.companyId === companyId;
+
+      if (samePrincipalReauthentication) {
+        const nextSession = { companyId, employeeId, sessionId: createUuidV4() };
+        const { transferCurrentInvoiceCollectionsForReauthentication } = await import(
+          '../services/invoiceCollectionPersistence.ts'
+        );
+        await transferCurrentInvoiceCollectionsForReauthentication(
+          previousSession,
+          nextSession,
+          () => setAuthTokens(result.gf_employee_token, nextSession.sessionId),
+        );
+        // Collection transfer committed and removed its old record. Remove the
+        // rest of the obsolete envelope; no other feature crosses sessions.
+        const [{ clearEncryptedSession }, { resetInvoiceCollectionSync }] = await Promise.all([
+          import('../services/encryptedStore.ts'),
+          import('../services/invoiceCollectionSync.ts'),
+        ]);
+        await clearEncryptedSession(previousSession);
+        resetInvoiceCollectionSync();
+        await clearSensitiveFieldData();
+        clearFieldDataIdentity();
+      } else {
+        await clearCurrentEncryptedFieldData();
+        // Actual logout/account switch remains destructive while the prior
+        // session reference is still readable, and never transfers evidence.
+        await setAuthTokens(result.gf_employee_token);
+      }
+      await clearRouteCache();
+      clearPricelistCaches();
+      useSalesStore.getState().reset();
 
       set({
         isAuthenticated: true,
@@ -368,7 +398,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         error: null,
         employeeId,
         employeeName: (pick<string>(emp, 'employeeName', 'name') as string) ?? '',
-        companyId: extractId(companyRaw),
+        companyId,
         companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
         warehouseId: extractId(warehouseRaw),
         warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
@@ -394,7 +424,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
       });
 
-      const companyId = useAuthStore.getState().companyId;
       if (companyId && companyId > 0) {
         setFieldDataIdentity({ companyId, employeeId });
       }

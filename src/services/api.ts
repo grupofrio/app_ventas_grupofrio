@@ -143,10 +143,10 @@ export async function getBaseUrl(): Promise<string> {
   return _baseUrl;
 }
 
-export async function setAuthTokens(gfToken: string) {
+export async function setAuthTokens(gfToken: string, sessionId = createUuidV4()) {
   await Promise.all([
     SecureStore.setItemAsync(STORE_KEYS.GF_TOKEN, gfToken),
-    SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, createUuidV4()),
+    SecureStore.setItemAsync(STORE_KEYS.SESSION_ID, sessionId),
     // Clear the no-longer-used credential when upgrading an existing install.
     SecureStore.deleteItemAsync('kf_api_key'),
   ]);

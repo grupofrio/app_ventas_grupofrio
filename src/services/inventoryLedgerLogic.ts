@@ -229,6 +229,9 @@ export async function rebaseLedgerFromServerSnapshot(
 export const LEDGER_AFFECTING_SYNC_TYPES = new Set([
   'sale_order',
   'gift',
+  'consignment_create',
+  'consignment_visit',
+  'consignment_close',
 ]);
 
 /**

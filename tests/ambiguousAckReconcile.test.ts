@@ -162,6 +162,62 @@ describe('INV-1B reconcileAmbiguousLedgerOperations (ACK intents)', () => {
     assert.equal(result.intents[0]!.acknowledged_at_ms, 5_000);
   });
 
+  it('consignment_* exact replay committed → ACK intent (same UUID)', async () => {
+    const op = '00000000-0000-4000-8000-0000000000c9';
+    const replayed: string[] = [];
+    const ports: AmbiguousAckReconcilePorts = {
+      nowMs: () => 6_000,
+      checkSaleDuplicate: async () => ({ duplicate: false }),
+      replayGift: async () => undefined,
+      classifyGiftError: () => 'ambiguous',
+      classifySaleCheckError: () => 'ambiguous',
+      replayConsignment: async (item) => {
+        replayed.push(item.type);
+      },
+      classifyConsignmentError: () => 'ambiguous',
+    };
+    for (const type of ['consignment_create', 'consignment_visit', 'consignment_close'] as const) {
+      replayed.length = 0;
+      const result = await reconcileAmbiguousLedgerOperations(
+        [{
+          id: op,
+          type,
+          status: 'error',
+          payload: { operation_id: op, partner_id: 1, consignment_id: 2, _ledgerApplied: true },
+        }],
+        ports,
+      );
+      assert.deepEqual(replayed, [type]);
+      assert.deepEqual(result.acknowledgedIds, [op]);
+      assert.equal(result.intents[0]!.type, type);
+      assert.equal(result.intents[0]!.operation_id, op);
+    }
+  });
+
+  it('consignment ambiguous replay failure → keep (no ACK)', async () => {
+    const ports: AmbiguousAckReconcilePorts = {
+      nowMs: () => 7_000,
+      checkSaleDuplicate: async () => ({ duplicate: false }),
+      replayGift: async () => undefined,
+      classifyGiftError: () => 'ambiguous',
+      classifySaleCheckError: () => 'ambiguous',
+      replayConsignment: async () => {
+        throw Object.assign(new Error('timeout'), { code: 'timeout' });
+      },
+      classifyConsignmentError: () => 'ambiguous',
+    };
+    const result = await reconcileAmbiguousLedgerOperations(
+      [{
+        id: OP,
+        type: 'consignment_create',
+        status: 'pending',
+        payload: { operation_id: OP, partner_id: 1, _ledgerApplied: true },
+      }],
+      ports,
+    );
+    assert.deepEqual(result.intents, []);
+  });
+
   it('two simultaneous flights share one logical reconcile', async () => {
     let calls = 0;
     const run = () =>

@@ -70,9 +70,10 @@ export function upsertConsignment(
 
 /**
  * Regla única (testable) de si se permiten mutaciones de consignación
- * (create/visit/close). Solo con conexión: el backend es la fuente de verdad y
- * no hay cola offline para consignación. El caché es exclusivamente de lectura.
+ * (create/visit/close). Offline is allowed: durable sync queue + ledger
+ * (POST-R1C) with stable operation_id; backend remains authority on sync.
+ * Cached my-active remains read-only until create sync returns a server id.
  */
-export function canMutateConsignment(isOnline: boolean): boolean {
-  return isOnline === true;
+export function canMutateConsignment(_isOnline: boolean): boolean {
+  return true;
 }

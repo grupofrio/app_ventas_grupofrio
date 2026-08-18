@@ -1,11 +1,12 @@
 /**
- * Types for Consignación (gf_consignment) — alineados al CONTRATO REAL de Sebas.
+ * Types for Consignación (gf_consignment) — hardened Kold Field contract.
  *
  * Reglas (fuente de verdad = backend; la app muestra preliminar):
- *   sold_qty  = max(0, target_qty - physical_qty)
+ *   sold_qty  = max(0, current_qty(server) - physical_qty)
  *   restock   = sold_qty
- *   importe   = sold_qty * price_unit
- * La respuesta NO trae sold_qty/folio/importe — la app no depende de ellos.
+ *   importe   = sold_qty * price_unit(server)
+ * Create: client sends product_id + target_qty only (no price / apply_inventory).
+ * Visit/close: client sends product_id + physical_qty only.
  */
 
 export type ConsignmentState = 'active' | 'closed' | 'draft' | string;
@@ -43,19 +44,20 @@ export interface ActiveConsignment {
   lines: ConsignmentLine[];
 }
 
-/** Línea para crear consignación (objetivo + precio cliente). */
+/** Línea para crear consignación (objetivo). Precio solo display preliminar. */
 export interface CreateConsignmentLine {
   product_id: number;
   target_qty: number;
-  price_unit: number;
+  /** Display-only from catalog; never sent as monetary authority. */
+  price_unit?: number;
 }
 
-/** Conteo físico para visit/close (incluye target+precio, el backend recalcula). */
+/** Conteo físico para visit/close. Sold = server previous − physical. */
 export interface ConsignmentCountLine {
   product_id: number;
   physical_qty: number;
-  target_qty: number;
-  price_unit: number;
+  /** Local ledger/preview only — server current_qty; not sold authority to BE. */
+  previous_qty?: number;
 }
 
 /** Cálculo preliminar por línea (mostrado en la app; backend confirma). */

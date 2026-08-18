@@ -127,6 +127,18 @@ export function giftMovementSlot(productId: number, lineIndex: number): string {
   return `gift:product:${productId}:line:${lineIndex}`;
 }
 
+export function consignmentOutSlot(productId: number, lineIndex: number): string {
+  return `consignment:out:product:${productId}:line:${lineIndex}`;
+}
+
+export function consignmentSoldSlot(productId: number, lineIndex: number): string {
+  return `consignment:sold:product:${productId}:line:${lineIndex}`;
+}
+
+export function consignmentReturnSlot(productId: number, lineIndex: number): string {
+  return `consignment:return:product:${productId}:line:${lineIndex}`;
+}
+
 export function exchangeDeliverySlot(productId: number, lineIndex: number): string {
   return `exchange:delivery:product:${productId}:line:${lineIndex}`;
 }

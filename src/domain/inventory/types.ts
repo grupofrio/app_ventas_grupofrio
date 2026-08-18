@@ -22,6 +22,7 @@ export const MOVEMENT_TYPES = [
   'sale',
   'gift',
   'consignment_out',
+  'consignment_sold',
   'consignment_return',
   'exchange_delivery',
   'exchange_return_good',

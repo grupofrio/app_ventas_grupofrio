@@ -89,6 +89,40 @@ export function buildGiftMovements(ctx: BuildMovementContext, lines: MovementLin
   );
 }
 
+/** Create / visit-restock: van sellable → customer consigned. */
+export function buildConsignmentOutMovements(
+  ctx: BuildMovementContext,
+  lines: MovementLine[],
+): InventoryMovement[] {
+  return requirePositiveLines(lines).map((line, index) =>
+    baseMovement(ctx, index, line, 'consignment_out', 'sellable', 'consigned'),
+  );
+}
+
+/**
+ * Visit sold qty: customer consigned consumed (charged). Paired with
+ * buildConsignmentOutMovements(restock) so consigned net is unchanged and
+ * van sellable decreases by restock.
+ */
+export function buildConsignmentSoldMovements(
+  ctx: BuildMovementContext,
+  lines: MovementLine[],
+): InventoryMovement[] {
+  return requirePositiveLines(lines).map((line, index) =>
+    baseMovement(ctx, index, line, 'consignment_sold', 'consigned', null),
+  );
+}
+
+/** Close return: remaining physical consigned → van sellable. */
+export function buildConsignmentReturnMovements(
+  ctx: BuildMovementContext,
+  lines: MovementLine[],
+): InventoryMovement[] {
+  return requirePositiveLines(lines).map((line, index) =>
+    baseMovement(ctx, index, line, 'consignment_return', 'consigned', 'sellable'),
+  );
+}
+
 export function buildExchangeMovements(
   ctx: BuildMovementContext,
   delivery: MovementLine[],

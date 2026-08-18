@@ -37,6 +37,7 @@ import {
   type AmbiguousQueueItem,
   type ServerAckIntent,
 } from '../services/ambiguousAckReconcile';
+import { LEDGER_AFFECTING_SYNC_TYPES } from '../services/inventoryLedgerLogic';
 import { postRest } from '../services/api';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
@@ -60,6 +61,11 @@ import {
 } from '../services/gfLogistics';
 import { createGift } from '../services/gfSalesOps';
 import {
+  createConsignment,
+  visitConsignment,
+  closeConsignment,
+} from '../services/consignment';
+import {
   submitVehicleCheck,
   completeVehicleChecklist,
 } from '../services/vehicleChecklist';
@@ -78,6 +84,10 @@ import {
 import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 import { syncCustomerContactUpdate } from '../services/customerContactUpdate';
 import { computeLocalStockReversal } from '../services/stockRollback';
+import {
+  isProtectedPhysicalReviewItem,
+  requiresConsignmentPhysicalReview,
+} from '../services/consignmentPhysicalReview';
 import { buildReversalMovements } from '../domain/inventory/buildMovements';
 import {
   loadOrMigrateLedger,
@@ -435,7 +445,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const ackAt = Date.now();
     const newQueue = get().queue.map((i) => {
       if (i.id !== id) return i;
-      const isLedgerOp = i.type === 'sale_order' || i.type === 'gift';
+      const isLedgerOp = LEDGER_AFFECTING_SYNC_TYPES.has(i.type);
       const payload =
         isLedgerOp && typeof i.payload._serverAcknowledgedAtMs !== 'number'
           ? { ...i.payload, _serverAcknowledgedAtMs: ackAt }
@@ -549,7 +559,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // operador sin necesidad de consultar el queue de vuelta.
   clearDead: () => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter((i) => i.status !== 'dead');
+    const newQueue = get().queue.filter(
+      (i) => i.status !== 'dead' || isProtectedPhysicalReviewItem(i),
+    );
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -1448,6 +1460,36 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       await createGift(payload as Record<string, unknown>);
       break;
 
+    case 'consignment_create': {
+      const partnerId = Number(payload.partner_id);
+      const operationId = String(payload.operation_id || payload._operationId || '');
+      const lines = Array.isArray(payload.lines) ? payload.lines : [];
+      await createConsignment({
+        partnerId,
+        operationId,
+        lines: lines as Parameters<typeof createConsignment>[0]['lines'],
+        notes: typeof payload.notes === 'string' ? payload.notes : undefined,
+      });
+      break;
+    }
+
+    case 'consignment_visit':
+    case 'consignment_close': {
+      const consignmentId = Number(payload.consignment_id);
+      const operationId = String(payload.operation_id || payload._operationId || '');
+      const paymentMethod = (payload.payment_method as 'cash') || 'cash';
+      const counts = Array.isArray(payload.counts) ? payload.counts : [];
+      const input = {
+        consignmentId,
+        operationId,
+        paymentMethod,
+        counts: counts as Parameters<typeof visitConsignment>[0]['counts'],
+      };
+      if (type === 'consignment_visit') await visitConsignment(input);
+      else await closeConsignment(input);
+      break;
+    }
+
     case 'photo': {
       let base64 = payload.image_base64 as string;
       if (payload.localUri && !base64) {
@@ -1543,10 +1585,36 @@ function markLedgerRollbackReviewRequired(id: string, rollbackError = false): vo
   persistQueueInBackground('ledger_rollback_review');
 }
 
+function markConsignmentPhysicalDeliveryReviewRequired(id: string): void {
+  const queue = useSyncStore.getState().queue.map((i) =>
+    i.id === id
+      ? {
+          ...i,
+          payload: {
+            ...i.payload,
+            _ledgerReviewRequired: true,
+            _consignmentPhysicalDeliveryReviewRequired: true,
+            _ledgerRollbackEvidencePending: true,
+          },
+        }
+      : i,
+  );
+  useSyncStore.setState({ queue, ...computeCounts(queue) });
+  persistQueueInBackground('consignment_physical_delivery_review');
+}
+
 function rollbackFailedOperation(item: SyncQueueItem): void {
   // POST-R1A: ledger-applied ops reverse via ledger only (no counter-mutation
   // fallback — that would create a second inventory source undone by hydrate).
   if (item.payload?._ledgerApplied === true) {
+    if (requiresConsignmentPhysicalReview(item)) {
+      markConsignmentPhysicalDeliveryReviewRequired(item.id);
+      logWarn('sync', 'consignment_physical_delivery_review_required', {
+        id: item.id,
+        type: item.type,
+      });
+      return;
+    }
     const operationId = String(
       item.payload._operationId
       || item.payload.operation_id

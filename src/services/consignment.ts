@@ -1,5 +1,5 @@
 /**
- * Consignación network service (gf_consignment) — CONTRATO REAL (Sebas).
+ * Consignación network service (gf_consignment) — hardened Kold Field contract.
  *
  * Endpoints authenticated by the shared employee Authorization: Bearer
  * transport. The server derives employee, company and route context from the
@@ -12,8 +12,8 @@
  * Respuesta: { ok, message, data:{ consignment: <obj> | false } }.
  * Online-first; postRest lanza en ok:false / HTTP>=400 → nunca simula éxito.
  * El backend es la fuente de verdad (inventario, venta/cobro, resurtido,
- * devolución, cierre). La app sólo manda conteos/objetivos y muestra
- * preliminar. La respuesta NO trae sold_qty/folio → no se depende de ellos.
+ * devolución, cierre). Create: product_id + target_qty (no price / apply_inventory).
+ * Visit/close: product_id + physical_qty (no price / target).
  */
 
 import { postRest, getRest } from './api';
@@ -26,6 +26,7 @@ import type {
   ConsignmentPaymentMethod,
   ConsignmentMutationResult,
 } from '../types/consignment';
+import { toCountWireLines, toCreateWireLines } from './consignmentLogic';
 
 const ENDPOINTS = {
   myActive: 'pwa-ruta/consignment/my-active',
@@ -121,13 +122,12 @@ interface CreateInput {
   lines: CreateConsignmentLine[];
 }
 
-/** POST crear consignación inicial. apply_inventory:true → backend baja stock. */
+/** POST crear consignación inicial. Inventory application is server-mandatory. */
 export async function createConsignment(input: CreateInput): Promise<ConsignmentMutationResult> {
   const body: Record<string, unknown> = {
     partner_id: input.partnerId,
     operation_id: input.operationId,
-    apply_inventory: true,
-    lines: input.lines,
+    lines: toCreateWireLines(input.lines),
   };
   if (input.notes && input.notes.trim()) body.notes = input.notes.trim();
 
@@ -153,7 +153,7 @@ export async function visitConsignment(input: CountInput): Promise<ConsignmentMu
     consignment_id: input.consignmentId,
     operation_id: input.operationId,
     payment_method: input.paymentMethod,
-    counts: input.counts,
+    counts: toCountWireLines(input.counts),
   });
   logInfo('general', 'consignment_visit', { consignment_id: input.consignmentId, counts: input.counts.length });
   return {
@@ -169,7 +169,7 @@ export async function closeConsignment(input: CountInput): Promise<ConsignmentMu
     consignment_id: input.consignmentId,
     operation_id: input.operationId,
     payment_method: input.paymentMethod,
-    counts: input.counts,
+    counts: toCountWireLines(input.counts),
   });
   logInfo('general', 'consignment_close', { consignment_id: input.consignmentId });
   return {

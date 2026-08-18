@@ -11,11 +11,11 @@ interface Mod {
 }
 
 function run(m: Mod) {
-  // Consignación: bloqueo con razón (trazabilidad de inventario).
+  // Consignación: offline capture copy (pending sync, not "confirmado").
   const consign = m.consignmentOfflineBlockMessage();
   assert.match(consign.title, /sin conexión/i);
-  assert.match(consign.body, /trazab/i);
-  assert.match(consign.body, /conexión/i);
+  assert.match(consign.body, /local|sincronizar|señal/i);
+  assert.doesNotMatch(consign.body, /confirmad/i);
 
   // Preventa: bloqueo, explica que la cotización se genera en Odoo.
   const presale = m.presaleOfflineBlockMessage();

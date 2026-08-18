@@ -27,6 +27,7 @@ import {
   buildSaleLedgerMovements,
 } from '../src/services/inventoryLedgerAdapters.ts';
 import {
+  commitQueueItemAndLedger,
   commitSyncQueueAndLedger,
   createMemoryLedgerPorts,
   loadOrMigrateLedger,
@@ -264,6 +265,129 @@ describe('ledger persistence barrier', () => {
     assert.equal(ports._state?.movements.length, 1);
     assert.equal((ports._queue as { id: string }[])[0]?.id, OP);
     assert.equal(ports._sellable[42], 9);
+  });
+
+  it('E3: concurrent ledger-backed queue appends preserve both operations', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 42: 10 }, 'seed', '2026-08-16T00:00:00.000Z'),
+    );
+    ports._queue = [{ id: 'unrelated', type: 'gps' }];
+    ports._writeDelayMs = 10;
+    const saleA = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [{ product_id: 42, qty: 1 }],
+    });
+    const saleB = buildSaleLedgerMovements({
+      operationId: OP_B,
+      lines: [{ product_id: 42, qty: 2 }],
+    });
+
+    await Promise.all([
+      commitQueueItemAndLedger({
+        item: {
+          id: OP,
+          type: 'exchange',
+          payload: { operation_id: OP },
+          status: 'pending',
+          created_at: 1,
+          retries: 0,
+          error_message: null,
+          priority: 1,
+          next_retry_at: null,
+        },
+        movements: saleA,
+        ports,
+      }),
+      commitQueueItemAndLedger({
+        item: {
+          id: OP_B,
+          type: 'exchange',
+          payload: { operation_id: OP_B },
+          status: 'pending',
+          created_at: 2,
+          retries: 0,
+          error_message: null,
+          priority: 1,
+          next_retry_at: null,
+        },
+        movements: saleB,
+        ports,
+      }),
+    ]);
+
+    assert.deepEqual(
+      (ports._queue as Array<{ id: string }>).map((item) => item.id).sort(),
+      [OP, OP_B, 'unrelated'].sort(),
+    );
+    assert.equal(ports._state?.movements.length, 2);
+    assert.equal(ports._sellable[42], 7);
+  });
+
+  it('E4: failed ledger-backed append leaves an unrelated queue row intact', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 42: 10 }, 'seed', '2026-08-16T00:00:00.000Z'),
+    );
+    ports._queue = [{ id: 'unrelated', type: 'gps' }];
+    ports._failNextWrite = true;
+    const movements = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [{ product_id: 42, qty: 1 }],
+    });
+
+    await assert.rejects(
+      () => commitQueueItemAndLedger({
+        item: {
+          id: OP,
+          type: 'exchange',
+          payload: { operation_id: OP },
+          status: 'pending',
+          created_at: 1,
+          retries: 0,
+          error_message: null,
+          priority: 1,
+          next_retry_at: null,
+        },
+        movements,
+        ports,
+      }),
+      /disk full/,
+    );
+
+    assert.deepEqual(ports._queue, [{ id: 'unrelated', type: 'gps' }]);
+    assert.equal(ports._state?.movements.length, 0);
+  });
+
+  it('E5: a stable operation id cannot append ledger movements under another queue type', async () => {
+    const ports = createMemoryLedgerPorts(
+      migrateLegacySellableSnapshot({ 42: 10 }, 'seed', '2026-08-16T00:00:00.000Z'),
+    );
+    ports._queue = [{ id: OP, type: 'gift' }];
+    const movements = buildSaleLedgerMovements({
+      operationId: OP,
+      lines: [{ product_id: 42, qty: 1 }],
+    });
+
+    await assert.rejects(
+      () => commitQueueItemAndLedger({
+        item: {
+          id: OP,
+          type: 'exchange',
+          payload: { operation_id: OP },
+          status: 'pending',
+          created_at: 1,
+          retries: 0,
+          error_message: null,
+          priority: 1,
+          next_retry_at: null,
+        },
+        movements,
+        ports,
+      }),
+      /collision/,
+    );
+
+    assert.deepEqual(ports._queue, [{ id: OP, type: 'gift' }]);
+    assert.equal(ports._state?.movements.length, 0);
   });
 
   it('C: simultaneous ledger writes do not lose updates', async () => {

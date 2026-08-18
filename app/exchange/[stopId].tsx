@@ -33,6 +33,7 @@ import { createUuidV4 } from '../../src/utils/clientEvent';
 import {
   applyExchangeStockViaLedger,
   buildExchangeLedgerMovements,
+  buildLedgerBackedQueueItem,
   commitQueuedOperationWithLedger,
 } from '../../src/services/inventoryLedgerAdapters';
 import { decideExchangeFailureAction } from '../../src/services/exchangeSubmit';
@@ -97,8 +98,6 @@ export default function CambioProductoScreen() {
   const router = useRouter();
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
-  const mobileLocationId = useAuthStore((s) => s.mobileLocationId);
-  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const products = useProductStore((s) => s.products);
   const productCount = useProductStore((s) => s.productCount);
   const productsLastSync = useProductStore((s) => s.lastSync);
@@ -142,7 +141,6 @@ export default function CambioProductoScreen() {
   );
 
   const partnerId = stop ? (getLeadPartnerId(stop) ?? stop.customer_id) : null;
-  const resolvedMobileLocationId = mobileLocationId ?? warehouseId;
   const deliveryPayloadLines = useMemo(() => buildPayloadLines(deliveryLines), [deliveryLines]);
   const mermaPayloadLines = useMemo(() => buildPayloadLines(mermaLines), [mermaLines]);
   const hasAtLeastOneLine = deliveryPayloadLines.length > 0 || mermaPayloadLines.length > 0;
@@ -230,18 +228,6 @@ export default function CambioProductoScreen() {
       Alert.alert('Evidencia requerida', 'Toma al menos una foto antes de registrar el cambio.');
       return;
     }
-    if (!employeeAnalyticPlazaId) {
-      Alert.alert('Sucursal faltante', 'No hay sucursal activa configurada para este chofer.');
-      return;
-    }
-    if (!resolvedMobileLocationId) {
-      Alert.alert('Van faltante', 'No se pudo determinar la van activa para registrar el cambio.');
-      return;
-    }
-    if (!partnerId) {
-      Alert.alert('Cliente faltante', 'No se pudo determinar el cliente activo de la visita.');
-      return;
-    }
     if (hasIncompleteLines(deliveryLines) || hasIncompleteLines(mermaLines)) {
       Alert.alert('Líneas incompletas', 'Completa producto y cantidad en cada línea o elimínala.');
       return;
@@ -262,44 +248,33 @@ export default function CambioProductoScreen() {
       qty: line.qty,
     }));
     const exchangeCapturePayload: Record<string, unknown> = {
-      analytic_account_id: employeeAnalyticPlazaId,
       idempotency_key: idempotencyKey,
-      mobile_location_id: resolvedMobileLocationId,
-      partner_id: partnerId,
-      visit_line_id: currentStop.visit_line_id ?? null,
+      stop_id: currentStop.id,
       delivery_lines: deliveryPayloadLines,
       merma_lines: mermaPayloadLines,
       notes,
       validate: true,
-      stop_id: currentStop.id,
     };
 
     const queueExchangeWithLedger = async () => {
-      const previousQueue = useSyncStore.getState().queue;
-      try {
-        enqueue('exchange', {
+      const movements = buildExchangeLedgerMovements({
+        operationId: idempotencyKey,
+        delivery: deliveryLedgerLines,
+        returnDamaged: damagedLedgerLines,
+        stopId: currentStop.id,
+        partnerId,
+      });
+      await commitQueuedOperationWithLedger({
+        queueItem: buildLedgerBackedQueueItem({
+          operationId: idempotencyKey,
+          type: 'exchange',
+          payload: {
           ...exchangeCapturePayload,
           _ledgerApplied: true,
-          _operationId: idempotencyKey,
-        }, {
-          operationId: idempotencyKey,
-          skipPersist: true,
-        });
-        const movements = buildExchangeLedgerMovements({
-          operationId: idempotencyKey,
-          delivery: deliveryLedgerLines,
-          returnDamaged: damagedLedgerLines,
-          stopId: currentStop.id,
-          partnerId,
-        });
-        await commitQueuedOperationWithLedger({
-          nextQueue: useSyncStore.getState().queue,
-          movements,
-        });
-      } catch (error) {
-        useSyncStore.getState().replaceQueueFromDurable(previousQueue);
-        throw error;
-      }
+          },
+        }),
+        movements,
+      });
     };
 
     const enqueueEvidence = async () => {
@@ -392,17 +367,7 @@ export default function CambioProductoScreen() {
       let registeredMessage = 'Cambio procesado';
       let response;
       try {
-        response = await createExchange({
-          analytic_account_id: exchangeCapturePayload.analytic_account_id,
-          idempotency_key: exchangeCapturePayload.idempotency_key,
-          mobile_location_id: exchangeCapturePayload.mobile_location_id,
-          partner_id: exchangeCapturePayload.partner_id,
-          visit_line_id: exchangeCapturePayload.visit_line_id,
-          delivery_lines: exchangeCapturePayload.delivery_lines,
-          merma_lines: exchangeCapturePayload.merma_lines,
-          notes: exchangeCapturePayload.notes,
-          validate: exchangeCapturePayload.validate,
-        });
+        response = await createExchange(exchangeCapturePayload);
         registeredMessage = response.user_message || registeredMessage;
       } catch (error) {
         const code = (error as { code?: string }).code;
@@ -565,7 +530,7 @@ export default function CambioProductoScreen() {
             Registra producto nuevo entregado y producto dañado recogido. No se genera cobro.
           </Text>
           <Text style={styles.contextMeta}>
-            Cliente #{partnerId || '--'} · Van #{resolvedMobileLocationId || '--'}
+            Parada #{currentStop.id}
           </Text>
         </Card>
 

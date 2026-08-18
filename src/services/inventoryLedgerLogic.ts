@@ -44,6 +44,21 @@ export interface InventoryLedgerPorts {
   nowIso: () => string;
   /** Publish durable queue to in-memory sync store after envelope commit. */
   publishQueue?: (queue: unknown[]) => void;
+  /** Append one already-durable row without replacing unrelated memory state. */
+  publishQueueItem?: (item: LedgerQueueItem) => void;
+}
+
+export interface LedgerQueueItem {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: string;
+  created_at: number;
+  retries: number;
+  error_message: string | null;
+  priority: number;
+  next_retry_at: number | null;
+  dependsOn?: string[];
 }
 
 function isUsableLedger(value: unknown): value is LedgerState {
@@ -154,6 +169,64 @@ export async function commitSyncQueueAndLedger(
   }
   ports.publishQueue?.(nextQueue);
   ports.applySellableProjection(projectSellable(next));
+  return next;
+}
+
+/**
+ * Append one queue row inside the same encrypted RMW as its ledger movements.
+ * The durable queue is read at commit time, so another writer cannot be lost
+ * by a stale screen snapshot.  Memory receives only the new row after commit.
+ */
+export async function commitQueueItemAndLedger(args: {
+  item: LedgerQueueItem;
+  movements: InventoryMovement[];
+  ports: InventoryLedgerPorts;
+}): Promise<LedgerState> {
+  if (!args.item.id || !args.item.type) {
+    throw new Error('commitQueueItemAndLedger requires a stable queue item');
+  }
+  if (!Array.isArray(args.movements) || args.movements.length === 0) {
+    throw new Error('commitQueueItemAndLedger requires at least one movement');
+  }
+  const session = await args.ports.getSession();
+  if (!session) {
+    throw new Error('Inventory ledger requires an encrypted field session');
+  }
+
+  let next: LedgerState | null = null;
+  let committedQueue: unknown[] | null = null;
+  await args.ports.updateRecords(session, (api) => {
+    assertEncryptedRecord(SYNC_QUEUE_RECORD_KEY, 'encrypted');
+    assertEncryptedRecord(LEDGER_RECORD_KEY, 'encrypted');
+    const currentQueue = api.getRecord<unknown[]>(SYNC_QUEUE_RECORD_KEY);
+    const queue = Array.isArray(currentQueue) ? currentQueue : [];
+    const existingQueueItem = queue.find(
+      (candidate) => !!candidate
+        && typeof candidate === 'object'
+        && (candidate as { id?: unknown }).id === args.item.id,
+    ) as { type?: unknown } | undefined;
+    if (existingQueueItem && existingQueueItem.type !== args.item.type) {
+      throw new Error(
+        `Sync operation id collision: ${args.item.id} already belongs to ${String(existingQueueItem.type)}`,
+      );
+    }
+    const exists = !!existingQueueItem;
+    const existing = api.getRecord<LedgerState>(LEDGER_RECORD_KEY);
+    const state = resolveLedgerState(existing, args.ports);
+    next = appendMovements(state, args.movements);
+    committedQueue = exists ? queue : [...queue, args.item];
+    api.setRecord(SYNC_QUEUE_RECORD_KEY, committedQueue);
+    api.setRecord(LEDGER_RECORD_KEY, next);
+  });
+  if (!next) {
+    throw new Error('commitQueueItemAndLedger failed to produce ledger state');
+  }
+  if (args.ports.publishQueueItem) {
+    args.ports.publishQueueItem(args.item);
+  } else {
+    args.ports.publishQueue?.(committedQueue ?? [args.item]);
+  }
+  args.ports.applySellableProjection(projectSellable(next));
   return next;
 }
 
@@ -323,6 +396,11 @@ export function createMemoryLedgerPorts(seed?: LedgerState | null): InventoryLed
     nowIso: () => '2026-08-16T00:00:00.000Z',
     publishQueue: (queue) => {
       ports._queue = queue;
+    },
+    publishQueueItem: (item) => {
+      if (!(ports._queue as Array<{ id?: unknown }>).some((candidate) => candidate?.id === item.id)) {
+        ports._queue = [...ports._queue, item];
+      }
     },
   };
   return ports;

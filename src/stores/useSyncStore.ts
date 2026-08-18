@@ -262,6 +262,8 @@ interface SyncState {
    * wrote `sync:queue` (avoids a second plaintext race write).
    */
   replaceQueueFromDurable: (queue: SyncQueueItem[]) => void;
+  /** Publish one row already committed alongside its ledger movements. */
+  publishLedgerBackedQueueItem: (item: SyncQueueItem) => void;
   /**
    * INV-1B: apply server ACK intents onto the *current* queue via the existing
    * serialized persistence coordinator (transformAndPersist). Durable write
@@ -607,6 +609,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       clearTimeout(_persistTimer);
       _persistTimer = null;
     }
+    set({ queue, ...computeCounts(queue) });
+  },
+
+  publishLedgerBackedQueueItem: (item) => {
+    const current = get().queue;
+    if (current.some((candidate) => candidate.id === item.id)) return;
+    const queue = [...current, item];
     set({ queue, ...computeCounts(queue) });
   },
 

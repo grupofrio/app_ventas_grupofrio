@@ -697,7 +697,7 @@ assert(
   'el onPress del Button Registrar Cambio debe invocar o envolver handleSubmit',
 );
 
-const createPhase = tryCatchContaining('response = await createExchange({');
+const createPhase = tryCatchContaining('response = await createExchange(exchangeCapturePayload)');
 assert.ok(createPhase.statement, 'handleSubmit debe contener try/catch de createExchange');
 const zeroPhotoGuards = directNodesInBody(submitHandler.bodyNode, ts.isIfStatement)
   .filter((statement) => hasZeroPhotoPredicate(statement.expression));
@@ -787,6 +787,7 @@ const stopIdProperty = objectProperty(enqueueObject, 'stopId');
 const photoUrisProperty = objectProperty(enqueueObject, 'photoUris');
 const enqueueProperty = objectProperty(enqueueObject, 'enqueue');
 const imageTypeProperty = objectProperty(enqueueObject, 'imageType');
+const dependsOnProperty = objectProperty(enqueueObject, 'dependsOn');
 assert(stopIdProperty, 'la llamada de encolado debe incluir stopId');
 assert(photoUrisProperty, 'la llamada de encolado debe incluir photoUris');
 assert(enqueueProperty, 'la llamada de encolado debe incluir la función enqueue');
@@ -798,14 +799,29 @@ assert.equal(
   propertyValueText(imageTypeProperty).replace(/^['"]|['"]$/g, ''),
   'exchange',
 );
-// Offline queue may declare dependsOn=[exchangeOperationId]; online success may omit it.
 assert(
-  enqueueProperties.includes('dependsOn') || !enqueueProperties.includes('dependsOn'),
-  'dependsOn is optional depending on online vs durable offline path',
+  dependsOnProperty,
+  'la evidencia debe depender del mismo operation id durable del cambio',
 );
+assert.match(propertyValueText(dependsOnProperty), /^\[\s*idempotencyKey\s*\]$/);
 assert(
   !enqueueProperties.includes('image_base64'),
   'la evidencia del cambio no debe declarar image_base64 en la cola',
+);
+assert.match(
+  exchange,
+  /buildLedgerBackedQueueItem\(\{[\s\S]*?operationId:\s*idempotencyKey[\s\S]*?type:\s*'exchange'/,
+  'el cambio debe crear su fila dentro de la barrera queue+ledger con el UUID estable',
+);
+assert.doesNotMatch(
+  exchange,
+  /nextQueue:\s*useSyncStore\.getState\(\)\.queue|replaceQueueFromDurable\(previousQueue\)/,
+  'el cambio no debe escribir ni restaurar snapshots completos de cola',
+);
+assert.doesNotMatch(
+  exchange,
+  /const exchangeCapturePayload[\s\S]*?(?:partner_id|visit_line_id|mobile_location_id|analytic_account_id)/,
+  'el payload de Cambio no debe enviar autoridad de cliente, visita, van o plaza',
 );
 
 const persistCalls = nodesInBody(submitHandler.bodyNode, ts.isCallExpression).filter((call) => ts.isIdentifier(call.expression) && call.expression.text === 'persistQueue');

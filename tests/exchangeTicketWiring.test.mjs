@@ -90,7 +90,7 @@ test('exchange submit wires local snapshot creation, strict save, and exchange t
   assert.match(source, /pathname:\s*'\/print-exchange\/\[snapshotId\]'/);
   assert.match(source, /snapshotId:\s*snapshot\.snapshotId/);
 
-  const createExchangeIndex = source.indexOf('response = await createExchange({');
+  const createExchangeIndex = source.indexOf('response = await createExchange(exchangeCapturePayload)');
   const saveSnapshotIndex = source.indexOf('await saveExchangeTicketSnapshot(snapshot)');
   const printRouteIndex = source.indexOf("pathname: '/print-exchange/[snapshotId]'");
 

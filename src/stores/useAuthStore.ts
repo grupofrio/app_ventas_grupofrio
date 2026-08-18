@@ -73,6 +73,7 @@ interface AuthState {
 
   // Actions
   login: (baseUrl: string, barcode: string, pin: string, db?: string | null) => Promise<boolean>;
+  beginReauthentication: () => void;
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   rehydrateAuth: () => Promise<boolean>;
@@ -191,6 +192,11 @@ export const useAuthStore = create<AuthState>((set) => ({
   customerIds: [],
 
   setLoading: (loading) => set({ isLoading: loading }),
+
+  // Preserve the current principal/session as a handoff candidate. The root
+  // auth guard routes to login; only a successful same-principal login may
+  // transfer the validated collection record to its new encrypted session.
+  beginReauthentication: () => set({ isAuthenticated: false, error: null }),
 
   /**
    * BLD-20260408-P0: Restore employee data from AsyncStorage.

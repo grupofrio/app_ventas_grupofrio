@@ -6,6 +6,7 @@ import test from 'node:test';
 const oldRoute = resolve('app/collect/[partnerId].tsx');
 const collectRoute = resolve('app/collect/[stopId].tsx');
 const checkinRoute = resolve('app/checkin/[stopId].tsx');
+const authStore = resolve('src/stores/useAuthStore.ts');
 
 test('invoice collection uses the stop route and removes the partner route', () => {
   assert.equal(existsSync(oldRoute), false, 'the old partner-authority route must be absent');
@@ -34,6 +35,11 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.match(source, /label="Actualizar estado" onPress=\{\(\) => void loadVisit\(true\)\}/);
   assert.match(source, /collection\.customer_name/);
   assert.doesNotMatch(source, /Recibo:/);
+  for (const label of ['Confirmado', 'Pendiente de confirmación', 'Revisión requerida', 'Inicia sesión de nuevo']) {
+    assert.match(source, new RegExp(label));
+  }
+  assert.match(source, /beginReauthentication/);
+  assert.match(source, /text: 'Iniciar sesión', onPress: beginReauthentication/);
   assert.match(source, /Operación: \$\{outcome\.operationId\}/);
   assert.match(source, /label="Reintentar" onPress=\{\(\) => void loadVisit\(true\)\}/);
   assert.match(source, /createVisitCollectionLifecycle/);
@@ -42,6 +48,17 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.doesNotMatch(action, /captureStarted/);
   assert.match(action, /isInvoiceCollectionCaptureFailure\(captureError\) \? captureError\.durableIntent : true/);
   assert.match(action, /setReconciliationPending\(true\);/);
+});
+
+test('the reauthentication action routes through the existing auth guard without destructive logout', () => {
+  const source = readFileSync(authStore, 'utf8');
+  const actionStart = source.lastIndexOf('beginReauthentication:');
+  const action = source.slice(
+    actionStart,
+    source.indexOf('/**', actionStart),
+  );
+  assert.match(action, /set\(\{ isAuthenticated: false, error: null \}\)/);
+  assert.doesNotMatch(action, /clearCurrentEncryptedFieldData|clearAuthTokens|signOut|storeRemove/);
 });
 
 test('the production capture gate remains before intent creation and direct capture', () => {

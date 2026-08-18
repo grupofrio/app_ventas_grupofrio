@@ -27,7 +27,7 @@ interface InvoiceCollectionVisitLogic {
     dispose(): void;
   };
   collectionCaptureFailureNotice: (durableIntent: boolean) => { title: string; message: string };
-  collectionCaptureResultNotice: (outcome: { status: string; needsReconciliation?: boolean }) => { title: string; message: string } | null;
+  collectionCaptureResultNotice: (outcome: { status: string; needsReconciliation?: boolean }) => { title: string; message: string };
 }
 
 async function loadLogic(): Promise<InvoiceCollectionVisitLogic> {
@@ -193,7 +193,7 @@ test('lifecycle guard rejects stale load completions and all UI publication afte
   assert.equal(lifecycle.isActive(), false);
 });
 
-test('capture notices distinguish a failed encrypted commit from a durable ambiguous acknowledgement', async () => {
+test('capture notices use exact operator states without a receipt or false failure for durable intents', async () => {
   const logic = await loadLogic();
 
   assert.deepEqual(logic.collectionCaptureFailureNotice(false), {
@@ -201,10 +201,33 @@ test('capture notices distinguish a failed encrypted commit from a durable ambig
     message: 'No se pudo guardar el cobro de forma cifrada. No se envió ningún pago.',
   });
   assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'pending', needsReconciliation: true }), {
-    title: 'Cobro pendiente de reconciliación',
-    message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación.',
+    title: 'Pendiente de confirmación',
+    message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación. No se emitió recibo.',
   });
-  assert.equal(logic.collectionCaptureResultNotice({ status: 'pending' }), null);
+  assert.deepEqual(logic.collectionCaptureFailureNotice(true), {
+    title: 'Pendiente de confirmación',
+    message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación. No se emitió recibo.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'applied' }), {
+    title: 'Confirmado',
+    message: 'El servidor confirmó el cobro.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'pending' }), {
+    title: 'Pendiente de confirmación',
+    message: 'El cobro quedó guardado de forma cifrada para confirmarse al reconectar. No se emitió recibo.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'captured_pending' }), {
+    title: 'Pendiente de confirmación',
+    message: 'El cobro quedó guardado de forma cifrada para confirmarse al reconectar. No se emitió recibo.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'review_required' }), {
+    title: 'Revisión requerida',
+    message: 'El servidor no confirmó el cobro. Esta factura queda bloqueada para revisión. No se emitió recibo.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'reauth_required' }), {
+    title: 'Inicia sesión de nuevo',
+    message: 'La sesión debe renovarse. El cobro cifrado conserva su operación para confirmarse después. No se emitió recibo.',
+  });
 });
 
 test('validates collection amounts against the selected snapshot residual', async () => {

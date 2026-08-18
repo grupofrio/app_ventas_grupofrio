@@ -13,6 +13,7 @@ import { createCurrentInvoiceCollectionPersistence } from '../../src/services/in
 import { captureCurrentInvoiceCollection, isInvoiceCollectionCaptureFailure } from '../../src/services/invoiceCollectionSync';
 import { assertVisitCollectionAmount, buildVisitCollectionState, collectionCaptureFailureNotice, collectionCaptureResultNotice, createVisitCollectionLifecycle, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
 import type { InvoiceCollectionPaymentMethod } from '../../src/services/invoiceCollection';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 
 const PAYMENT_METHODS: readonly { id: InvoiceCollectionPaymentMethod; label: string }[] = [
   { id: 'cash', label: 'Efectivo' },
@@ -30,6 +31,7 @@ function uuidV4(): string {
 export default function CollectScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
+  const beginReauthentication = useAuthStore((state) => state.beginReauthentication);
   const numericStopId = Number(stopId);
   const lifecycle = useRef(createVisitCollectionLifecycle()).current;
   const [collection, setCollection] = useState<VisitCollectionState | null>(null);
@@ -148,9 +150,10 @@ export default function CollectScreen() {
       await refreshIntents();
       if (!lifecycle.isActive()) return;
       if (outcome.status === 'applied') {
+        const notice = collectionCaptureResultNotice(outcome);
         setRequiresFreshBundle(true);
         setSelectedInvoiceId(null);
-        Alert.alert('Cobro aplicado', `El servidor confirmó el cobro. Operación: ${outcome.operationId}.`, [
+        Alert.alert('Confirmado', `${notice.message} Operación: ${outcome.operationId}.`, [
           { text: 'Actualizar bundle', onPress: () => void loadVisit(true) },
           { text: 'Volver', onPress: () => router.back() },
         ]);
@@ -158,26 +161,24 @@ export default function CollectScreen() {
       }
       if (outcome.status === 'pending' || outcome.status === 'captured_pending') {
         const notice = collectionCaptureResultNotice(outcome);
-        if (notice) {
-          setReconciliationPending(true);
-          setSelectedInvoiceId(null);
-          Alert.alert(notice.title, notice.message, [
-            { text: 'Volver', onPress: () => router.back() },
-            { text: 'Quedarme' },
-          ]);
-          return;
-        }
-        Alert.alert('Cobro pendiente', 'El cobro quedó guardado de forma cifrada para sincronizarse. No se emitió recibo.', [
+        setReconciliationPending(true);
+        setSelectedInvoiceId(null);
+        Alert.alert('Pendiente de confirmación', notice.message, [
           { text: 'Volver', onPress: () => router.back() },
           { text: 'Quedarme' },
         ]);
         return;
       }
       if (outcome.status === 'review_required') {
-        Alert.alert('Revisión requerida', 'El servidor no confirmó el cobro. Esta factura queda bloqueada para revisión; no se emitió recibo.');
+        const notice = collectionCaptureResultNotice(outcome);
+        Alert.alert('Revisión requerida', notice.message);
         return;
       }
-      Alert.alert('Sesión requerida', 'No se pudo confirmar el cobro porque la sesión debe renovarse. El intent queda pendiente; no se emitió recibo.');
+      const notice = collectionCaptureResultNotice(outcome);
+      Alert.alert('Inicia sesión de nuevo', notice.message, [
+        { text: 'Iniciar sesión', onPress: beginReauthentication },
+        { text: 'Quedarme', style: 'cancel' },
+      ]);
     } catch (captureError) {
       if (lifecycle.isActive()) {
         const durableIntent = isInvoiceCollectionCaptureFailure(captureError) ? captureError.durableIntent : true;
@@ -232,7 +233,7 @@ export default function CollectScreen() {
 
         {reconciliationPending ? (
           <Card style={styles.notice}>
-            <Text style={typography.body}>El resultado del cobro sigue pendiente de reconciliación.</Text>
+            <Text style={typography.body}>Pendiente de confirmación</Text>
             <Text style={typography.dim}>No registres otro pago para esta factura hasta que la app actualice su estado.</Text>
             <Button label="Actualizar estado" onPress={() => void loadVisit(true)} loading={refreshing} variant="secondary" />
           </Card>
@@ -254,10 +255,10 @@ export default function CollectScreen() {
                 <Text style={typography.dimSmall}>{entry.invoice.due_date ? `Vence ${entry.invoice.due_date}` : 'Sin fecha de vencimiento'} · {entry.invoice.currency}</Text>
                 {blocked ? <Text style={[typography.dimSmall, styles.blockedText]}>{
                   entry.collection_state === 'pending'
-                    ? 'Cobro pendiente: no se generará otro envío.'
+                    ? 'Pendiente de confirmación · no se generará otro envío.'
                     : entry.collection_state === 'requires_refresh'
-                    ? 'Cobro aplicado a este snapshot: actualiza el bundle antes de volver a cobrar.'
-                    : 'Cobro en revisión: no se generará otro envío.'
+                    ? 'Confirmado · actualiza el bundle antes de volver a cobrar.'
+                    : 'Revisión requerida · no se generará otro envío.'
                 }</Text> : null}
               </View>
               <Text style={[typography.metricValue, styles.invoiceAmount]}>{formatCurrency(entry.invoice.amount_residual)}</Text>

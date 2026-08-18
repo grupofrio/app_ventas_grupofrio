@@ -33,8 +33,8 @@ export interface CollectionCaptureNotice {
 export function collectionCaptureFailureNotice(durableIntent: boolean): CollectionCaptureNotice {
   if (durableIntent) {
     return {
-      title: 'Cobro pendiente de reconciliación',
-      message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación.',
+      title: 'Pendiente de confirmación',
+      message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación. No se emitió recibo.',
     };
   }
   return {
@@ -44,11 +44,33 @@ export function collectionCaptureFailureNotice(durableIntent: boolean): Collecti
 }
 
 export function collectionCaptureResultNotice(
-  outcome: Pick<{ status: string; needsReconciliation?: boolean }, 'status' | 'needsReconciliation'>,
-): CollectionCaptureNotice | null {
-  return outcome.status === 'pending' && outcome.needsReconciliation
-    ? collectionCaptureFailureNotice(true)
-    : null;
+  outcome: Pick<{
+    status: 'applied' | 'captured_pending' | 'pending' | 'review_required' | 'reauth_required';
+    needsReconciliation?: boolean;
+  }, 'status' | 'needsReconciliation'>,
+): CollectionCaptureNotice {
+  if (outcome.status === 'applied') {
+    return { title: 'Confirmado', message: 'El servidor confirmó el cobro.' };
+  }
+  if (outcome.status === 'review_required') {
+    return {
+      title: 'Revisión requerida',
+      message: 'El servidor no confirmó el cobro. Esta factura queda bloqueada para revisión. No se emitió recibo.',
+    };
+  }
+  if (outcome.status === 'reauth_required') {
+    return {
+      title: 'Inicia sesión de nuevo',
+      message: 'La sesión debe renovarse. El cobro cifrado conserva su operación para confirmarse después. No se emitió recibo.',
+    };
+  }
+  if (outcome.status === 'pending' && outcome.needsReconciliation) {
+    return collectionCaptureFailureNotice(true);
+  }
+  return {
+    title: 'Pendiente de confirmación',
+    message: 'El cobro quedó guardado de forma cifrada para confirmarse al reconectar. No se emitió recibo.',
+  };
 }
 
 function matchingStop(bundle: DayBundle, stopId: number): Record<string, unknown> {

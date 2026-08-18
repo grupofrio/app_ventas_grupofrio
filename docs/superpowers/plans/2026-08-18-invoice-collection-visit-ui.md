@@ -281,9 +281,13 @@ Add tests for all of these behaviors:
 2. Pending/review collection summaries block liquidation and route close, but
    do not enter the generic queue. Applied intents do not block.
 3. Startup with unknown/offline connectivity does not call collection transport
-   or await the mutation timeout before the app becomes usable; confirmed
+   or await an unresolved connectivity probe/mutation timeout before the app becomes usable; confirmed
    connectivity wakes the existing reconciler.
-4. The collection UI exposes and tests exact Spanish labels: Confirmado,
+4. A 401 from foreground **or background reconciliation** persists an explicit
+   reauth-required view state with UUID/binding intact, stops the batch, and
+   exposes the same sign-in action; same-principal handoff converts it back to
+   pending for original-UUID replay.
+5. The collection UI exposes and tests exact Spanish labels: Confirmado,
    Pendiente de confirmación, Revisión requerida and Inicia sesión de nuevo.
 
 - [ ] **Step 2: Run RED**
@@ -307,10 +311,13 @@ generic queue item or changing server authority.
 
 - [ ] **Step 4: Implement nonblocking connectivity ordering and exact copy**
 
-Initialize/verify connectivity before requesting a replay and schedule
-reconciliation off the critical rehydration path. Preserve the existing
-singleton reconnect wake. Update UI copy to the exact state labels, including
-an explicit sign-in action for `reauth_required`.
+Start connectivity observation without awaiting any initial `NetInfo` probe,
+and schedule reconciliation off the critical rehydration path only after a
+confirmed online state. Preserve the existing singleton reconnect wake. Persist
+background 401 as `reauth_required` metadata/status without changing UUID or
+binding; same-principal handoff resets it to pending. Update UI copy to the
+exact state labels, including an explicit sign-in action for any
+`reauth_required` state.
 
 - [ ] **Step 5: Run GREEN and commit**
 

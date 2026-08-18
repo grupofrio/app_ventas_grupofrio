@@ -66,7 +66,7 @@ No se crea una pestaña de navegación ni un flujo de cobro manual paralelo.
 | `applied` | Abono confirmado por servidor | Actualizar/revalidar datos del día cuando corresponda |
 | `pending` | Pendiente de confirmación, sin recibo | Reconciliación automática con el UUID original |
 | `review_required` | El saldo, scope o configuración cambió; requiere revisión | No reintentar automáticamente ni ocultar el intent |
-| `reauth_required` | Debe iniciar sesión de nuevo | Conserva el intent cifrado sin mutarlo |
+| `reauth_required` | Debe iniciar sesión de nuevo | Conserva UUID y binding cifrados; persiste sólo la señal de reautenticación para impedir replays con token revocado |
 
 Un pendiente no bloquea iniciar la siguiente visita. Los pendientes y revisiones
 de dinero sí participan en el gate de liquidación/cierre, no en la navegación
@@ -80,6 +80,11 @@ cola genérica.
   exclusivamente los intents de cobranza cifrados y sus UUID originales hacia
   la nueva sesión; al cambiar de empleado o compañía se conserva el borrado
   destructivo y no se migra evidencia entre cuentas.
+- Un `reauth_required` producido por reconciliación en segundo plano persiste
+  esa señal visible sobre el intent (sin cambiar UUID ni binding) y ofrece la
+  misma acción de inicio de sesión que una captura en primer plano. Tras un
+  handoff de mismo principal, vuelve a ser pendiente para reintentar con el
+  UUID original.
 - El arranque no envía intents antes de conocer conectividad. La reconciliación
   de red se programa después de inicializar NetInfo/estado real y nunca bloquea
   rehydration ni la entrada a ruta en modo avión.

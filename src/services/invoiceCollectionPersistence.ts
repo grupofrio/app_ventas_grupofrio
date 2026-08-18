@@ -209,6 +209,8 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       }
       if (!deps.remove) throw new Error('La migración cifrada de cobranza no está disponible.');
       const source = parseStored(await deps.load(oldSession, INVOICE_COLLECTION_RECORD_KEY));
+      const destinationRaw = await deps.load(newSession, INVOICE_COLLECTION_RECORD_KEY);
+      const destinationBefore = parseStored(destinationRaw);
       const transferable = source.intents.map((intent) => intent.status === 'reauth_required'
         ? { ...intent, status: 'pending' as const }
         : { ...intent });
@@ -226,7 +228,23 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       });
       // Keep the old record recoverable until both the destination encrypted
       // write and the new credential/session activation have completed.
-      await activateDestination();
+      try {
+        await activateDestination();
+      } catch (error) {
+        try {
+          if (destinationRaw === null) {
+            await deps.remove(newSession, INVOICE_COLLECTION_RECORD_KEY);
+          } else {
+            await deps.update(newSession, (api) => {
+              api.setRecord(INVOICE_COLLECTION_RECORD_KEY, destinationBefore);
+            });
+          }
+        } catch {
+          // Source evidence remains authoritative and credential rotation also
+          // compensates its scope. Do not mask the activation failure.
+        }
+        throw error;
+      }
       await deps.remove(oldSession, INVOICE_COLLECTION_RECORD_KEY);
       return { transferred: true, count: source.intents.length };
     },

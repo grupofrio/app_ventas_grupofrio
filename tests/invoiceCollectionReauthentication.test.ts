@@ -409,11 +409,7 @@ test('failed destination-session activation keeps the old encrypted copy recover
   );
 
   assert.deepEqual(await persistence.list(oldSession), [reauthIntent]);
-  assert.deepEqual(
-    await persistence.list(newSession),
-    [{ ...intent, status: 'pending', updated_at_ms: 3 }],
-    'the staged encrypted destination remains idempotent and replayable',
-  );
+  assert.deepEqual(await persistence.list(newSession), [], 'failed activation must roll back its staged destination');
 });
 
 test('auth wiring chooses handoff only after the new principal is known and logout remains destructive', () => {
@@ -447,6 +443,10 @@ test('auth wiring chooses handoff only after the new principal is known and logo
   );
   assert.match(login, /setAuthTokens\(result\.gf_employee_token, nextSession\.sessionId\)/);
   assert.match(api, /setAuthTokens\(gfToken: string, sessionId = createUuidV4\(\)\)/);
+  assert(
+    api.indexOf("{ key: STORE_KEYS.GF_TOKEN") < api.indexOf("{ key: STORE_KEYS.SESSION_ID"),
+    'SESSION_ID is the final credential pointer in a same-principal rotation',
+  );
   assert.match(api, /setItemAsync\(STORE_KEYS\.SESSION_ID, sessionId\)/);
   assert.match(logout, /await clearCurrentEncryptedFieldData\(\)/);
   assert.match(destructiveClear, /clearInvoiceCollectionReauthenticationRequired/);

@@ -143,25 +143,42 @@ async function clearRouteCache(): Promise<void> {
 }
 
 async function clearCurrentEncryptedFieldData(): Promise<void> {
-  const { clearLegacyConsignmentPendingOperations } = await import(
-    '../services/consignmentOperationPersistence'
-  );
-  // This pre-envelope key is global to the install, so erase it before any
-  // operation that might fail while clearing the current session envelope.
-  await clearLegacyConsignmentPendingOperations();
-  const session = await getFieldDataSession();
-  if (session) {
-    const [{ clearEncryptedSession }, { clearInvoiceCollectionReauthenticationRequired }] = await Promise.all([
+  try {
+    const session = await getFieldDataSession();
+    const [
+      { clearLegacyConsignmentPendingOperations },
+      { clearEncryptedSession },
+      { clearInvoiceCollectionReauthenticationRequired },
+      { retireAndClearInvoiceCollectionSessionState },
+      { resetInvoiceCollectionSync },
+    ] = await Promise.all([
+      import('../services/consignmentOperationPersistence'),
       import('../services/encryptedStore.ts'),
       import('../services/invoiceCollectionReauthLatch.ts'),
+      import('../services/invoiceCollectionReauthLatchLogic.ts'),
+      import('../services/invoiceCollectionSync'),
     ]);
-    await clearInvoiceCollectionReauthenticationRequired(session);
-    await clearEncryptedSession(session);
+    if (session) {
+      await retireAndClearInvoiceCollectionSessionState({
+        retireProcessor: () => resetInvoiceCollectionSync(),
+        clearPreEnvelopeState: () => clearLegacyConsignmentPendingOperations(),
+        clearEncryptedSession: async () => { await clearEncryptedSession(session); },
+        clearReauthenticationLatch: () => clearInvoiceCollectionReauthenticationRequired(session),
+      });
+    } else {
+      await resetInvoiceCollectionSync();
+      await clearLegacyConsignmentPendingOperations();
+    }
+    await clearSensitiveFieldData();
+  } finally {
+    // Destructive logout/account switch must not retain the old credential
+    // even when encrypted field cleanup reports a storage failure.
+    try {
+      await clearAuthTokens();
+    } finally {
+      clearFieldDataIdentity();
+    }
   }
-  const { resetInvoiceCollectionSync } = await import('../services/invoiceCollectionSync');
-  resetInvoiceCollectionSync();
-  await clearSensitiveFieldData();
-  clearFieldDataIdentity();
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -388,20 +405,26 @@ export const useAuthStore = create<AuthState>((set) => ({
           { clearEncryptedSession },
           { resetInvoiceCollectionSync },
           { clearInvoiceCollectionReauthenticationRequired },
+          { retireAndClearInvoiceCollectionSessionState },
         ] = await Promise.all([
           import('../services/encryptedStore.ts'),
           import('../services/invoiceCollectionSync.ts'),
           import('../services/invoiceCollectionReauthLatch.ts'),
+          import('../services/invoiceCollectionReauthLatchLogic.ts'),
         ]);
-        await clearInvoiceCollectionReauthenticationRequired(previousSession);
-        await clearEncryptedSession(previousSession);
-        resetInvoiceCollectionSync();
+        await retireAndClearInvoiceCollectionSessionState({
+          retireProcessor: () => resetInvoiceCollectionSync(),
+          clearEncryptedSession: async () => { await clearEncryptedSession(previousSession); },
+          clearReauthenticationLatch: () => clearInvoiceCollectionReauthenticationRequired(previousSession),
+        });
         await clearSensitiveFieldData();
         clearFieldDataIdentity();
       } else {
+        set({ isAuthenticated: false });
         await clearCurrentEncryptedFieldData();
         // Actual logout/account switch remains destructive while the prior
         // session reference is still readable, and never transfers evidence.
+        await setBaseUrl(baseUrl);
         await setAuthTokens(result.gf_employee_token);
       }
       await clearRouteCache();
@@ -473,6 +496,12 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: state.customerIds,
       });
 
+      const { resumeInvoiceCollectionSync, requestInvoiceCollectionSync } = await import(
+        '../services/invoiceCollectionSync'
+      );
+      resumeInvoiceCollectionSync();
+      requestInvoiceCollectionSync();
+
       return true;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error de conexion';
@@ -482,6 +511,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    set({ isAuthenticated: false });
     try {
       await signOut();
     } finally {

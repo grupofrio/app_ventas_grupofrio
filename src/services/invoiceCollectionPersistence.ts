@@ -129,8 +129,11 @@ export function createInvoiceCollectionReauthAwarePersistence(
     summary: () => persistence.summary(),
     insert: (intent: InvoiceCollectionIntent) => persistence.insert(intent),
     async findOrInsert(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent> {
+      // Keep latch read failures on the pre-commit side of this mutating call;
+      // otherwise the UI could claim an intent was not registered after it was.
+      const required = await latch.isRequired();
       const effective = await persistence.findOrInsert(intent);
-      return projectReauthenticationRequired(effective, await latch.isRequired());
+      return projectReauthenticationRequired(effective, required);
     },
     transition: (operationId: string, status: PersistedTransitionStatus, nowMs: number) =>
       persistence.transition(operationId, status, nowMs),

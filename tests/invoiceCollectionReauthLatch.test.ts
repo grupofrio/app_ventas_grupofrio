@@ -17,6 +17,12 @@ interface LatchModule {
     markRequired(session: Session): Promise<void>;
     clear(session: Session): Promise<void>;
   };
+  retireAndClearInvoiceCollectionSessionState(deps: {
+    retireProcessor(): Promise<void>;
+    clearPreEnvelopeState?(): Promise<void>;
+    clearEncryptedSession(): Promise<void>;
+    clearReauthenticationLatch(): Promise<void>;
+  }): Promise<void>;
 }
 
 test('the durable reauth latch is scoped to the exact principal session and stores no collection data', async () => {
@@ -44,4 +50,25 @@ test('the durable reauth latch is scoped to the exact principal session and stor
 
   await latch.clear(session);
   assert.equal(await latch.isRequired(session), false);
+});
+
+test('session cleanup preserves the reauth latch when encrypted-envelope deletion fails', async () => {
+  const mod = await import('../src/services/invoiceCollectionReauthLatchLogic.ts') as unknown as LatchModule;
+  const events: string[] = [];
+
+  await assert.rejects(() => mod.retireAndClearInvoiceCollectionSessionState({
+    async retireProcessor() { events.push('retire'); },
+    async clearPreEnvelopeState() { events.push('legacy'); },
+    async clearEncryptedSession() {
+      events.push('envelope');
+      throw new Error('encrypted envelope deletion failed');
+    },
+    async clearReauthenticationLatch() { events.push('latch'); },
+  }), /encrypted envelope deletion failed/);
+
+  assert.deepEqual(
+    events,
+    ['retire', 'legacy', 'envelope'],
+    'legacy state clears first, while the latch survives as long as the old intent envelope survives',
+  );
 });

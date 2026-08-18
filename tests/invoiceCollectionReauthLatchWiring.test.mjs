@@ -14,5 +14,6 @@ test('production reauth latch uses independent SecureStore and composes into eve
   assert.match(persistence, /import\('\.\/invoiceCollectionReauthLatch\.ts'\)/);
   assert.match(persistence, /createInvoiceCollectionReauthAwarePersistence\(\{/);
   assert.match(persistence, /markRequired: \(\) => markInvoiceCollectionReauthenticationRequired\(session\)/);
-  assert.match(sync, /await deps\.persistence\.markReauthenticationRequired\?\.\(\)/);
+  assert.match(sync, /const latchMutation = deps\.persistence\.markReauthenticationRequired\?\.\(\)/);
+  assert.match(sync, /await trackDurableMutation\(latchMutation\)/);
 });

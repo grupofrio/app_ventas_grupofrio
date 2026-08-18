@@ -29,14 +29,15 @@ test('unknown connectivity is offline-safe until reachability is confirmed', () 
 
 test('startup and connectivity wake target the same lazy collection singleton', () => {
   const runtime = collectionSync.slice(
-    collectionSync.indexOf('function currentProductionRuntime'),
+    collectionSync.indexOf('const productionRuntimeLifecycle'),
     collectionSync.indexOf('export async function captureCurrentInvoiceCollection'),
   );
   const request = collectionSync.slice(
     collectionSync.indexOf('export function requestInvoiceCollectionSync'),
     collectionSync.indexOf('export function resetInvoiceCollectionSync'),
   );
-  assert.match(request, /currentProductionRuntime\(\)\.requestReconnect\(\)/);
+  assert.match(request, /const runtime = currentProductionRuntime\(\)/);
+  assert.match(request, /runtime\.requestReconnect\(\)/);
   assert.match(request, /\.catch\(/);
   assert.doesNotMatch(request, /productionRuntime\?\./);
   assert.match(runtime, /import\('\.\.\/stores\/useAuthStore\.ts'\)/);

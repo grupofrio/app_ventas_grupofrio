@@ -128,15 +128,27 @@ function isTerminal(status: InvoiceCollectionIntent['status']): boolean {
 export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSyncDeps) {
   let reconciliation: Promise<void> | null = null;
   let reauthenticationPaused = false;
+  let retired = false;
   const operations = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
+  const durableMutations = new Set<Promise<unknown>>();
+  function trackDurableMutation<T>(mutation: Promise<T>): Promise<T> {
+    durableMutations.add(mutation);
+    void mutation.then(
+      () => { durableMutations.delete(mutation); },
+      () => { durableMutations.delete(mutation); },
+    );
+    return mutation;
+  }
   function reconciliationPending(intent: InvoiceCollectionIntent): InvoiceCollectionCaptureResult {
     return { status: 'pending', operationId: intent.operation_id, needsReconciliation: true };
   }
   async function send(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
+    if (retired) return reconciliationPending(intent);
     let result: InvoiceCollectionServerResult;
     try {
       result = await deps.transport.collect(requestFromIntent(intent));
     } catch (error) {
+      if (retired) return reconciliationPending(intent);
       const outcome = classifyInvoiceCollectionError(error);
       const errorDetails = {
         ...(outcome.code === undefined ? {} : { code: outcome.code }),
@@ -148,10 +160,13 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         // that marker cannot be committed.
         reauthenticationPaused = true;
         try {
-          await deps.persistence.transition(intent.operation_id, 'reauth_required', deps.now());
+          await trackDurableMutation(
+            deps.persistence.transition(intent.operation_id, 'reauth_required', deps.now()),
+          );
         } catch {
           try {
-            await deps.persistence.markReauthenticationRequired?.();
+            const latchMutation = deps.persistence.markReauthenticationRequired?.();
+            if (latchMutation) await trackDurableMutation(latchMutation);
           } catch {
             // No restart-safe claim is possible when both independent durable
             // writes fail. The runtime latch above still prevents fail-open
@@ -168,7 +183,7 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       }
       const status: PersistedStatus = outcome.kind === 'review_required' ? 'review_required' : 'pending';
       try {
-        await deps.persistence.transition(intent.operation_id, status, deps.now());
+        await trackDurableMutation(deps.persistence.transition(intent.operation_id, status, deps.now()));
       } catch {
         // The intent was committed before the POST. Its status could not be
         // updated, so preserve the UUID and require reconciliation instead of
@@ -177,11 +192,12 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       }
       return { status, operationId: intent.operation_id, ...errorDetails };
     }
+    if (retired) return reconciliationPending(intent);
     const status: PersistedStatus = result.status === 'applied' ? 'applied' : 'review_required';
     // Persist acknowledgement before publishing it. A crash here only causes
     // an idempotent replay under the original UUID on restart.
     try {
-      await deps.persistence.transition(intent.operation_id, status, deps.now());
+      await trackDurableMutation(deps.persistence.transition(intent.operation_id, status, deps.now()));
     } catch {
       return reconciliationPending(intent);
     }
@@ -201,13 +217,17 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
   return {
     capture(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
       return (async () => {
+        if (retired) {
+          throw new InvoiceCollectionCaptureFailure('La sesión de cobranza cambió.', false);
+        }
         // This awaited encrypted write is the commit point before first send.
         let effective: InvoiceCollectionIntent;
         try {
-          effective = await deps.persistence.findOrInsert(intent);
+          effective = await trackDurableMutation(deps.persistence.findOrInsert(intent));
         } catch (error) {
           throw preCommitCaptureFailure(error);
         }
+        if (retired) return reconciliationPending(effective);
         const inFlight = operations.get(effective.operation_id);
         if (inFlight) return inFlight;
         if (effective.status === 'applied') {
@@ -221,7 +241,9 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         }
         if (!deps.isOnline()) {
           try {
-            await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
+            await trackDurableMutation(
+              deps.persistence.transition(effective.operation_id, 'pending', deps.now()),
+            );
           } catch {
             return reconciliationPending(effective);
           }
@@ -233,12 +255,13 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
     reconcile(): Promise<void> {
       if (reconciliation) return reconciliation;
       reconciliation = (async () => {
-        if (reauthenticationPaused || !deps.isOnline()) return;
+        if (retired || reauthenticationPaused || !deps.isOnline()) return;
         const intents = await deps.persistence.list();
         if (intents.some((intent) => intent.status === 'reauth_required')) return;
         for (const intent of intents) {
-          if (reauthenticationPaused || !deps.isOnline()) break;
+          if (retired || reauthenticationPaused || !deps.isOnline()) break;
           const latest = await deps.persistence.list();
+          if (retired) break;
           if (latest.some((candidate) => candidate.status === 'reauth_required')) break;
           const current = latest.find((candidate) => candidate.operation_id === intent.operation_id);
           if (current && !isTerminal(current.status)) {
@@ -248,6 +271,13 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         }
       })().finally(() => { reconciliation = null; });
       return reconciliation;
+    },
+    async retire(): Promise<void> {
+      retired = true;
+      reauthenticationPaused = true;
+      while (durableMutations.size > 0) {
+        await Promise.allSettled([...durableMutations]);
+      }
     },
   };
 }
@@ -329,9 +359,15 @@ export interface InvoiceCollectionSyncRuntimeDeps {
 /** One processor owner shared by direct capture, startup, and reconnect. */
 export function createInvoiceCollectionSyncRuntime(deps: InvoiceCollectionSyncRuntimeDeps) {
   let processor: Promise<InvoiceCollectionSyncProcessor> | null = null;
+  let resolvedProcessor: InvoiceCollectionSyncProcessor | null = null;
+  let retired = false;
   function currentProcessor() {
     if (processor) return processor;
-    const created = deps.createProcessor();
+    const created = deps.createProcessor().then(async (current) => {
+      resolvedProcessor = current;
+      if (retired) await current.retire();
+      return current;
+    });
     processor = created;
     void created.catch(() => {
       if (processor === created) processor = null;
@@ -341,17 +377,54 @@ export function createInvoiceCollectionSyncRuntime(deps: InvoiceCollectionSyncRu
   const directCapture = createInvoiceCollectionDirectCapture({ createProcessor: currentProcessor });
   const bootstrap = createInvoiceCollectionSyncBootstrap({ createProcessor: currentProcessor });
   return {
-    capture: directCapture,
-    bootstrap: (): Promise<void> => bootstrap.bootstrap(),
-    requestReconnect: (): Promise<void> => bootstrap.requestReconnect(),
+    capture: (intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> => {
+      if (retired) {
+        return Promise.reject(new InvoiceCollectionCaptureFailure('La sesión de cobranza cambió.', false));
+      }
+      return directCapture(intent);
+    },
+    bootstrap: (): Promise<void> => retired ? Promise.resolve() : bootstrap.bootstrap(),
+    requestReconnect: (): Promise<void> => retired ? Promise.resolve() : bootstrap.requestReconnect(),
+    async retire(): Promise<void> {
+      retired = true;
+      try {
+        const current = resolvedProcessor ?? (processor ? await processor : null);
+        await current?.retire();
+      } catch {
+        // A processor that never initialized has no session-bound writes to drain.
+      }
+    },
   };
 }
 
-let productionRuntime: ReturnType<typeof createInvoiceCollectionSyncRuntime> | null = null;
+/** Prevents a replacement runtime from binding while the prior session is being destroyed. */
+export function createInvoiceCollectionSyncRuntimeLifecycle<T extends { retire(): Promise<void> }>(
+  createRuntime: () => T,
+) {
+  let runtime: T | null = null;
+  let suspended = false;
+  return {
+    current(): T | null {
+      if (suspended) return null;
+      runtime ??= createRuntime();
+      return runtime;
+    },
+    async suspend(): Promise<void> {
+      suspended = true;
+      const previous = runtime;
+      await previous?.retire();
+      if (runtime === previous) runtime = null;
+    },
+    resume(): void {
+      suspended = false;
+    },
+  };
+}
+
 let productionCapture: ReturnType<typeof createInvoiceCollectionGatedCapture> | null = null;
 
-function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSyncRuntime> {
-  productionRuntime ??= createInvoiceCollectionSyncRuntime({
+const productionRuntimeLifecycle = createInvoiceCollectionSyncRuntimeLifecycle(() =>
+  createInvoiceCollectionSyncRuntime({
     createProcessor: async () => {
       const [persistence, { submitInvoiceCollection }, { useSyncStore }, { useAuthStore }] = await Promise.all([
         import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
@@ -366,8 +439,10 @@ function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSy
         now: () => Date.now(),
       });
     },
-  });
-  return productionRuntime;
+  }));
+
+function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSyncRuntime> | null {
+  return productionRuntimeLifecycle.current();
 }
 
 /**
@@ -384,7 +459,11 @@ export async function captureCurrentInvoiceCollection(input: unknown): Promise<I
       productionCapture = createInvoiceCollectionGatedCapture({
         assertCurrentEmployeeDayBundleAllowsActions,
         createIntent: createInvoiceCollectionIntent,
-        captureIntent: (intent) => currentProductionRuntime().capture(intent),
+        captureIntent: (intent) => {
+          const runtime = currentProductionRuntime();
+          if (!runtime) throw new InvoiceCollectionCaptureFailure('La sesión de cobranza cambió.', false);
+          return runtime.capture(intent);
+        },
       });
     }
     return await productionCapture(input);
@@ -395,19 +474,26 @@ export async function captureCurrentInvoiceCollection(input: unknown): Promise<I
 
 /** Creates the production processor after auth/session restoration, then rehydrates its encrypted intents. */
 export async function bootstrapInvoiceCollectionSync(): Promise<void> {
-  await currentProductionRuntime().bootstrap();
+  await currentProductionRuntime()?.bootstrap();
 }
 
 /** Called from the existing NetInfo/foreground wake; safe before bootstrap. */
 export function requestInvoiceCollectionSync(): void {
-  void currentProductionRuntime().requestReconnect().catch(() => {
+  const runtime = currentProductionRuntime();
+  if (!runtime) return;
+  void runtime.requestReconnect().catch(() => {
     // Connectivity can wake before auth restoration. The shared runtime clears
     // a rejected processor promise so the post-rehydrate wake can retry it.
   });
 }
 
-/** Auth logout/account-switch discards the old session-bound processor. */
-export function resetInvoiceCollectionSync(): void {
-  productionRuntime = null;
+/** Auth logout/account-switch retires old writes before discarding their owner. */
+export async function resetInvoiceCollectionSync(): Promise<void> {
   productionCapture = null;
+  await productionRuntimeLifecycle.suspend();
+}
+
+/** Auth calls this only after the replacement principal/session is installed. */
+export function resumeInvoiceCollectionSync(): void {
+  productionRuntimeLifecycle.resume();
 }

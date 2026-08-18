@@ -9,6 +9,13 @@ export interface InvoiceCollectionReauthLatchDriver {
   remove(key: string): Promise<void>;
 }
 
+export interface InvoiceCollectionSessionCleanupDeps {
+  retireProcessor(): Promise<void>;
+  clearPreEnvelopeState?(): Promise<void>;
+  clearEncryptedSession(): Promise<void>;
+  clearReauthenticationLatch(): Promise<void>;
+}
+
 const LATCH_KEY_PREFIX = 'kf-reauth-v1';
 const LATCH_VALUE = '1';
 
@@ -31,4 +38,17 @@ export function createInvoiceCollectionReauthLatch(driver: InvoiceCollectionReau
       return driver.remove(latchKey(session));
     },
   };
+}
+
+/**
+ * Retire old writes before destructive cleanup, and keep the safety latch until
+ * deletion of the encrypted intent envelope has definitely succeeded.
+ */
+export async function retireAndClearInvoiceCollectionSessionState(
+  deps: InvoiceCollectionSessionCleanupDeps,
+): Promise<void> {
+  await deps.retireProcessor();
+  await deps.clearPreEnvelopeState?.();
+  await deps.clearEncryptedSession();
+  await deps.clearReauthenticationLatch();
 }

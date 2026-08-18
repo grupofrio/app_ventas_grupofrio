@@ -133,6 +133,26 @@ function createEncryptedHarness() {
   };
 }
 
+test('a failed reauth latch read happens before findOrInsert can commit an intent', async () => {
+  const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
+  let commits = 0;
+  const persistence = persistenceModule.createInvoiceCollectionReauthAwarePersistence({
+    async list() { return []; },
+    async insert() {},
+    async findOrInsert(candidate) {
+      commits += 1;
+      return candidate;
+    },
+    async transition() {},
+  }, {
+    async isRequired() { throw new Error('SecureStore read failed'); },
+    async markRequired() {},
+  });
+
+  await assert.rejects(() => persistence.findOrInsert(intent), /SecureStore read failed/);
+  assert.equal(commits, 0, 'a latch read failure must remain before the encrypted intent commit point');
+});
+
 test('background 401 reenters with reauth action and same-principal handoff replays the original UUID', async () => {
   const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
   const syncModule = await import('../src/services/invoiceCollectionSync.ts') as unknown as SyncModule;
@@ -399,6 +419,7 @@ test('failed destination-session activation keeps the old encrypted copy recover
 test('auth wiring chooses handoff only after the new principal is known and logout remains destructive', () => {
   const source = readFileSync(resolve('src/stores/useAuthStore.ts'), 'utf8');
   const api = readFileSync(resolve('src/services/api.ts'), 'utf8');
+  const sync = readFileSync(resolve('src/services/invoiceCollectionSync.ts'), 'utf8');
   const destructiveClear = source.slice(
     source.indexOf('async function clearCurrentEncryptedFieldData'),
     source.indexOf('export const useAuthStore'),
@@ -408,7 +429,7 @@ test('auth wiring chooses handoff only after the new principal is known and logo
 
   assert.match(login, /samePrincipalReauthentication/);
   assert.match(login, /transferCurrentInvoiceCollectionsForReauthentication/);
-  assert.match(login, /else\s*\{\s*await clearCurrentEncryptedFieldData\(\)/);
+  assert.match(login, /else\s*\{\s*set\(\{ isAuthenticated: false \}\);\s*await clearCurrentEncryptedFieldData\(\)/);
   assert(login.indexOf('const employeeId') < login.indexOf('samePrincipalReauthentication'));
   assert(login.indexOf('const companyId') < login.indexOf('samePrincipalReauthentication'));
   assert(login.indexOf('const nextSession') < login.indexOf('transferCurrentInvoiceCollectionsForReauthentication'));
@@ -419,14 +440,34 @@ test('auth wiring chooses handoff only after the new principal is known and logo
       > login.indexOf('await transferCurrentInvoiceCollectionsForReauthentication'),
     'the old latch clears only after the destination intent transfer is durable',
   );
+  assert(
+    login.lastIndexOf('resetInvoiceCollectionSync()')
+      < login.lastIndexOf('clearReauthenticationLatch:'),
+    'the old processor retires before same-principal cleanup can clear its latch',
+  );
   assert.match(login, /setAuthTokens\(result\.gf_employee_token, nextSession\.sessionId\)/);
   assert.match(api, /setAuthTokens\(gfToken: string, sessionId = createUuidV4\(\)\)/);
   assert.match(api, /setItemAsync\(STORE_KEYS\.SESSION_ID, sessionId\)/);
   assert.match(logout, /await clearCurrentEncryptedFieldData\(\)/);
   assert.match(destructiveClear, /clearInvoiceCollectionReauthenticationRequired/);
   assert(
-    destructiveClear.lastIndexOf('await clearInvoiceCollectionReauthenticationRequired')
-      < destructiveClear.lastIndexOf('await clearEncryptedSession'),
-    'logout/account-switch cleanup must destroy the session latch while the old identity is readable',
+    destructiveClear.indexOf('resetInvoiceCollectionSync()')
+      < destructiveClear.indexOf('clearReauthenticationLatch:'),
+    'logout/account-switch retires old requests before destroying their latch',
+  );
+  assert(
+    destructiveClear.lastIndexOf('clearReauthenticationLatch:')
+      > destructiveClear.lastIndexOf('clearEncryptedSession:'),
+    'logout/account-switch may clear the latch only after the old intent envelope is gone',
+  );
+  assert.match(destructiveClear, /finally\s*\{[\s\S]*await clearAuthTokens\(\)/);
+  assert.match(sync, /await productionRuntimeLifecycle\.suspend\(\)/);
+  assert(
+    login.lastIndexOf('resumeInvoiceCollectionSync()') > login.lastIndexOf('setFieldDataIdentity'),
+    'sync resumes only after the replacement field identity is installed',
+  );
+  assert(
+    login.lastIndexOf('requestInvoiceCollectionSync()') > login.lastIndexOf('resumeInvoiceCollectionSync()'),
+    'the first post-login wake must use the freshly resumed runtime owner',
   );
 });

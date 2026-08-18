@@ -7,6 +7,7 @@ interface SyncModule {
   createInvoiceCollectionSyncProcessor(deps: unknown): {
     capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
     reconcile(): Promise<void>;
+    retire(): Promise<void>;
   };
   createInvoiceCollectionDirectCapture(deps: {
     createProcessor: () => Promise<{ capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }> }>;
@@ -25,6 +26,13 @@ interface SyncModule {
     capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
     bootstrap(): Promise<void>;
     requestReconnect(): Promise<void>;
+  };
+  createInvoiceCollectionSyncRuntimeLifecycle<T extends { retire(): Promise<void> }>(
+    createRuntime: () => T,
+  ): {
+    current(): T | null;
+    suspend(): Promise<void>;
+    resume(): void;
   };
 }
 
@@ -637,4 +645,68 @@ test('a failed reauth marker write fails closed for the rest of the processor li
   assert.equal(latchWriteAttempts, 1, 'the independent durable latch is attempted before relying on memory only');
   assert.equal(stored.records[0].status, 'dispatching', 'the failed encrypted write must not invent durable reauth');
   assert.equal(stored.records[1].status, 'dispatching');
+});
+
+test('a retired session processor ignores a late 401 without recreating durable reauth state', async () => {
+  const mod = await loadSync();
+  const stored = createMemoryPersistence();
+  let transitionAttempts = 0;
+  let latchWriteAttempts = 0;
+  let rejectTransport!: (error: unknown) => void;
+  const transportResponse = new Promise<never>((_resolve, reject) => { rejectTransport = reject; });
+  const persistence = {
+    ...stored,
+    async transition(operationId: string, status: string, nowMs: number) {
+      transitionAttempts += 1;
+      await stored.transition(operationId, status, nowMs);
+    },
+    async markReauthenticationRequired() {
+      latchWriteAttempts += 1;
+    },
+  };
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 55,
+    transport: { collect: async () => transportResponse },
+  });
+
+  const capture = processor.capture(intent);
+  await Promise.resolve();
+  await processor.retire();
+  rejectTransport({ httpStatus: 401, code: 'session_expired', responseReceived: true });
+
+  assert.deepEqual(await capture, {
+    status: 'pending',
+    operationId: intent.operation_id,
+    needsReconciliation: true,
+  });
+  assert.equal(transitionAttempts, 0, 'the destroyed session envelope must stay destroyed');
+  assert.equal(latchWriteAttempts, 0, 'the destroyed old-session latch must not be recreated');
+});
+
+test('a wake during reset cannot bind a replacement runtime until the new identity resumes sync', async () => {
+  const mod = await loadSync();
+  let creations = 0;
+  let releaseRetirement!: () => void;
+  const retirement = new Promise<void>((resolve) => { releaseRetirement = resolve; });
+  const lifecycle = mod.createInvoiceCollectionSyncRuntimeLifecycle(() => ({
+    id: ++creations,
+    async retire() { await retirement; },
+  }));
+
+  const oldRuntime = lifecycle.current();
+  assert.equal(oldRuntime?.id, 1);
+  const reset = lifecycle.suspend();
+
+  assert.equal(lifecycle.current(), null, 'a concurrent connectivity wake must not create against old identity');
+  assert.equal(creations, 1);
+  releaseRetirement();
+  await reset;
+  assert.equal(lifecycle.current(), null, 'cleanup remains suspended after old durable writes drain');
+
+  lifecycle.resume();
+  const newRuntime = lifecycle.current();
+  assert.equal(newRuntime?.id, 2);
+  assert.notEqual(newRuntime, oldRuntime);
 });

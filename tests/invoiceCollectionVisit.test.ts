@@ -124,3 +124,14 @@ test('validates collection amounts against the selected snapshot residual', asyn
     assert.throws(() => logic.assertVisitCollectionAmount(invoice, amount), /monto|saldo/i);
   }
 });
+
+test('rejects non-finite residual bounds from an invalid invoice projection', async () => {
+  const logic = await loadLogic();
+
+  for (const amount_residual of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => logic.assertVisitCollectionAmount({ amount_residual }, 1),
+      /saldo/i,
+    );
+  }
+});

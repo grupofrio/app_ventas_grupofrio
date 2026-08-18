@@ -100,6 +100,9 @@ export function assertVisitCollectionAmount(
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
     throw new Error('El monto debe ser un número finito mayor que cero.');
   }
+  if (!Number.isFinite(invoice.amount_residual) || invoice.amount_residual <= 0) {
+    throw new Error('El saldo del snapshot no es válido.');
+  }
   if (amount > invoice.amount_residual) {
     throw new Error('El monto excede el saldo del snapshot.');
   }

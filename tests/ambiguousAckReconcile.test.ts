@@ -177,7 +177,9 @@ describe('INV-1B reconcileAmbiguousLedgerOperations (ACK intents)', () => {
       nowMs: () => 6_000,
       checkSaleDuplicate: async () => ({ duplicate: false }),
       replayGift: async () => undefined,
+      replayExchange: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
       replayConsignment: async (item) => {
         replayed.push(item.type);
@@ -207,7 +209,9 @@ describe('INV-1B reconcileAmbiguousLedgerOperations (ACK intents)', () => {
       nowMs: () => 7_000,
       checkSaleDuplicate: async () => ({ duplicate: false }),
       replayGift: async () => undefined,
+      replayExchange: async () => undefined,
       classifyGiftError: () => 'ambiguous',
+      classifyExchangeError: () => 'ambiguous',
       classifySaleCheckError: () => 'ambiguous',
       replayConsignment: async () => {
         throw Object.assign(new Error('timeout'), { code: 'timeout' });

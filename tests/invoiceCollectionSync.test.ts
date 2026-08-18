@@ -15,6 +15,15 @@ interface SyncModule {
     createIntent: (input: unknown) => unknown;
     captureIntent: (input: unknown) => Promise<{ status: string; operationId: string }>;
   }): (input: unknown) => Promise<{ status: string; operationId: string }>;
+  createInvoiceCollectionSyncRuntime(deps: {
+    createProcessor: () => Promise<{
+      capture(input: unknown): Promise<{ status: string; operationId: string }>;
+      reconcile(): Promise<void>;
+    }>;
+  }): {
+    capture(input: unknown): Promise<{ status: string; operationId: string }>;
+    requestReconnect(): Promise<void>;
+  };
 }
 
 async function loadSync(): Promise<SyncModule> {
@@ -94,6 +103,31 @@ test('a stale day bundle prevents intent creation, encrypted persistence, and tr
   await assert.rejects(() => capture(intent), /bundle vencido/);
   assert.equal(intentCreations, 0);
   assert.equal(captures, 0);
+});
+
+test('capture arms the shared reconnect runtime so an offline intent replays without restart', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence();
+  let online = false;
+  const sent: string[] = [];
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => online,
+    now: () => 12,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+  const runtime = mod.createInvoiceCollectionSyncRuntime({ createProcessor: async () => processor });
+
+  assert.deepEqual(await runtime.capture(intent), { status: 'captured_pending', operationId: intent.operation_id });
+  online = true;
+  await runtime.requestReconnect();
+  assert.deepEqual(sent, [intent.operation_id]);
+  assert.equal(persistence.records[0].status, 'applied');
 });
 
 test('online capture durably writes dispatching before send and response loss keeps its UUID for restart replay', async () => {

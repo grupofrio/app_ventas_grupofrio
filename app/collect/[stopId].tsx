@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -12,7 +12,7 @@ import { loadCurrentEmployeeDayBundle, prepareCurrentEmployeeDayBundle } from '.
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { createCurrentInvoiceCollectionPersistence } from '../../src/services/invoiceCollectionPersistence';
 import { captureCurrentInvoiceCollection } from '../../src/services/invoiceCollectionSync';
-import { assertVisitCollectionAmount, buildVisitCollectionState, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
+import { assertVisitCollectionAmount, buildVisitCollectionState, createVisitCollectionLifecycle, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
 import type { InvoiceCollectionPaymentMethod } from '../../src/services/invoiceCollection';
 
 const PAYMENT_METHODS: readonly { id: InvoiceCollectionPaymentMethod; label: string }[] = [
@@ -32,6 +32,7 @@ export default function CollectScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const numericStopId = Number(stopId);
+  const lifecycle = useRef(createVisitCollectionLifecycle()).current;
   const [collection, setCollection] = useState<VisitCollectionState | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
@@ -43,13 +44,18 @@ export default function CollectScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const loadVisit = useCallback(async (refreshBundle = false) => {
+    const requestGeneration = lifecycle.beginLoad();
     if (!Number.isSafeInteger(numericStopId) || numericStopId <= 0) {
-      setError('La parada no es válida.');
-      setLoading(false);
+      if (lifecycle.canPublishLoad(requestGeneration)) {
+        setError('La parada no es válida.');
+        setLoading(false);
+      }
       return;
     }
-    refreshBundle ? setRefreshing(true) : setLoading(true);
-    setError(null);
+    if (lifecycle.canPublishLoad(requestGeneration)) {
+      refreshBundle ? setRefreshing(true) : setLoading(true);
+      setError(null);
+    }
     try {
       if (refreshBundle) await prepareCurrentEmployeeDayBundle();
       const [loaded, persistence] = await Promise.all([
@@ -58,19 +64,27 @@ export default function CollectScreen() {
       ]);
       if (!loaded || !loaded.access.canRead) throw new Error('No hay un bundle de día disponible para esta visita.');
       const storedIntents = await persistence.list();
-      setCollection(buildVisitCollectionState(loaded.record.bundle, numericStopId, storedIntents));
-      if (refreshBundle) setRequiresFreshBundle(false);
+      if (lifecycle.canPublishLoad(requestGeneration)) {
+        setCollection(buildVisitCollectionState(loaded.record.bundle, numericStopId, storedIntents));
+        if (refreshBundle) setRequiresFreshBundle(false);
+      }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'No se pudo cargar la cobranza de esta parada.');
+      if (lifecycle.canPublishLoad(requestGeneration)) {
+        setError(loadError instanceof Error ? loadError.message : 'No se pudo cargar la cobranza de esta parada.');
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (lifecycle.canPublishLoad(requestGeneration)) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [numericStopId]);
+  }, [lifecycle, numericStopId]);
 
   useEffect(() => {
     void loadVisit();
   }, [loadVisit]);
+
+  useEffect(() => () => lifecycle.dispose(), [lifecycle]);
 
   const selectedInvoice = useMemo(
     () => collection?.invoices.find((entry) => entry.invoice.invoice_id === selectedInvoiceId) ?? null,
@@ -125,7 +139,9 @@ export default function CollectScreen() {
         now_ms: Date.now(),
       });
 
+      if (!lifecycle.isActive()) return;
       await refreshIntents();
+      if (!lifecycle.isActive()) return;
       if (outcome.status === 'applied') {
         setRequiresFreshBundle(true);
         setSelectedInvoiceId(null);
@@ -148,9 +164,11 @@ export default function CollectScreen() {
       }
       Alert.alert('Sesión requerida', 'No se pudo confirmar el cobro porque la sesión debe renovarse. El intent queda pendiente; no se emitió recibo.');
     } catch (captureError) {
-      Alert.alert('Cobro no registrado', captureError instanceof Error ? captureError.message : 'No se pudo registrar el cobro.');
+      if (lifecycle.isActive()) {
+        Alert.alert('Cobro no registrado', captureError instanceof Error ? captureError.message : 'No se pudo registrar el cobro.');
+      }
     } finally {
-      setSubmitting(false);
+      if (lifecycle.isActive()) setSubmitting(false);
     }
   }
 
@@ -169,7 +187,7 @@ export default function CollectScreen() {
         <TopBar title="Cobrar facturas" showBack />
         <View style={styles.center}>
           <Text style={typography.dim}>{error ?? 'No hay facturas disponibles para esta parada.'}</Text>
-          <Button label="Reintentar" onPress={() => void loadVisit()} variant="secondary" />
+          <Button label="Reintentar" onPress={() => void loadVisit(true)} variant="secondary" />
         </View>
       </SafeAreaView>
     );

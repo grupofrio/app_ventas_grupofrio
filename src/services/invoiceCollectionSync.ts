@@ -220,25 +220,46 @@ export function createInvoiceCollectionSyncBootstrap(deps: InvoiceCollectionSync
   };
 }
 
-let productionProcessor: Promise<InvoiceCollectionSyncProcessor> | null = null;
-let productionBootstrap: ReturnType<typeof createInvoiceCollectionSyncBootstrap> | null = null;
+export interface InvoiceCollectionSyncRuntimeDeps {
+  createProcessor: () => Promise<InvoiceCollectionSyncProcessor>;
+}
+
+/** One processor owner shared by direct capture, startup, and reconnect. */
+export function createInvoiceCollectionSyncRuntime(deps: InvoiceCollectionSyncRuntimeDeps) {
+  let processor: Promise<InvoiceCollectionSyncProcessor> | null = null;
+  function currentProcessor() {
+    processor ??= deps.createProcessor();
+    return processor;
+  }
+  const directCapture = createInvoiceCollectionDirectCapture({ createProcessor: currentProcessor });
+  const bootstrap = createInvoiceCollectionSyncBootstrap({ createProcessor: currentProcessor });
+  return {
+    capture: directCapture,
+    bootstrap: (): Promise<void> => bootstrap.bootstrap(),
+    requestReconnect: (): Promise<void> => bootstrap.requestReconnect(),
+  };
+}
+
+let productionRuntime: ReturnType<typeof createInvoiceCollectionSyncRuntime> | null = null;
 let productionCapture: ReturnType<typeof createInvoiceCollectionGatedCapture> | null = null;
 
-function currentProductionProcessor(): Promise<InvoiceCollectionSyncProcessor> {
-  productionProcessor ??= (async () => {
-    const [persistence, { submitInvoiceCollection }, { useSyncStore }] = await Promise.all([
-      import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
-      import('./invoiceCollection.ts'),
-      import('../stores/useSyncStore.ts'),
-    ]);
-    return createInvoiceCollectionSyncProcessor({
-      persistence,
-      transport: { collect: submitInvoiceCollection },
-      isOnline: () => useSyncStore.getState().isOnline,
-      now: () => Date.now(),
-    });
-  })();
-  return productionProcessor;
+function currentProductionRuntime(): ReturnType<typeof createInvoiceCollectionSyncRuntime> {
+  productionRuntime ??= createInvoiceCollectionSyncRuntime({
+    createProcessor: async () => {
+      const [persistence, { submitInvoiceCollection }, { useSyncStore }] = await Promise.all([
+        import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
+        import('./invoiceCollection.ts'),
+        import('../stores/useSyncStore.ts'),
+      ]);
+      return createInvoiceCollectionSyncProcessor({
+        persistence,
+        transport: { collect: submitInvoiceCollection },
+        isOnline: () => useSyncStore.getState().isOnline,
+        now: () => Date.now(),
+      });
+    },
+  });
+  return productionRuntime;
 }
 
 /**
@@ -251,13 +272,10 @@ export async function captureCurrentInvoiceCollection(input: unknown): Promise<I
     const [{ assertCurrentEmployeeDayBundleAllowsActions }, { createInvoiceCollectionIntent }] = await Promise.all([
       import('./dayBundleMutationGate.ts'), import('./invoiceCollection.ts'),
     ]);
-    const directCapture = createInvoiceCollectionDirectCapture({
-      createProcessor: currentProductionProcessor,
-    });
     productionCapture = createInvoiceCollectionGatedCapture({
       assertCurrentEmployeeDayBundleAllowsActions,
       createIntent: createInvoiceCollectionIntent,
-      captureIntent: directCapture,
+      captureIntent: (intent) => currentProductionRuntime().capture(intent),
     });
   }
   return productionCapture(input);
@@ -265,22 +283,16 @@ export async function captureCurrentInvoiceCollection(input: unknown): Promise<I
 
 /** Creates the production processor after auth/session restoration, then rehydrates its encrypted intents. */
 export async function bootstrapInvoiceCollectionSync(): Promise<void> {
-  if (!productionBootstrap) {
-    productionBootstrap = createInvoiceCollectionSyncBootstrap({
-      createProcessor: currentProductionProcessor,
-    });
-  }
-  await productionBootstrap.bootstrap();
+  await currentProductionRuntime().bootstrap();
 }
 
 /** Called from the existing NetInfo/foreground wake; safe before bootstrap. */
 export function requestInvoiceCollectionSync(): void {
-  void productionBootstrap?.requestReconnect();
+  void productionRuntime?.requestReconnect();
 }
 
 /** Auth logout/account-switch discards the old session-bound processor. */
 export function resetInvoiceCollectionSync(): void {
-  productionProcessor = null;
-  productionBootstrap = null;
+  productionRuntime = null;
   productionCapture = null;
 }

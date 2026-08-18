@@ -20,6 +20,12 @@ interface InvoiceCollectionVisitLogic {
     }[];
   };
   assertVisitCollectionAmount: (invoice: { amount_residual: number }, amount: unknown) => number;
+  createVisitCollectionLifecycle: () => {
+    beginLoad(): number;
+    canPublishLoad(generation: number): boolean;
+    isActive(): boolean;
+    dispose(): void;
+  };
 }
 
 async function loadLogic(): Promise<InvoiceCollectionVisitLogic> {
@@ -136,7 +142,7 @@ test('an applied intent permits a new selection only when the authoritative invo
   assert.equal(refreshed.invoices[0].intent, null);
 });
 
-test('an applied intent with no snapshot timestamp remains locked until a timestamped snapshot replaces it', async () => {
+test('an applied intent with no snapshot timestamp remains locked because freshness cannot be demonstrated', async () => {
   const logic = await loadLogic();
   const noTimestampBundle = {
     ...bundle,
@@ -153,8 +159,36 @@ test('an applied intent with no snapshot timestamp remains locked until a timest
       ...noTimestampBundle,
       invoice_snapshots: [{ ...noTimestampBundle.invoice_snapshots[0], as_of: '2026-08-18 14:10:00' }],
     }, 71, [applied]).invoices[0].collection_state,
-    'ready',
+    'requires_refresh',
   );
+});
+
+test('only a demonstrably newer authoritative snapshot unlocks the latest applied collection', async () => {
+  const logic = await loadLogic();
+  const olderApplied = { ...intent, operation_id: '22222222-2222-4aaa-8bbb-333333333333', snapshot_as_of: '2026-08-18 14:00:00', status: 'applied' as const };
+  const latestApplied = { ...intent, operation_id: '33333333-2222-4aaa-8bbb-333333333333', snapshot_as_of: '2026-08-18 14:05:00', status: 'applied' as const };
+  const at = (as_of: string | null) => logic.buildVisitCollectionState({
+    ...bundle,
+    invoice_snapshots: [{ ...bundle.invoice_snapshots[0], as_of }],
+  }, 71, [olderApplied, latestApplied]).invoices[0].collection_state;
+
+  for (const as_of of [null, 'not-a-timestamp', '2026-08-18 14:04:59', '2026-08-18 14:05:00', '2026-08-18T14:05:00Z']) {
+    assert.equal(at(as_of), 'requires_refresh', `must stay locked for ${as_of}`);
+  }
+  assert.equal(at('2026-08-18 14:05:01'), 'ready');
+});
+
+test('lifecycle guard rejects stale load completions and all UI publication after disposal', async () => {
+  const logic = await loadLogic();
+  const lifecycle = logic.createVisitCollectionLifecycle();
+  const older = lifecycle.beginLoad();
+  const newer = lifecycle.beginLoad();
+
+  assert.equal(lifecycle.canPublishLoad(older), false);
+  assert.equal(lifecycle.canPublishLoad(newer), true);
+  lifecycle.dispose();
+  assert.equal(lifecycle.canPublishLoad(newer), false);
+  assert.equal(lifecycle.isActive(), false);
 });
 
 test('validates collection amounts against the selected snapshot residual', async () => {

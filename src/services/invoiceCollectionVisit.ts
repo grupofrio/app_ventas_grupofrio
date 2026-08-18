@@ -38,6 +38,40 @@ function customerName(stop: Record<string, unknown>): string | null {
   return typeof name === 'string' && name.trim() ? name : null;
 }
 
+function snapshotAsOfMs(value: string | null): number | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})Z?$/.exec(value);
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  const parsed = new Date(ms);
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour || parsed.getUTCMinutes() !== minute || parsed.getUTCSeconds() !== second) {
+    return null;
+  }
+  return ms;
+}
+
+function appliedIntentRequiringRefresh(
+  intents: readonly InvoiceCollectionIntent[],
+  snapshotAsOf: string | null,
+): InvoiceCollectionIntent | undefined {
+  const applied = intents.filter((intent) => intent.status === 'applied');
+  if (applied.length === 0) return undefined;
+  const current = snapshotAsOfMs(snapshotAsOf);
+  const appliedWithTimes = applied.map((intent) => ({ intent, at: snapshotAsOfMs(intent.snapshot_as_of) }));
+  if (current === null || appliedWithTimes.some(({ at }) => at === null)) return applied[0];
+  const latest = Math.max(...appliedWithTimes.map(({ at }) => at as number));
+  if (current > latest) return undefined;
+  return appliedWithTimes.find(({ at }) => at === latest)?.intent;
+}
+
 function matchingIntent(
   intents: readonly InvoiceCollectionIntent[],
   stopId: number,
@@ -48,10 +82,31 @@ function matchingIntent(
   const active = matching.filter((intent) => intent.status !== 'applied');
   if (active.length > 1) throw new Error('Hay múltiples intents activos para la misma factura.');
   if (active[0]) return active[0];
-  // `as_of` is the backend-issued identity of the bounded invoice snapshot.
-  // An applied intent only unlocks after a different authoritative snapshot
-  // arrives; matching nulls are intentionally not treated as fresh.
-  return matching.find((intent) => intent.status === 'applied' && intent.snapshot_as_of === snapshotAsOf);
+  // Only a parseable snapshot later than every applied intent may unlock a
+  // new capture. A different spelling, an older timestamp, or absent metadata
+  // cannot demonstrate freshness and therefore remains safely locked.
+  return appliedIntentRequiringRefresh(matching, snapshotAsOf);
+}
+
+/** Guards UI publication for overlapping loads and unmounted visit screens. */
+export function createVisitCollectionLifecycle() {
+  let generation = 0;
+  let active = true;
+  return {
+    beginLoad(): number {
+      generation += 1;
+      return generation;
+    },
+    canPublishLoad(requestGeneration: number): boolean {
+      return active && requestGeneration === generation;
+    },
+    isActive(): boolean {
+      return active;
+    },
+    dispose(): void {
+      active = false;
+    },
+  };
 }
 
 function invoiceState(intent: InvoiceCollectionIntent | undefined): VisitInvoiceCollectionState {

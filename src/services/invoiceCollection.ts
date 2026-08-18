@@ -108,8 +108,14 @@ export function requestFromIntent(intent: InvoiceCollectionIntent): InvoiceColle
   });
 }
 
-function parseOpenInvoices(value: unknown): OpenInvoice[] {
-  const data = plainRecord(value);
+function successfulEnvelopeData(value: unknown, message: string): Record<string, unknown> {
+  const envelope = plainRecord(value);
+  if (envelope.ok !== true) throw new Error(message);
+  return plainRecord(envelope.data);
+}
+
+export function parseOpenInvoicesResponse(value: unknown): OpenInvoice[] {
+  const data = successfulEnvelopeData(value, 'La respuesta de facturas no es válida.');
   const rows = Array.isArray(data.invoices) ? data.invoices : null;
   if (!rows) throw new Error('La respuesta de facturas no es válida.');
   return rows.map((row) => {
@@ -127,14 +133,12 @@ function parseOpenInvoices(value: unknown): OpenInvoice[] {
   });
 }
 
-function parseServerResult(value: unknown, operationId: string): InvoiceCollectionServerResult {
-  const data = plainRecord(value);
-  if ((data.status !== 'applied' && data.status !== 'review_required') || data.operation_id !== operationId) {
+export function parseInvoiceCollectionServerResult(value: unknown, operationId: string): InvoiceCollectionServerResult {
+  const data = successfulEnvelopeData(value, 'La respuesta de cobranza no es válida.');
+  if (data.state !== 'applied' || data.operation_id !== operationId) {
     throw new Error('La respuesta de cobranza no es válida.');
   }
-  return data.status === 'applied'
-    ? { status: 'applied', operation_id: operationId }
-    : { status: 'review_required', operation_id: operationId, ...(typeof data.reason === 'string' ? { reason: data.reason } : {}) };
+  return { status: 'applied', operation_id: operationId };
 }
 
 /** Strict Employee-Bearer GET: the sole caller-supplied selector is stop_id. */
@@ -142,7 +146,7 @@ export async function fetchOpenInvoices(stopId: number): Promise<OpenInvoice[]> 
   positiveInteger(stopId, 'stop_id');
   const { getRest } = await import('./api.ts');
   const response = await getRest<unknown>(`/gf/logistics/api/employee/payments/open_invoices?stop_id=${stopId}`);
-  return parseOpenInvoices(response);
+  return parseOpenInvoicesResponse(response);
 }
 
 /** Strict Employee-Bearer POST: serialize only the immutable five-field DTO. */
@@ -156,5 +160,5 @@ export async function submitInvoiceCollection(request: InvoiceCollectionRequest)
     payment_method: request.payment_method,
   };
   const response = await postRest<unknown>('/gf/logistics/api/employee/payments/collect', body);
-  return parseServerResult(response, request.operation_id);
+  return parseInvoiceCollectionServerResult(response, request.operation_id);
 }

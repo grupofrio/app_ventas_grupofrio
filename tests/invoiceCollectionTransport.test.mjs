@@ -9,6 +9,11 @@ const connectivity = readFileSync(resolve('src/services/connectivity.ts'), 'utf8
 
 assert.match(transport, /payments\/open_invoices\?stop_id=\$\{stopId\}/, 'invoice list sends only stop_id');
 assert.match(transport, /payments\/collect/, 'invoice collection uses the dedicated employee endpoint');
+assert.match(
+  transport,
+  /const response = await postRest<unknown>\('\/gf\/logistics\/api\/employee\/payments\/collect', body\);\s*return parseInvoiceCollectionServerResult\(response, request\.operation_id\);/,
+  'a 409 from postRest must propagate to the sync error classifier before any success parser runs',
+);
 assert.match(transport, /operation_id:\s*request\.operation_id[\s\S]*stop_id:\s*request\.stop_id[\s\S]*invoice_id:\s*request\.invoice_id[\s\S]*amount:\s*request\.amount[\s\S]*payment_method:\s*request\.payment_method/, 'collection body is an exact narrow DTO');
 assert.doesNotMatch(transport, /partner_id|company_id|employee_id|journal_id|payment_method_line_id|sale_order_id|odooRpc|call_kw|execute_kw/i, 'collection transport cannot carry client accounting authority or generic RPC');
 assert.doesNotMatch(sync, /['"]payment['"]\s*[),]/, 'invoice intents never enter the legacy payment sync queue');

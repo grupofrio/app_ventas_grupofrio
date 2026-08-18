@@ -218,6 +218,39 @@ test('a failed durable applied transition leaves the original intent for restart
   assert.deepEqual(restartedPersistence.records, [{ ...intent, status: 'applied', updated_at_ms: 43 }]);
 });
 
+test('capture joins an in-flight reconcile replay for its effective UUID', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence([{ ...intent, status: 'pending' }]);
+  let sends = 0;
+  let resolveFirst!: () => void;
+  let rejectSecond: (() => void) | undefined;
+  const firstResponse = new Promise<{ status: 'applied'; operation_id: string }>((resolve) => {
+    resolveFirst = () => resolve({ status: 'applied', operation_id: intent.operation_id });
+  });
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 44,
+    transport: {
+      collect: async () => {
+        if (++sends === 1) return firstResponse;
+        return await new Promise<never>((_resolve, reject) => { rejectSecond = () => reject(new Error('network timeout')); });
+      },
+    },
+  });
+
+  const replay = processor.reconcile();
+  await Promise.resolve();
+  const capture = processor.capture({ ...intent, operation_id: '55555555-2222-4aaa-8bbb-333333333333' });
+  await Promise.resolve();
+  resolveFirst();
+  rejectSecond?.();
+  await Promise.all([replay, capture]);
+
+  assert.equal(sends, 1);
+  assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 44 }]);
+});
+
 test('authenticated validation failure is terminal review while revoked credentials stay unchanged for reauth', async () => {
   const mod = await loadSync();
   assert.deepEqual(

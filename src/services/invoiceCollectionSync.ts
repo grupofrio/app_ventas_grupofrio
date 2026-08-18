@@ -89,7 +89,7 @@ function isTerminal(status: InvoiceCollectionIntent['status']): boolean {
 
 export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSyncDeps) {
   let reconciliation: Promise<void> | null = null;
-  const captures = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
+  const operations = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
   async function send(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
     try {
       const result = await deps.transport.collect(requestFromIntent(intent));
@@ -114,29 +114,30 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       return { status, operationId: intent.operation_id, ...errorDetails };
     }
   }
+  function sendOnce(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
+    const inFlight = operations.get(intent.operation_id);
+    if (inFlight) return inFlight;
+    const operation = send(intent);
+    operations.set(intent.operation_id, operation);
+    void operation.then(
+      () => { operations.delete(intent.operation_id); },
+      () => { operations.delete(intent.operation_id); },
+    );
+    return operation;
+  }
   return {
     capture(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
       return (async () => {
         // This awaited encrypted write is the commit point before first send.
         const effective = await deps.persistence.findOrInsert(intent);
-        const inFlight = captures.get(effective.operation_id);
-        if (inFlight) return inFlight;
-        const capture = (async () => {
-          if (effective.status === 'review_required') {
-            return { status: 'review_required' as const, operationId: effective.operation_id };
-          }
-          if (!deps.isOnline()) {
-            await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
-            return { status: 'captured_pending' as const, operationId: effective.operation_id };
-          }
-          return send(effective);
-        })();
-        captures.set(effective.operation_id, capture);
-        void capture.then(
-          () => { captures.delete(effective.operation_id); },
-          () => { captures.delete(effective.operation_id); },
-        );
-        return capture;
+        if (effective.status === 'review_required') {
+          return { status: 'review_required' as const, operationId: effective.operation_id };
+        }
+        if (!deps.isOnline()) {
+          await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
+          return { status: 'captured_pending' as const, operationId: effective.operation_id };
+        }
+        return sendOnce(effective);
       })();
     },
     reconcile(): Promise<void> {
@@ -144,7 +145,7 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
       reconciliation = (async () => {
         if (!deps.isOnline()) return;
         for (const intent of await deps.persistence.list()) {
-          if (!isTerminal(intent.status)) await send(intent);
+          if (!isTerminal(intent.status)) await sendOnce(intent);
         }
       })().finally(() => { reconciliation = null; });
       return reconciliation;

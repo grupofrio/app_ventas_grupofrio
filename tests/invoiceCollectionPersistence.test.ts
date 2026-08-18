@@ -124,3 +124,17 @@ test('find-or-insert returns the effective nonterminal intent for one stop and i
     ...replacement, operation_id: '55555555-2222-4aaa-8bbb-333333333333', stop_id: 6,
   }, 'a different stop does not collide');
 });
+
+test('find-or-insert rejects a globally reused UUID with a different immutable binding', async () => {
+  const mod = await loadPersistence();
+  const harness = createEncryptedHarness();
+  const store = mod.createInvoiceCollectionPersistence({ load: harness.load, update: harness.update });
+  await store.findOrInsert(session, { ...intent, status: 'applied' });
+
+  await assert.rejects(
+    () => store.findOrInsert(session, { ...intent, invoice_id: 9, amount: 24, snapshot_residual: 29 }),
+    /operation_id ya pertenece a otro intent de cobranza/,
+  );
+  await store.transition(session, intent.operation_id, 'pending', 2);
+  assert.deepEqual(await store.list(session), [{ ...intent, status: 'pending', updated_at_ms: 2 }]);
+});

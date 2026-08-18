@@ -25,7 +25,8 @@ function parseStored(value: unknown): StoredInvoiceCollections {
 
 function identicalIntent(a: InvoiceCollectionIntent, b: InvoiceCollectionIntent): boolean {
   return a.operation_id === b.operation_id && a.stop_id === b.stop_id && a.invoice_id === b.invoice_id
-    && a.amount === b.amount && a.payment_method === b.payment_method;
+    && a.amount === b.amount && a.payment_method === b.payment_method
+    && a.snapshot_residual === b.snapshot_residual && a.snapshot_as_of === b.snapshot_as_of;
 }
 
 function isNonterminal(intent: InvoiceCollectionIntent): boolean {
@@ -50,6 +51,12 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       let effective!: InvoiceCollectionIntent;
       await deps.update(session, (api) => {
         const current = parseStored(api.getRecord<unknown>(INVOICE_COLLECTION_RECORD_KEY));
+        const operation = current.intents.find((candidate) => candidate.operation_id === intent.operation_id);
+        if (operation) {
+          if (!identicalIntent(operation, intent)) throw new Error('operation_id ya pertenece a otro intent de cobranza.');
+          effective = { ...operation };
+          return;
+        }
         const existing = current.intents.find((candidate) => candidate.stop_id === intent.stop_id
           && candidate.invoice_id === intent.invoice_id && isNonterminal(candidate));
         if (existing) {
@@ -69,13 +76,13 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
     ): Promise<void> {
       await deps.update(session, (api) => {
         const current = parseStored(api.getRecord<unknown>(INVOICE_COLLECTION_RECORD_KEY));
-        let matched = false;
+        const matching = current.intents.filter((intent) => intent.operation_id === operationId);
+        if (matching.length === 0) throw new Error('No existe el intent de cobranza.');
+        if (matching.length > 1) throw new Error('operation_id pertenece a múltiples intents de cobranza.');
         const intents = current.intents.map((intent) => {
           if (intent.operation_id !== operationId) return intent;
-          matched = true;
           return { ...intent, status, updated_at_ms: nowMs };
         });
-        if (!matched) throw new Error('No existe el intent de cobranza.');
         api.setRecord(INVOICE_COLLECTION_RECORD_KEY, { version: 1, intents });
       });
     },

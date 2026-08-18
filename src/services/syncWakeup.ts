@@ -31,6 +31,11 @@ export function isPotentiallyOnline(s: NetSnapshot): boolean {
   return s.isConnected === true && s.isInternetReachable !== false;
 }
 
+/** Outgoing mutations require an affirmative link and reachability result. */
+export function isConfirmedOnline(s: NetSnapshot): boolean {
+  return s.isConnected === true && s.isInternetReachable === true;
+}
+
 /**
  * ¿Esta transición de NetInfo debe despertar la cola?
  *

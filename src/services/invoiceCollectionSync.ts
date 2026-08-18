@@ -367,7 +367,10 @@ export async function bootstrapInvoiceCollectionSync(): Promise<void> {
 
 /** Called from the existing NetInfo/foreground wake; safe before bootstrap. */
 export function requestInvoiceCollectionSync(): void {
-  void productionRuntime?.requestReconnect();
+  void currentProductionRuntime().requestReconnect().catch(() => {
+    // Connectivity can wake before auth restoration. The shared runtime clears
+    // a rejected processor promise so the post-rehydrate wake can retry it.
+  });
 }
 
 /** Auth logout/account-switch discards the old session-bound processor. */

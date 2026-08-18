@@ -71,7 +71,7 @@ function testEligibility(m: Mod) {
 
 // ── Conectividad tri-estado: ¿despertar en esta transición? ──
 function testNetTransition(m: Mod) {
-  const { shouldWakeOnNetTransition, isPotentiallyOnline } = m;
+  const { shouldWakeOnNetTransition, isPotentiallyOnline, isConfirmedOnline } = m;
   const on = { isConnected: true, isInternetReachable: true };
   const phantom = { isConnected: true, isInternetReachable: null };
   const offHard = { isConnected: false, isInternetReachable: false };
@@ -103,6 +103,10 @@ function testNetTransition(m: Mod) {
   assert.equal(isPotentiallyOnline(phantom), true);
   assert.equal(isPotentiallyOnline(unreachable), false);
   assert.equal(isPotentiallyOnline(offHard), false);
+  assert.equal(isConfirmedOnline(phantom), false, 'unknown reachability is unsafe for outgoing transport');
+  assert.equal(isConfirmedOnline(unreachable), false);
+  assert.equal(isConfirmedOnline(noLink), false);
+  assert.equal(isConfirmedOnline(on), true);
   console.log('net transition: ok');
 }
 

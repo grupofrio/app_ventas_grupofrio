@@ -27,6 +27,7 @@ import { rehydrateAppState } from '../src/services/rehydrate';
 import { startConnectivityMonitor, checkConnectivity } from '../src/services/connectivity';
 import { initializeGPS, startLocationWatch } from '../src/services/gps';
 import { startBackgroundTracking } from '../src/services/gpsBackground';
+import { requestInvoiceCollectionSync } from '../src/services/invoiceCollectionSync';
 
 // F2.7: tope global de escala de fuente por accesibilidad del sistema. Sin
 // esto, un vendedor con "texto grande" activado en el teléfono puede romper
@@ -66,6 +67,15 @@ export default function RootLayout() {
     async function initApp() {
       console.log('[Init] Starting app initialization...');
       try {
+        // Establish conservative connectivity before any recovery path can
+        // consider an outgoing mutation. Reachability `null` remains offline.
+        console.log('[Init] Starting connectivity monitor...');
+        startConnectivityMonitor();
+        await checkConnectivity().catch(e => {
+          console.log('Connectivity check failed', e);
+          return false;
+        });
+
         // 1. Check auth tokens + restore employee data
         const hasTokens = await hasAuthTokens();
         console.log('[Init] Auth tokens found:', hasTokens);
@@ -83,6 +93,10 @@ export default function RootLayout() {
             // Rehydrate the employee-scoped local state before starting GPS.
             console.log('[Init] Rehydrating app state...');
             await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
+            // Dedicated collection replay is deliberately off the critical
+            // rehydration path. Its processor checks the confirmed online bit;
+            // the connectivity monitor later wakes this same singleton.
+            requestInvoiceCollectionSync();
 
             // GPS initialization
             console.log('[Init] Initializing GPS...');
@@ -94,11 +108,6 @@ export default function RootLayout() {
               .catch(e => console.log('[gps] GPS startup not available', e));
           }
         }
-
-        // 4. Connectivity monitor
-        console.log('[Init] Starting connectivity monitor...');
-        startConnectivityMonitor();
-        await checkConnectivity().catch(e => console.log('Connectivity check failed'));
 
       } catch (error) {
         console.error('[Init] Critical error during init:', error);

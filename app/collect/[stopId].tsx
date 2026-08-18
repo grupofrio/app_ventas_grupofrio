@@ -97,7 +97,9 @@ export default function CollectScreen() {
     && Number.isFinite(numericAmount)
     && numericAmount > 0
     && numericAmount <= selectedInvoice.invoice.amount_residual;
-  const interactionDisabled = loading || refreshing || submitting || requiresFreshBundle;
+  const snapshotRequiresRefresh = collection?.invoices.some((entry) => entry.collection_state === 'requires_refresh') ?? false;
+  const mustRefreshBundle = requiresFreshBundle || snapshotRequiresRefresh;
+  const interactionDisabled = loading || refreshing || submitting || mustRefreshBundle;
   const canCollect = !interactionDisabled && amountIsValid;
 
   async function refreshIntents(): Promise<void> {
@@ -127,7 +129,7 @@ export default function CollectScreen() {
       if (outcome.status === 'applied') {
         setRequiresFreshBundle(true);
         setSelectedInvoiceId(null);
-        Alert.alert('Cobro aplicado', `El servidor confirmó el cobro. Recibo: ${outcome.operationId}.`, [
+        Alert.alert('Cobro aplicado', `El servidor confirmó el cobro. Operación: ${outcome.operationId}.`, [
           { text: 'Actualizar bundle', onPress: () => void loadVisit(true) },
           { text: 'Volver', onPress: () => router.back() },
         ]);
@@ -178,9 +180,10 @@ export default function CollectScreen() {
       <TopBar title="Cobrar facturas" showBack />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={typography.dim}>Parada #{collection.stop_id}</Text>
+        {collection.customer_name ? <Text style={typography.body}>{collection.customer_name}</Text> : null}
         {collection.snapshot_as_of ? <Text style={typography.dimSmall}>Snapshot: {collection.snapshot_as_of}</Text> : null}
 
-        {requiresFreshBundle ? (
+        {mustRefreshBundle ? (
           <Card style={styles.notice}>
             <Text style={typography.body}>El cobro aplicado invalidó este snapshot.</Text>
             <Text style={typography.dim}>Actualiza el bundle antes de intentar otro cobro en esta parada.</Text>
@@ -202,14 +205,20 @@ export default function CollectScreen() {
               <View style={styles.invoiceCopy}>
                 <Text style={typography.body}>{entry.invoice.name}</Text>
                 <Text style={typography.dimSmall}>{entry.invoice.due_date ? `Vence ${entry.invoice.due_date}` : 'Sin fecha de vencimiento'} · {entry.invoice.currency}</Text>
-                {blocked ? <Text style={[typography.dimSmall, styles.blockedText]}>{entry.collection_state === 'pending' ? 'Cobro pendiente: no se generará otro envío.' : 'Cobro en revisión: no se generará otro envío.'}</Text> : null}
+                {blocked ? <Text style={[typography.dimSmall, styles.blockedText]}>{
+                  entry.collection_state === 'pending'
+                    ? 'Cobro pendiente: no se generará otro envío.'
+                    : entry.collection_state === 'requires_refresh'
+                    ? 'Cobro aplicado a este snapshot: actualiza el bundle antes de volver a cobrar.'
+                    : 'Cobro en revisión: no se generará otro envío.'
+                }</Text> : null}
               </View>
               <Text style={[typography.metricValue, styles.invoiceAmount]}>{formatCurrency(entry.invoice.amount_residual)}</Text>
             </TouchableOpacity>
           );
         })}
 
-        {selectedInvoice && !requiresFreshBundle ? (
+        {selectedInvoice && !mustRefreshBundle ? (
           <Card style={styles.form}>
             <Text style={typography.sectionTitle}>Factura seleccionada</Text>
             <Text style={typography.body}>{selectedInvoice.invoice.name}</Text>

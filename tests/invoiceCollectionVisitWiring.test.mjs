@@ -27,6 +27,9 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.match(source, /createCurrentInvoiceCollectionPersistence/);
   assert.match(source, /buildVisitCollectionState/);
   assert.match(source, /captureCurrentInvoiceCollection/);
+  assert.match(source, /collection\.customer_name/);
+  assert.doesNotMatch(source, /Recibo:/);
+  assert.match(source, /Operación: \$\{outcome\.operationId\}/);
   assert.doesNotMatch(source, /useSyncStore|defaultPaymentJournalId|collectPaymentIntent|payments\/create|postRpc|odooRpc/);
   assert(action.indexOf('assertCurrentEmployeeDayBundleAllowsActions') < action.indexOf('captureCurrentInvoiceCollection'), 'the mutation gate must run before direct capture');
 });

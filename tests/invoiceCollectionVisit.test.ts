@@ -4,6 +4,7 @@ import test from 'node:test';
 interface InvoiceCollectionVisitLogic {
   buildVisitCollectionState: (bundle: unknown, stopId: number, intents: unknown[]) => {
     stop_id: number;
+    customer_name: string | null;
     snapshot_as_of: string | null;
     invoices: readonly {
       invoice: Readonly<{
@@ -14,7 +15,7 @@ interface InvoiceCollectionVisitLogic {
         currency: string;
         amount_residual: number;
       }>;
-      collection_state: 'ready' | 'pending' | 'review_required';
+      collection_state: 'ready' | 'pending' | 'review_required' | 'requires_refresh';
       intent: Readonly<{ operation_id: string; status: string }> | null;
     }[];
   };
@@ -30,7 +31,7 @@ const bundle = {
   operational_date: '2026-08-18',
   expires_at: null,
   plan: { id: 1, date: '2026-08-18', state: 'in_progress', route_id: 2, vehicle_id: 3 },
-  stops: [{ id: 71, sequence: 1, state: 'in_progress', kind: 'customer', customer: null, payment_term: null }],
+  stops: [{ id: 71, sequence: 1, state: 'in_progress', kind: 'customer', customer: { id: 501, name: 'Abarrotes del Centro' }, payment_term: null }],
   catalog: [], directory: [], no_sale_reasons: [], gift_reasons: [], competitors: [],
   invoice_snapshots: [{
     stop_id: 71,
@@ -64,6 +65,7 @@ test('projects only the selected stop snapshot and preserves invoice display fie
 
   assert.deepEqual(logic.buildVisitCollectionState(bundle, 71, []), {
     stop_id: 71,
+    customer_name: 'Abarrotes del Centro',
     snapshot_as_of: '2026-08-18 14:00:00',
     invoices: [{
       invoice: bundle.invoice_snapshots[0].invoices[0],
@@ -97,7 +99,7 @@ test('rejects a duplicate invoice id inside the selected snapshot', async () => 
   );
 });
 
-test('projects pending and review intents as immutable blockers while applied intents do not block collection', async () => {
+test('projects pending, review, and same-snapshot applied intents as immutable blockers', async () => {
   const logic = await loadLogic();
 
   for (const status of ['dispatching', 'pending'] as const) {
@@ -111,8 +113,48 @@ test('projects pending and review intents as immutable blockers while applied in
   assert.deepEqual(review.invoices[0].intent, { operation_id: intent.operation_id, status: 'review_required' });
 
   const applied = logic.buildVisitCollectionState(bundle, 71, [{ ...intent, status: 'applied' }]);
-  assert.equal(applied.invoices[0].collection_state, 'ready');
-  assert.equal(applied.invoices[0].intent, null);
+  assert.equal(applied.invoices[0].collection_state, 'requires_refresh');
+  assert.deepEqual(applied.invoices[0].intent, { operation_id: intent.operation_id, status: 'applied' });
+});
+
+test('an applied intent permits a new selection only when the authoritative invoice snapshot changes', async () => {
+  const logic = await loadLogic();
+  const applied = { ...intent, status: 'applied' as const };
+
+  const remounted = logic.buildVisitCollectionState(bundle, 71, [applied]);
+  assert.equal(remounted.invoices[0].collection_state, 'requires_refresh');
+
+  const freshBundle = {
+    ...bundle,
+    invoice_snapshots: [{
+      ...bundle.invoice_snapshots[0],
+      as_of: '2026-08-18 14:05:00',
+    }],
+  };
+  const refreshed = logic.buildVisitCollectionState(freshBundle, 71, [applied]);
+  assert.equal(refreshed.invoices[0].collection_state, 'ready');
+  assert.equal(refreshed.invoices[0].intent, null);
+});
+
+test('an applied intent with no snapshot timestamp remains locked until a timestamped snapshot replaces it', async () => {
+  const logic = await loadLogic();
+  const noTimestampBundle = {
+    ...bundle,
+    invoice_snapshots: [{ ...bundle.invoice_snapshots[0], as_of: null }],
+  };
+  const applied = { ...intent, snapshot_as_of: null, status: 'applied' as const };
+
+  assert.equal(
+    logic.buildVisitCollectionState(noTimestampBundle, 71, [applied]).invoices[0].collection_state,
+    'requires_refresh',
+  );
+  assert.equal(
+    logic.buildVisitCollectionState({
+      ...noTimestampBundle,
+      invoice_snapshots: [{ ...noTimestampBundle.invoice_snapshots[0], as_of: '2026-08-18 14:10:00' }],
+    }, 71, [applied]).invoices[0].collection_state,
+    'ready',
+  );
 });
 
 test('validates collection amounts against the selected snapshot residual', async () => {

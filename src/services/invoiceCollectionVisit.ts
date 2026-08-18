@@ -9,7 +9,7 @@
 import type { DayBundle, OpenInvoiceSnapshot } from './employeeDayBundleLogic.ts';
 import type { InvoiceCollectionIntent } from './invoiceCollection.ts';
 
-export type VisitInvoiceCollectionState = 'ready' | 'pending' | 'review_required';
+export type VisitInvoiceCollectionState = 'ready' | 'pending' | 'review_required' | 'requires_refresh';
 
 export interface VisitCollectionInvoice {
   readonly invoice: Readonly<OpenInvoiceSnapshot>;
@@ -19,28 +19,44 @@ export interface VisitCollectionInvoice {
 
 export interface VisitCollectionState {
   readonly stop_id: number;
+  readonly customer_name: string | null;
   readonly snapshot_as_of: string | null;
   readonly invoices: readonly VisitCollectionInvoice[];
 }
 
-function hasStopId(stop: unknown, stopId: number): boolean {
-  return typeof stop === 'object' && stop !== null && !Array.isArray(stop)
-    && (stop as { id?: unknown }).id === stopId;
+function matchingStop(bundle: DayBundle, stopId: number): Record<string, unknown> {
+  const stop = bundle.stops.find((candidate) => typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate)
+    && (candidate as { id?: unknown }).id === stopId);
+  if (!stop) throw new Error('El stop no existe en el bundle validado.');
+  return stop as Record<string, unknown>;
+}
+
+function customerName(stop: Record<string, unknown>): string | null {
+  const customer = stop.customer;
+  if (typeof customer !== 'object' || customer === null || Array.isArray(customer)) return null;
+  const name = (customer as Record<string, unknown>).name;
+  return typeof name === 'string' && name.trim() ? name : null;
 }
 
 function matchingIntent(
   intents: readonly InvoiceCollectionIntent[],
   stopId: number,
   invoiceId: number,
+  snapshotAsOf: string | null,
 ): InvoiceCollectionIntent | undefined {
-  const active = intents.filter((intent) => intent.stop_id === stopId && intent.invoice_id === invoiceId
-    && intent.status !== 'applied');
+  const matching = intents.filter((intent) => intent.stop_id === stopId && intent.invoice_id === invoiceId);
+  const active = matching.filter((intent) => intent.status !== 'applied');
   if (active.length > 1) throw new Error('Hay múltiples intents activos para la misma factura.');
-  return active[0];
+  if (active[0]) return active[0];
+  // `as_of` is the backend-issued identity of the bounded invoice snapshot.
+  // An applied intent only unlocks after a different authoritative snapshot
+  // arrives; matching nulls are intentionally not treated as fresh.
+  return matching.find((intent) => intent.status === 'applied' && intent.snapshot_as_of === snapshotAsOf);
 }
 
 function invoiceState(intent: InvoiceCollectionIntent | undefined): VisitInvoiceCollectionState {
   if (!intent) return 'ready';
+  if (intent.status === 'applied') return 'requires_refresh';
   if (intent.status === 'review_required') return 'review_required';
   return 'pending';
 }
@@ -65,9 +81,7 @@ export function buildVisitCollectionState(
   stopId: number,
   intents: readonly InvoiceCollectionIntent[],
 ): VisitCollectionState {
-  if (!bundle.stops.some((stop) => hasStopId(stop, stopId))) {
-    throw new Error('El stop no existe en el bundle validado.');
-  }
+  const stop = matchingStop(bundle, stopId);
 
   const snapshots = (bundle.invoice_snapshots ?? []).filter((snapshot) => snapshot.stop_id === stopId);
   if (snapshots.length !== 1) {
@@ -81,7 +95,7 @@ export function buildVisitCollectionState(
       throw new Error('invoice_id duplicado dentro del snapshot seleccionado.');
     }
     invoiceIds.add(invoice.invoice_id);
-    const intent = matchingIntent(intents, stopId, invoice.invoice_id);
+    const intent = matchingIntent(intents, stopId, invoice.invoice_id, snapshot.as_of);
     return {
       invoice: copyInvoice(invoice),
       collection_state: invoiceState(intent),
@@ -89,7 +103,7 @@ export function buildVisitCollectionState(
     };
   });
 
-  return { stop_id: stopId, snapshot_as_of: snapshot.as_of, invoices };
+  return { stop_id: stopId, customer_name: customerName(stop), snapshot_as_of: snapshot.as_of, invoices };
 }
 
 /** Validates a user-entered amount against one projected snapshot invoice. */

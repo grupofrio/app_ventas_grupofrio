@@ -9,6 +9,7 @@ import {
   createOpenNoSaleIntent,
   noSaleIntentRecordKey,
   parseNoSaleIntent,
+  assertNoSaleIntentCanOpen,
   resolveNoSaleOperationId,
   withNoSaleIntentState,
 } from '../src/services/noSaleOperationPersistenceLogic.ts';
@@ -209,5 +210,43 @@ describe('no-sale durable operation identity', () => {
     assert.ok(parsed);
     assert.equal(parsed!.reason_code, 'other');
     assert.equal(parsed!.operation_id, OP);
+  });
+
+  it('round-trips review_required evidence without minting a replacement UUID', () => {
+    const open = createOpenNoSaleIntent({
+      stopId: 7,
+      planId: null,
+      operationalDate: null,
+      reasonCode: 'closed',
+      reasonId: 1,
+      notes: '',
+      competitor: null,
+      photoUris: ['file://evidence.jpg'],
+      operationId: OP,
+    });
+    const review = withNoSaleIntentState(open, 'review_required');
+    const parsed = parseNoSaleIntent(review);
+    assert.ok(parsed);
+    assert.equal(parsed!.state, 'review_required');
+    assert.equal(parsed!.operation_id, OP);
+    assert.deepEqual(parsed!.photo_uris, ['file://evidence.jpg']);
+  });
+
+  it('rejects any attempt to reopen review_required evidence', () => {
+    const review = withNoSaleIntentState(
+      createOpenNoSaleIntent({
+        stopId: 7,
+        planId: null,
+        operationalDate: null,
+        reasonCode: 'closed',
+        reasonId: 1,
+        notes: '',
+        competitor: null,
+        photoUris: [],
+        operationId: OP,
+      }),
+      'review_required',
+    );
+    assert.throws(() => assertNoSaleIntentCanOpen(review), /revisión/i);
   });
 });

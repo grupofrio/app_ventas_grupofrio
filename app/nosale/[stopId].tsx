@@ -30,6 +30,7 @@ import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import {
   persistOpenNoSaleIntent,
   retireNoSaleIntent,
+  markNoSaleIntentReviewRequired,
   loadNoSaleIntent,
   type NoSaleIntentKeyParts,
 } from '../../src/services/noSaleOperationPersistence';
@@ -55,6 +56,7 @@ export default function NoSaleScreen() {
   } = useVisitStore();
 
   const enqueue = useSyncStore((s) => s.enqueue);
+  const persistQueue = useSyncStore((s) => s.persistQueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
@@ -64,6 +66,7 @@ export default function NoSaleScreen() {
   const [notes, setNotes] = useState(noSaleNotes);
   const [submitting, setSubmitting] = useState(false);
   const [rehydratedOpId, setRehydratedOpId] = useState<string | null>(null);
+  const [reviewRequired, setReviewRequired] = useState(false);
   const noSaleReasons = useEmployeeDayBundleStore((s) => s.noSaleReasons);
   const competitors = useEmployeeDayBundleStore((s) => s.competitors);
   const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
@@ -86,7 +89,13 @@ export default function NoSaleScreen() {
     let cancelled = false;
     void (async () => {
       const existing = await loadNoSaleIntent(intentParts);
-      if (cancelled || !existing || existing.state !== 'open') return;
+      if (cancelled || !existing) return;
+      if (existing.state === 'review_required') {
+        setRehydratedOpId(existing.operation_id);
+        setReviewRequired(true);
+        return;
+      }
+      if (existing.state !== 'open') return;
       setRehydratedOpId(existing.operation_id);
       if (existing.reason_code) {
         const match = noSaleReasons.find((r) => r.code === existing.reason_code);
@@ -132,7 +141,7 @@ export default function NoSaleScreen() {
     photoTaken: noSalePhotoTaken,
     competitorCatalogAvailable,
   });
-  const canSave = validationIssue === null && dayBundleAccess?.canRunActions === true;
+  const canSave = validationIssue === null && dayBundleAccess?.canRunActions === true && !reviewRequired;
   const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
@@ -165,6 +174,13 @@ export default function NoSaleScreen() {
     } else {
       Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
     }
+  }
+
+  async function preserveForReview(message: string) {
+    if (!intentParts) return;
+    await markNoSaleIntentReviewRequired(intentParts);
+    setReviewRequired(true);
+    Alert.alert('Revisión requerida', message);
   }
 
   async function handleSave() {
@@ -200,69 +216,80 @@ export default function NoSaleScreen() {
         notes,
         competitor: effectiveCompetitor,
         photoUris: noSalePhotoUris,
+        latitude,
+        longitude,
         operationId: rehydratedOpId ?? undefined,
       });
       const operationId = intent.operation_id;
       setRehydratedOpId(operationId);
+      const capturedLatitude = intent.capture_latitude ?? latitude ?? 0;
+      const capturedLongitude = intent.capture_longitude ?? longitude ?? 0;
+      const capturedReasonCode = intent.reason_code;
+      const capturedReasonId = intent.reason_id ?? selectedReason.id;
+      const capturedNotes = intent.notes;
+      const capturedCompetitor = intent.competitor;
+      const capturedPhotoUris = intent.photo_uris;
 
       if (isOffrouteVisit) {
-        const closePayload = offrouteVisitId
-          ? {
-              visit_id: offrouteVisitId,
-              result_status: 'no_sale' as const,
-              latitude: latitude || 0,
-              longitude: longitude || 0,
-              notes: `No venta: ${selectedReason.code || ''} ${notes || ''}`.trim(),
-            }
-          : null;
+        if (!offrouteVisitId) {
+          await preserveForReview(
+            'No pudimos validar el cierre de la visita especial. La no-venta quedó pendiente de conciliación.',
+          );
+          return;
+        }
+        const closePayload = {
+          visit_id: offrouteVisitId,
+          result_status: 'no_sale' as const,
+          latitude: capturedLatitude,
+          longitude: capturedLongitude,
+          notes: `No venta: ${capturedReasonCode || ''} ${capturedNotes || ''}`.trim(),
+        };
 
         if (!isOnline) {
           let closeSyncId: string | null = null;
-          if (closePayload) {
-            closeSyncId = enqueue('offroute_visit_close', {
-              ...closePayload,
-              operation_id: operationId,
-              timestamp: Date.now(),
-            });
-          }
+          closeSyncId = enqueue('offroute_visit_close', {
+            ...closePayload,
+            operation_id: operationId,
+            timestamp: Date.now(),
+          }, { operationId });
           enqueueVisitPhotos({
             stopId: stop.id,
-            photoUris: noSalePhotoUris,
+            photoUris: capturedPhotoUris,
             enqueue,
-            dependsOn: closeSyncId ? [closeSyncId] : undefined,
+            dependsOn: [closeSyncId],
           });
+          await persistQueue();
           await retireNoSaleIntent(intentParts, 'completed');
           finalizeNoSaleLocally();
           return;
         }
 
         let closeSyncId: string | null = null;
-        if (closePayload) {
-          try {
-            await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
-            if (isRetryableSyncErrorMessage(message)) {
-              closeSyncId = enqueue('offroute_visit_close', {
-                ...closePayload,
-                operation_id: operationId,
-                timestamp: Date.now(),
-              });
-            } else {
-              Alert.alert(
-                'Cierre pendiente en servidor',
-                'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
-              );
-            }
+        try {
+          await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+          if (isRetryableSyncErrorMessage(message)) {
+            closeSyncId = enqueue('offroute_visit_close', {
+              ...closePayload,
+              operation_id: operationId,
+              timestamp: Date.now(),
+            }, { operationId });
+          } else {
+            await preserveForReview(
+              'El servidor rechazó el cierre de la visita especial. Conservamos la no-venta para conciliación; no se cerró localmente.',
+            );
+            return;
           }
         }
 
         enqueueVisitPhotos({
           stopId: stop.id,
-          photoUris: noSalePhotoUris,
+          photoUris: capturedPhotoUris,
           enqueue,
           dependsOn: closeSyncId ? [closeSyncId] : undefined,
         });
+        await persistQueue();
         await retireNoSaleIntent(intentParts, 'completed');
         finalizeNoSaleLocally();
         return;
@@ -272,13 +299,13 @@ export default function NoSaleScreen() {
       // Incident chatter is supplementary only and is not invoked on this path.
       const checkoutPayload = buildCheckoutPayload({
         stopId: stop.id,
-        latitude: latitude || 0,
-        longitude: longitude || 0,
+        latitude: capturedLatitude,
+        longitude: capturedLongitude,
         saleTotal: 0,
-        noSaleReasonId: selectedReason.id,
-        noSaleReasonCode: selectedReason.code,
-        noSaleNotes: notes,
-        noSaleCompetitor: effectiveCompetitor,
+        noSaleReasonId: capturedReasonId,
+        noSaleReasonCode: capturedReasonCode,
+        noSaleNotes: capturedNotes,
+        noSaleCompetitor: capturedCompetitor,
       });
 
       const enqueueCheckoutAndPhotos = () => {
@@ -289,10 +316,11 @@ export default function NoSaleScreen() {
             operation_id: operationId,
             timestamp: Date.now(),
           },
+          { operationId },
         );
         enqueueVisitPhotos({
           stopId: stop.id,
-          photoUris: noSalePhotoUris,
+          photoUris: capturedPhotoUris,
           enqueue,
           dependsOn: [checkoutId],
         });
@@ -300,6 +328,7 @@ export default function NoSaleScreen() {
 
       if (!isOnline) {
         enqueueCheckoutAndPhotos();
+        await persistQueue();
         await retireNoSaleIntent(intentParts, 'completed');
         finalizeNoSaleLocally();
         return;
@@ -321,9 +350,10 @@ export default function NoSaleScreen() {
         );
         enqueueVisitPhotos({
           stopId: stop.id,
-          photoUris: noSalePhotoUris,
+          photoUris: capturedPhotoUris,
           enqueue,
         });
+        await persistQueue();
         await retireNoSaleIntent(intentParts, 'completed');
         finalizeNoSaleLocally();
       } catch (error) {
@@ -334,6 +364,7 @@ export default function NoSaleScreen() {
             'Sincronización pendiente',
             'No se pudo confirmar la no-venta con el servidor. La visita quedó pendiente de sincronización.',
           );
+          await persistQueue();
           await retireNoSaleIntent(intentParts, 'completed');
           finalizeNoSaleLocally();
           return;
@@ -368,6 +399,13 @@ export default function NoSaleScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Text style={[typography.dim, styles.hint]}>Alimenta KoldDemand para mejorar forecasts.</Text>
+
+        {reviewRequired ? (
+          <View style={styles.reviewRequiredCard}>
+            <Text style={typography.body}>Esta no-venta requiere revisión antes de cerrar la visita.</Text>
+            <Text style={typography.dim}>Conservamos la evidencia y el mismo operation_id para conciliación.</Text>
+          </View>
+        ) : null}
 
         <Text style={typography.sectionTitle}>¿Por qué no se vendió?</Text>
         <View style={styles.chipContainer}>
@@ -466,6 +504,13 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   hint: { color: colors.textDim, marginBottom: 14 },
+  reviewRequiredCard: {
+    backgroundColor: colors.warningAlpha12,
+    borderRadius: radii.card,
+    padding: 14,
+    gap: 4,
+    marginBottom: 16,
+  },
   chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   textArea: {
     backgroundColor: colors.card,

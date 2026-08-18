@@ -11,18 +11,18 @@ const syncStore = readFileSync(resolve(REPO_ROOT, 'src/stores/useSyncStore.ts'),
 function main() {
   assert.match(
     noSaleScreen,
-    /noSaleReasonCode: selectedReason\.code/,
-    'el motivo debe viajar como código estable del catálogo, no como id',
+    /noSaleReasonCode: capturedReasonCode/,
+    'el motivo reenviado debe ser el código estable congelado en el intent',
   );
   assert.match(
     noSaleScreen,
-    /noSaleNotes: notes/,
-    'las notas del vendedor deben viajar en el checkout',
+    /noSaleNotes: capturedNotes/,
+    'el checkout debe reutilizar las notas ligadas al operation_id original',
   );
   assert.match(
     noSaleScreen,
-    /noSaleCompetitor: effectiveCompetitor/,
-    'el competidor viaja solo cuando el motivo competitor lo resolvió',
+    /noSaleCompetitor: capturedCompetitor/,
+    'el competidor reenviado debe permanecer ligado al operation_id original',
   );
 
   assert.match(

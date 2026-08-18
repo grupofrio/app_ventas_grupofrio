@@ -10,7 +10,11 @@ function createUuidV4(): string {
   });
 }
 
-export type NoSaleIntentState = 'open' | 'completed' | 'rejected';
+/**
+ * `review_required` is terminal for automatic replay. It preserves the exact
+ * capture/evidence when the physical or off-route outcome cannot be verified.
+ */
+export type NoSaleIntentState = 'open' | 'completed' | 'rejected' | 'review_required';
 
 export interface NoSaleIntentV1 {
   version: 1;
@@ -23,6 +27,9 @@ export interface NoSaleIntentV1 {
   notes: string;
   competitor: string | null;
   photo_uris: string[];
+  /** Frozen at first capture when available; absent legacy records read as null. */
+  capture_latitude: number | null;
+  capture_longitude: number | null;
   state: NoSaleIntentState;
   created_at: string;
   updated_at: string;
@@ -67,7 +74,16 @@ export function parseNoSaleIntent(value: unknown): NoSaleIntentV1 | null {
   if (!Array.isArray(value.photo_uris) || !value.photo_uris.every((u) => typeof u === 'string')) {
     return null;
   }
-  if (value.state !== 'open' && value.state !== 'completed' && value.state !== 'rejected') return null;
+  const latitude = value.capture_latitude ?? null;
+  const longitude = value.capture_longitude ?? null;
+  if (latitude !== null && (typeof latitude !== 'number' || !Number.isFinite(latitude))) return null;
+  if (longitude !== null && (typeof longitude !== 'number' || !Number.isFinite(longitude))) return null;
+  if (
+    value.state !== 'open'
+    && value.state !== 'completed'
+    && value.state !== 'rejected'
+    && value.state !== 'review_required'
+  ) return null;
   if (typeof value.created_at !== 'string' || typeof value.updated_at !== 'string') return null;
 
   return {
@@ -81,6 +97,8 @@ export function parseNoSaleIntent(value: unknown): NoSaleIntentV1 | null {
     notes: value.notes,
     competitor: value.competitor,
     photo_uris: value.photo_uris,
+    capture_latitude: latitude,
+    capture_longitude: longitude,
     state: value.state,
     created_at: value.created_at,
     updated_at: value.updated_at,
@@ -96,6 +114,8 @@ export function createOpenNoSaleIntent(input: {
   notes: string;
   competitor: string | null;
   photoUris: string[];
+  latitude?: number | null;
+  longitude?: number | null;
   nowIso?: string;
   operationId?: string;
 }): NoSaleIntentV1 {
@@ -111,6 +131,8 @@ export function createOpenNoSaleIntent(input: {
     notes: input.notes,
     competitor: input.competitor,
     photo_uris: [...input.photoUris],
+    capture_latitude: Number.isFinite(input.latitude) ? input.latitude ?? null : null,
+    capture_longitude: Number.isFinite(input.longitude) ? input.longitude ?? null : null,
     state: 'open',
     created_at: now,
     updated_at: now,
@@ -127,6 +149,13 @@ export function withNoSaleIntentState(
     state,
     updated_at: nowIso ?? new Date().toISOString(),
   };
+}
+
+/** `review_required` is durable human evidence, never a new automatic capture. */
+export function assertNoSaleIntentCanOpen(existing: NoSaleIntentV1 | null): void {
+  if (existing?.state === 'review_required') {
+    throw new Error('Esta no-venta requiere revisión antes de registrar otra captura.');
+  }
 }
 
 /** Reuse open intent when same stop binding; otherwise mint only after terminal. */

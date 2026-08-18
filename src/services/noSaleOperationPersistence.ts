@@ -6,6 +6,7 @@ import {
 import { getFieldDataSession } from './fieldDataSession.ts';
 import {
   createOpenNoSaleIntent,
+  assertNoSaleIntentCanOpen,
   noSaleIntentRecordKey,
   parseNoSaleIntent,
   type NoSaleIntentKeyParts,
@@ -40,6 +41,8 @@ export async function persistOpenNoSaleIntent(input: {
   notes: string;
   competitor: string | null;
   photoUris: string[];
+  latitude?: number | null;
+  longitude?: number | null;
   /** When rehydrating / retrying, force this UUID. */
   operationId?: string;
 }): Promise<NoSaleIntentV1> {
@@ -53,9 +56,13 @@ export async function persistOpenNoSaleIntent(input: {
     stopId: input.stopId,
   };
   const existing = await loadNoSaleIntent(parts);
+  assertNoSaleIntentCanOpen(existing);
   const reuseOpen = existing?.state === 'open';
+  // An unresolved UUID binds the original payload. A later edit must never
+  // reuse that UUID with different reason/evidence after a lost response.
+  if (reuseOpen && existing) return existing;
   const operationId = input.operationId
-    ?? (reuseOpen ? existing.operation_id : undefined);
+    ?? undefined;
 
   const intent = createOpenNoSaleIntent({
     stopId: input.stopId,
@@ -66,15 +73,32 @@ export async function persistOpenNoSaleIntent(input: {
     notes: input.notes,
     competitor: input.competitor,
     photoUris: input.photoUris,
+    latitude: input.latitude,
+    longitude: input.longitude,
     operationId,
   });
 
-  const toSave: NoSaleIntentV1 = reuseOpen && existing.operation_id === intent.operation_id
-    ? { ...intent, created_at: existing.created_at, updated_at: new Date().toISOString() }
-    : intent;
+  await saveEncrypted(session, noSaleIntentRecordKey(parts), intent);
+  return intent;
+}
 
-  await saveEncrypted(session, noSaleIntentRecordKey(parts), toSave);
-  return toSave;
+/** Preserve the exact no-sale evidence for human reconciliation; never delete it. */
+export async function markNoSaleIntentReviewRequired(
+  parts: NoSaleIntentKeyParts,
+): Promise<void> {
+  const session = await getFieldDataSession();
+  if (!session) {
+    throw new Error('No hay sesión cifrada para conservar la no-venta pendiente de revisión.');
+  }
+  const existing = await loadNoSaleIntent(parts);
+  if (!existing) {
+    throw new Error('No existe evidencia de no-venta para conservar en revisión.');
+  }
+  await saveEncrypted(session, noSaleIntentRecordKey(parts), {
+    ...existing,
+    state: 'review_required',
+    updated_at: new Date().toISOString(),
+  });
 }
 
 export async function retireNoSaleIntent(

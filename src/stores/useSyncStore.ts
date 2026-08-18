@@ -1560,6 +1560,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         latitude: payload.latitude,
         longitude: payload.longitude,
         notes: payload.notes,
+        operation_id: payload.operation_id,
       }, meta);
       break;
 

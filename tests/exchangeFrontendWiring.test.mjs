@@ -80,7 +80,7 @@ function main() {
 
   assert.match(
     exchangeScreen,
-    /exchangeMessage:\s*registeredMessage/,
+    /exchangeMessage:\s*(registeredMessage|args\.registeredMessage)/,
     'ante fallo de guardado debe volver a check-in con el mensaje ya registrado',
   );
 

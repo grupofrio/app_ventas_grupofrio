@@ -58,8 +58,10 @@ import {
   createFieldLeadData,
   upsertLeadData,
   closeOffrouteVisit,
+  createExchange,
 } from '../services/gfLogistics';
 import { createGift } from '../services/gfSalesOps';
+import { createPresale } from '../services/presale';
 import {
   createConsignment,
   visitConsignment,
@@ -1458,6 +1460,17 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       // lo postea a /gf/salesops/gift/create. La idempotencia la da
       // meta.idempotency_key (estable por intento) — un retry no duplica.
       await createGift(payload as Record<string, unknown>);
+      break;
+
+    case 'exchange':
+      // Flat capture fields are validated and scoped by createExchange. The queue
+      // operation id is stable, so an ambiguous retry is an idempotent replay.
+      await createExchange(payload as Record<string, unknown>, meta);
+      break;
+
+    case 'presale':
+      // Draft quotation only — it never changes truck stock.
+      await createPresale(payload as never);
       break;
 
     case 'consignment_create': {

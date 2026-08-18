@@ -23,7 +23,7 @@ interface PersistenceModule {
     list(session: Session): Promise<Array<Record<string, unknown>>>;
     insert(session: Session, intent: Record<string, unknown>): Promise<void>;
     findOrInsert(session: Session, intent: Record<string, unknown>): Promise<Record<string, unknown>>;
-    transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number): Promise<void>;
+    transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number): Promise<void>;
     transferForSamePrincipal(
       oldSession: Session,
       newSession: Session,
@@ -42,12 +42,32 @@ interface SyncModule {
   };
 }
 
+interface VisitModule {
+  buildVisitCollectionState(bundle: unknown, stopId: number, intents: unknown[]): {
+    invoices: Array<{
+      collection_state: string;
+      intent: { operation_id: string; status: string } | null;
+    }>;
+  };
+}
+
 const oldSession = { companyId: 7, employeeId: 19, sessionId: 'old-session' };
 const newSession = { companyId: 7, employeeId: 19, sessionId: 'new-session' };
 const intent = {
   operation_id: '11111111-2222-4aaa-8bbb-333333333333', stop_id: 5, invoice_id: 8,
   amount: 25, payment_method: 'cash', snapshot_residual: 30, snapshot_as_of: null,
   status: 'pending', created_at_ms: 1, updated_at_ms: 2,
+};
+const bundle = {
+  schema_version: 'day_bundle.v1', operational_date: '2026-08-18', expires_at: null,
+  plan: { id: 1, date: '2026-08-18', state: 'in_progress', route_id: 2, vehicle_id: 3 },
+  stops: [{ id: 5, sequence: 1, state: 'in_progress', kind: 'customer', customer: { id: 4, name: 'Cliente' }, payment_term: null }],
+  catalog: [], directory: [], no_sale_reasons: [], gift_reasons: [], competitors: [],
+  invoice_snapshots: [{
+    stop_id: 5,
+    as_of: null,
+    invoices: [{ invoice_id: 8, name: 'FAC/8', invoice_date: null, due_date: null, currency: 'MXN', amount_residual: 30 }],
+  }],
 };
 
 function sessionKey(session: Session): string {
@@ -83,19 +103,22 @@ function createEncryptedHarness() {
   };
 }
 
-test('same employee and company reauthentication transfers the encrypted UUID and restart replays it', async () => {
+test('background 401 reenters with reauth action and same-principal handoff replays the original UUID', async () => {
   const persistenceModule = await import('../src/services/invoiceCollectionPersistence.ts') as unknown as PersistenceModule;
   const syncModule = await import('../src/services/invoiceCollectionSync.ts') as unknown as SyncModule;
+  const visitModule = await import('../src/services/invoiceCollectionVisit.ts') as unknown as VisitModule;
   const harness = createEncryptedHarness();
   const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
   let revokedAttempts = 0;
+
+  await persistence.insert(oldSession, intent);
 
   const beforeReauthentication = syncModule.createInvoiceCollectionSyncProcessor({
     persistence: {
       list: () => persistence.list(oldSession),
       insert: (candidate: Record<string, unknown>) => persistence.insert(oldSession, candidate),
       findOrInsert: (candidate: Record<string, unknown>) => persistence.findOrInsert(oldSession, candidate),
-      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number) =>
+      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number) =>
         persistence.transition(oldSession, operationId, status, nowMs),
     },
     isOnline: () => true,
@@ -111,15 +134,51 @@ test('same employee and company reauthentication transfers the encrypted UUID an
       },
     },
   });
-  assert.deepEqual(await beforeReauthentication.capture(intent), {
-    status: 'reauth_required',
-    operationId: intent.operation_id,
-    code: 'token_revoked',
-    httpStatus: 401,
-  });
-  assert.deepEqual(await persistence.list(oldSession), [intent], '401 must leave the original durable UUID untouched');
   await beforeReauthentication.reconcile();
   assert.equal(revokedAttempts, 1, 'a reconnect before successful login must not POST with revoked credentials');
+  const after401 = await persistence.list(oldSession);
+  assert.deepEqual(after401, [{ ...intent, status: 'reauth_required', updated_at_ms: 3 }]);
+  assert.deepEqual({
+    operation_id: after401[0].operation_id,
+    stop_id: after401[0].stop_id,
+    invoice_id: after401[0].invoice_id,
+    amount: after401[0].amount,
+    payment_method: after401[0].payment_method,
+    snapshot_residual: after401[0].snapshot_residual,
+    snapshot_as_of: after401[0].snapshot_as_of,
+  }, {
+    operation_id: intent.operation_id,
+    stop_id: intent.stop_id,
+    invoice_id: intent.invoice_id,
+    amount: intent.amount,
+    payment_method: intent.payment_method,
+    snapshot_residual: intent.snapshot_residual,
+    snapshot_as_of: intent.snapshot_as_of,
+  }, 'durable reauth must preserve the UUID and immutable collection binding');
+
+  const reentered = visitModule.buildVisitCollectionState(bundle, intent.stop_id, after401);
+  assert.equal(reentered.invoices[0].collection_state, 'reauth_required');
+  assert.equal(reentered.invoices[0].intent?.operation_id, intent.operation_id);
+
+  const restartedBeforeLogin = syncModule.createInvoiceCollectionSyncProcessor({
+    persistence: {
+      list: () => persistence.list(oldSession),
+      insert: (candidate: Record<string, unknown>) => persistence.insert(oldSession, candidate),
+      findOrInsert: (candidate: Record<string, unknown>) => persistence.findOrInsert(oldSession, candidate),
+      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number) =>
+        persistence.transition(oldSession, operationId, status, nowMs),
+    },
+    isOnline: () => true,
+    now: () => 3,
+    transport: {
+      collect: async () => {
+        revokedAttempts += 1;
+        return { status: 'applied', operation_id: intent.operation_id };
+      },
+    },
+  });
+  await restartedBeforeLogin.reconcile();
+  assert.equal(revokedAttempts, 1, 'durable reauth must pause a fresh processor before login');
 
   let activated = false;
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, newSession, async () => {
@@ -130,7 +189,7 @@ test('same employee and company reauthentication transfers the encrypted UUID an
   });
   assert.equal(activated, true);
   assert.deepEqual(await persistence.list(oldSession), [], 'old copy is deleted only after the new copy commits');
-  assert.deepEqual(await persistence.list(newSession), [intent]);
+  assert.deepEqual(await persistence.list(newSession), [{ ...intent, status: 'pending', updated_at_ms: 3 }]);
 
   const sent: string[] = [];
   const restarted = syncModule.createInvoiceCollectionSyncProcessor({
@@ -138,7 +197,7 @@ test('same employee and company reauthentication transfers the encrypted UUID an
       list: () => persistence.list(newSession),
       insert: (candidate: Record<string, unknown>) => persistence.insert(newSession, candidate),
       findOrInsert: async (candidate: Record<string, unknown>) => candidate,
-      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number) =>
+      transition: (operationId: string, status: 'pending' | 'applied' | 'review_required' | 'reauth_required', nowMs: number) =>
         persistence.transition(newSession, operationId, status, nowMs),
     },
     isOnline: () => true,
@@ -163,7 +222,8 @@ test('account switch never transfers invoice collection data and destructive cle
   const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
   const otherPrincipal = { companyId: 7, employeeId: 20, sessionId: 'other-session' };
 
-  await persistence.insert(oldSession, intent);
+  const reauthIntent = { ...intent, status: 'reauth_required', updated_at_ms: 3 };
+  await persistence.insert(oldSession, reauthIntent);
   assert.deepEqual(await persistence.transferForSamePrincipal(oldSession, otherPrincipal, async () => {
     assert.fail('cross-principal handoff must not activate the destination session');
   }), {
@@ -171,7 +231,7 @@ test('account switch never transfers invoice collection data and destructive cle
     count: 0,
   });
   assert.deepEqual(await persistence.list(otherPrincipal), []);
-  assert.deepEqual(await persistence.list(oldSession), [intent], 'a rejected handoff must not delete evidence itself');
+  assert.deepEqual(await persistence.list(oldSession), [reauthIntent], 'a rejected handoff must not delete evidence itself');
 
   harness.clear(oldSession);
   assert.deepEqual(await persistence.list(oldSession), [], 'the existing account-switch cleanup remains destructive');
@@ -182,7 +242,8 @@ test('failed destination-session activation keeps the old encrypted copy recover
   const harness = createEncryptedHarness();
   const persistence = persistenceModule.createInvoiceCollectionPersistence(harness);
 
-  await persistence.insert(oldSession, intent);
+  const reauthIntent = { ...intent, status: 'reauth_required', updated_at_ms: 3 };
+  await persistence.insert(oldSession, reauthIntent);
   await assert.rejects(
     () => persistence.transferForSamePrincipal(oldSession, newSession, async () => {
       throw new Error('SecureStore rotation failed');
@@ -190,8 +251,12 @@ test('failed destination-session activation keeps the old encrypted copy recover
     /SecureStore rotation failed/,
   );
 
-  assert.deepEqual(await persistence.list(oldSession), [intent]);
-  assert.deepEqual(await persistence.list(newSession), [intent], 'the staged encrypted destination remains idempotent');
+  assert.deepEqual(await persistence.list(oldSession), [reauthIntent]);
+  assert.deepEqual(
+    await persistence.list(newSession),
+    [{ ...intent, status: 'pending', updated_at_ms: 3 }],
+    'the staged encrypted destination remains idempotent and replayable',
+  );
 });
 
 test('auth wiring chooses handoff only after the new principal is known and logout remains destructive', () => {

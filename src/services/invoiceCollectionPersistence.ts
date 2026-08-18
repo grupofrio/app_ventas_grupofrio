@@ -34,7 +34,7 @@ const STORED_INTENT_KEYS = new Set([
   'operation_id', 'stop_id', 'invoice_id', 'amount', 'payment_method',
   'snapshot_residual', 'snapshot_as_of', 'status', 'created_at_ms', 'updated_at_ms',
 ]);
-const STORED_STATUSES = new Set<InvoiceCollectionStatus>(['dispatching', 'pending', 'applied', 'review_required']);
+const STORED_STATUSES = new Set<InvoiceCollectionStatus>(['dispatching', 'pending', 'applied', 'review_required', 'reauth_required']);
 
 function positiveTimestamp(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
@@ -82,11 +82,13 @@ function identicalStoredIntent(a: InvoiceCollectionIntent, b: InvoiceCollectionI
 }
 
 function isNonterminal(intent: InvoiceCollectionIntent): boolean {
-  return intent.status === 'dispatching' || intent.status === 'pending' || intent.status === 'review_required';
+  return intent.status === 'dispatching' || intent.status === 'pending'
+    || intent.status === 'review_required' || intent.status === 'reauth_required';
 }
 
 function summarize(intents: readonly InvoiceCollectionIntent[]): InvoiceCollectionDurableSummary {
-  const pendingCount = intents.filter((intent) => intent.status === 'dispatching' || intent.status === 'pending').length;
+  const pendingCount = intents.filter((intent) => intent.status === 'dispatching'
+    || intent.status === 'pending' || intent.status === 'reauth_required').length;
   const reviewRequiredCount = intents.filter((intent) => intent.status === 'review_required').length;
   return { pendingCount, reviewRequiredCount, blockingCount: pendingCount + reviewRequiredCount };
 }
@@ -134,7 +136,7 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
     async transition(
       session: EncryptedSessionIdentity,
       operationId: string,
-      status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required'>,
+      status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required' | 'reauth_required'>,
       nowMs: number,
     ): Promise<void> {
       await deps.update(session, (api) => {
@@ -159,10 +161,13 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
       }
       if (!deps.remove) throw new Error('La migración cifrada de cobranza no está disponible.');
       const source = parseStored(await deps.load(oldSession, INVOICE_COLLECTION_RECORD_KEY));
+      const transferable = source.intents.map((intent) => intent.status === 'reauth_required'
+        ? { ...intent, status: 'pending' as const }
+        : { ...intent });
       await deps.update(newSession, (api) => {
         const destination = parseStored(api.getRecord<unknown>(INVOICE_COLLECTION_RECORD_KEY));
         const merged = [...destination.intents];
-        for (const intent of source.intents) {
+        for (const intent of transferable) {
           const existing = merged.find((candidate) => candidate.operation_id === intent.operation_id);
           if (existing && !identicalStoredIntent(existing, intent)) {
             throw new Error('operation_id ya pertenece a otro intent de cobranza.');
@@ -197,7 +202,7 @@ export async function createCurrentInvoiceCollectionPersistence() {
     summary: () => persistence.summary(session),
     insert: (intent: InvoiceCollectionIntent) => persistence.insert(session, intent),
     findOrInsert: (intent: InvoiceCollectionIntent) => persistence.findOrInsert(session, intent),
-    transition: (operationId: string, status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required'>, nowMs: number) => persistence.transition(session, operationId, status, nowMs),
+    transition: (operationId: string, status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required' | 'reauth_required'>, nowMs: number) => persistence.transition(session, operationId, status, nowMs),
   };
 }
 

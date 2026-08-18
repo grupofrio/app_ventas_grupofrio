@@ -7,7 +7,7 @@
  */
 
 export type InvoiceCollectionPaymentMethod = 'cash' | 'transfer' | 'check';
-export type InvoiceCollectionStatus = 'dispatching' | 'pending' | 'applied' | 'review_required';
+export type InvoiceCollectionStatus = 'dispatching' | 'pending' | 'applied' | 'review_required' | 'reauth_required';
 
 export interface InvoiceCollectionRequest {
   operation_id: string;

@@ -40,6 +40,8 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   }
   assert.match(source, /beginReauthentication/);
   assert.match(source, /text: 'Iniciar sesión', onPress: beginReauthentication/);
+  assert.match(source, /entry\.collection_state === 'reauth_required'/);
+  assert.match(source, /<Button label="Iniciar sesión" onPress=\{beginReauthentication\}/);
   assert.match(source, /Operación: \$\{outcome\.operationId\}/);
   assert.match(source, /label="Reintentar" onPress=\{\(\) => void loadVisit\(true\)\}/);
   assert.match(source, /createVisitCollectionLifecycle/);

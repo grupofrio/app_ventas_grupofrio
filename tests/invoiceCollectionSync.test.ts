@@ -504,7 +504,7 @@ test('reconcile skips a stale later row that capture already durably applied', a
   ]);
 });
 
-test('authenticated validation failure is terminal review while revoked credentials stay unchanged for reauth', async () => {
+test('authenticated validation failure is terminal review while revoked credentials persist reauth', async () => {
   const mod = await loadSync();
   assert.deepEqual(
     mod.classifyInvoiceCollectionError({ httpStatus: 422, code: 'validation_error', responseReceived: true }),
@@ -549,10 +549,11 @@ test('authenticated validation failure is terminal review while revoked credenti
   assert.deepEqual(await reauthProcessor.capture(intent), {
     status: 'reauth_required', operationId: intent.operation_id, code: 'session_expired', httpStatus: 401,
   });
-  assert.equal(reauthPersistence.records[0].status, 'dispatching', 'reauth must not mutate the encrypted intent');
+  assert.equal(reauthPersistence.records[0].status, 'reauth_required', 'reauth must be durable without changing the UUID or binding');
+  assert.equal(reauthPersistence.records[0].operation_id, intent.operation_id);
 });
 
-test('the first reauth response pauses the processor and stops the remaining replay pass', async () => {
+test('durable reauth stops the current pass and a restarted processor without private state sends nothing', async () => {
   const mod = await loadSync();
   const secondIntent = {
     ...intent,
@@ -577,6 +578,17 @@ test('the first reauth response pauses the processor and stops the remaining rep
   await processor.reconcile();
   assert.deepEqual(sent, [intent.operation_id], 'the first revoked response must stop this replay pass');
 
-  await processor.reconcile();
-  assert.deepEqual(sent, [intent.operation_id], 'the revoked processor must stay paused until auth replaces it');
+  const restarted = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 53,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+  await restarted.reconcile();
+  assert.deepEqual(sent, [intent.operation_id], 'persisted reauth must pause a fresh processor before transport');
 });

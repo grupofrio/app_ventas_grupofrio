@@ -115,8 +115,9 @@ export default function CollectScreen() {
     && numericAmount > 0
     && numericAmount <= selectedInvoice.invoice.amount_residual;
   const snapshotRequiresRefresh = collection?.invoices.some((entry) => entry.collection_state === 'requires_refresh') ?? false;
+  const reauthenticationRequired = collection?.invoices.some((entry) => entry.collection_state === 'reauth_required') ?? false;
   const mustRefreshBundle = requiresFreshBundle || snapshotRequiresRefresh;
-  const interactionDisabled = loading || refreshing || submitting || mustRefreshBundle || reconciliationPending;
+  const interactionDisabled = loading || refreshing || submitting || mustRefreshBundle || reconciliationPending || reauthenticationRequired;
   const canCollect = !interactionDisabled && amountIsValid;
 
   async function refreshIntents(): Promise<void> {
@@ -239,6 +240,14 @@ export default function CollectScreen() {
           </Card>
         ) : null}
 
+        {reauthenticationRequired ? (
+          <Card style={styles.notice}>
+            <Text style={typography.body}>Inicia sesión de nuevo</Text>
+            <Text style={typography.dim}>La operación cifrada se conserva para confirmarse después. No se emitió recibo.</Text>
+            <Button label="Iniciar sesión" onPress={beginReauthentication} variant="secondary" />
+          </Card>
+        ) : null}
+
         {collection.invoices.length === 0 ? <Card><Text style={typography.dim}>No hay facturas abiertas en el snapshot de esta parada.</Text></Card> : null}
         {collection.invoices.map((entry) => {
           const selected = entry.invoice.invoice_id === selectedInvoiceId;
@@ -256,6 +265,8 @@ export default function CollectScreen() {
                 {blocked ? <Text style={[typography.dimSmall, styles.blockedText]}>{
                   entry.collection_state === 'pending'
                     ? 'Pendiente de confirmación · no se generará otro envío.'
+                    : entry.collection_state === 'reauth_required'
+                    ? 'Inicia sesión de nuevo · no se generará otro envío.'
                     : entry.collection_state === 'requires_refresh'
                     ? 'Confirmado · actualiza el bundle antes de volver a cobrar.'
                     : 'Revisión requerida · no se generará otro envío.'

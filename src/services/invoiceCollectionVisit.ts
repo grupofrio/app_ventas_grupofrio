@@ -9,7 +9,7 @@
 import type { DayBundle, OpenInvoiceSnapshot } from './employeeDayBundleLogic.ts';
 import type { InvoiceCollectionIntent } from './invoiceCollection.ts';
 
-export type VisitInvoiceCollectionState = 'ready' | 'pending' | 'review_required' | 'requires_refresh';
+export type VisitInvoiceCollectionState = 'ready' | 'pending' | 'review_required' | 'reauth_required' | 'requires_refresh';
 
 export interface VisitCollectionInvoice {
   readonly invoice: Readonly<OpenInvoiceSnapshot>;
@@ -162,6 +162,7 @@ function invoiceState(intent: InvoiceCollectionIntent | undefined): VisitInvoice
   if (!intent) return 'ready';
   if (intent.status === 'applied') return 'requires_refresh';
   if (intent.status === 'review_required') return 'review_required';
+  if (intent.status === 'reauth_required') return 'reauth_required';
   return 'pending';
 }
 

@@ -15,7 +15,7 @@ interface InvoiceCollectionVisitLogic {
         currency: string;
         amount_residual: number;
       }>;
-      collection_state: 'ready' | 'pending' | 'review_required' | 'requires_refresh';
+      collection_state: 'ready' | 'pending' | 'review_required' | 'reauth_required' | 'requires_refresh';
       intent: Readonly<{ operation_id: string; status: string }> | null;
     }[];
   };
@@ -107,7 +107,7 @@ test('rejects a duplicate invoice id inside the selected snapshot', async () => 
   );
 });
 
-test('projects pending, review, and same-snapshot applied intents as immutable blockers', async () => {
+test('projects pending, reauth, review, and same-snapshot applied intents as immutable blockers', async () => {
   const logic = await loadLogic();
 
   for (const status of ['dispatching', 'pending'] as const) {
@@ -119,6 +119,10 @@ test('projects pending, review, and same-snapshot applied intents as immutable b
   const review = logic.buildVisitCollectionState(bundle, 71, [{ ...intent, status: 'review_required' }]);
   assert.equal(review.invoices[0].collection_state, 'review_required');
   assert.deepEqual(review.invoices[0].intent, { operation_id: intent.operation_id, status: 'review_required' });
+
+  const reauth = logic.buildVisitCollectionState(bundle, 71, [{ ...intent, status: 'reauth_required' }]);
+  assert.equal(reauth.invoices[0].collection_state, 'reauth_required');
+  assert.deepEqual(reauth.invoices[0].intent, { operation_id: intent.operation_id, status: 'reauth_required' });
 
   const applied = logic.buildVisitCollectionState(bundle, 71, [{ ...intent, status: 'applied' }]);
   assert.equal(applied.invoices[0].collection_state, 'requires_refresh');

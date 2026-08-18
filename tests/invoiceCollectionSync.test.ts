@@ -592,3 +592,43 @@ test('durable reauth stops the current pass and a restarted processor without pr
   await restarted.reconcile();
   assert.deepEqual(sent, [intent.operation_id], 'persisted reauth must pause a fresh processor before transport');
 });
+
+test('a failed reauth marker write fails closed for the rest of the processor lifetime', async () => {
+  const mod = await loadSync();
+  const secondIntent = {
+    ...intent,
+    operation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    stop_id: 6,
+    invoice_id: 9,
+  };
+  const stored = createMemoryPersistence([intent, secondIntent]);
+  const persistence = {
+    ...stored,
+    async transition(operationId: string, status: string, nowMs: number) {
+      if (status === 'reauth_required') throw new Error('encrypted transition failed');
+      await stored.transition(operationId, status, nowMs);
+    },
+  };
+  const sent: string[] = [];
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 54,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        if (request.operation_id === intent.operation_id) {
+          throw { httpStatus: 401, code: 'session_expired', responseReceived: true };
+        }
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+
+  await processor.reconcile();
+  await processor.reconcile();
+
+  assert.deepEqual(sent, [intent.operation_id], 'a known revoked token must never fail open to another POST');
+  assert.equal(stored.records[0].status, 'dispatching', 'the failed encrypted write must not invent durable reauth');
+  assert.equal(stored.records[1].status, 'dispatching');
+});

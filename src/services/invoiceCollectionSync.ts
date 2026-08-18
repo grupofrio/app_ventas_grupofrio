@@ -126,6 +126,7 @@ function isTerminal(status: InvoiceCollectionIntent['status']): boolean {
 
 export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSyncDeps) {
   let reconciliation: Promise<void> | null = null;
+  let reauthenticationPaused = false;
   const operations = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
   function reconciliationPending(intent: InvoiceCollectionIntent): InvoiceCollectionCaptureResult {
     return { status: 'pending', operationId: intent.operation_id, needsReconciliation: true };
@@ -141,10 +142,19 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         ...(outcome.httpStatus === undefined ? {} : { httpStatus: outcome.httpStatus }),
       };
       if (outcome.kind === 'reauth_required') {
+        // Fail closed immediately. The encrypted marker is the restart-safe
+        // source of truth; this latch also protects the current runtime when
+        // that marker cannot be committed.
+        reauthenticationPaused = true;
         try {
           await deps.persistence.transition(intent.operation_id, 'reauth_required', deps.now());
         } catch {
-          return reconciliationPending(intent);
+          return {
+            status: 'reauth_required',
+            operationId: intent.operation_id,
+            needsReconciliation: true,
+            ...errorDetails,
+          };
         }
         return { status: 'reauth_required', operationId: intent.operation_id, ...errorDetails };
       }
@@ -198,7 +208,7 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         if (effective.status === 'review_required') {
           return { status: 'review_required' as const, operationId: effective.operation_id };
         }
-        if (effective.status === 'reauth_required') {
+        if (reauthenticationPaused || effective.status === 'reauth_required') {
           return { status: 'reauth_required' as const, operationId: effective.operation_id };
         }
         if (!deps.isOnline()) {
@@ -215,11 +225,11 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
     reconcile(): Promise<void> {
       if (reconciliation) return reconciliation;
       reconciliation = (async () => {
-        if (!deps.isOnline()) return;
+        if (reauthenticationPaused || !deps.isOnline()) return;
         const intents = await deps.persistence.list();
         if (intents.some((intent) => intent.status === 'reauth_required')) return;
         for (const intent of intents) {
-          if (!deps.isOnline()) break;
+          if (reauthenticationPaused || !deps.isOnline()) break;
           const latest = await deps.persistence.list();
           if (latest.some((candidate) => candidate.status === 'reauth_required')) break;
           const current = latest.find((candidate) => candidate.operation_id === intent.operation_id);

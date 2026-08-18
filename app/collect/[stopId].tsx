@@ -11,8 +11,8 @@ import { formatCurrency } from '../../src/utils/time';
 import { loadCurrentEmployeeDayBundle, prepareCurrentEmployeeDayBundle } from '../../src/services/employeeDayBundle';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
 import { createCurrentInvoiceCollectionPersistence } from '../../src/services/invoiceCollectionPersistence';
-import { captureCurrentInvoiceCollection } from '../../src/services/invoiceCollectionSync';
-import { assertVisitCollectionAmount, buildVisitCollectionState, createVisitCollectionLifecycle, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
+import { captureCurrentInvoiceCollection, isInvoiceCollectionCaptureFailure } from '../../src/services/invoiceCollectionSync';
+import { assertVisitCollectionAmount, buildVisitCollectionState, collectionCaptureFailureNotice, collectionCaptureResultNotice, createVisitCollectionLifecycle, type VisitCollectionState } from '../../src/services/invoiceCollectionVisit';
 import type { InvoiceCollectionPaymentMethod } from '../../src/services/invoiceCollection';
 
 const PAYMENT_METHODS: readonly { id: InvoiceCollectionPaymentMethod; label: string }[] = [
@@ -41,6 +41,7 @@ export default function CollectScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [requiresFreshBundle, setRequiresFreshBundle] = useState(false);
+  const [reconciliationPending, setReconciliationPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadVisit = useCallback(async (refreshBundle = false) => {
@@ -67,6 +68,7 @@ export default function CollectScreen() {
       if (lifecycle.canPublishLoad(requestGeneration)) {
         setCollection(buildVisitCollectionState(loaded.record.bundle, numericStopId, storedIntents));
         if (refreshBundle) setRequiresFreshBundle(false);
+        setReconciliationPending(false);
       }
     } catch (loadError) {
       if (lifecycle.canPublishLoad(requestGeneration)) {
@@ -92,14 +94,14 @@ export default function CollectScreen() {
   );
 
   useEffect(() => {
-    if (requiresFreshBundle || !collection) {
+    if (requiresFreshBundle || reconciliationPending || !collection) {
       setSelectedInvoiceId(null);
       return;
     }
     const selectedIsReady = collection.invoices.some((entry) => entry.invoice.invoice_id === selectedInvoiceId && entry.collection_state === 'ready');
     if (selectedIsReady) return;
     setSelectedInvoiceId(collection.invoices.find((entry) => entry.collection_state === 'ready')?.invoice.invoice_id ?? null);
-  }, [collection, requiresFreshBundle, selectedInvoiceId]);
+  }, [collection, reconciliationPending, requiresFreshBundle, selectedInvoiceId]);
 
   useEffect(() => {
     setAmount(selectedInvoice ? String(selectedInvoice.invoice.amount_residual) : '');
@@ -113,7 +115,7 @@ export default function CollectScreen() {
     && numericAmount <= selectedInvoice.invoice.amount_residual;
   const snapshotRequiresRefresh = collection?.invoices.some((entry) => entry.collection_state === 'requires_refresh') ?? false;
   const mustRefreshBundle = requiresFreshBundle || snapshotRequiresRefresh;
-  const interactionDisabled = loading || refreshing || submitting || mustRefreshBundle;
+  const interactionDisabled = loading || refreshing || submitting || mustRefreshBundle || reconciliationPending;
   const canCollect = !interactionDisabled && amountIsValid;
 
   async function refreshIntents(): Promise<void> {
@@ -123,11 +125,13 @@ export default function CollectScreen() {
   async function handleCollect() {
     if (!selectedInvoice || !canCollect) return;
     setSubmitting(true);
+    let captureStarted = false;
     try {
       const validAmount = assertVisitCollectionAmount(selectedInvoice.invoice, numericAmount);
       // This screen-level action gate prevents an intent write or POST from a
       // stale bundle. The production capture entry point enforces it again.
       await assertCurrentEmployeeDayBundleAllowsActions();
+      captureStarted = true;
       const outcome = await captureCurrentInvoiceCollection({
         operation_id: uuidV4(),
         stop_id: numericStopId,
@@ -152,6 +156,16 @@ export default function CollectScreen() {
         return;
       }
       if (outcome.status === 'pending' || outcome.status === 'captured_pending') {
+        const notice = collectionCaptureResultNotice(outcome);
+        if (notice) {
+          setReconciliationPending(true);
+          setSelectedInvoiceId(null);
+          Alert.alert(notice.title, notice.message, [
+            { text: 'Volver', onPress: () => router.back() },
+            { text: 'Quedarme' },
+          ]);
+          return;
+        }
         Alert.alert('Cobro pendiente', 'El cobro quedó guardado de forma cifrada para sincronizarse. No se emitió recibo.', [
           { text: 'Volver', onPress: () => router.back() },
           { text: 'Quedarme' },
@@ -165,7 +179,14 @@ export default function CollectScreen() {
       Alert.alert('Sesión requerida', 'No se pudo confirmar el cobro porque la sesión debe renovarse. El intent queda pendiente; no se emitió recibo.');
     } catch (captureError) {
       if (lifecycle.isActive()) {
-        Alert.alert('Cobro no registrado', captureError instanceof Error ? captureError.message : 'No se pudo registrar el cobro.');
+        const durableIntent =
+          captureStarted && (!isInvoiceCollectionCaptureFailure(captureError) || captureError.durableIntent);
+        if (durableIntent) {
+          setReconciliationPending(true);
+          setSelectedInvoiceId(null);
+        }
+        const notice = collectionCaptureFailureNotice(durableIntent);
+        Alert.alert(notice.title, notice.message);
       }
     } finally {
       if (lifecycle.isActive()) setSubmitting(false);
@@ -206,6 +227,13 @@ export default function CollectScreen() {
             <Text style={typography.body}>El cobro aplicado invalidó este snapshot.</Text>
             <Text style={typography.dim}>Actualiza el bundle antes de intentar otro cobro en esta parada.</Text>
             <Button label="Actualizar bundle" onPress={() => void loadVisit(true)} loading={refreshing} variant="secondary" />
+          </Card>
+        ) : null}
+
+        {reconciliationPending ? (
+          <Card style={styles.notice}>
+            <Text style={typography.body}>El resultado del cobro sigue pendiente de reconciliación.</Text>
+            <Text style={typography.dim}>No registres otro pago para esta factura hasta que la app actualice su estado.</Text>
           </Card>
         ) : null}
 

@@ -27,6 +27,10 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.match(source, /createCurrentInvoiceCollectionPersistence/);
   assert.match(source, /buildVisitCollectionState/);
   assert.match(source, /captureCurrentInvoiceCollection/);
+  assert.match(source, /isInvoiceCollectionCaptureFailure/);
+  assert.match(source, /collectionCaptureFailureNotice/);
+  assert.match(source, /collectionCaptureResultNotice/);
+  assert.match(source, /const \[reconciliationPending, setReconciliationPending\] = useState\(false\)/);
   assert.match(source, /collection\.customer_name/);
   assert.doesNotMatch(source, /Recibo:/);
   assert.match(source, /Operación: \$\{outcome\.operationId\}/);
@@ -34,6 +38,8 @@ test('collection screen reads scoped bundle data and never uses the legacy payme
   assert.match(source, /createVisitCollectionLifecycle/);
   assert.doesNotMatch(source, /useSyncStore|defaultPaymentJournalId|collectPaymentIntent|payments\/create|postRpc|odooRpc/);
   assert(action.indexOf('assertCurrentEmployeeDayBundleAllowsActions') < action.indexOf('captureCurrentInvoiceCollection'), 'the mutation gate must run before direct capture');
+  assert.match(action, /captureStarted && \(!isInvoiceCollectionCaptureFailure\(captureError\) \|\| captureError\.durableIntent\)/);
+  assert.match(action, /setReconciliationPending\(true\);/);
 });
 
 test('direct collection capture delegates to capture rather than a queue or reconnect runner', () => {
@@ -43,6 +49,6 @@ test('direct collection capture delegates to capture rather than a queue or reco
     source.indexOf('export function createInvoiceCollectionGatedCapture'),
   );
 
-  assert.match(direct, /return \(await current\(\)\)\.capture\(intent\);/);
+  assert.match(direct, /return currentProcessor\.capture\(intent\);/);
   assert.doesNotMatch(direct, /\benqueue\b|\breconcile\b|\brequestReconnect\b/);
 });

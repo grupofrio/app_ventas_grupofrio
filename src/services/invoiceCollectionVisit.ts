@@ -24,6 +24,33 @@ export interface VisitCollectionState {
   readonly invoices: readonly VisitCollectionInvoice[];
 }
 
+export interface CollectionCaptureNotice {
+  readonly title: string;
+  readonly message: string;
+}
+
+/** Operator copy intentionally distinguishes no durable intent from an uncertain durable one. */
+export function collectionCaptureFailureNotice(durableIntent: boolean): CollectionCaptureNotice {
+  if (durableIntent) {
+    return {
+      title: 'Cobro pendiente de reconciliación',
+      message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación.',
+    };
+  }
+  return {
+    title: 'Cobro no registrado',
+    message: 'No se pudo guardar el cobro de forma cifrada. No se envió ningún pago.',
+  };
+}
+
+export function collectionCaptureResultNotice(
+  outcome: Pick<{ status: string; needsReconciliation?: boolean }, 'status' | 'needsReconciliation'>,
+): CollectionCaptureNotice | null {
+  return outcome.status === 'pending' && outcome.needsReconciliation
+    ? collectionCaptureFailureNotice(true)
+    : null;
+}
+
 function matchingStop(bundle: DayBundle, stopId: number): Record<string, unknown> {
   const stop = bundle.stops.find((candidate) => typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate)
     && (candidate as { id?: unknown }).id === stopId);

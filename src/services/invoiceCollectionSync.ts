@@ -46,7 +46,32 @@ export type InvoiceCollectionCaptureResult = {
   operationId: string;
   code?: string;
   httpStatus?: number;
+  /** The encrypted intent exists, but its latest server outcome is uncertain. */
+  needsReconciliation?: true;
 };
+
+/** A capture failure before the encrypted intent commit point. */
+export class InvoiceCollectionCaptureFailure extends Error {
+  readonly durableIntent: boolean;
+
+  constructor(message: string, durableIntent: boolean) {
+    super(message);
+    this.name = 'InvoiceCollectionCaptureFailure';
+    this.durableIntent = durableIntent;
+  }
+}
+
+export function isInvoiceCollectionCaptureFailure(error: unknown): error is InvoiceCollectionCaptureFailure {
+  return error instanceof InvoiceCollectionCaptureFailure;
+}
+
+function preCommitCaptureFailure(error: unknown): InvoiceCollectionCaptureFailure {
+  if (isInvoiceCollectionCaptureFailure(error)) return error;
+  return new InvoiceCollectionCaptureFailure(
+    error instanceof Error ? error.message : 'No se pudo guardar el cobro de forma cifrada.',
+    false,
+  );
+}
 
 function errorMetadata(error: unknown): InvoiceCollectionErrorMetadata {
   if (!error || (typeof error !== 'object' && typeof error !== 'function')) return {};
@@ -102,14 +127,13 @@ function isTerminal(status: InvoiceCollectionIntent['status']): boolean {
 export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSyncDeps) {
   let reconciliation: Promise<void> | null = null;
   const operations = new Map<string, Promise<InvoiceCollectionCaptureResult>>();
+  function reconciliationPending(intent: InvoiceCollectionIntent): InvoiceCollectionCaptureResult {
+    return { status: 'pending', operationId: intent.operation_id, needsReconciliation: true };
+  }
   async function send(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
+    let result: InvoiceCollectionServerResult;
     try {
-      const result = await deps.transport.collect(requestFromIntent(intent));
-      const status: PersistedStatus = result.status === 'applied' ? 'applied' : 'review_required';
-      // Persist acknowledgement before publishing it. A crash here only causes
-      // an idempotent replay under the original UUID on restart.
-      await deps.persistence.transition(intent.operation_id, status, deps.now());
-      return { status, operationId: intent.operation_id };
+      result = await deps.transport.collect(requestFromIntent(intent));
     } catch (error) {
       const outcome = classifyInvoiceCollectionError(error);
       const errorDetails = {
@@ -122,9 +146,25 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
         return { status: 'reauth_required', operationId: intent.operation_id, ...errorDetails };
       }
       const status: PersistedStatus = outcome.kind === 'review_required' ? 'review_required' : 'pending';
-      await deps.persistence.transition(intent.operation_id, status, deps.now());
+      try {
+        await deps.persistence.transition(intent.operation_id, status, deps.now());
+      } catch {
+        // The intent was committed before the POST. Its status could not be
+        // updated, so preserve the UUID and require reconciliation instead of
+        // claiming that the payment was not registered.
+        return reconciliationPending(intent);
+      }
       return { status, operationId: intent.operation_id, ...errorDetails };
     }
+    const status: PersistedStatus = result.status === 'applied' ? 'applied' : 'review_required';
+    // Persist acknowledgement before publishing it. A crash here only causes
+    // an idempotent replay under the original UUID on restart.
+    try {
+      await deps.persistence.transition(intent.operation_id, status, deps.now());
+    } catch {
+      return reconciliationPending(intent);
+    }
+    return { status, operationId: intent.operation_id };
   }
   function sendOnce(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
     const inFlight = operations.get(intent.operation_id);
@@ -141,7 +181,12 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
     capture(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
       return (async () => {
         // This awaited encrypted write is the commit point before first send.
-        const effective = await deps.persistence.findOrInsert(intent);
+        let effective: InvoiceCollectionIntent;
+        try {
+          effective = await deps.persistence.findOrInsert(intent);
+        } catch (error) {
+          throw preCommitCaptureFailure(error);
+        }
         const inFlight = operations.get(effective.operation_id);
         if (inFlight) return inFlight;
         if (effective.status === 'applied') {
@@ -151,7 +196,11 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
           return { status: 'review_required' as const, operationId: effective.operation_id };
         }
         if (!deps.isOnline()) {
-          await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
+          try {
+            await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
+          } catch {
+            return reconciliationPending(effective);
+          }
           return { status: 'captured_pending' as const, operationId: effective.operation_id };
         }
         return sendOnce(effective);
@@ -179,11 +228,22 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
 export function createInvoiceCollectionDirectCapture(deps: InvoiceCollectionDirectCaptureDeps) {
   let processor: Promise<Pick<InvoiceCollectionSyncProcessor, 'capture'>> | null = null;
   function current() {
-    processor ??= deps.createProcessor();
-    return processor;
+    if (processor) return processor;
+    const created = deps.createProcessor();
+    processor = created;
+    void created.catch(() => {
+      if (processor === created) processor = null;
+    });
+    return created;
   }
   return async (intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> => {
-    return (await current()).capture(intent);
+    let currentProcessor: Pick<InvoiceCollectionSyncProcessor, 'capture'>;
+    try {
+      currentProcessor = await current();
+    } catch (error) {
+      throw preCommitCaptureFailure(error);
+    }
+    return currentProcessor.capture(intent);
   };
 }
 
@@ -207,8 +267,13 @@ export interface InvoiceCollectionSyncBootstrapDeps {
 export function createInvoiceCollectionSyncBootstrap(deps: InvoiceCollectionSyncBootstrapDeps) {
   let processor: Promise<Pick<ReturnType<typeof createInvoiceCollectionSyncProcessor>, 'reconcile'>> | null = null;
   function current() {
-    processor ??= deps.createProcessor();
-    return processor;
+    if (processor) return processor;
+    const created = deps.createProcessor();
+    processor = created;
+    void created.catch(() => {
+      if (processor === created) processor = null;
+    });
+    return created;
   }
   return {
     async bootstrap(): Promise<void> {
@@ -228,8 +293,13 @@ export interface InvoiceCollectionSyncRuntimeDeps {
 export function createInvoiceCollectionSyncRuntime(deps: InvoiceCollectionSyncRuntimeDeps) {
   let processor: Promise<InvoiceCollectionSyncProcessor> | null = null;
   function currentProcessor() {
-    processor ??= deps.createProcessor();
-    return processor;
+    if (processor) return processor;
+    const created = deps.createProcessor();
+    processor = created;
+    void created.catch(() => {
+      if (processor === created) processor = null;
+    });
+    return created;
   }
   const directCapture = createInvoiceCollectionDirectCapture({ createProcessor: currentProcessor });
   const bootstrap = createInvoiceCollectionSyncBootstrap({ createProcessor: currentProcessor });

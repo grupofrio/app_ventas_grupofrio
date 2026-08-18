@@ -3,25 +3,27 @@ import test from 'node:test';
 
 interface SyncModule {
   classifyInvoiceCollectionError(error: unknown): { kind: string; code?: string; httpStatus?: number };
+  isInvoiceCollectionCaptureFailure(error: unknown): error is Error & { durableIntent: boolean };
   createInvoiceCollectionSyncProcessor(deps: unknown): {
-    capture(input: unknown): Promise<{ status: string; operationId: string }>;
+    capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
     reconcile(): Promise<void>;
   };
   createInvoiceCollectionDirectCapture(deps: {
-    createProcessor: () => Promise<{ capture(input: unknown): Promise<{ status: string; operationId: string }> }>;
-  }): (input: unknown) => Promise<{ status: string; operationId: string }>;
+    createProcessor: () => Promise<{ capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }> }>;
+  }): (input: unknown) => Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
   createInvoiceCollectionGatedCapture(deps: {
     assertCurrentEmployeeDayBundleAllowsActions: () => Promise<void>;
     createIntent: (input: unknown) => unknown;
     captureIntent: (input: unknown) => Promise<{ status: string; operationId: string }>;
-  }): (input: unknown) => Promise<{ status: string; operationId: string }>;
+  }): (input: unknown) => Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
   createInvoiceCollectionSyncRuntime(deps: {
     createProcessor: () => Promise<{
-      capture(input: unknown): Promise<{ status: string; operationId: string }>;
+      capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
       reconcile(): Promise<void>;
     }>;
   }): {
-    capture(input: unknown): Promise<{ status: string; operationId: string }>;
+    capture(input: unknown): Promise<{ status: string; operationId: string; needsReconciliation?: true }>;
+    bootstrap(): Promise<void>;
     requestReconnect(): Promise<void>;
   };
 }
@@ -130,6 +132,34 @@ test('capture arms the shared reconnect runtime so an offline intent replays wit
   assert.equal(persistence.records[0].status, 'applied');
 });
 
+test('shared processor initialization clears a rejected promise so capture, bootstrap, and reconnect can retry', async () => {
+  const mod = await loadSync();
+  let attempts = 0;
+  let captures = 0;
+  let reconciliations = 0;
+  const runtime = mod.createInvoiceCollectionSyncRuntime({
+    createProcessor: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('SecureStore temporalmente no disponible');
+      return {
+        capture: async () => {
+          captures += 1;
+          return { status: 'applied', operationId: intent.operation_id };
+        },
+        reconcile: async () => { reconciliations += 1; },
+      };
+    },
+  });
+
+  await assert.rejects(() => runtime.capture(intent), /SecureStore temporalmente no disponible/);
+  await runtime.bootstrap();
+  await runtime.requestReconnect();
+  assert.deepEqual(await runtime.capture(intent), { status: 'applied', operationId: intent.operation_id });
+  assert.equal(attempts, 2, 'the settled processor remains shared after the retry');
+  assert.equal(reconciliations, 2);
+  assert.equal(captures, 1);
+});
+
 test('online capture durably writes dispatching before send and response loss keeps its UUID for restart replay', async () => {
   const mod = await loadSync();
   const persistence = createMemoryPersistence();
@@ -188,7 +218,7 @@ test('offline capture is durable pending and review-required never retries', asy
   assert.equal(sends, 1, 'review-required records are terminal');
 });
 
-test('an encrypted persistence failure prevents the first online send', async () => {
+test('an encrypted persistence failure reports a non-durable capture and prevents the first online send', async () => {
   const mod = await loadSync();
   let sends = 0;
   const processor = mod.createInvoiceCollectionSyncProcessor({
@@ -202,7 +232,15 @@ test('an encrypted persistence failure prevents the first online send', async ()
     now: () => 30,
     transport: { collect: async () => { sends += 1; return { status: 'applied', operation_id: intent.operation_id }; } },
   });
-  await assert.rejects(() => processor.capture(intent), /encrypted write failed/);
+  await assert.rejects(
+    () => processor.capture(intent),
+    (error: unknown) => {
+      assert.equal(mod.isInvoiceCollectionCaptureFailure(error), true);
+      assert.equal((error as { durableIntent: boolean }).durableIntent, false);
+      assert.match((error as Error).message, /encrypted write failed/);
+      return true;
+    },
+  );
   assert.equal(sends, 0);
 });
 
@@ -277,7 +315,7 @@ test('a review-required effective intent never resends for a new UUID', async ()
   assert.equal(sends, 0);
 });
 
-test('a failed durable applied transition leaves the original intent for restart replay', async () => {
+test('a failed durable applied acknowledgement reports reconciliation pending without claiming the capture was lost', async () => {
   const mod = await loadSync();
   const records: Record<string, unknown>[] = [{ ...intent }];
   const persistence = {
@@ -293,7 +331,9 @@ test('a failed durable applied transition leaves the original intent for restart
     transport: { collect: async () => ({ status: 'applied', operation_id: intent.operation_id }) },
   });
 
-  await assert.rejects(() => processor.capture(intent), /encrypted acknowledgement write failed/);
+  assert.deepEqual(await processor.capture(intent), {
+    status: 'pending', operationId: intent.operation_id, needsReconciliation: true,
+  });
   assert.deepEqual(records, [intent]);
 
   const restartedPersistence = createMemoryPersistence(records);

@@ -26,6 +26,8 @@ interface InvoiceCollectionVisitLogic {
     isActive(): boolean;
     dispose(): void;
   };
+  collectionCaptureFailureNotice: (durableIntent: boolean) => { title: string; message: string };
+  collectionCaptureResultNotice: (outcome: { status: string; needsReconciliation?: boolean }) => { title: string; message: string } | null;
 }
 
 async function loadLogic(): Promise<InvoiceCollectionVisitLogic> {
@@ -189,6 +191,20 @@ test('lifecycle guard rejects stale load completions and all UI publication afte
   lifecycle.dispose();
   assert.equal(lifecycle.canPublishLoad(newer), false);
   assert.equal(lifecycle.isActive(), false);
+});
+
+test('capture notices distinguish a failed encrypted commit from a durable ambiguous acknowledgement', async () => {
+  const logic = await loadLogic();
+
+  assert.deepEqual(logic.collectionCaptureFailureNotice(false), {
+    title: 'Cobro no registrado',
+    message: 'No se pudo guardar el cobro de forma cifrada. No se envió ningún pago.',
+  });
+  assert.deepEqual(logic.collectionCaptureResultNotice({ status: 'pending', needsReconciliation: true }), {
+    title: 'Cobro pendiente de reconciliación',
+    message: 'El cobro quedó guardado, pero no se pudo confirmar su resultado. No registres otro pago; espera la reconciliación.',
+  });
+  assert.equal(logic.collectionCaptureResultNotice({ status: 'pending' }), null);
 });
 
 test('validates collection amounts against the selected snapshot residual', async () => {

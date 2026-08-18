@@ -15,7 +15,8 @@ assert.match(visitStore, /const opId = createUuidV4\(\);/);
 assert.doesNotMatch(visitStore, /sale_\$\{Date\.now\(\)/);
 
 for (const [file, pattern] of [
-  ['app/nosale/[stopId].tsx', /function makeAttemptId\(\): string \{\s*return createUuidV4\(\);\s*\}/],
+  ['app/nosale/[stopId].tsx', /persistOpenNoSaleIntent/],
+  ['src/services/noSaleOperationPersistenceLogic.ts', /function createUuidV4\(\)/],
   ['app/gift/[stopId].tsx', /function makeAttemptId\(\): string \{\s*return createUuidV4\(\);\s*\}/],
   ['app/presale.tsx', /function makeOperationId\(\): string \{\s*return createUuidV4\(\);\s*\}/],
   ['app/exchange/[stopId].tsx', /function makeIdempotencyKey\(\): string \{\s*return createUuidV4\(\);\s*\}/],

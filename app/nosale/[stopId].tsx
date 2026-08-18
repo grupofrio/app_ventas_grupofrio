@@ -1,10 +1,13 @@
 /**
- * No-sale screen — s-nosale in mockup (lines 308-321).
- * Reason selection, competitor detection, notes, mandatory photo.
+ * No-sale screen — structured reason + conditional fields + durable operation_id.
+ * Catalog authority: day_bundle (Odoo gf.no.sale.reason). Canonical write: checkout.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert,
+  KeyboardAvoidingView, Platform,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -18,23 +21,29 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { takePhoto } from '../../src/services/camera';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
-import { checkOut, closeOffrouteVisit, reportIncident } from '../../src/services/gfLogistics';
+import { checkOut, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
-import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
-import { createUuidV4 } from '../../src/utils/clientEvent';
-
-function makeAttemptId(): string {
-  return createUuidV4();
-}
+import {
+  persistOpenNoSaleIntent,
+  retireNoSaleIntent,
+  loadNoSaleIntent,
+  type NoSaleIntentKeyParts,
+} from '../../src/services/noSaleOperationPersistence';
+import {
+  noSaleValidationMessage,
+  validateNoSaleCapture,
+} from '../../src/services/noSaleValidation';
+import { createSaleConfirmationSingleFlight } from '../../src/services/saleConfirmationFlow';
 
 export default function NoSaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
+  const plan = useRouteStore((s) => s.plan);
   const stop = stops.find((s) => s.id === Number(stopId));
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const removeStop = useRouteStore((s) => s.removeStop);
@@ -51,27 +60,49 @@ export default function NoSaleScreen() {
   const longitude = useLocationStore((s) => s.longitude);
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
+  const [typedCompetitor, setTypedCompetitor] = useState('');
   const [notes, setNotes] = useState(noSaleNotes);
   const [submitting, setSubmitting] = useState(false);
+  const [rehydratedOpId, setRehydratedOpId] = useState<string | null>(null);
   const noSaleReasons = useEmployeeDayBundleStore((s) => s.noSaleReasons);
   const competitors = useEmployeeDayBundleStore((s) => s.competitors);
   const dayBundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const dayBundleRecord = useEmployeeDayBundleStore((s) => s.record);
   const hydrateDayBundle = useEmployeeDayBundleStore((s) => s.hydrate);
+
+  const singleFlightRef = useRef(createSaleConfirmationSingleFlight());
+
+  const operationalDate = dayBundleRecord?.bundle.operational_date ?? null;
+  const intentParts: NoSaleIntentKeyParts | null = stop
+    ? { operationalDate, planId: plan?.plan_id ?? null, stopId: stop.id }
+    : null;
 
   useEffect(() => {
     void hydrateDayBundle();
   }, [hydrateDayBundle]);
 
-  // F3.3: id estable a través de reintentos (online → falla ambigua → misma
-  // no-venta encolada) para que reportIncident/checkOut manden el MISMO
-  // operation_id las dos veces — hoy el backend aún no dedupe con esto
-  // (pendiente B1.3), pero sin un id estable ni siquiera queda la opción de
-  // dedupear cuando el backend lo soporte. Se regenera tras un envío exitoso.
-  const operationIdRef = useRef<string | null>(null);
-  function getNoSaleOperationId(): string {
-    if (!operationIdRef.current) operationIdRef.current = makeAttemptId();
-    return operationIdRef.current;
-  }
+  useEffect(() => {
+    if (!intentParts) return;
+    let cancelled = false;
+    void (async () => {
+      const existing = await loadNoSaleIntent(intentParts);
+      if (cancelled || !existing || existing.state !== 'open') return;
+      setRehydratedOpId(existing.operation_id);
+      if (existing.reason_code) {
+        const match = noSaleReasons.find((r) => r.code === existing.reason_code);
+        if (match) setSelectedReasonId(match.id);
+      }
+      if (existing.notes) setNotes(existing.notes);
+      if (existing.competitor) {
+        if (competitors.includes(existing.competitor)) {
+          setSelectedCompetitor(existing.competitor);
+        } else {
+          setTypedCompetitor(existing.competitor);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [intentParts?.stopId, intentParts?.planId, intentParts?.operationalDate, noSaleReasons, competitors]);
 
   if (!stop) {
     return (
@@ -84,18 +115,27 @@ export default function NoSaleScreen() {
     );
   }
 
-  // BLD-20260424-STAB: derived data movido a DESPUÉS del guard de stop
-  // para que TypeScript narrowee `stop` a GFStop (no GFStop|undefined).
-  // Antes del refactor de Sebastián el cálculo estaba aquí; el guard se
-  // intercaló más abajo y rompió tanto el tipo como la seguridad runtime.
-  const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
-  const competitorReasonId = noSaleReasons.find((reason) => reason.code === 'competitor')?.id ?? null;
-  const showCompetitor = selectedReasonId === competitorReasonId;
-  const canSave = selectedReasonId != null && noSalePhotoTaken && dayBundleAccess?.canRunActions === true;
+  const selectedReason = noSaleReasons.find((reason) => reason.id === selectedReasonId) ?? null;
+  const reasonCode = selectedReason?.code ?? null;
+  const showCompetitor = reasonCode === 'competitor';
+  const showOtherNotes = reasonCode === 'other';
+  const showSupervisorNotes = reasonCode === 'supervisor_requested';
+  const competitorCatalogAvailable = competitors.length > 0;
+  const effectiveCompetitor = showCompetitor
+    ? (selectedCompetitor || typedCompetitor.trim() || null)
+    : null;
+
+  const validationIssue = validateNoSaleCapture({
+    reasonCode,
+    notes,
+    competitor: effectiveCompetitor,
+    photoTaken: noSalePhotoTaken,
+    competitorCatalogAvailable,
+  });
+  const canSave = validationIssue === null && dayBundleAccess?.canRunActions === true;
   const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
-    operationIdRef.current = null; // siguiente no-venta = nuevo id
     captureAndEnqueueGpsPoint('checkout').catch(() => {});
     setGpsMode('in_transit');
     if (stop!._isOffroute) {
@@ -128,185 +168,121 @@ export default function NoSaleScreen() {
   }
 
   async function handleSave() {
-    if (submitting) return; // guard doble-tap
+    if (!singleFlightRef.current.tryAcquire()) return;
     if (!dayBundleAccess?.canRunActions) {
+      singleFlightRef.current.release();
       Alert.alert('Bundle vencido', 'La no-venta está bloqueada hasta renovar el bundle del día con conexión.');
       return;
     }
-    if (!canSave) {
-      const missing = [];
-      if (!selectedReasonId) missing.push('razon de no-venta');
-      if (!noSalePhotoTaken) missing.push('foto del punto');
-      Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
+    if (validationIssue) {
+      singleFlightRef.current.release();
+      Alert.alert('Faltan datos', noSaleValidationMessage(validationIssue));
+      return;
+    }
+    if (!stop || !selectedReason || !intentParts) {
+      singleFlightRef.current.release();
       return;
     }
 
-    if (!stop) return;
-    const operationId = getNoSaleOperationId();
-    const reason = noSaleReasons.find((r) => r.id === selectedReasonId);
-    setNoSaleReason(selectedReasonId!, reason?.label || '');
+    setNoSaleReason(selectedReason.id, selectedReason.label);
     setNoSaleNotes(notes);
+    if (effectiveCompetitor) setNoSaleCompetitor(effectiveCompetitor);
     setSubmitting(true);
+
     try {
+      // Durable operation identity BEFORE any mutating network/queue write.
+      const intent = await persistOpenNoSaleIntent({
+        stopId: stop.id,
+        planId: plan?.plan_id ?? null,
+        operationalDate,
+        reasonCode: selectedReason.code,
+        reasonId: selectedReason.id,
+        notes,
+        competitor: effectiveCompetitor,
+        photoUris: noSalePhotoUris,
+        operationId: rehydratedOpId ?? undefined,
+      });
+      const operationId = intent.operation_id;
+      setRehydratedOpId(operationId);
 
-    if (isOffrouteVisit) {
-      const closePayload = offrouteVisitId
-        ? {
-            visit_id: offrouteVisitId,
-            result_status: 'no_sale' as const,
-            latitude: latitude || 0,
-            longitude: longitude || 0,
-            notes: `No venta: ${reason?.code || ''} ${notes || ''}`.trim(),
+      if (isOffrouteVisit) {
+        const closePayload = offrouteVisitId
+          ? {
+              visit_id: offrouteVisitId,
+              result_status: 'no_sale' as const,
+              latitude: latitude || 0,
+              longitude: longitude || 0,
+              notes: `No venta: ${selectedReason.code || ''} ${notes || ''}`.trim(),
+            }
+          : null;
+
+        if (!isOnline) {
+          let closeSyncId: string | null = null;
+          if (closePayload) {
+            closeSyncId = enqueue('offroute_visit_close', {
+              ...closePayload,
+              operation_id: operationId,
+              timestamp: Date.now(),
+            });
           }
-        : null;
+          enqueueVisitPhotos({
+            stopId: stop.id,
+            photoUris: noSalePhotoUris,
+            enqueue,
+            dependsOn: closeSyncId ? [closeSyncId] : undefined,
+          });
+          await retireNoSaleIntent(intentParts, 'completed');
+          finalizeNoSaleLocally();
+          return;
+        }
 
-      if (!isOnline) {
         let closeSyncId: string | null = null;
         if (closePayload) {
-          closeSyncId = enqueue('offroute_visit_close', {
-            ...closePayload,
-            operation_id: operationId,
-            timestamp: Date.now(),
-          });
+          try {
+            await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+            if (isRetryableSyncErrorMessage(message)) {
+              closeSyncId = enqueue('offroute_visit_close', {
+                ...closePayload,
+                operation_id: operationId,
+                timestamp: Date.now(),
+              });
+            } else {
+              Alert.alert(
+                'Cierre pendiente en servidor',
+                'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
+              );
+            }
+          }
         }
+
         enqueueVisitPhotos({
           stopId: stop.id,
           photoUris: noSalePhotoUris,
           enqueue,
           dependsOn: closeSyncId ? [closeSyncId] : undefined,
         });
+        await retireNoSaleIntent(intentParts, 'completed');
         finalizeNoSaleLocally();
         return;
       }
 
-      let closeSyncId: string | null = null;
-      if (closePayload) {
-        try {
-          await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
-          if (isRetryableSyncErrorMessage(message)) {
-            closeSyncId = enqueue('offroute_visit_close', {
-              ...closePayload,
-              operation_id: operationId,
-              timestamp: Date.now(),
-            });
-          } else {
-            Alert.alert(
-              'Cierre pendiente en servidor',
-              'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
-            );
-          }
-        }
-      }
-
-      enqueueVisitPhotos({
+      // Canonical structured No Venta write = checkout (reason/notes/competitor on gf.route.stop).
+      // Incident chatter is supplementary only and is not invoked on this path.
+      const checkoutPayload = buildCheckoutPayload({
         stopId: stop.id,
-        photoUris: noSalePhotoUris,
-        enqueue,
-        dependsOn: closeSyncId ? [closeSyncId] : undefined,
-      });
-      finalizeNoSaleLocally();
-      return;
-    }
-
-    // El motivo estructurado viaja EN EL CHECKOUT: es el único camino que el
-    // backend persiste en gf.route.stop (no_sale_*). El endpoint de incidentes
-    // ignora estas claves (solo postea al chatter de leads).
-    const checkoutPayload = buildCheckoutPayload({
-      stopId: stop.id,
-      latitude: latitude || 0,
-      longitude: longitude || 0,
-      saleTotal: 0,
-      noSaleReasonId: selectedReasonId,
-      noSaleReasonCode: reason?.code,
-      noSaleNotes: notes,
-      noSaleCompetitor: selectedReasonId === competitorReasonId ? selectedCompetitor : null,
-    });
-
-    const enqueueNoSaleAndCheckout = () => {
-      const noSaleId = enqueue('no_sale', {
-        stop_id: stop.id,
-        partner_id: partnerId,
-        reason_id: selectedReasonId,
-        reason_code: reason?.code,
-        competitor: selectedCompetitor,
-        notes,
-        operation_id: operationId,
-        timestamp: Date.now(),
+        latitude: latitude || 0,
+        longitude: longitude || 0,
+        saleTotal: 0,
+        noSaleReasonId: selectedReason.id,
+        noSaleReasonCode: selectedReason.code,
+        noSaleNotes: notes,
+        noSaleCompetitor: effectiveCompetitor,
       });
 
-      enqueue(
-        'checkout',
-        {
-          ...checkoutPayload,
-          operation_id: operationId,
-          timestamp: Date.now(),
-        },
-        { dependsOn: [noSaleId] },
-      );
-      enqueueVisitPhotos({
-        stopId: stop.id,
-        photoUris: noSalePhotoUris,
-        enqueue,
-        dependsOn: [noSaleId],
-      });
-    };
-
-    if (!isOnline) {
-      enqueueNoSaleAndCheckout();
-      finalizeNoSaleLocally();
-      return;
-    }
-
-    try {
-      await reportIncident(
-        stop.id,
-        (selectedReasonId as number) || 1,
-        `No-venta: ${reason?.code || ''} ${notes || ''}`.trim(),
-        undefined,
-        operationId,
-      );
-      enqueueVisitPhotos({
-        stopId: stop.id,
-        photoUris: noSalePhotoUris,
-        enqueue,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudo registrar la no-venta.';
-      if (isRetryableSyncErrorMessage(message)) {
-        enqueueNoSaleAndCheckout();
-        Alert.alert(
-          'Sincronizacion pendiente',
-          'No se pudo confirmar la no-venta con el servidor. La visita quedo pendiente de sincronizacion.',
-        );
-        finalizeNoSaleLocally();
-        return;
-      }
-
-      Alert.alert('No-venta rechazada', message);
-      return;
-    }
-
-    try {
-      await checkOut(
-        checkoutPayload.stop_id,
-        checkoutPayload.latitude,
-        checkoutPayload.longitude,
-        checkoutPayload.result_status,
-        {
-          no_sale_reason_code: checkoutPayload.no_sale_reason_code,
-          no_sale_notes: checkoutPayload.no_sale_notes,
-          no_sale_competitor: checkoutPayload.no_sale_competitor,
-        },
-        undefined,
-        operationId,
-      );
-      finalizeNoSaleLocally();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
-      if (isRetryableSyncErrorMessage(message)) {
-        enqueue(
+      const enqueueCheckoutAndPhotos = () => {
+        const checkoutId = enqueue(
           'checkout',
           {
             ...checkoutPayload,
@@ -314,20 +290,76 @@ export default function NoSaleScreen() {
             timestamp: Date.now(),
           },
         );
-        Alert.alert(
-          'Check-out pendiente',
-          'La no-venta ya quedo registrada, pero el cierre de visita quedo pendiente de sincronizacion.',
-        );
+        enqueueVisitPhotos({
+          stopId: stop.id,
+          photoUris: noSalePhotoUris,
+          enqueue,
+          dependsOn: [checkoutId],
+        });
+      };
+
+      if (!isOnline) {
+        enqueueCheckoutAndPhotos();
+        await retireNoSaleIntent(intentParts, 'completed');
         finalizeNoSaleLocally();
         return;
       }
 
-      Alert.alert('Check-out rechazado', message);
-    }
+      try {
+        await checkOut(
+          checkoutPayload.stop_id,
+          checkoutPayload.latitude,
+          checkoutPayload.longitude,
+          checkoutPayload.result_status,
+          {
+            no_sale_reason_code: checkoutPayload.no_sale_reason_code,
+            no_sale_notes: checkoutPayload.no_sale_notes,
+            no_sale_competitor: checkoutPayload.no_sale_competitor,
+          },
+          undefined,
+          operationId,
+        );
+        enqueueVisitPhotos({
+          stopId: stop.id,
+          photoUris: noSalePhotoUris,
+          enqueue,
+        });
+        await retireNoSaleIntent(intentParts, 'completed');
+        finalizeNoSaleLocally();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
+        if (isRetryableSyncErrorMessage(message)) {
+          enqueueCheckoutAndPhotos();
+          Alert.alert(
+            'Sincronización pendiente',
+            'No se pudo confirmar la no-venta con el servidor. La visita quedó pendiente de sincronización.',
+          );
+          await retireNoSaleIntent(intentParts, 'completed');
+          finalizeNoSaleLocally();
+          return;
+        }
+
+        Alert.alert('Check-out rechazado', message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar la no-venta.';
+      Alert.alert('No-venta', message);
     } finally {
       setSubmitting(false);
+      singleFlightRef.current.release();
     }
   }
+
+  const notesLabel = showOtherNotes
+    ? 'Especifica la causa'
+    : showSupervisorNotes
+      ? '¿Qué necesita revisar con el supervisor?'
+      : 'NOTAS';
+  const notesPlaceholder = showOtherNotes
+    ? 'Describe el motivo'
+    : showSupervisorNotes
+      ? 'Detalle para el supervisor'
+      : '¿Qué observaste? (opcional)';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -337,8 +369,7 @@ export default function NoSaleScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Text style={[typography.dim, styles.hint]}>Alimenta KoldDemand para mejorar forecasts.</Text>
 
-        {/* Reason selection */}
-        <Text style={typography.sectionTitle}>¿Por que no se vendio?</Text>
+        <Text style={typography.sectionTitle}>¿Por qué no se vendió?</Text>
         <View style={styles.chipContainer}>
           {noSaleReasons.map((reason) => (
             <Chip
@@ -350,31 +381,46 @@ export default function NoSaleScreen() {
           ))}
         </View>
 
-        {/* Competitor detection (shown when reason = competitor) */}
         {showCompetitor && (
           <>
             <Text style={typography.inputLabel}>COMPETIDOR DETECTADO</Text>
-            <View style={styles.chipContainer}>
-              {competitors.map((comp) => (
-                <Chip
-                  key={comp}
-                  label={comp}
-                  selected={selectedCompetitor === comp}
-                  onPress={() => {
-                    setSelectedCompetitor(selectedCompetitor === comp ? null : comp);
-                    setNoSaleCompetitor(selectedCompetitor === comp ? null : comp);
-                  }}
+            {competitorCatalogAvailable ? (
+              <View style={styles.chipContainer}>
+                {competitors.map((comp) => (
+                  <Chip
+                    key={comp}
+                    label={comp}
+                    selected={selectedCompetitor === comp}
+                    onPress={() => {
+                      const next = selectedCompetitor === comp ? null : comp;
+                      setSelectedCompetitor(next);
+                      setNoSaleCompetitor(next);
+                      if (next) setTypedCompetitor('');
+                    }}
+                  />
+                ))}
+              </View>
+            ) : (
+              <>
+                <Text style={[typography.dim, { marginBottom: 6 }]}>
+                  Catálogo de competidores no disponible. Especifica el competidor:
+                </Text>
+                <TextInput
+                  style={[typography.body, styles.textArea, { minHeight: 44 }]}
+                  placeholder="Otro competidor"
+                  placeholderTextColor={colors.textDim}
+                  value={typedCompetitor}
+                  onChangeText={setTypedCompetitor}
                 />
-              ))}
-            </View>
+              </>
+            )}
           </>
         )}
 
-        {/* Notes */}
-        <Text style={typography.inputLabel}>NOTAS</Text>
+        <Text style={typography.inputLabel}>{notesLabel}</Text>
         <TextInput
           style={[typography.body, styles.textArea]}
-          placeholder="¿Que observaste?"
+          placeholder={notesPlaceholder}
           placeholderTextColor={colors.textDim}
           value={notes}
           onChangeText={setNotes}
@@ -382,11 +428,9 @@ export default function NoSaleScreen() {
           numberOfLines={2}
         />
 
-        {/* Mandatory photo */}
-        <Text style={typography.sectionTitle}>📸 Foto del punto (obligatoria)</Text>
+        <Text style={typography.sectionTitle}>Foto del punto (obligatoria)</Text>
         {noSalePhotoTaken ? (
           <View style={styles.photoDone}>
-            <Text style={typography.stateIcon}>📸</Text>
             <Text style={[typography.dim, { color: colors.success, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               {noSalePhotoUris.length} {noSalePhotoUris.length === 1 ? 'foto capturada' : 'fotos capturadas'}
             </Text>
@@ -395,21 +439,14 @@ export default function NoSaleScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <TouchableOpacity
-            style={styles.photoReq}
-            onPress={handleAddNoSalePhoto}
-          >
-            <Text style={typography.stateIcon}>📸</Text>
+          <TouchableOpacity style={styles.photoReq} onPress={handleAddNoSalePhoto}>
             <Text style={[typography.bodySmall, { color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' }]}>
               Tomar foto de no-venta
             </Text>
-            <Text style={typography.dimSmall}>
-              Evidencia del punto de venta
-            </Text>
+            <Text style={typography.dimSmall}>Evidencia del punto de venta</Text>
           </TouchableOpacity>
         )}
 
-        {/* Save button */}
         <Button
           label={submitting ? 'Guardando…' : 'Guardar No Venta'}
           onPress={handleSave}

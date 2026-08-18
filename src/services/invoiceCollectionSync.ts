@@ -20,6 +20,18 @@ export interface InvoiceCollectionSyncDeps {
   now: () => number;
 }
 
+type InvoiceCollectionSyncProcessor = ReturnType<typeof createInvoiceCollectionSyncProcessor>;
+
+export interface InvoiceCollectionDirectCaptureDeps {
+  createProcessor: () => Promise<Pick<InvoiceCollectionSyncProcessor, 'capture'>>;
+}
+
+export interface InvoiceCollectionGatedCaptureDeps {
+  assertCurrentEmployeeDayBundleAllowsActions: () => Promise<void>;
+  createIntent: (input: unknown) => InvoiceCollectionIntent;
+  captureIntent: (intent: InvoiceCollectionIntent) => Promise<InvoiceCollectionCaptureResult>;
+}
+
 export interface InvoiceCollectionErrorMetadata {
   code?: string;
   httpStatus?: number;
@@ -159,6 +171,31 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
   };
 }
 
+/**
+ * Direct collection capture is deliberately a thin entry point over the same
+ * processor used for bootstrap and reconnect reconciliation. It creates no
+ * queue, dispatcher, or second retry runner.
+ */
+export function createInvoiceCollectionDirectCapture(deps: InvoiceCollectionDirectCaptureDeps) {
+  let processor: Promise<Pick<InvoiceCollectionSyncProcessor, 'capture'>> | null = null;
+  function current() {
+    processor ??= deps.createProcessor();
+    return processor;
+  }
+  return async (intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> => {
+    return (await current()).capture(intent);
+  };
+}
+
+/** Applies the authoritative day-bundle gate before an intent can exist. */
+export function createInvoiceCollectionGatedCapture(deps: InvoiceCollectionGatedCaptureDeps) {
+  return async (input: unknown): Promise<InvoiceCollectionCaptureResult> => {
+    await deps.assertCurrentEmployeeDayBundleAllowsActions();
+    const intent = deps.createIntent(input);
+    return deps.captureIntent(intent);
+  };
+}
+
 export interface InvoiceCollectionSyncBootstrapDeps {
   createProcessor: () => Promise<Pick<ReturnType<typeof createInvoiceCollectionSyncProcessor>, 'reconcile'>>;
 }
@@ -183,25 +220,54 @@ export function createInvoiceCollectionSyncBootstrap(deps: InvoiceCollectionSync
   };
 }
 
+let productionProcessor: Promise<InvoiceCollectionSyncProcessor> | null = null;
 let productionBootstrap: ReturnType<typeof createInvoiceCollectionSyncBootstrap> | null = null;
+let productionCapture: ReturnType<typeof createInvoiceCollectionGatedCapture> | null = null;
+
+function currentProductionProcessor(): Promise<InvoiceCollectionSyncProcessor> {
+  productionProcessor ??= (async () => {
+    const [persistence, { submitInvoiceCollection }, { useSyncStore }] = await Promise.all([
+      import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
+      import('./invoiceCollection.ts'),
+      import('../stores/useSyncStore.ts'),
+    ]);
+    return createInvoiceCollectionSyncProcessor({
+      persistence,
+      transport: { collect: submitInvoiceCollection },
+      isOnline: () => useSyncStore.getState().isOnline,
+      now: () => Date.now(),
+    });
+  })();
+  return productionProcessor;
+}
+
+/**
+ * Production entry point for the collection screen. Its gate runs before the
+ * UUID intent is created, so stale bundles cannot write encrypted state or
+ * send the strict collection POST.
+ */
+export async function captureCurrentInvoiceCollection(input: unknown): Promise<InvoiceCollectionCaptureResult> {
+  if (!productionCapture) {
+    const [{ assertCurrentEmployeeDayBundleAllowsActions }, { createInvoiceCollectionIntent }] = await Promise.all([
+      import('./dayBundleMutationGate.ts'), import('./invoiceCollection.ts'),
+    ]);
+    const directCapture = createInvoiceCollectionDirectCapture({
+      createProcessor: currentProductionProcessor,
+    });
+    productionCapture = createInvoiceCollectionGatedCapture({
+      assertCurrentEmployeeDayBundleAllowsActions,
+      createIntent: createInvoiceCollectionIntent,
+      captureIntent: directCapture,
+    });
+  }
+  return productionCapture(input);
+}
 
 /** Creates the production processor after auth/session restoration, then rehydrates its encrypted intents. */
 export async function bootstrapInvoiceCollectionSync(): Promise<void> {
   if (!productionBootstrap) {
     productionBootstrap = createInvoiceCollectionSyncBootstrap({
-      createProcessor: async () => {
-        const [persistence, { submitInvoiceCollection }, { useSyncStore }] = await Promise.all([
-          import('./invoiceCollectionPersistence.ts').then((module) => module.createCurrentInvoiceCollectionPersistence()),
-          import('./invoiceCollection.ts'),
-          import('../stores/useSyncStore.ts'),
-        ]);
-        return createInvoiceCollectionSyncProcessor({
-          persistence,
-          transport: { collect: submitInvoiceCollection },
-          isOnline: () => useSyncStore.getState().isOnline,
-          now: () => Date.now(),
-        });
-      },
+      createProcessor: currentProductionProcessor,
     });
   }
   await productionBootstrap.bootstrap();
@@ -214,5 +280,7 @@ export function requestInvoiceCollectionSync(): void {
 
 /** Auth logout/account-switch discards the old session-bound processor. */
 export function resetInvoiceCollectionSync(): void {
+  productionProcessor = null;
   productionBootstrap = null;
+  productionCapture = null;
 }

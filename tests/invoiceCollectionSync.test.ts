@@ -7,6 +7,14 @@ interface SyncModule {
     capture(input: unknown): Promise<{ status: string; operationId: string }>;
     reconcile(): Promise<void>;
   };
+  createInvoiceCollectionDirectCapture(deps: {
+    createProcessor: () => Promise<{ capture(input: unknown): Promise<{ status: string; operationId: string }> }>;
+  }): (input: unknown) => Promise<{ status: string; operationId: string }>;
+  createInvoiceCollectionGatedCapture(deps: {
+    assertCurrentEmployeeDayBundleAllowsActions: () => Promise<void>;
+    createIntent: (input: unknown) => unknown;
+    captureIntent: (input: unknown) => Promise<{ status: string; operationId: string }>;
+  }): (input: unknown) => Promise<{ status: string; operationId: string }>;
 }
 
 async function loadSync(): Promise<SyncModule> {
@@ -40,6 +48,53 @@ function createMemoryPersistence(initial: Record<string, unknown>[] = []) {
     },
   };
 }
+
+test('direct capture uses its shared processor to persist before the strict collection transport sends', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence();
+  const sent: string[] = [];
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 9,
+    transport: {
+      collect: async (request: { operation_id: string }) => {
+        sent.push(request.operation_id);
+        return { status: 'applied', operation_id: request.operation_id };
+      },
+    },
+  });
+  const directCapture = mod.createInvoiceCollectionDirectCapture({
+    createProcessor: async () => processor,
+  });
+
+  assert.deepEqual(await directCapture(intent), { status: 'applied', operationId: intent.operation_id });
+  assert.deepEqual(sent, [intent.operation_id]);
+  assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 9 }]);
+});
+
+test('a stale day bundle prevents intent creation, encrypted persistence, and transport', async () => {
+  const mod = await loadSync();
+  let intentCreations = 0;
+  let captures = 0;
+  const capture = mod.createInvoiceCollectionGatedCapture({
+    assertCurrentEmployeeDayBundleAllowsActions: async () => {
+      throw new Error('bundle vencido');
+    },
+    createIntent: () => {
+      intentCreations += 1;
+      return intent;
+    },
+    captureIntent: async () => {
+      captures += 1;
+      return { status: 'applied', operationId: intent.operation_id };
+    },
+  });
+
+  await assert.rejects(() => capture(intent), /bundle vencido/);
+  assert.equal(intentCreations, 0);
+  assert.equal(captures, 0);
+});
 
 test('online capture durably writes dispatching before send and response loss keeps its UUID for restart replay', async () => {
   const mod = await loadSync();

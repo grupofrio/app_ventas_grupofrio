@@ -108,7 +108,7 @@ export default function ProfileScreen() {
         />
         {allowCreateCustomer && (
           <Button
-            label="➕ Nuevo Cliente"
+            label="➕ Nuevo Prospecto"
             variant="secondary"
             fullWidth
             onPress={() => router.push('/newcustomer' as never)}

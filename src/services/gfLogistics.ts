@@ -1052,15 +1052,8 @@ export async function fetchAnalyticsOptions(
   }
 }
 
-export async function fetchLeadStages(
-  companyId?: number | null,
-): Promise<Array<{ id: number; name: string; sequence?: number }>> {
-  const body: Record<string, unknown> = {};
-  if (typeof companyId === 'number' && companyId > 0) {
-    body.company_id = companyId;
-  }
-
-  const result = await postRest<any>(`${GF_BASE}/lead/stages`, body);
+export async function fetchLeadStages(): Promise<Array<{ id: number; name: string; sequence?: number }>> {
+  const result = await postRest<any>(`${GF_BASE}/lead/stages`, {});
   if (!result || typeof result !== 'object') return [];
   const data = result.data !== undefined ? result.data : result;
   if (Array.isArray(data?.stages)) return data.stages;
@@ -1091,6 +1084,35 @@ export async function createFieldLeadData(
   const data = result.data !== undefined ? result.data : result;
   const lead = data?.lead ?? data;
   return lead && typeof lead === 'object' ? lead : null;
+}
+
+/**
+ * Secure online-only prospect → customer conversion.
+ * Must NOT be used offline; must NOT go through lead/upsert.
+ * Payload is intentionally minimal: operation_id + stop_id (+ optional lead_id).
+ */
+export async function convertLeadData(
+  payload: {
+    operation_id: string;
+    stop_id: number;
+    lead_id?: number | null;
+  },
+  meta?: ClientEventMeta | null,
+): Promise<Record<string, unknown> | null> {
+  const body: Record<string, unknown> = {
+    operation_id: payload.operation_id,
+    stop_id: payload.stop_id,
+  };
+  if (typeof payload.lead_id === 'number' && payload.lead_id > 0) {
+    body.lead_id = payload.lead_id;
+  }
+  const result = await postRest<any>(
+    `${GF_BASE}/lead/convert`,
+    attachClientMetaToRestPayload(body, meta ?? null),
+  );
+  if (!result || typeof result !== 'object') return null;
+  const data = result.data !== undefined ? result.data : result;
+  return data && typeof data === 'object' ? data : null;
 }
 
 export async function startOffrouteVisit(

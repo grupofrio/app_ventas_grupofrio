@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -21,19 +21,31 @@ import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
-import { useAuthStore } from '../../src/stores/useAuthStore';
-import { closeOffrouteVisit, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
+import { closeOffrouteVisit, convertLeadData, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
 import { applyLeadUpsertToStop, getLeadPartnerId, LeadStageOption } from '../../src/services/leadVisit';
+import {
+  applyLeadConvertToStop,
+  isReviewRequiredDuplicateError,
+  reviewRequiredMessage,
+  type ProspectConvertResult,
+} from '../../src/services/prospectConvert';
+import { createConvertLeadIntentController } from '../../src/services/convertLeadIntent';
 import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
-
-const DEFAULT_LEAD_COMPANY_ID = 34;
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
 const INTEREST_OPTIONS = [
   { value: 'high', label: 'Alto' },
   { value: 'medium', label: 'Medio' },
   { value: 'low', label: 'Bajo' },
 ] as const;
+
+function hasPersistedLeadLocation(stop: { customer_latitude?: unknown; customer_longitude?: unknown }) {
+  return typeof stop.customer_latitude === 'number'
+    && Number.isFinite(stop.customer_latitude)
+    && typeof stop.customer_longitude === 'number'
+    && Number.isFinite(stop.customer_longitude);
+}
 
 const FREEZER_OPTIONS = [
   { value: 'yes', label: 'Sí' },
@@ -50,7 +62,6 @@ export default function ProspeccionScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const resetVisit = useVisitStore((s) => s.resetVisit);
   const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
-  const companyId = useAuthStore((s) => s.companyId);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
@@ -66,11 +77,12 @@ export default function ProspeccionScreen() {
   const [loadingStages, setLoadingStages] = useState(true);
   const [saving, setSaving] = useState(false);
   const [stageError, setStageError] = useState<string | null>(null);
+  const convertIntentRef = useRef(
+    createConvertLeadIntentController({ uuid: createUuidV4 }),
+  );
 
   const isLead = stop?._entityType === 'lead';
   const title = 'Datos';
-  const effectiveCompanyId = companyId ?? DEFAULT_LEAD_COMPANY_ID;
-
   const canSave = useMemo(() => {
     return selectedStageId != null;
   }, [selectedStageId]);
@@ -89,7 +101,7 @@ export default function ProspeccionScreen() {
       setLoadingStages(true);
       setStageError(null);
       try {
-        const response = await fetchLeadStages(effectiveCompanyId);
+        const response = await fetchLeadStages();
         if (cancelled) return;
         const normalized = [...response].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
         setStages(normalized);
@@ -109,7 +121,7 @@ export default function ProspeccionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveCompanyId, isOnline]);
+  }, [isOnline]);
 
   if (!stop) {
     return (
@@ -124,13 +136,11 @@ export default function ProspeccionScreen() {
 
   const currentStop = stop;
 
-  // F1.8: la conversión de prospecto a cliente ya sucedía implícita dentro
-  // de "Guardar Datos" (applyLeadUpsertToStop refleja el partner_id que
-  // regrese el backend). Aquí solo se hace explícita con nombre y
-  // requisitos visibles — el flujo/endpoint no cambia.
+  // Conversión usa /lead/convert (online-only). Guardar Datos usa /lead/upsert
+  // solo para actualizar prospecto / partner ya ligado — nunca para crear cliente.
   const alreadyCustomer = !isLead || getLeadPartnerId(currentStop) != null;
-  const hasPhoneReq = hasContactPhone(currentStop) || phone.trim().length > 0;
-  const hasLocationReq = typeof currentStop.customer_latitude === 'number' && typeof currentStop.customer_longitude === 'number';
+  const hasPhoneReq = hasContactPhone(currentStop);
+  const hasLocationReq = hasPersistedLeadLocation(currentStop);
   const readyToConvert = isLead && !alreadyCustomer && hasPhoneReq && hasLocationReq;
 
   function finalizeAfterSave() {
@@ -192,6 +202,130 @@ export default function ProspeccionScreen() {
     );
   }
 
+  function patchStopLocal(nextStop: typeof currentStop) {
+    patchStop(currentStop.id, nextStop);
+    const visitState = useVisitStore.getState();
+    if (visitState.currentStopId === currentStop.id && visitState.currentStop) {
+      useVisitStore.setState({ currentStop: nextStop });
+    }
+  }
+
+  async function handleConvert() {
+    if (!readyToConvert || saving) return;
+
+    if (!isOnline) {
+      Alert.alert(
+        'Sin conexión',
+        'Necesitas conexión para convertir este prospecto en cliente.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+      return;
+    }
+
+    // Crash/restart v1: if stop already has partner, treat as converted — no new mutation.
+    if (getLeadPartnerId(currentStop) != null) {
+      convertIntentRef.current.finalize('already_converted');
+      Alert.alert(
+        'Prospecto ya convertido',
+        'Este prospecto ya tiene cliente ligado. La venta está habilitada.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+      return;
+    }
+
+    const begun = convertIntentRef.current.begin({
+      stopId: currentStop.id,
+      leadId: currentStop._leadId ?? null,
+    });
+    if (begun.status === 'ignored_inflight') return;
+    const operationId = begun.operationId;
+
+    setSaving(true);
+    try {
+      const convertResult = await convertLeadData({
+        operation_id: operationId,
+        stop_id: currentStop.id,
+        lead_id: currentStop._leadId ?? null,
+      });
+      if (!convertResult) {
+        convertIntentRef.current.markAmbiguous();
+        Alert.alert(
+          'Confirmación pendiente',
+          'No pudimos confirmar si la conversión se completó.',
+          [
+            { text: 'Continuar visita', onPress: finalizeAfterSave },
+            { text: 'Reintentar', onPress: () => { void handleConvert(); } },
+          ],
+        );
+        return;
+      }
+
+      const status = typeof convertResult.status === 'string' ? convertResult.status : '';
+      const nextStop = applyLeadConvertToStop(
+        currentStop,
+        convertResult as unknown as ProspectConvertResult,
+      );
+      if (getLeadPartnerId(nextStop) != null) {
+        patchStopLocal(nextStop);
+      }
+
+      const converted =
+        status === 'converted'
+        || status === 'already_converted'
+        || getLeadPartnerId(nextStop) != null;
+
+      if (!converted) {
+        convertIntentRef.current.finalize('rejected');
+        Alert.alert(
+          'Conversión pendiente',
+          'El servidor no confirmó un cliente ligado. El prospecto se conserva.',
+          [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+        );
+        return;
+      }
+
+      convertIntentRef.current.finalize(
+        status === 'already_converted' ? 'already_converted' : 'converted',
+      );
+      Alert.alert(
+        status === 'already_converted'
+          ? 'Prospecto ya convertido'
+          : 'Prospecto convertido a cliente',
+        status === 'already_converted'
+          ? 'Este prospecto ya tenía cliente en el servidor. La venta quedó habilitada.'
+          : 'El servidor confirmó el cliente. La venta se habilitó en esta misma visita.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+    } catch (error) {
+      if (isReviewRequiredDuplicateError(error)) {
+        convertIntentRef.current.finalize('review_required_duplicate');
+        Alert.alert(
+          'Revisión requerida',
+          reviewRequiredMessage(error),
+          [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+        );
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'No se pudo convertir el prospecto.';
+      if (isRetryableSyncErrorMessage(message)) {
+        convertIntentRef.current.markAmbiguous();
+        Alert.alert(
+          'Confirmación pendiente',
+          'No pudimos confirmar si la conversión se completó.',
+          [
+            { text: 'Continuar visita', onPress: finalizeAfterSave },
+            { text: 'Reintentar', onPress: () => { void handleConvert(); } },
+          ],
+        );
+        return;
+      }
+      convertIntentRef.current.finalize('rejected');
+      Alert.alert('Conversión rechazada', message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleSave() {
     if (!canSave) {
       Alert.alert('Falta etapa', 'Selecciona la etapa a la que debe caer la oportunidad.');
@@ -211,7 +345,6 @@ export default function ProspeccionScreen() {
         notes,
       },
       stageId: selectedStageId as number,
-      companyId: effectiveCompanyId,
     });
 
     if (!isOnline) {
@@ -221,7 +354,7 @@ export default function ProspeccionScreen() {
       });
       Alert.alert(
         'Datos pendientes',
-        'No hay conexión. Los datos quedaron en cola y la venta se habilitará cuando el prospecto se sincronice.',
+        'No hay conexión. Los datos del prospecto quedaron pendientes de sincronizar. Puedes continuar la ruta.',
         [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
       );
       return;
@@ -229,26 +362,16 @@ export default function ProspeccionScreen() {
 
     setSaving(true);
     try {
-      const wasCustomerBefore = getLeadPartnerId(currentStop) != null;
       const lead = await upsertLeadData(payload);
-      let nextStop = currentStop;
       if (lead) {
-        nextStop = applyLeadUpsertToStop(currentStop, lead as any);
-        patchStop(currentStop.id, nextStop);
-        const visitState = useVisitStore.getState();
-        if (visitState.currentStopId === currentStop.id && visitState.currentStop) {
-          useVisitStore.setState({ currentStop: nextStop });
-        }
+        // Upsert must not create customers; only refresh lead fields / existing partner.
+        const nextStop = applyLeadUpsertToStop(currentStop, lead as any);
+        patchStopLocal(nextStop);
       }
 
-      const nowCustomer = getLeadPartnerId(nextStop) != null;
-      const justConverted = !wasCustomerBefore && nowCustomer;
-
       Alert.alert(
-        justConverted ? 'Prospecto convertido a cliente' : 'Datos guardados',
-        justConverted
-          ? 'Ya se creó el contacto en Odoo — la venta se habilitó en esta misma visita.'
-          : 'La oportunidad quedó actualizada.',
+        'Datos guardados',
+        'La oportunidad quedó actualizada.',
         [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
       );
     } catch (error) {
@@ -260,7 +383,7 @@ export default function ProspeccionScreen() {
         });
         Alert.alert(
           'Datos pendientes',
-          'No se pudo confirmar con el servidor. Los datos quedaron en cola de sincronización.',
+          'No se pudo confirmar con el servidor. Los datos del prospecto quedaron pendientes de sincronizar.',
           [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
         );
       } else {
@@ -407,13 +530,25 @@ export default function ProspeccionScreen() {
           />
         </View>
 
+        {readyToConvert ? (
+          <Button
+            label="Convertir a cliente"
+            onPress={() => { void handleConvert(); }}
+            fullWidth
+            disabled={saving || loadingStages}
+            loading={saving}
+            style={{ marginTop: 16 }}
+          />
+        ) : null}
+
         <Button
-          label={readyToConvert ? 'Convertir a cliente y habilitar venta' : 'Guardar Datos'}
+          label="Guardar Datos"
           onPress={() => { void handleSave(); }}
           fullWidth
           disabled={!canSave || saving || loadingStages}
-          loading={saving}
-          style={{ marginTop: 16 }}
+          loading={saving && !readyToConvert}
+          variant={readyToConvert ? 'secondary' : 'primary'}
+          style={{ marginTop: readyToConvert ? 8 : 16 }}
         />
 
         {currentStop._isOffroute ? (

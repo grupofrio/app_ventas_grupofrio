@@ -17,7 +17,6 @@ interface BuildPostvisitPayloadInput {
   stop: Pick<GFStop, 'id' | 'customer_name' | '_entityType' | '_leadId' | '_partnerId' | 'partner_id'>;
   form: PostvisitFormValues;
   stageId: number;
-  companyId: number;
 }
 
 function mapInterestToPriority(level: InterestLevel): '1' | '2' | '3' {
@@ -50,12 +49,11 @@ function extractLeadPartnerId(
   return null;
 }
 
-export function buildPostvisitPayload({ stop, form, stageId, companyId }: BuildPostvisitPayloadInput) {
+export function buildPostvisitPayload({ stop, form, stageId }: BuildPostvisitPayloadInput) {
   return {
     stop_id: stop.id,
     lead_id: stop._entityType === 'lead' ? stop._leadId || null : null,
     partner_id: extractLeadPartnerId(stop),
-    company_id: companyId,
     customer_name: stop.customer_name,
     stage_id: stageId,
     contact_name: form.contactName || undefined,

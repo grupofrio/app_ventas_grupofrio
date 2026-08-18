@@ -6,6 +6,7 @@
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { deleteAllAuthCredentialKeys } from './authCredentialCleanup';
 import { logError, logInfo } from '../utils/logger';
 import { buildHttpTraceData } from '../utils/httpDebug';
 import { unwrapRestResult } from '../utils/apiResult';
@@ -154,10 +155,12 @@ export async function setAuthTokens(gfToken: string, sessionId = createUuidV4())
 
 export async function clearAuthTokens() {
   _baseUrl = DEFAULT_BASE_URL;
-  await SecureStore.deleteItemAsync('kf_api_key');
-  await SecureStore.deleteItemAsync(STORE_KEYS.GF_TOKEN);
-  await SecureStore.deleteItemAsync(STORE_KEYS.SESSION_ID);
-  await SecureStore.deleteItemAsync(STORE_KEYS.BASE_URL);
+  await deleteAllAuthCredentialKeys([
+    'kf_api_key',
+    STORE_KEYS.GF_TOKEN,
+    STORE_KEYS.SESSION_ID,
+    STORE_KEYS.BASE_URL,
+  ], (key) => SecureStore.deleteItemAsync(key));
 }
 
 /**

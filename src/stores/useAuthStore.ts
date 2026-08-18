@@ -20,13 +20,15 @@ import { resolveOdooDatabase } from '../services/odooDatabase';
 import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
 import {
   clearSensitiveFieldData,
-  storeSave,
+  storeSaveStrict,
   storeLoad,
   storeRemove,
+  storeRemoveStrict,
   STORAGE_KEYS,
 } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
 import { isRestorableSession } from '../services/authOffline';
+import { commitAuthStateBeforeSync } from '../services/authCredentialCleanup';
 import {
   clearFieldDataIdentity,
   getFieldDataSession,
@@ -173,11 +175,19 @@ async function clearCurrentEncryptedFieldData(): Promise<void> {
   } finally {
     // Destructive logout/account switch must not retain the old credential
     // even when encrypted field cleanup reports a storage failure.
+    let cleanupFailure: unknown;
     try {
       await clearAuthTokens();
-    } finally {
-      clearFieldDataIdentity();
+    } catch (error) {
+      cleanupFailure = error;
     }
+    try {
+      await storeRemoveStrict(STORAGE_KEYS.AUTH_STATE);
+    } catch (error) {
+      cleanupFailure ??= error;
+    }
+    clearFieldDataIdentity();
+    if (cleanupFailure !== undefined) throw cleanupFailure;
   }
 }
 
@@ -284,6 +294,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   login: async (baseUrl, barcode, pin, db) => {
+    let destructiveSessionActivation = false;
     set({ isLoading: true, error: null });
     try {
       await setBaseUrl(baseUrl);
@@ -388,8 +399,40 @@ export const useAuthStore = create<AuthState>((set) => ({
         && typeof companyId === 'number' && companyId > 0
         && previousSession.employeeId === employeeId
         && previousSession.companyId === companyId;
+      const authenticatedEmployeeState = {
+        employeeId,
+        employeeName: (pick<string>(emp, 'employeeName', 'name') as string) ?? '',
+        companyId,
+        companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
+        warehouseId: extractId(warehouseRaw),
+        warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
+        mobileLocationId: extractId(mobileLocationRaw),
+        mobileLocationName: (pick<string>(emp, 'mobileLocationName') as string) ?? extractName(mobileLocationRaw),
+        employeeAnalyticPlazaId: analyticPlazaFromLogin.id,
+        employeeAnalyticPlazaName: analyticPlazaFromLogin.name,
+        parentId: extractId(parentRaw),
+        isSupervisor: !!pick(emp, 'isSupervisor', 'is_supervisor'),
+        allowCreateCustomer: !!pick(emp, 'allowCreateCustomer', 'allow_create_customer'),
+        allowFreeVisitsMode: !!pick(emp, 'allowFreeVisitsMode', 'allow_free_visits_mode'),
+        allowConfirmPayment: !!pick(emp, 'allowConfirmPayment', 'allow_confirm_payment'),
+        allowDeliveryScreen: !!pick(emp, 'allowDeliveryScreen', 'allow_delivery_screen'),
+        allowSalesDirectInvoice: !!pick(emp, 'allowSalesDirectInvoice', 'allow_sales_direct_invoice'),
+        allowOffDateVisits: !!pick(emp, 'allowOffDateVisits', 'allow_offdate_visits'),
+        allowOffDistanceVisits: !!pick(emp, 'allowOffDistanceVisits', 'allow_offdistance_visits', 'allow_off_distance_visits'),
+        maxCashLimit: (pick<number>(emp, 'maxCashLimit', 'max_cash_limit') as number) ?? 0,
+        stockValueLimit: (pick<number>(emp, 'stockValueLimit', 'stock_value_limit') as number) ?? 0,
+        mustTakePhotosToEndVisit: true,
+        blockSaleIfUnpaidInvoices: false,
+        defaultPaymentJournalId: extractId(paymentJournalRaw),
+        defaultCashAccountId: extractId(cashAccountRaw),
+        customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
+      };
 
       if (samePrincipalReauthentication) {
+        // Persist while the old same-principal credential/session is still
+        // intact. A failure cannot strand the transferred UUID under a token
+        // rotation whose auth projection was never made durable.
+        await storeSaveStrict(STORAGE_KEYS.AUTH_STATE, authenticatedEmployeeState);
         const nextSession = { companyId, employeeId, sessionId: createUuidV4() };
         const { transferCurrentInvoiceCollectionsForReauthentication } = await import(
           '../services/invoiceCollectionPersistence.ts'
@@ -424,6 +467,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         await clearCurrentEncryptedFieldData();
         // Actual logout/account switch remains destructive while the prior
         // session reference is still readable, and never transfers evidence.
+        destructiveSessionActivation = true;
         await setBaseUrl(baseUrl);
         await setAuthTokens(result.gf_employee_token);
       }
@@ -431,81 +475,47 @@ export const useAuthStore = create<AuthState>((set) => ({
       clearPricelistCaches();
       useSalesStore.getState().reset();
 
-      set({
-        isAuthenticated: true,
-        isLoading: false,
-        error: null,
-        employeeId,
-        employeeName: (pick<string>(emp, 'employeeName', 'name') as string) ?? '',
-        companyId,
-        companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
-        warehouseId: extractId(warehouseRaw),
-        warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
-        mobileLocationId: extractId(mobileLocationRaw),
-        mobileLocationName: (pick<string>(emp, 'mobileLocationName') as string) ?? extractName(mobileLocationRaw),
-        employeeAnalyticPlazaId: analyticPlazaFromLogin.id,
-        employeeAnalyticPlazaName: analyticPlazaFromLogin.name,
-        parentId: extractId(parentRaw),
-        isSupervisor: !!pick(emp, 'isSupervisor', 'is_supervisor'),
-        allowCreateCustomer: !!pick(emp, 'allowCreateCustomer', 'allow_create_customer'),
-        allowFreeVisitsMode: !!pick(emp, 'allowFreeVisitsMode', 'allow_free_visits_mode'),
-        allowConfirmPayment: !!pick(emp, 'allowConfirmPayment', 'allow_confirm_payment'),
-        allowDeliveryScreen: !!pick(emp, 'allowDeliveryScreen', 'allow_delivery_screen'),
-        allowSalesDirectInvoice: !!pick(emp, 'allowSalesDirectInvoice', 'allow_sales_direct_invoice'),
-        allowOffDateVisits: !!pick(emp, 'allowOffDateVisits', 'allow_offdate_visits'),
-        allowOffDistanceVisits: !!pick(emp, 'allowOffDistanceVisits', 'allow_offdistance_visits', 'allow_off_distance_visits'),
-        maxCashLimit: (pick<number>(emp, 'maxCashLimit', 'max_cash_limit') as number) ?? 0,
-        stockValueLimit: (pick<number>(emp, 'stockValueLimit', 'stock_value_limit') as number) ?? 0,
-        mustTakePhotosToEndVisit: true, // ALWAYS TRUE
-        blockSaleIfUnpaidInvoices: false, // WARNING only
-        defaultPaymentJournalId: extractId(paymentJournalRaw),
-        defaultCashAccountId: extractId(cashAccountRaw),
-        customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
-      });
+      set({ isAuthenticated: true, isLoading: false, error: null, ...authenticatedEmployeeState });
 
       if (companyId && companyId > 0) {
         setFieldDataIdentity({ companyId, employeeId });
       }
 
-      // BLD-20260408-P0: Persist auth state so it survives app restart.
-      const state = useAuthStore.getState();
-      await storeSave(STORAGE_KEYS.AUTH_STATE, {
-        employeeId: state.employeeId,
-        employeeName: state.employeeName,
-        companyId: state.companyId,
-        companyName: state.companyName,
-        warehouseId: state.warehouseId,
-        warehouseName: state.warehouseName,
-        mobileLocationId: state.mobileLocationId,
-        mobileLocationName: state.mobileLocationName,
-        employeeAnalyticPlazaId: state.employeeAnalyticPlazaId,
-        employeeAnalyticPlazaName: state.employeeAnalyticPlazaName,
-        parentId: state.parentId,
-        isSupervisor: state.isSupervisor,
-        allowCreateCustomer: state.allowCreateCustomer,
-        allowFreeVisitsMode: state.allowFreeVisitsMode,
-        allowConfirmPayment: state.allowConfirmPayment,
-        allowDeliveryScreen: state.allowDeliveryScreen,
-        allowSalesDirectInvoice: state.allowSalesDirectInvoice,
-        allowOffDateVisits: state.allowOffDateVisits,
-        allowOffDistanceVisits: state.allowOffDistanceVisits,
-        maxCashLimit: state.maxCashLimit,
-        stockValueLimit: state.stockValueLimit,
-        defaultPaymentJournalId: state.defaultPaymentJournalId,
-        defaultCashAccountId: state.defaultCashAccountId,
-        customerIds: state.customerIds,
-      });
-
       const { resumeInvoiceCollectionSync, requestInvoiceCollectionSync } = await import(
         '../services/invoiceCollectionSync'
       );
-      resumeInvoiceCollectionSync();
-      requestInvoiceCollectionSync();
+      const resumeSync = () => {
+        resumeInvoiceCollectionSync();
+        requestInvoiceCollectionSync();
+      };
+      if (samePrincipalReauthentication) {
+        resumeSync();
+      } else {
+        // Account switches cannot reuse the old projection. Keep sync suspended
+        // until this strict write pairs the new credential with its principal.
+        await commitAuthStateBeforeSync({
+          persist: () => storeSaveStrict(STORAGE_KEYS.AUTH_STATE, authenticatedEmployeeState),
+          rollback: async () => {
+            destructiveSessionActivation = false;
+            await clearCurrentEncryptedFieldData();
+          },
+          resume: resumeSync,
+        });
+      }
+      destructiveSessionActivation = false;
 
       return true;
     } catch (error: unknown) {
+      if (destructiveSessionActivation) {
+        try {
+          await clearCurrentEncryptedFieldData();
+        } catch {
+          // The cleanup path attempts credentials and AUTH_STATE independently;
+          // keep the original login failure for the operator.
+        }
+      }
       const msg = error instanceof Error ? error.message : 'Error de conexion';
-      set({ error: msg, isLoading: false });
+      set({ isAuthenticated: false, error: msg, isLoading: false });
       return false;
     }
   },
@@ -518,8 +528,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       await clearCurrentEncryptedFieldData();
       await clearRouteCache();
       useSalesStore.getState().reset();
-      await clearAuthTokens();
-      await storeRemove(STORAGE_KEYS.AUTH_STATE);
       set({
         isAuthenticated: false,
         employeeId: null,

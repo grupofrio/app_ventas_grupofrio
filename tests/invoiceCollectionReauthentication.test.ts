@@ -461,7 +461,20 @@ test('auth wiring chooses handoff only after the new principal is known and logo
     'logout/account-switch may clear the latch only after the old intent envelope is gone',
   );
   assert.match(destructiveClear, /finally\s*\{[\s\S]*await clearAuthTokens\(\)/);
+  assert.match(destructiveClear, /storeRemoveStrict\(STORAGE_KEYS\.AUTH_STATE\)/);
   assert.match(sync, /await productionRuntimeLifecycle\.suspend\(\)/);
+  assert(
+    login.indexOf('await storeSaveStrict(STORAGE_KEYS.AUTH_STATE')
+      < login.indexOf('await transferCurrentInvoiceCollectionsForReauthentication'),
+    'same-principal auth state must be durable before token rotation and intent handoff',
+  );
+  assert(
+    login.lastIndexOf('await storeSaveStrict(STORAGE_KEYS.AUTH_STATE')
+      < login.lastIndexOf('resumeInvoiceCollectionSync()'),
+    'sync cannot resume before strict auth-state persistence',
+  );
+  assert.match(login, /persist: \(\) => storeSaveStrict\(STORAGE_KEYS\.AUTH_STATE/);
+  assert.match(login, /rollback: async \(\) => \{[\s\S]*await clearCurrentEncryptedFieldData\(\)/);
   assert(
     login.lastIndexOf('resumeInvoiceCollectionSync()') > login.lastIndexOf('setFieldDataIdentity'),
     'sync resumes only after the replacement field identity is installed',

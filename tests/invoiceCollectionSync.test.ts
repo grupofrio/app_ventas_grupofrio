@@ -24,6 +24,13 @@ function createMemoryPersistence(initial: Record<string, unknown>[] = []) {
   return {
     records,
     async insert(item: Record<string, unknown>) { records.push({ ...item }); },
+    async findOrInsert(item: Record<string, unknown>) {
+      const existing = records.find((candidate) => candidate.stop_id === item.stop_id && candidate.invoice_id === item.invoice_id
+        && ['dispatching', 'pending', 'review_required'].includes(String(candidate.status)));
+      if (existing) return { ...existing };
+      records.push({ ...item });
+      return { ...item };
+    },
     async list() { return records.map((item) => ({ ...item })); },
     async transition(operationId: string, status: string, nowMs: number) {
       const record = records.find((item) => item.operation_id === operationId);
@@ -99,6 +106,7 @@ test('an encrypted persistence failure prevents the first online send', async ()
     persistence: {
       async list() { return []; },
       async insert() { throw new Error('encrypted write failed'); },
+      async findOrInsert() { throw new Error('encrypted write failed'); },
       async transition() {},
     },
     isOnline: () => true,
@@ -132,6 +140,82 @@ test('double tap shares one in-flight capture for the original UUID', async () =
     { status: 'applied', operationId: intent.operation_id },
     { status: 'applied', operationId: intent.operation_id },
   ]);
+});
+
+test('concurrent distinct UUID captures reuse one effective intent and one POST', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence();
+  const replacement = { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333' };
+  let sends = 0;
+  let release!: () => void;
+  const server = new Promise<{ status: 'applied'; operation_id: string }>((resolve) => {
+    release = () => resolve({ status: 'applied', operation_id: intent.operation_id });
+  });
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 41,
+    transport: { collect: async () => { sends += 1; return server; } },
+  });
+
+  const first = processor.capture(intent);
+  const second = processor.capture(replacement);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(sends, 1);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [
+    { status: 'applied', operationId: intent.operation_id },
+    { status: 'applied', operationId: intent.operation_id },
+  ]);
+  assert.deepEqual(persistence.records, [{ ...intent, status: 'applied', updated_at_ms: 41 }]);
+});
+
+test('a review-required effective intent never resends for a new UUID', async () => {
+  const mod = await loadSync();
+  const persistence = createMemoryPersistence([{ ...intent, status: 'review_required' }]);
+  let sends = 0;
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 42,
+    transport: { collect: async () => { sends += 1; return { status: 'applied', operation_id: intent.operation_id }; } },
+  });
+
+  assert.deepEqual(await processor.capture({ ...intent, operation_id: '55555555-2222-4aaa-8bbb-333333333333' }), {
+    status: 'review_required', operationId: intent.operation_id,
+  });
+  assert.equal(sends, 0);
+});
+
+test('a failed durable applied transition leaves the original intent for restart replay', async () => {
+  const mod = await loadSync();
+  const records: Record<string, unknown>[] = [{ ...intent }];
+  const persistence = {
+    async list() { return records.map((item) => ({ ...item })); },
+    async insert(item: Record<string, unknown>) { records.push({ ...item }); },
+    async findOrInsert(item: Record<string, unknown>) { return { ...item }; },
+    async transition() { throw new Error('encrypted acknowledgement write failed'); },
+  };
+  const processor = mod.createInvoiceCollectionSyncProcessor({
+    persistence,
+    isOnline: () => true,
+    now: () => 42,
+    transport: { collect: async () => ({ status: 'applied', operation_id: intent.operation_id }) },
+  });
+
+  await assert.rejects(() => processor.capture(intent), /encrypted acknowledgement write failed/);
+  assert.deepEqual(records, [intent]);
+
+  const restartedPersistence = createMemoryPersistence(records);
+  const restarted = mod.createInvoiceCollectionSyncProcessor({
+    persistence: restartedPersistence,
+    isOnline: () => true,
+    now: () => 43,
+    transport: { collect: async () => ({ status: 'applied', operation_id: intent.operation_id }) },
+  });
+  await restarted.reconcile();
+  assert.deepEqual(restartedPersistence.records, [{ ...intent, status: 'applied', updated_at_ms: 43 }]);
 });
 
 test('authenticated validation failure is terminal review while revoked credentials stay unchanged for reauth', async () => {

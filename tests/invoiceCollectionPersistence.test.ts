@@ -20,6 +20,7 @@ interface PersistenceModule {
   }): {
     list(session: Session): Promise<Array<{ operation_id: string; status: string }>>;
     insert(session: Session, intent: Record<string, unknown>): Promise<void>;
+    findOrInsert(session: Session, intent: Record<string, unknown>): Promise<Record<string, unknown>>;
     transition(session: Session, operationId: string, status: 'pending' | 'applied' | 'review_required', nowMs: number): Promise<void>;
   };
 }
@@ -103,4 +104,23 @@ test('failed durable write exposes no in-memory success and restart rehydrates o
   await firstProcess.insert(session, intent);
   const restarted = mod.createInvoiceCollectionPersistence({ load, update });
   assert.deepEqual(await restarted.list(session), [intent]);
+});
+
+test('find-or-insert returns the effective nonterminal intent for one stop and invoice', async () => {
+  const mod = await loadPersistence();
+  const harness = createEncryptedHarness();
+  const store = mod.createInvoiceCollectionPersistence({ load: harness.load, update: harness.update });
+  const replacement = { ...intent, operation_id: '44444444-2222-4aaa-8bbb-333333333333' };
+
+  assert.deepEqual(await store.findOrInsert(session, intent), intent);
+  assert.deepEqual(await store.findOrInsert(session, replacement), intent, 'dispatching blocks a new UUID');
+  await store.transition(session, intent.operation_id, 'pending', 2);
+  assert.deepEqual(await store.findOrInsert(session, replacement), { ...intent, status: 'pending', updated_at_ms: 2 });
+  await store.transition(session, intent.operation_id, 'review_required', 3);
+  assert.deepEqual(await store.findOrInsert(session, replacement), { ...intent, status: 'review_required', updated_at_ms: 3 });
+  await store.transition(session, intent.operation_id, 'applied', 4);
+  assert.deepEqual(await store.findOrInsert(session, replacement), replacement, 'applied does not block a new collection');
+  assert.deepEqual(await store.findOrInsert(session, { ...replacement, operation_id: '55555555-2222-4aaa-8bbb-333333333333', stop_id: 6 }), {
+    ...replacement, operation_id: '55555555-2222-4aaa-8bbb-333333333333', stop_id: 6,
+  }, 'a different stop does not collide');
 });

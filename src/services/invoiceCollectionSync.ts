@@ -5,6 +5,7 @@ type PersistedStatus = Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 
 export interface InvoiceCollectionIntentPersistence {
   list(): Promise<InvoiceCollectionIntent[]>;
   insert(intent: InvoiceCollectionIntent): Promise<void>;
+  findOrInsert(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent>;
   transition(operationId: string, status: PersistedStatus, nowMs: number): Promise<void>;
 }
 
@@ -115,23 +116,28 @@ export function createInvoiceCollectionSyncProcessor(deps: InvoiceCollectionSync
   }
   return {
     capture(intent: InvoiceCollectionIntent): Promise<InvoiceCollectionCaptureResult> {
-      const inFlight = captures.get(intent.operation_id);
-      if (inFlight) return inFlight;
-      const capture = (async () => {
+      return (async () => {
         // This awaited encrypted write is the commit point before first send.
-        await deps.persistence.insert(intent);
-        if (!deps.isOnline()) {
-          await deps.persistence.transition(intent.operation_id, 'pending', deps.now());
-          return { status: 'captured_pending' as const, operationId: intent.operation_id };
-        }
-        return send(intent);
+        const effective = await deps.persistence.findOrInsert(intent);
+        const inFlight = captures.get(effective.operation_id);
+        if (inFlight) return inFlight;
+        const capture = (async () => {
+          if (effective.status === 'review_required') {
+            return { status: 'review_required' as const, operationId: effective.operation_id };
+          }
+          if (!deps.isOnline()) {
+            await deps.persistence.transition(effective.operation_id, 'pending', deps.now());
+            return { status: 'captured_pending' as const, operationId: effective.operation_id };
+          }
+          return send(effective);
+        })();
+        captures.set(effective.operation_id, capture);
+        void capture.then(
+          () => { captures.delete(effective.operation_id); },
+          () => { captures.delete(effective.operation_id); },
+        );
+        return capture;
       })();
-      captures.set(intent.operation_id, capture);
-      void capture.then(
-        () => { captures.delete(intent.operation_id); },
-        () => { captures.delete(intent.operation_id); },
-      );
-      return capture;
     },
     reconcile(): Promise<void> {
       if (reconciliation) return reconciliation;

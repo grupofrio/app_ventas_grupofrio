@@ -28,6 +28,10 @@ function identicalIntent(a: InvoiceCollectionIntent, b: InvoiceCollectionIntent)
     && a.amount === b.amount && a.payment_method === b.payment_method;
 }
 
+function isNonterminal(intent: InvoiceCollectionIntent): boolean {
+  return intent.status === 'dispatching' || intent.status === 'pending' || intent.status === 'review_required';
+}
+
 export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersistenceDeps) {
   return {
     async list(session: EncryptedSessionIdentity): Promise<InvoiceCollectionIntent[]> {
@@ -41,6 +45,21 @@ export function createInvoiceCollectionPersistence(deps: InvoiceCollectionPersis
         if (existing) return;
         api.setRecord(INVOICE_COLLECTION_RECORD_KEY, { version: 1, intents: [...current.intents, { ...intent }] });
       });
+    },
+    async findOrInsert(session: EncryptedSessionIdentity, intent: InvoiceCollectionIntent): Promise<InvoiceCollectionIntent> {
+      let effective!: InvoiceCollectionIntent;
+      await deps.update(session, (api) => {
+        const current = parseStored(api.getRecord<unknown>(INVOICE_COLLECTION_RECORD_KEY));
+        const existing = current.intents.find((candidate) => candidate.stop_id === intent.stop_id
+          && candidate.invoice_id === intent.invoice_id && isNonterminal(candidate));
+        if (existing) {
+          effective = { ...existing };
+          return;
+        }
+        effective = { ...intent };
+        api.setRecord(INVOICE_COLLECTION_RECORD_KEY, { version: 1, intents: [...current.intents, effective] });
+      });
+      return effective;
     },
     async transition(
       session: EncryptedSessionIdentity,
@@ -74,6 +93,7 @@ export async function createCurrentInvoiceCollectionPersistence() {
   return {
     list: () => persistence.list(session),
     insert: (intent: InvoiceCollectionIntent) => persistence.insert(session, intent),
+    findOrInsert: (intent: InvoiceCollectionIntent) => persistence.findOrInsert(session, intent),
     transition: (operationId: string, status: Extract<InvoiceCollectionStatus, 'pending' | 'applied' | 'review_required'>, nowMs: number) => persistence.transition(session, operationId, status, nowMs),
   };
 }

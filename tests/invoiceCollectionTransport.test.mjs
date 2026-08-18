@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 const transport = readFileSync(resolve('src/services/invoiceCollection.ts'), 'utf8');
 const sync = readFileSync(resolve('src/services/invoiceCollectionSync.ts'), 'utf8');
+const connectivity = readFileSync(resolve('src/services/connectivity.ts'), 'utf8');
 const collectionSurface = [
   'app/collect/[stopId].tsx',
   'src/services/invoiceCollection.ts',
@@ -11,6 +12,8 @@ const collectionSurface = [
   'src/services/invoiceCollectionSync.ts',
   'src/services/invoiceCollectionVisit.ts',
 ].map((path) => readFileSync(resolve(path), 'utf8')).join('\n');
+const forbiddenCollectionAuthority = /\b(?:partner|company|employee|journal)(?:Id|_id)\b|\b(?:payment_method_line_id|paymentMethodLineId)\b|\b(?:sale_order_id|saleOrderId)\b/;
+const forbiddenGenericPaymentQueue = /enqueue\s*\(\s*['"]payment['"]|\bpaymentQueue\b/;
 
 assert.match(transport, /payments\/open_invoices\?stop_id=\$\{stopId\}/, 'invoice list sends only stop_id');
 assert.match(transport, /payments\/collect/, 'invoice collection uses the dedicated employee endpoint');
@@ -23,6 +26,14 @@ assert.match(transport, /operation_id:\s*request\.operation_id[\s\S]*stop_id:\s*
 assert.doesNotMatch(transport, /partner_id|company_id|employee_id|journal_id|payment_method_line_id|sale_order_id|odooRpc|call_kw|execute_kw/i, 'collection transport cannot carry client accounting authority or generic RPC');
 assert.doesNotMatch(sync, /['"]payment['"]\s*[),]/, 'invoice intents never enter the legacy payment sync queue');
 assert.equal(existsSync(resolve('src/services/collectPaymentIntent.ts')), false, 'the obsolete manual collection controller is removed');
-assert.doesNotMatch(collectionSurface, /\bpartnerId\b|\bjournalId\b|enqueue\(\s*['"]payment['"]|\bpaymentQueue\b|payments\/create/, 'the scoped collection surface has no manual accounting boundary or legacy generic payment queue');
+assert.doesNotMatch(collectionSurface, forbiddenCollectionAuthority, 'the scoped collection surface has no client accounting authority fields');
+assert.doesNotMatch(collectionSurface, forbiddenGenericPaymentQueue, 'the scoped collection surface has no legacy generic payment queue');
+assert.doesNotMatch(collectionSurface, /payments\/create/, 'the scoped collection surface does not use the generic payment endpoint');
+assert.match(connectivity, /requestInvoiceCollectionSync\(\)/, 'connectivity wake requests pending invoice-collection reconciliation');
+assert.throws(
+  () => assert.doesNotMatch('enqueue \n ( "payment"', forbiddenGenericPaymentQueue),
+  assert.AssertionError,
+  'the generic-payment guard catches whitespace-separated enqueue calls',
+);
 
 console.log('invoice collection transport contract: ok');

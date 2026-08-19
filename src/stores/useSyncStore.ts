@@ -222,6 +222,7 @@ function calculateBackoff(retryCount: number): number {
 interface SyncState {
   queue: SyncQueueItem[];
   isOnline: boolean;
+  isPotentiallyOnline: boolean;
   isSyncing: boolean;
   lastSyncAt: number | null;
 
@@ -249,7 +250,7 @@ interface SyncState {
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
   markDead: (id: string, message: string, retries?: number) => void;
-  setOnline: (online: boolean) => void;
+  setOnline: (online: boolean, potentiallyOnline?: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
   clearDead: () => number;
@@ -349,6 +350,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // Unknown startup connectivity is deliberately mutation-safe. NetInfo is
   // the only authority that promotes this to true after confirmed reachability.
   isOnline: false,
+  isPotentiallyOnline: false,
   isSyncing: false,
   lastSyncAt: null,
   pendingCount: 0,
@@ -516,8 +518,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
   },
 
-  setOnline: (online) => {
-    set({ isOnline: online });
+  setOnline: (online, potentiallyOnline = online) => {
+    set({ isOnline: online, isPotentiallyOnline: potentiallyOnline });
     const pendingQueueCount = get().queue.filter((i) => i.status === 'pending').length;
     if (online && pendingQueueCount > 0) {
       logInfo('sync', 'reconnect_trigger', { pending: pendingQueueCount });

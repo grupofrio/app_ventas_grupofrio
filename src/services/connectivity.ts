@@ -24,6 +24,7 @@ import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import {
   isConfirmedOnline,
+  isPotentiallyOnline,
   shouldWakeOnNetTransition,
   shouldWakeOnWarehouseTransition,
   NetSnapshot,
@@ -113,8 +114,9 @@ export function startConnectivityMonitor(): void {
   netUnsubscribe = NetInfo.addEventListener((state: NetInfoState) => {
     const next = toSnapshot(state);
     const isNowOnline = isOnlineFromState(state);
+    const isPotentially = isPotentiallyOnline(state);
 
-    useSyncStore.getState().setOnline(isNowOnline);
+    useSyncStore.getState().setOnline(isNowOnline, isPotentially);
 
     // PR-1: despertar en transiciones relevantes (incluye phantom→real), no
     // solo en el flanco booleano offline→online.
@@ -187,6 +189,7 @@ export async function checkConnectivity(): Promise<boolean> {
   const state = await NetInfo.fetch();
   prevNet = toSnapshot(state);
   const online = isOnlineFromState(state);
-  useSyncStore.getState().setOnline(online);
+  const potentially = isPotentiallyOnline(state);
+  useSyncStore.getState().setOnline(online, potentially);
   return online;
 }

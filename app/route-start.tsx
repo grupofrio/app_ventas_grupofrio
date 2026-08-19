@@ -100,6 +100,7 @@ export default function RouteStartScreen() {
   const loadOutcome = useRouteStore((s) => s.loadOutcome);
   const planId = plan?.plan_id ?? null;
   const isOnline = useSyncStore((s) => s.isOnline);
+  const isPotentiallyOnline = useSyncStore((s) => s.isPotentiallyOnline);
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
   const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
@@ -398,10 +399,10 @@ export default function RouteStartScreen() {
     initialLoadRejectedWaiting: initialLoadState.initialLoadRejectedWaiting,
     kmCaptured: kmDoneLive,
     dataMinimumReady: dataMinReady,
-    isOnline,
+    isOnline: isPotentiallyOnline,
   });
   const readyToStartLive = startDayGates.startUnlocked;
-  const canRequestStart = plan?.state === 'published' && readyToStartLive && isOnline;
+  const canRequestStart = plan?.state === 'published' && readyToStartLive && isPotentiallyOnline;
   const canContinue = (serverStarted && readyToStartLive) || canRequestStart;
 
   async function handleStartRoute() {
@@ -434,7 +435,7 @@ export default function RouteStartScreen() {
       initialLoadRejectedWaiting: currentInitial.initialLoadRejectedWaiting,
       kmCaptured: currentKm != null,
       dataMinimumReady: currentDataMinReady,
-      isOnline: useSyncStore.getState().isOnline,
+      isOnline: useSyncStore.getState().isPotentiallyOnline,
     });
     const currentReadyToStart = currentGates.startUnlocked;
     if (currentPlan?.plan_id !== capturedPlanId) return;
@@ -442,7 +443,7 @@ export default function RouteStartScreen() {
     const currentUiState = buildRouteStartUiState({
       planState: currentPlan.state,
       readyToStart: currentReadyToStart,
-      isOnline: useSyncStore.getState().isOnline,
+      isOnline: useSyncStore.getState().isPotentiallyOnline,
     });
     if (
       !currentUiState.canContinue

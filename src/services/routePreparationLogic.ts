@@ -78,3 +78,18 @@ export function formatPreparedAt(ts: number | null): string {
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
 }
+
+export type {
+  RoutePreparationAssessment,
+  RoutePreparationBindingContext,
+  RoutePreparationReceiptV1,
+} from './routePreparationReceipt.ts';
+
+export {
+  assessRoutePreparationReceipt,
+  buildRoutePreparationReceipt,
+  parseRoutePreparationReceipt,
+  receiptMatchesBinding,
+  receiptToStoreSnapshot,
+  ROUTE_PREP_RECEIPT_PERSIST_WARNING,
+} from './routePreparationReceipt.ts';

@@ -71,6 +71,7 @@ import {
   safeUnknownErrorMessage,
   shouldResumeAfterSale,
 } from '../../src/services/saleConfirmationFlow';
+import { describeOperationIntentDiagnostics } from '../../src/services/operationIntentDiagnostics';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -603,6 +604,15 @@ function SaleScreenInner() {
         outcome: outcome.kind,
         http_status: metadata.httpStatus,
         code: metadata.code,
+        ...(outcome.kind === 'ambiguous_result'
+          ? describeOperationIntentDiagnostics({
+            operationType: 'sale_order',
+            operationId,
+            payload: recoveryIntent.queuePayload,
+            recoveryState: saleRecoveryPersistenceFailed ? 'persist_failed' : 'pending',
+            queueState: 'submitting',
+          })
+          : {}),
       });
 
       if (outcome.kind === 'definitive_rejection') {

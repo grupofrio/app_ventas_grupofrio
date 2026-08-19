@@ -182,6 +182,7 @@ export const STORAGE_KEYS = {
   STOPS: 'route:stops',
   VISIT_STATE: 'visit:active',
   ROUTE_START: 'route:start', // Sprint A: checklist/km/load readiness cache
+  ROUTE_PREPARATION: 'route:preparation', // Durable receipt for "Preparar ruta"
 
   // Products
   PRODUCTS: 'entities:products',

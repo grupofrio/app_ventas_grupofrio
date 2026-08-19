@@ -17,6 +17,8 @@ import { useAuthStore } from '../stores/useAuthStore';
 import { useVisitStore } from '../stores/useVisitStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
 import { useProductStore } from '../stores/useProductStore';
+import { useEmployeeDayBundleStore } from '../stores/useEmployeeDayBundleStore';
+import { useRoutePreparationStore } from '../stores/useRoutePreparationStore';
 import { hydratePriceCacheFromDisk } from './offlineCache';
 import { GFPlan, GFStop } from '../types/plan';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
@@ -142,6 +144,10 @@ export async function rehydrateAppState(): Promise<{
     const warehouseId = useAuthStore.getState().warehouseId;
     productCount = await useProductStore.getState().hydrateFromCache(warehouseId);
     const restoredPrices = await hydratePriceCacheFromDisk();
+
+    // 3b. Day bundle + route preparation receipt (after plan/products/prices).
+    await useEmployeeDayBundleStore.getState().hydrate();
+    await useRoutePreparationStore.getState().hydrate();
 
     // 4. Migración de compatibilidad (UNA versión): descarta de la cola cualquier
     // evento legacy de recarga/devolución (flujo retirado), revierte su delta de

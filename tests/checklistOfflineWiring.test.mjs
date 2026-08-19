@@ -50,7 +50,7 @@ function main() {
   );
   assert.match(
     screen,
-    /storeLoad<Record<number, CheckDraft>>\(checklistDraftsStorageKey\(planIdNum\)\)/,
+    /storeLoad<Record<number, ChecklistDraft>>\(checklistDraftsStorageKey\(planIdNum\)\)/,
     'los borradores deben rehidratarse al montar',
   );
 
@@ -77,8 +77,19 @@ function main() {
   );
   assert.match(
     screen,
-    /await submitVehicleCheck\(check\.id, payload\);[\s\S]{0,500}collectDeadChecklistAnswerOpIds\([\s\S]{0,250}header\?\.id \?\? 0,[\s\S]{0,150}check\.id[\s\S]{0,300}removeDeadQueueItems\([\s\S]{0,500}await reloadChecks\(\)/,
-    'un envío online exitoso elimina los dead del mismo check antes de recargar',
+    /await submitVehicleCheck\(check\.id, payload\);[\s\S]{0,500}collectDeadChecklistAnswerOpIds\([\s\S]{0,250}header\?\.id \?\? 0,[\s\S]{0,150}check\.id[\s\S]{0,300}removeDeadQueueItems/,
+    'un envío online exitoso elimina los dead del mismo check',
+  );
+  assert.match(
+    screen,
+    /validateRequiredChecklistDrafts\(checks, drafts\)[\s\S]{0,400}if \(!validation\.ok\) \{[\s\S]{0,250}return;/,
+    'la validación local de requeridos corre ANTES de cualquier mutación de red',
+  );
+  assert.match(screen, /Guardar y completar checklist/, 'un solo CTA guarda y completa');
+  assert.doesNotMatch(
+    screen,
+    /label=\{check\.answered \? 'Actualizar' : 'Guardar'\}/,
+    'no debe haber Guardar/Actualizar por punto',
   );
 
   // Pantalla: cierre offline con dependsOn de las respuestas encoladas y
@@ -145,7 +156,7 @@ function main() {
   );
   assert.match(
     screen,
-    /await completeVehicleChecklist\([\s\S]{0,1800}catch \(err\) \{[\s\S]{0,500}isRetryableSyncErrorMessage\(msg\)[\s\S]{0,500}completeOffline\(capturedPlanId, useSyncStore\.getState\(\)\.queue\)/,
+    /await handleComplete\(\);[\s\S]{0,80}catch \(err\) \{[\s\S]{0,500}isRetryableSyncErrorMessage\(msg\)[\s\S]{0,500}completeOffline\(capturedPlanId, useSyncStore\.getState\(\)\.queue\)/,
     'el fallback reintentable relee la cola actual después del await antes de aplicar guard/dependencies',
   );
   assert.match(

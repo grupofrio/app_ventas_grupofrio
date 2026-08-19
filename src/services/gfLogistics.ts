@@ -24,7 +24,7 @@ import { CheckoutResultStatus } from './checkoutResult';
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
-import { buildRouteLoadAcceptPayload } from './routeLoadAcceptance';
+import { buildRouteLoadAcceptPayload, buildRouteLoadRejectPayload } from './routeLoadAcceptance';
 import {
   parseRouteLoadAcceptResponse,
   requirePositivePickingId,
@@ -669,6 +669,39 @@ export async function acceptRouteLoad(
     already_accepted: parsed.already_accepted,
   });
   return parsed;
+}
+
+/**
+ * Operational Field reject of an exact route stock.picking.
+ * Online only — no optimistic stock. Distinct from PT `pt_transfer/reject`.
+ */
+export async function rejectRouteLoad(
+  routePlanId: number,
+  pickingId: number,
+  input: {
+    operationId: string;
+    rejectionReasonCode: string;
+    rejectionNotes?: string;
+  },
+): Promise<void> {
+  const planId = requirePositivePlanId(routePlanId);
+  const exactPickingId = requirePositivePickingId(pickingId);
+  const payload = buildRouteLoadRejectPayload({
+    planId,
+    pickingId: exactPickingId,
+    operationId: input.operationId,
+    rejectionReasonCode: input.rejectionReasonCode,
+    rejectionNotes: input.rejectionNotes,
+  });
+  await postRest<Record<string, unknown>>(
+    `${GF_BASE}/route_plan/reject_load`,
+    payload,
+  );
+  logInfo('inventory', 'route_load_reject_ok', {
+    plan_id: planId,
+    picking_id: exactPickingId,
+    rejection_reason_code: payload.rejection_reason_code,
+  });
 }
 
 export async function createPayment(

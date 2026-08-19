@@ -196,7 +196,7 @@ function main() {
 
   assert.match(
     routeStartScreen,
-    /import \{ acceptRouteLoad, startPlan \} from '\.\.\/src\/services\/gfLogistics';/,
+    /import \{ acceptRouteLoad, rejectRouteLoad, startPlan \} from '\.\.\/src\/services\/gfLogistics';/,
     'route-start UI must use the real authoritative start transport',
   );
   assert.match(
@@ -226,19 +226,19 @@ function main() {
   );
   assert.match(
     routeStartScreen,
-    /const checklistDoneLive = serverStarted \|\| \(routeStartPlanId === planId && checklistComplete\);/,
-    'in-progress is authoritative while pre-start checklist facts remain plan-scoped',
+    /const checklistDoneLive = routeStartPlanId === planId && checklistComplete;/,
+    'checklist readiness for start-of-day must be the server-confirmed plan-scoped fact',
   );
   assert.match(
     routeStartScreen,
-    /const checklistDisplayStatus: StepStatus = serverStarted\s*\? 'done'\s*:\s*\(checklistDoneLive && checklistStatus === 'done' \? 'done' : 'pending'\);/,
-    'an authoritative started plan must display checklist done while plan-scoped facts protect other plans',
+    /const checklistDisplayStatus: StepStatus = checklistDoneLive && checklistStatus === 'done'\s*\? 'done'\s*: 'pending';/,
+    'checklist display must not treat plan.state in_progress as server-confirmed complete',
   );
 
   assert.match(
     routeStartScreen,
     /buildInitialLoadAcceptanceState\(plan\)/,
-    'daily route start must derive Step 4 from the initial load only',
+    'daily route start must derive the load step from the initial load only',
   );
   assert.doesNotMatch(
     routeStartScreen,
@@ -331,8 +331,8 @@ function main() {
   );
   assert.match(
     routeStartScreen,
-    /const serverStarted = plan\?\.state === 'in_progress';[\s\S]*?const canRequestStart = plan\?\.state === 'published' && readyToStartLive && isOnline;[\s\S]*?const canContinue = serverStarted \|\| canRequestStart;/,
-    'UI eligibility must explicitly separate authoritative continuation from published readiness',
+    /const canRequestStart = plan\?\.state === 'published' && readyToStartLive && isOnline;[\s\S]*?const canContinue = \(serverStarted && readyToStartLive\) \|\| canRequestStart;/,
+    'UI eligibility must not unlock continue merely because plan.state is in_progress',
   );
   assert.match(
     handleStart,
@@ -341,8 +341,8 @@ function main() {
   );
   assert.match(
     handleStart,
-    /const currentReadyToStart = currentStart\.planId === capturedPlanId[\s\S]*?&& currentStart\.loadAccepted[\s\S]*?&& dataMinReady;/,
-    'the programmatic start guard must use the latest authoritative load fact, not a stale render closure',
+    /const currentReadyToStart = currentGates\.startUnlocked;/,
+    'the programmatic start guard must recompute start-day gates from the latest plan, not only local store booleans',
   );
 
   assert.match(

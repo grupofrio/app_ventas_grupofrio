@@ -1,16 +1,16 @@
 /**
  * Route Start hub — Sprint A.
  *
- * Orchestrates the morning sequence for the jefe de ruta BEFORE leaving the
- * CEDIS, so they no longer need the PWA Colaboradores for this:
- *   1. Ver unidad/ruta asignada
- *   2. Checklist de unidad      → app/checklist/[planId]
- *   3. KM inicial               → inline
- *   4. Ver/aceptar carga        → app/acceptload/[planId]
- *   5. Listo para iniciar ruta  (botón preparado, wiring real fuera de Sprint A)
+ * Orchestrates the morning sequence BEFORE leaving the CEDIS:
+ *   1. Checklist de unidad (server-confirmed)
+ *   2. Aceptar o rechazar carga
+ *   3. Preparar plan del día (full operational bundle)
+ *   4. Iniciar ruta
  *
- * Online-first (CEDIS WiFi). Each step degrades gracefully: no plan, no load,
- * offline — none of them crash the screen.
+ * Minimal bootstrap (plan/vehicle/checklist/load metadata) may load first.
+ * Full day preparation waits until load is authoritatively accepted.
+ * KM inicial is captured from the checklist odometer; a manual fallback
+ * appears only when that value is missing.
  */
 
 import React, { useCallback, useRef, useState } from 'react';
@@ -35,7 +35,7 @@ import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore
 import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleStore';
 import { ensureChecklistReady } from '../src/services/vehicleChecklist';
 import { updateKm } from '../src/services/routeKm';
-import { acceptRouteLoad, startPlan } from '../src/services/gfLogistics';
+import { acceptRouteLoad, rejectRouteLoad, startPlan } from '../src/services/gfLogistics';
 import {
   describeRouteLoadAcceptSuccess,
   evaluateInventoryRefreshEvidence,
@@ -43,18 +43,28 @@ import {
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
 } from '../src/services/routeLoadAcceptFlow';
-import { buildInitialLoadAcceptanceState } from '../src/services/routeLoadAcceptance';
+import {
+  buildInitialLoadAcceptanceState,
+  buildRouteLoadRejectPayload,
+  createRouteLoadOperationId,
+  ROUTE_LOAD_REJECTION_REASON_CODES,
+  ROUTE_LOAD_REJECTION_REASON_LABELS,
+  type RouteLoadRejectionReasonCode,
+} from '../src/services/routeLoadAcceptance';
 import { logWarn } from '../src/utils/logger';
 import {
   chooseAuthoritativeKm,
-  isChecklistAnsweredForStart,
+  computeStartDayStepGates,
+  isChecklistServerConfirmed,
   isValidKm,
   isAbsurdOdometer,
+  START_DAY_COPY,
 } from '../src/services/routeStartLogic';
 import { computeRouteReadiness } from '../src/services/routeReadiness';
 import { describeRouteLoad, isErrorStatus } from '../src/services/routeLoadOutcome';
 import { RoutePreparationCard } from '../src/components/domain/RoutePreparationCard';
 import { confirmAuthoritativeRouteStart } from '../src/services/routeStartAction';
+import { hasQueuedChecklistCompleteForPlan } from '../src/services/vehicleChecklistOffline';
 import {
   buildRouteStartUiState,
   isCurrentRoutePlan,
@@ -125,7 +135,12 @@ export default function RouteStartScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checklistStatus, setChecklistStatus] = useState<StepStatus>('pending');
+  const [checklistSyncPending, setChecklistSyncPending] = useState(false);
   const [acceptingLoad, setAcceptingLoad] = useState(false);
+  const [rejectingLoad, setRejectingLoad] = useState(false);
+  const [rejectPickerOpen, setRejectPickerOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState<RouteLoadRejectionReasonCode | null>(null);
+  const [rejectNotes, setRejectNotes] = useState('');
 
   const [kmInput, setKmInput] = useState('');
   const [savingKm, setSavingKm] = useState(false);
@@ -142,9 +157,11 @@ export default function RouteStartScreen() {
   // object (load_pickings / pending_loads). No extra /my-load fetch.
   const initialLoadState = React.useMemo(() => buildInitialLoadAcceptanceState(plan), [plan]);
   const loadStatus: StepStatus =
-    initialLoadState.initialLoads.length === 0
-      ? 'skip'
-      : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
+    initialLoadState.initialLoadRejectedWaiting
+      ? 'pending'
+      : initialLoadState.initialLoads.length === 0
+        ? 'skip'
+        : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
 
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
@@ -160,7 +177,14 @@ export default function RouteStartScreen() {
       currentStart.planId === capturedPlanId && currentStart.checklistComplete ? 'done' : 'pending',
     );
     setKmInitialBackend(null);
+    const queuedComplete = hasQueuedChecklistCompleteForPlan(
+      useSyncStore.getState().queue,
+      capturedPlanId,
+    );
     if (!isOnline) {
+      const preserved = useRouteStartStore.getState();
+      const serverConfirmed = preserved.planId === capturedPlanId && preserved.checklistComplete;
+      setChecklistSyncPending(queuedComplete && !serverConfirmed);
       setError(null);
       setLoading(false);
       return;
@@ -176,17 +200,23 @@ export default function RouteStartScreen() {
         km: typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null,
       });
       const { header } = await ensureChecklistReady(capturedPlanId);
-      // The hub creates/loads the checklist before evaluating readiness.
-      // Answers are required; pass/fail does not block route start.
-      const done = isChecklistAnsweredForStart(header);
+      // Hub unlock for Load uses server-confirmed complete, not answers-only.
+      const done = isChecklistServerConfirmed(header);
       setChecklistCompleteForPlan(capturedPlanId, done);
       if (isCurrentPlan(capturedPlanId)) {
         setChecklistStatus(done ? 'done' : 'pending');
+        setChecklistSyncPending(!done && (
+          queuedComplete || hasQueuedChecklistCompleteForPlan(
+            useSyncStore.getState().queue,
+            capturedPlanId,
+          )
+        ));
       }
     } catch {
       if (isCurrentPlan(capturedPlanId)) {
         const preservedChecklist = useRouteStartStore.getState().checklistComplete;
         setChecklistStatus(preservedChecklist ? 'done' : 'pending');
+        setChecklistSyncPending(queuedComplete && !preservedChecklist);
         setError('No se pudo validar el checklist de unidad. Reintenta con conexión.');
       }
     } finally {
@@ -271,6 +301,80 @@ export default function RouteStartScreen() {
     );
   }
 
+  function closeRejectPicker(): void {
+    setRejectPickerOpen(false);
+    setRejectReason(null);
+    setRejectNotes('');
+  }
+
+  async function confirmRejectLoad(): Promise<void> {
+    if (!planId || rejectingLoad || acceptingLoad) return;
+    const capturedPlanId = planId;
+    const pending = initialLoadState.nextPendingInitialLoad;
+    if (!pending?.picking_id) return;
+    const pickingId = requirePositivePickingId(pending.picking_id);
+    if (!isOnline) {
+      Alert.alert('Sin conexión', 'Conéctate al WiFi del CEDIS para rechazar la carga.');
+      return;
+    }
+    if (!rejectReason) {
+      Alert.alert('Motivo requerido', 'Selecciona el motivo del rechazo.');
+      return;
+    }
+    let payload: ReturnType<typeof buildRouteLoadRejectPayload>;
+    try {
+      payload = buildRouteLoadRejectPayload({
+        planId: capturedPlanId,
+        pickingId,
+        operationId: createRouteLoadOperationId(),
+        rejectionReasonCode: rejectReason,
+        rejectionNotes: rejectNotes,
+      });
+    } catch (err) {
+      Alert.alert('Rechazo inválido', err instanceof Error ? err.message : 'Revisa el motivo y las notas.');
+      return;
+    }
+
+    Alert.alert(
+      'Rechazar carga',
+      `¿Confirmas el rechazo de "${pending.name}"? Almacén deberá corregirla. Cancelar no rechaza.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Rechazar',
+          style: 'destructive',
+          onPress: async () => {
+            if (!isCurrentPlan(capturedPlanId)) {
+              showRouteChangedAlert();
+              return;
+            }
+            setRejectingLoad(true);
+            try {
+              await rejectRouteLoad(capturedPlanId, pickingId, {
+                operationId: String(payload.operation_id),
+                rejectionReasonCode: String(payload.rejection_reason_code),
+                rejectionNotes: String(payload.rejection_notes || ''),
+              });
+              closeRejectPicker();
+              await loadPlan({ force: true });
+              Alert.alert(
+                'Carga rechazada',
+                'Esperando corrección de Almacén. No se otorgó stock a la unidad.',
+              );
+            } catch (err) {
+              Alert.alert(
+                'No se pudo rechazar la carga',
+                err instanceof Error ? err.message : 'Intenta de nuevo.',
+              );
+            } finally {
+              setRejectingLoad(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
   useFocusEffect(
     useCallback(() => {
       void refresh();
@@ -280,32 +384,61 @@ export default function RouteStartScreen() {
   const kmStatus: StepStatus = kmInitial != null ? 'done' : 'pending';
 
   const serverStarted = plan?.state === 'in_progress';
-  const checklistDoneLive = serverStarted || (routeStartPlanId === planId && checklistComplete);
-  const checklistDisplayStatus: StepStatus = serverStarted
+  const checklistDoneLive = routeStartPlanId === planId && checklistComplete;
+  const checklistDisplayStatus: StepStatus = checklistDoneLive && checklistStatus === 'done'
     ? 'done'
-    : (checklistDoneLive && checklistStatus === 'done' ? 'done' : 'pending');
+    : 'pending';
   const kmDoneLive = kmInitial != null;
-  const loadDoneLive = loadStatus !== 'pending'; // 'done' (accepted) or 'skip' (none)
-  // Perf Fase 2C: además del checklist/KM/carga, exigir el MÍNIMO de datos en
-  // caché (ruta + productos) para no salir a ruta sin con qué operar. Los
-  // precios faltantes son advertencia, no bloqueo (degradación segura).
+  const loadAcceptedLive = initialLoadState.initialLoadAccepted;
   const dataMinReady = dataReady.minimumReady && dayBundleAccess?.canStartRoute === true;
-  const readyToStartLive = checklistDoneLive && kmDoneLive && loadDoneLive && dataMinReady;
+  const startDayGates = computeStartDayStepGates({
+    checklistServerConfirmed: checklistDoneLive,
+    checklistSyncPending,
+    initialLoadAccepted: loadAcceptedLive,
+    initialLoadRejectedWaiting: initialLoadState.initialLoadRejectedWaiting,
+    kmCaptured: kmDoneLive,
+    dataMinimumReady: dataMinReady,
+    isOnline,
+  });
+  const readyToStartLive = startDayGates.startUnlocked;
   const canRequestStart = plan?.state === 'published' && readyToStartLive && isOnline;
-  const canContinue = serverStarted || canRequestStart;
+  const canContinue = (serverStarted && readyToStartLive) || canRequestStart;
 
   async function handleStartRoute() {
     if (!planId || startingRouteRef.current) return;
     const capturedPlanId = planId;
     const currentPlan = useRouteStore.getState().plan;
     const currentStart = useRouteStartStore.getState();
-    const currentReadyToStart = currentStart.planId === capturedPlanId
-      && currentStart.checklistComplete
-      && currentStart.kmInitial != null
-      && currentStart.loadAccepted
-      && dataMinReady;
+    const currentInitial = buildInitialLoadAcceptanceState(currentPlan);
+    const currentBundle = useEmployeeDayBundleStore.getState().access;
+    const currentDataReady = computeRouteReadiness({
+      hasPlan: !!currentPlan,
+      stopsCount: useRouteStore.getState().stops.length,
+      productCount: useProductStore.getState().productCount,
+      customersTotal: useRoutePreparationStore.getState().customersTotal,
+      customersPrepared: useRoutePreparationStore.getState().customersPrepared,
+    });
+    const currentKm = chooseAuthoritativeKm({
+      planKm: typeof currentPlan?.departure_km === 'number' ? currentPlan.departure_km : null,
+      backendKm: kmInitialBackend?.planId === capturedPlanId ? kmInitialBackend.km : null,
+      localKm: currentStart.planId === capturedPlanId ? currentStart.kmInitial : null,
+    });
+    const currentDataMinReady = currentDataReady.minimumReady && currentBundle?.canStartRoute === true;
+    const currentGates = computeStartDayStepGates({
+      checklistServerConfirmed: currentStart.planId === capturedPlanId && currentStart.checklistComplete,
+      checklistSyncPending: hasQueuedChecklistCompleteForPlan(
+        useSyncStore.getState().queue,
+        capturedPlanId,
+      ) && !(currentStart.planId === capturedPlanId && currentStart.checklistComplete),
+      initialLoadAccepted: currentInitial.initialLoadAccepted,
+      initialLoadRejectedWaiting: currentInitial.initialLoadRejectedWaiting,
+      kmCaptured: currentKm != null,
+      dataMinimumReady: currentDataMinReady,
+      isOnline: useSyncStore.getState().isOnline,
+    });
+    const currentReadyToStart = currentGates.startUnlocked;
     if (currentPlan?.plan_id !== capturedPlanId) return;
-    if (!useEmployeeDayBundleStore.getState().access?.canStartRoute) return;
+    if (!currentBundle?.canStartRoute) return;
     const currentUiState = buildRouteStartUiState({
       planState: currentPlan.state,
       readyToStart: currentReadyToStart,
@@ -491,10 +624,10 @@ export default function RouteStartScreen() {
           </View>
         )}
 
-        {/* Step 1: unidad / ruta */}
+        {/* Unidad / ruta — context, not a numbered gate */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={typography.cardHeading}>1 · Unidad y ruta</Text>
+            <Text style={typography.cardHeading}>Unidad y ruta</Text>
           </View>
           <Text style={[typography.cardValue, styles.unitName]}>{plan?.route || plan?.name || 'Ruta del día'}</Text>
           <Text style={[typography.dim, styles.unitSub]}>
@@ -502,76 +635,81 @@ export default function RouteStartScreen() {
           </Text>
         </Card>
 
-        {/* Step 2: checklist */}
+        {/* 1 Checklist */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={typography.cardHeading}>2 · Checklist de unidad</Text>
+            <Text style={typography.cardHeading}>1 · Checklist de unidad</Text>
             {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <StatusBadge status={checklistDisplayStatus} />}
           </View>
           <Text style={[typography.dim, styles.stepBody]}>
             Revisa el estado de la unidad antes de salir (llantas, gas, kit, etc.).
           </Text>
+          {checklistSyncPending && (
+            <Text style={[typography.dimSmall, styles.readyWarn]}>{START_DAY_COPY.checklistSyncPending}</Text>
+          )}
           <Button
             label={checklistDisplayStatus === 'done' ? 'Ver checklist' : 'Hacer checklist'}
             variant={checklistDisplayStatus === 'done' ? 'secondary' : 'primary'}
             onPress={() => router.push(`/checklist/${planId}` as never)}
             fullWidth
-            disabled={!isOnline}
           />
         </Card>
 
-        {/* Step 3: KM inicial.
-            A.1 Option A: si el checklist trae "Odómetro salida", se registra
-            automáticamente al completar. El input manual queda disponible como
-            fallback para no depender del template del checklist. */}
-        <Card>
-          <View style={styles.rowBetween}>
-            <Text style={typography.cardHeading}>3 · KM inicial</Text>
-            <StatusBadge status={kmStatus} />
-          </View>
-          {kmInitial != null ? (
+        {/* KM fallback — not a numbered step. Only when odometer did not register. */}
+        {kmInitial == null && (
+          <Card>
+            <View style={styles.rowBetween}>
+              <Text style={typography.cardHeading}>Capturar KM inicial</Text>
+              <StatusBadge status={kmStatus} />
+            </View>
             <Text style={[typography.dim, styles.stepBody]}>
-              Registrado en Odoo: <Text style={styles.kmValue}>{kmInitial} km</Text>
+              {checklistDisplayStatus === 'done'
+                ? 'El checklist no registró el KM. Captúralo aquí para continuar.'
+                : 'Se registra automáticamente con el odómetro del checklist. Úsalo solo si hace falta.'}
             </Text>
-          ) : (
-            <>
-              <Text style={[typography.dim, styles.stepBody]}>
-                {checklistDisplayStatus === 'done'
-                  ? 'El checklist no registró el KM. Captúralo manualmente para continuar.'
-                  : 'Puede registrarse automáticamente al completar el checklist; si vas a operar ahora, captura el KM inicial aquí.'}
-              </Text>
-              <View style={styles.kmRow}>
-                <TextInput
-                  style={[typography.scoreValue, styles.kmInput]}
-                  value={kmInput}
-                  onChangeText={setKmInput}
-                  placeholder="Ej. 123456"
-                  placeholderTextColor={colors.textDim}
-                  keyboardType="number-pad"
-                  editable={isOnline && !savingKm}
-                />
-                <Button
-                  label={savingKm ? 'Guardando…' : 'Guardar'}
-                  variant="primary"
-                  onPress={handleSaveKm}
-                  disabled={!isOnline || savingKm}
-                  loading={savingKm}
-                />
-              </View>
-            </>
-          )}
-        </Card>
+            <View style={styles.kmRow}>
+              <TextInput
+                style={[typography.scoreValue, styles.kmInput]}
+                value={kmInput}
+                onChangeText={setKmInput}
+                placeholder="Ej. 123456"
+                placeholderTextColor={colors.textDim}
+                keyboardType="number-pad"
+                editable={isOnline && !savingKm}
+              />
+              <Button
+                label={savingKm ? 'Guardando…' : 'Guardar'}
+                variant="primary"
+                onPress={handleSaveKm}
+                disabled={!isOnline || savingKm}
+                loading={savingKm}
+              />
+            </View>
+          </Card>
+        )}
 
-        {/* Step 4: carga (reuse Sebas's acceptRouteLoad + plan-embedded load) */}
+        {/* 2 Carga — locked until checklist is server-confirmed */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={typography.cardHeading}>4 · Carga asignada</Text>
-            <StatusBadge status={loadStatus} />
+            <Text style={typography.cardHeading}>2 · Carga</Text>
+            <StatusBadge status={
+              !startDayGates.loadUnlocked
+                ? 'pending'
+                : initialLoadState.initialLoadRejectedWaiting
+                  ? 'pending'
+                  : loadStatus
+            } />
           </View>
-          {loadStatus === 'skip' ? (
+          {!startDayGates.loadUnlocked ? (
+            <Text style={[typography.dim, styles.stepBody]}>
+              {startDayGates.loadLockMessage}
+            </Text>
+          ) : loadStatus === 'skip' ? (
             <Text style={[typography.dim, styles.stepBody]}>No tienes carga pendiente de aceptar.</Text>
           ) : loadStatus === 'done' ? (
             <Text style={[typography.dim, styles.stepBody]}>✓ Tu carga ya fue aceptada.</Text>
+          ) : initialLoadState.initialLoadRejectedWaiting ? (
+            <Text style={[typography.dim, styles.stepBody]}>{START_DAY_COPY.loadRejectedWaiting}</Text>
           ) : (
             <>
               <Text style={[typography.dim, styles.stepBody]}>
@@ -580,44 +718,125 @@ export default function RouteStartScreen() {
                   ? `  ·  ${initialLoadState.nextPendingInitialLoad.lines.length} producto(s)`
                   : ''}
               </Text>
-              <Button
-                label={acceptingLoad ? 'Aceptando…' : 'Aceptar carga'}
-                variant="primary"
-                onPress={handleAcceptLoad}
-                fullWidth
-                disabled={!isOnline || acceptingLoad}
-                loading={acceptingLoad}
-              />
+              {!!initialLoadState.nextPendingInitialLoad?.lines?.length && (
+                <View style={styles.loadLines}>
+                  {initialLoadState.nextPendingInitialLoad.lines.map((line, index) => (
+                    <View key={line.move_id || `${line.product_id}-${index}`} style={styles.loadLineRow}>
+                      <Text style={[typography.dim, styles.loadLineName]} numberOfLines={2}>{line.product_name}</Text>
+                      <Text style={[typography.bodySmall, styles.loadLineQty]}>
+                        {Number.isInteger(line.display_qty || line.done_qty || line.requested_qty)
+                          ? String(line.display_qty || line.done_qty || line.requested_qty)
+                          : (line.display_qty || line.done_qty || line.requested_qty).toFixed(2)} {line.uom_name || ''}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <View style={styles.loadActions}>
+                <Button
+                  label={rejectingLoad ? 'Rechazando…' : 'Rechazar carga'}
+                  variant="danger"
+                  onPress={() => {
+                    if (!isOnline) {
+                      Alert.alert('Sin conexión', 'Conéctate al WiFi del CEDIS para rechazar la carga.');
+                      return;
+                    }
+                    setRejectPickerOpen(true);
+                  }}
+                  disabled={!isOnline || acceptingLoad || rejectingLoad}
+                  small
+                />
+                <Button
+                  label={acceptingLoad ? 'Aceptando…' : 'Aceptar carga'}
+                  variant="primary"
+                  onPress={handleAcceptLoad}
+                  disabled={!isOnline || acceptingLoad || rejectingLoad}
+                  loading={acceptingLoad}
+                  small
+                />
+              </View>
+              {rejectPickerOpen && (
+                <View style={styles.rejectBox}>
+                  <Text style={[typography.dim, styles.stepBody]}>Motivo del rechazo</Text>
+                  {ROUTE_LOAD_REJECTION_REASON_CODES.map((code) => (
+                    <TouchableOpacity
+                      key={code}
+                      style={[styles.reasonChip, rejectReason === code && styles.reasonChipOn]}
+                      onPress={() => setRejectReason(code)}
+                    >
+                      <Text style={[typography.bodySmall, rejectReason === code && styles.reasonChipTextOn]}>
+                        {ROUTE_LOAD_REJECTION_REASON_LABELS[code]}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  {rejectReason === 'other' && (
+                    <TextInput
+                      style={[typography.body, styles.reasonNotes]}
+                      value={rejectNotes}
+                      onChangeText={setRejectNotes}
+                      placeholder="Notas (obligatorias)"
+                      placeholderTextColor={colors.textDim}
+                      multiline
+                    />
+                  )}
+                  <View style={styles.loadActions}>
+                    <Button
+                      label="Cancelar"
+                      variant="secondary"
+                      onPress={closeRejectPicker}
+                      disabled={rejectingLoad}
+                      small
+                    />
+                    <Button
+                      label="Confirmar rechazo"
+                      variant="danger"
+                      onPress={() => { void confirmRejectLoad(); }}
+                      disabled={rejectingLoad || !rejectReason}
+                      loading={rejectingLoad}
+                      small
+                    />
+                  </View>
+                </View>
+              )}
             </>
           )}
         </Card>
 
-        {/* Step 5: preparar datos de ruta (Fase 2C) — reusa el orquestador
-            (useRoutePreparationStore) vía RoutePreparationCard: progreso,
-            faltantes, errores por-cliente y reintentar. */}
+        {/* 3 Preparar plan del día */}
         <Card>
           <View style={styles.rowBetween}>
-            <Text style={typography.cardHeading}>5 · Preparar datos de ruta</Text>
+            <Text style={typography.cardHeading}>3 · Preparar plan del día</Text>
             <StatusBadge status={dataMinReady ? 'done' : 'pending'} />
           </View>
           <Text style={[typography.dim, styles.stepBody]}>
             Descarga clientes, productos y precios con WiFi para operar offline en ruta.
           </Text>
-          <RoutePreparationCard />
+          <RoutePreparationCard
+            locked={!startDayGates.prepareUnlocked}
+            lockMessage={startDayGates.prepareLockMessage}
+          />
         </Card>
 
-        {/* Readiness summary (live-derived — see BLD-SPRINT-A-FIX) */}
+        {/* 4 Iniciar ruta */}
         <View style={[styles.readyCard, canContinue ? styles.readyOk : styles.readyPending]}>
+          <Text style={typography.cardHeading}>4 · Iniciar ruta</Text>
           <Text style={[typography.screenTitle, styles.readyTitle]}>
             {serverStarted
               ? '✅ Ruta iniciada'
               : (canRequestStart ? '✅ Listo para iniciar ruta' : 'Completa los pasos para iniciar')}
           </Text>
           <Text style={[typography.scoreValueSmall, styles.readyChecklist]}>
-            {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadDoneLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
+            {checklistDoneLive ? '✓' : '○'} Checklist   ·   {kmDoneLive ? '✓' : '○'} KM   ·   {loadAcceptedLive ? '✓' : '○'} Carga   ·   {dataMinReady ? '✓' : '○'} Datos
           </Text>
           {!checklistDoneLive && (
-            <Text style={[typography.dimSmall, styles.readyWarn]}>⚠️ Checklist de unidad pendiente. Responde todos los puntos para actualizar el estado del vehículo.</Text>
+            <Text style={[typography.dimSmall, styles.readyWarn]}>
+              {checklistSyncPending
+                ? `⚠️ ${START_DAY_COPY.checklistSyncPending}. La carga permanece bloqueada.`
+                : '⚠️ Checklist de unidad pendiente. Completa y sincroniza la inspección para continuar.'}
+            </Text>
+          )}
+          {checklistDoneLive && initialLoadState.initialLoadRejectedWaiting && (
+            <Text style={[typography.dimSmall, styles.readyWarn]}>⚠️ {START_DAY_COPY.loadRejectedWaiting}</Text>
           )}
           {dataMinReady && dataReady.warnings.length > 0 && (
             <Text style={[typography.dimSmall, styles.readyWarn]}>⚠️ {dataReady.warnings.join('; ')}. Se completan al abrir cada cliente con señal.</Text>
@@ -634,7 +853,7 @@ export default function RouteStartScreen() {
             <Text style={[typography.dimSmall, styles.readyHint]}>
               {!dataMinReady && dataReady.blockReason
                 ? dataReady.blockReason
-                : 'El botón se habilita cuando termines checklist, KM, carga y preparación de datos.'}
+                : 'El botón se habilita cuando termines checklist, carga y preparación de datos.'}
             </Text>
           )}
         </View>
@@ -672,6 +891,53 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, backgroundColor: colors.card,
   },
   kmValue: { fontFamily: fonts.monoBold, fontWeight: '700', color: colors.text },
+  loadLines: {
+    borderRadius: radii.button,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 6,
+    marginBottom: 10,
+  },
+  loadLineRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  loadLineName: { flex: 1, color: colors.text },
+  loadLineQty: { fontWeight: '700', color: colors.text, textAlign: 'right' },
+  loadActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' },
+  rejectBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.35)',
+    gap: 8,
+  },
+  reasonChip: {
+    minHeight: 40,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  reasonChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  reasonChipTextOn: { color: '#FFFFFF' },
+  reasonNotes: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.button,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
   readyCard: { padding: 16, borderRadius: radii.card, borderWidth: 1, marginTop: 4 },
   readyOk: { backgroundColor: colors.successAlpha08, borderColor: 'rgba(22,101,52,0.35)' },
   readyPending: { backgroundColor: colors.card, borderColor: colors.border },

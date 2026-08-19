@@ -184,6 +184,10 @@ export function collectDeadChecklistAnswerOpIds(
     .map((item) => item.id);
 }
 
+function isLiveQueueStatus(status: string): boolean {
+  return status !== 'done' && status !== 'dead';
+}
+
 /** ¿Hay un cierre de este checklist ya encolado y no terminado? */
 export function hasQueuedChecklistComplete(
   queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
@@ -192,8 +196,18 @@ export function hasQueuedChecklistComplete(
   // Un cierre dead NO cuenta: debe poder reintentarse con un cierre nuevo
   // tras reparar las respuestas.
   return queue.some((item) => item.type === 'vehicle_checklist_complete'
-    && item.status !== 'done' && item.status !== 'dead'
+    && isLiveQueueStatus(item.status)
     && (item.payload as { checklist_id?: number } | undefined)?.checklist_id === checklistId);
+}
+
+/** Hub: a complete queued for this plan is not server-confirmed — Load stays locked. */
+export function hasQueuedChecklistCompleteForPlan(
+  queue: Array<{ type: string; status: string; payload?: Record<string, unknown> }>,
+  planId: number,
+): boolean {
+  return queue.some((item) => item.type === 'vehicle_checklist_complete'
+    && isLiveQueueStatus(item.status)
+    && Number((item.payload as { plan_id?: unknown } | undefined)?.plan_id) === planId);
 }
 
 /** ¿Todos los puntos requeridos están respondidos (contando encolados)? */

@@ -24,7 +24,16 @@ import {
 } from '../../services/routePreparationLogic';
 import { describeDataFreshness } from '../../services/trustSignals';
 
-export function RoutePreparationCard() {
+interface RoutePreparationCardProps {
+  /** When true, the prepare trigger is disabled (start-of-day sequential lock). */
+  locked?: boolean;
+  lockMessage?: string | null;
+}
+
+export function RoutePreparationCard({
+  locked = false,
+  lockMessage = null,
+}: RoutePreparationCardProps) {
   const isPreparing = useRoutePreparationStore((s) => s.isPreparing);
   const currentStep = useRoutePreparationStore((s) => s.currentStep);
   const customersTotal = useRoutePreparationStore((s) => s.customersTotal);
@@ -121,15 +130,19 @@ export function RoutePreparationCard() {
       {lastError && (
         <Text style={styles.errorMsg} numberOfLines={3}>{lastError}</Text>
       )}
-      <TouchableOpacity
-        style={styles.btn}
-        onPress={() => { void prepareRouteData(); }}
-        accessibilityRole="button"
-        accessibilityLabel="Preparar ruta para operar offline"
-      >
-        <Text style={styles.btnText}>Preparar ruta</Text>
-      </TouchableOpacity>
-      {!isOnline && (
+      {locked ? (
+        <Text style={styles.lockMsg}>{lockMessage || 'Completa los pasos anteriores primero.'}</Text>
+      ) : (
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={() => { void prepareRouteData(); }}
+          accessibilityRole="button"
+          accessibilityLabel="Preparar ruta para operar offline"
+        >
+          <Text style={styles.btnText}>Preparar ruta</Text>
+        </TouchableOpacity>
+      )}
+      {!isOnline && !locked && (
         <Text style={styles.hint}>
           Recomendado hacerlo con WiFi en CEDIS.
         </Text>
@@ -221,5 +234,12 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     marginTop: 6,
     textAlign: 'center',
+  },
+  lockMsg: {
+    fontSize: 12,
+    color: colors.warning,
+    fontWeight: '600',
+    marginTop: 6,
+    lineHeight: 17,
   },
 });

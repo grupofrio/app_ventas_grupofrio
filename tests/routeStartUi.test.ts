@@ -30,8 +30,13 @@ async function main() {
 
   assert.deepEqual(
     module.buildRouteStartUiState({ planState: 'in_progress', readyToStart: false, isOnline: false }),
+    { serverStarted: true, canRequestStart: false, canContinue: false },
+    'in_progress from seal_load must not unlock continue when operational gates fail',
+  );
+  assert.deepEqual(
+    module.buildRouteStartUiState({ planState: 'in_progress', readyToStart: true, isOnline: false }),
     { serverStarted: true, canRequestStart: false, canContinue: true },
-    'an authoritative started plan must always be continuable',
+    'an already started plan may continue when start-day gates are satisfied',
   );
   assert.deepEqual(
     module.buildRouteStartUiState({ planState: 'published', readyToStart: true, isOnline: true }),

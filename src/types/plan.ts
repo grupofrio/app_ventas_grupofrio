@@ -21,6 +21,10 @@ export interface GFRouteLoadPicking {
   location_dest_name?: string;
   accepted?: boolean;
   gf_route_load_accepted?: boolean;
+  rejected?: boolean;
+  gf_route_load_rejected?: boolean;
+  rejection_reason_code?: string;
+  rejection_notes?: string;
   load_kind?: 'initial' | 'refill' | string;
   gf_route_load_kind?: 'initial' | 'refill' | string;
   lines?: GFRouteLoadLine[];
@@ -66,8 +70,10 @@ export interface GFPlan {
   load_picking_id?: number | false | null;
   load_pickings?: GFRouteLoadPicking[];
   pending_loads?: GFRouteLoadPicking[];
+  rejected_loads?: GFRouteLoadPicking[];
   pending_load_count?: number;
   has_pending_load?: boolean;
+  has_rejected_load?: boolean;
   corte_validated?: boolean;
   corte_validated_at?: string | null;
   liquidacion_done_at?: string | null;

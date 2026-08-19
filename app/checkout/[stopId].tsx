@@ -30,6 +30,7 @@ import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
 import { createIncident } from '../../src/services/routeIncidents';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -62,6 +63,17 @@ function CheckoutScreenInner() {
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
   const [retryingSale, setRetryingSale] = React.useState(false);
   const [markingForReview, setMarkingForReview] = React.useState(false);
+
+  // Backend gate (PR #73): /stop/checkout requires a UUID v4 operation_id on
+  // every call, distinct from saleOperationId (that one identifies the sale
+  // order write, not the checkout write). Cached in a ref so a retry — either
+  // a re-tap of "Confirmar" or the offline enqueue path — reuses the same id
+  // instead of minting a new one each attempt.
+  const checkoutOperationIdRef = React.useRef<string | null>(null);
+  function getCheckoutOperationId(): string {
+    if (!checkoutOperationIdRef.current) checkoutOperationIdRef.current = createUuidV4();
+    return checkoutOperationIdRef.current;
+  }
 
   // BLD-20260506-CHECKOUT-SALE-RETRY: live snapshot of the sale-order
   // sync state for THIS visit. Recomputed on every queue change so the
@@ -225,11 +237,14 @@ function CheckoutScreenInner() {
       return;
     }
 
+    const checkoutOperationId = getCheckoutOperationId();
+
     const enqueueCheckout = () => {
       enqueue('checkout', {
         ...checkoutPayload,
+        operation_id: checkoutOperationId,
         timestamp: Date.now(),
-      });
+      }, { operationId: checkoutOperationId });
     };
 
     if (!isOnline) {
@@ -252,6 +267,13 @@ function CheckoutScreenInner() {
         checkoutPayload.latitude,
         checkoutPayload.longitude,
         checkoutPayload.result_status,
+        {
+          no_sale_reason_code: checkoutPayload.no_sale_reason_code,
+          no_sale_notes: checkoutPayload.no_sale_notes,
+          no_sale_competitor: checkoutPayload.no_sale_competitor,
+        },
+        undefined,
+        checkoutOperationId,
       );
       finalizeCheckout(shouldNavigateToNextStop);
     } catch (error) {
@@ -313,10 +335,12 @@ function CheckoutScreenInner() {
         return;
       }
 
+      const checkoutOperationId = getCheckoutOperationId();
       enqueue('checkout', {
         ...checkoutPayload,
+        operation_id: checkoutOperationId,
         timestamp: Date.now(),
-      });
+      }, { operationId: checkoutOperationId });
       Alert.alert(
         'Marcado para revisión',
         'La venta quedó reportada para que tu supervisor la revise. Puedes continuar tu ruta.',

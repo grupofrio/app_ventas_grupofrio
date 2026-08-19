@@ -21,6 +21,7 @@ test('route, visit, catalog, price, directory, and queue records require the enc
     'route:plan',
     'route:stops',
     'route:start',
+    'route:preparation',
     'visit:active',
     'cache:products:catalog',
     'cache:prices',

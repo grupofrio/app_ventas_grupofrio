@@ -43,6 +43,7 @@ export function RoutePreparationCard({
   const preparedPlanId = useRoutePreparationStore((s) => s.preparedPlanId);
   const failures = useRoutePreparationStore((s) => s.failures);
   const lastError = useRoutePreparationStore((s) => s.lastError);
+  const bundleExpired = useRoutePreparationStore((s) => s.bundleExpired);
   const prepareRouteData = useRoutePreparationStore((s) => s.prepareRouteData);
   const retryFailures = useRoutePreparationStore((s) => s.retryFailures);
 
@@ -74,9 +75,36 @@ export function RoutePreparationCard({
   // ── State C — prepared (and same plan) ─────────────────────────────────
   if (isFresh && preparedAt) {
     const hasFailures = failures.length > 0;
-    // Trust signal: antigüedad de los datos ("hace X") + aviso si están viejos
-    // o son de otro día (precios/stock podrían haber cambiado).
     const freshness = describeDataFreshness({ preparedAtMs: preparedAt, nowMs: Date.now() });
+    if (bundleExpired) {
+      return (
+        <View style={[styles.card, styles.cardWarning]}>
+          <View style={styles.headerRow}>
+            <Text style={styles.icon}>⏳</Text>
+            <Text style={styles.title}>Bundle vencido</Text>
+          </View>
+          <Text style={styles.body}>
+            La ruta estaba preparada, pero el bundle del día ya no permite operar.
+            Renueva los datos con conexión antes de continuar.
+          </Text>
+          {lastError ? (
+            <Text style={styles.errorMsg} numberOfLines={3}>{lastError}</Text>
+          ) : null}
+          {!locked ? (
+            <TouchableOpacity
+              style={styles.btn}
+              onPress={() => { void prepareRouteData(); }}
+              accessibilityRole="button"
+              accessibilityLabel="Renovar bundle del día"
+            >
+              <Text style={styles.btnText}>Renovar bundle</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.lockMsg}>{lockMessage || 'Completa los pasos anteriores primero.'}</Text>
+          )}
+        </View>
+      );
+    }
     return (
       <View style={[styles.card, hasFailures ? styles.cardWarning : styles.cardOk]}>
         <View style={styles.headerRow}>

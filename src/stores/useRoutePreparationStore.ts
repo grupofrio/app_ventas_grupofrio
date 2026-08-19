@@ -29,11 +29,51 @@ import {
   buildCustomerNameMap,
   dedupePartnerIds,
   PreparationFailure,
+  buildRoutePreparationReceipt,
+  receiptToStoreSnapshot,
 } from '../services/routePreparationLogic';
+import {
+  clearRoutePreparationReceipt,
+  loadRoutePreparationReceipt,
+  saveRoutePreparationReceipt,
+} from '../services/routePreparationPersistence';
+import { localOperationalDate } from '../services/employeeDayBundle';
 import { schedulePersistPriceCache } from '../services/offlineCache';
 import { logInfo, logWarn } from '../utils/logger';
 
 const PREPARE_CONCURRENCY = 4; // matches preloadRouteCustomerPrices for parity
+
+async function persistPreparationReceipt(input: {
+  planId: number;
+  preparedAtMs: number;
+  customersTotal: number;
+  customersPrepared: number;
+  pricesPrepared: number;
+  failures: PreparationFailure[];
+}): Promise<void> {
+  const auth = useAuthStore.getState();
+  const bundleRecord = useEmployeeDayBundleStore.getState().record;
+  if (!auth.companyId || !auth.employeeId || !bundleRecord?.etag) return;
+  try {
+    const receipt = buildRoutePreparationReceipt({
+      companyId: auth.companyId,
+      employeeId: auth.employeeId,
+      planId: input.planId,
+      operationalDate: localOperationalDate(),
+      bundleEtag: bundleRecord.etag,
+      preparedAtMs: input.preparedAtMs,
+      customersTotal: input.customersTotal,
+      customersPrepared: input.customersPrepared,
+      pricesPrepared: input.pricesPrepared,
+      failures: input.failures,
+    });
+    await saveRoutePreparationReceipt(receipt);
+  } catch (error) {
+    logWarn('general', 'route_prep_receipt_persist_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 interface RoutePreparationState {
   isPreparing: boolean;
@@ -47,10 +87,12 @@ interface RoutePreparationState {
   pricesPrepared: number;
   failures: PreparationFailure[];
   lastError: string | null;
+  bundleExpired: boolean;
 
   prepareRouteData: () => Promise<void>;
   retryFailures: () => Promise<void>;
   resetPreparation: () => void;
+  hydrate: () => Promise<void>;
 }
 
 export const useRoutePreparationStore = create<RoutePreparationState>((set, get) => ({
@@ -65,6 +107,50 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
   pricesPrepared: 0,
   failures: [],
   lastError: null,
+  bundleExpired: false,
+
+  hydrate: async () => {
+    const auth = useAuthStore.getState();
+    if (!auth.isAuthenticated || !auth.companyId || !auth.employeeId) {
+      return;
+    }
+    await useEmployeeDayBundleStore.getState().hydrate();
+    const receipt = await loadRoutePreparationReceipt();
+    const dayBundle = useEmployeeDayBundleStore.getState();
+    const route = useRouteStore.getState();
+    const products = useProductStore.getState().products;
+    const { assessRoutePreparationReceipt } = await import('../services/routePreparationReceipt.ts');
+    const assessment = assessRoutePreparationReceipt(receipt, {
+      companyId: auth.companyId,
+      employeeId: auth.employeeId,
+      operationalDate: localOperationalDate(),
+      nowMs: Date.now(),
+      currentPlanId: route.plan?.plan_id ?? null,
+      bundleEtag: dayBundle.record?.etag ?? null,
+      bundleCanStartRoute: dayBundle.access?.canStartRoute === true,
+      hasPlan: !!route.plan,
+      stopsCount: route.stops.length,
+      productCount: products.length,
+    });
+
+    if (assessment.status === 'prepared' || assessment.status === 'prepared_bundle_expired') {
+      set({
+        ...receiptToStoreSnapshot(assessment.receipt),
+        bundleExpired: assessment.status === 'prepared_bundle_expired',
+        lastError: assessment.status === 'prepared_bundle_expired' ? assessment.message : null,
+      });
+      return;
+    }
+
+    if (assessment.status === 'invalid_receipt') {
+      await clearRoutePreparationReceipt();
+    }
+    set({
+      preparedAt: null,
+      preparedPlanId: null,
+      bundleExpired: false,
+    });
+  },
 
   prepareRouteData: async () => {
     if (get().isPreparing) {
@@ -232,13 +318,24 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       // sobreviva un reinicio en ruta (lectura offline en el ProductPicker).
       schedulePersistPriceCache();
 
+      const preparedAtMs = Date.now();
       set({
         isPreparing: false,
         currentStep: null,
-        preparedAt: Date.now(),
+        preparedAt: preparedAtMs,
         preparedPlanId: plan.plan_id ?? null,
         failures,
         lastError: null,
+        bundleExpired: false,
+      });
+
+      await persistPreparationReceipt({
+        planId: plan.plan_id!,
+        preparedAtMs,
+        customersTotal: total,
+        customersPrepared: prepared,
+        pricesPrepared: pricesCount,
+        failures,
       });
 
       logInfo('general', 'route_prep_completed', {
@@ -295,12 +392,25 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
     // Perf Fase 2B: persistir lo recuperado en el reintento.
     schedulePersistPriceCache();
 
+    const preparedAtMs = Date.now();
+    const state = get();
     set({
       isPreparing: false,
       currentStep: null,
       failures: stillFailed,
-      preparedAt: Date.now(),
+      preparedAt: preparedAtMs,
     });
+
+    if (state.preparedPlanId) {
+      await persistPreparationReceipt({
+        planId: state.preparedPlanId,
+        preparedAtMs,
+        customersTotal: state.customersTotal,
+        customersPrepared: get().customersPrepared,
+        pricesPrepared: get().pricesPrepared,
+        failures: stillFailed,
+      });
+    }
 
     logInfo('general', 'route_prep_retry_done', { recovered, still_failed: stillFailed.length });
   },
@@ -318,6 +428,8 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       pricesPrepared: 0,
       failures: [],
       lastError: null,
+      bundleExpired: false,
     });
+    void clearRoutePreparationReceipt();
   },
 }));

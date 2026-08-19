@@ -451,6 +451,10 @@ export const useAuthStore = create<AuthState>((set) => ({
         // the old envelope is destroyed below — same handoff shape as the
         // invoice-collection transfer above, minus a live processor to retire.
         await transferEmployeeDayBundleForReauthentication(previousSession, nextSession);
+        const { transferRoutePreparationReceiptForReauthentication } = await import(
+          '../services/routePreparationPersistence.ts'
+        );
+        await transferRoutePreparationReceiptForReauthentication(previousSession, nextSession);
         // Collection transfer committed and removed its old record. Remove the
         // rest of the obsolete envelope; no other feature crosses sessions.
         const [

@@ -7,6 +7,7 @@ export const ENCRYPTED_FIELD_DATA_KEYS = [
   'route:plan',
   'route:stops',
   'route:start',
+  'route:preparation',
   'visit:active',
   'entities:products',
   'cache:products:catalog',

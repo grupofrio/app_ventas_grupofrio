@@ -43,6 +43,17 @@ import { logInfo, logWarn } from '../utils/logger';
 
 const PREPARE_CONCURRENCY = 4; // matches preloadRouteCustomerPrices for parity
 
+function buildPreparationErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/tiempo de espera|timeout/i.test(message)) {
+    return 'La conexión tardó demasiado. Conéctate al WiFi del CEDIS y vuelve a intentar.';
+  }
+  if (/network|sin conexión|conexi[oó]n.*perdida|offline/i.test(message)) {
+    return 'No hay conexión estable. Verifica el WiFi del CEDIS e intenta de nuevo.';
+  }
+  return message || 'No se pudo preparar la ruta.';
+}
+
 async function persistPreparationReceipt(input: {
   planId: number;
   preparedAtMs: number;
@@ -363,7 +374,7 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
         prices: pricesCount,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
+      const message = buildPreparationErrorMessage(err);
       set({
         isPreparing: false,
         currentStep: null,

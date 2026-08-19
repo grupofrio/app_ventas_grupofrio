@@ -1,11 +1,33 @@
 const PENDING_LOAD_STATES = new Set(['confirmed', 'assigned', 'waiting', 'partially_available', 'draft']);
 
+export const ROUTE_LOAD_REJECTION_REASON_CODES = [
+  'physical_difference',
+  'wrong_product',
+  'wrong_quantity',
+  'damaged_product',
+  'load_not_received',
+  'other',
+] as const;
+
+export type RouteLoadRejectionReasonCode = typeof ROUTE_LOAD_REJECTION_REASON_CODES[number];
+
+export const ROUTE_LOAD_REJECTION_REASON_LABELS: Record<RouteLoadRejectionReasonCode, string> = {
+  physical_difference: 'Diferencia física',
+  wrong_product: 'Producto incorrecto',
+  wrong_quantity: 'Cantidad incorrecta',
+  damaged_product: 'Producto dañado',
+  load_not_received: 'No recibí la carga',
+  other: 'Otro',
+};
+
 export interface RouteLoadCard {
   id: number;
   picking_id: number;
   name: string;
   state: string;
   accepted: boolean;
+  rejected: boolean;
+  rejection_reason_code: string;
   load_kind: string;
   isRefill: boolean;
   scheduled_date: string;
@@ -28,6 +50,7 @@ export interface RouteLoadAcceptanceState {
   loadCards: RouteLoadCard[];
   pendingLoads: RouteLoadCard[];
   acceptedLoads: RouteLoadCard[];
+  rejectedLoads: RouteLoadCard[];
   hasPendingLoad: boolean;
   nextPendingLoad: RouteLoadCard | null;
 }
@@ -35,7 +58,9 @@ export interface RouteLoadAcceptanceState {
 export interface InitialLoadAcceptanceState {
   initialLoads: RouteLoadCard[];
   pendingInitialLoads: RouteLoadCard[];
+  rejectedInitialLoads: RouteLoadCard[];
   initialLoadAccepted: boolean;
+  initialLoadRejectedWaiting: boolean;
   nextPendingInitialLoad: RouteLoadCard | null;
 }
 
@@ -75,11 +100,21 @@ function normalizeLoadLine(raw: any): RouteLoadLine | null {
   };
 }
 
+function isRejectedRaw(raw: any): boolean {
+  return raw?.rejected === true || raw?.gf_route_load_rejected === true;
+}
+
+function isAcceptedRaw(raw: any): boolean {
+  if (isRejectedRaw(raw)) return false;
+  return raw?.accepted === true || raw?.gf_route_load_accepted === true;
+}
+
 function normalizeLoadCard(raw: any, initialPickingId: number, hasMultipleCards: boolean): RouteLoadCard | null {
   const pickingId = toPositiveNumber(raw?.picking_id || raw?.id || raw?.load_picking_id);
   if (!pickingId) return null;
 
-  const accepted = raw?.accepted === true || raw?.gf_route_load_accepted === true;
+  const rejected = isRejectedRaw(raw);
+  const accepted = isAcceptedRaw(raw);
   const fieldKind = String(raw?.load_kind || raw?.gf_route_load_kind || '');
   const loadKind = pickingId === initialPickingId
     ? 'initial'
@@ -92,6 +127,8 @@ function normalizeLoadCard(raw: any, initialPickingId: number, hasMultipleCards:
     name: String(raw?.name || raw?.picking_name || `Picking ${pickingId}`),
     state: String(raw?.state || raw?.picking_state || ''),
     accepted,
+    rejected,
+    rejection_reason_code: String(raw?.rejection_reason_code || ''),
     load_kind: loadKind,
     isRefill: loadKind === 'refill',
     scheduled_date: String(raw?.scheduled_date || raw?.create_date || ''),
@@ -105,8 +142,26 @@ function normalizeLoadCard(raw: any, initialPickingId: number, hasMultipleCards:
 
 function isPendingLoadCard(card: RouteLoadCard): boolean {
   if (card.accepted === true) return false;
+  if (card.rejected === true) return false;
   if (!card.state) return true;
   return PENDING_LOAD_STATES.has(card.state);
+}
+
+export function isRouteLoadRejectionReasonCode(
+  value: unknown,
+): value is RouteLoadRejectionReasonCode {
+  return typeof value === 'string'
+    && (ROUTE_LOAD_REJECTION_REASON_CODES as readonly string[]).includes(value);
+}
+
+export function createRouteLoadOperationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = (Math.random() * 16) | 0;
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
 }
 
 export function buildRouteLoadAcceptPayload(routePlanId: number, pickingId: number): Record<string, number> {
@@ -117,9 +172,40 @@ export function buildRouteLoadAcceptPayload(routePlanId: number, pickingId: numb
   };
 }
 
-export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceState {
+export function buildRouteLoadRejectPayload(input: {
+  planId: number;
+  pickingId: number;
+  operationId: string;
+  rejectionReasonCode: string;
+  rejectionNotes?: string;
+}): Record<string, string | number> {
+  const notes = (input.rejectionNotes || '').trim();
+  if (!isRouteLoadRejectionReasonCode(input.rejectionReasonCode)) {
+    throw new Error('Motivo de rechazo inválido.');
+  }
+  if (input.rejectionReasonCode === 'other' && !notes) {
+    throw new Error("Escribe una nota cuando el motivo es 'Otro'.");
+  }
+  if (notes.length > 2000) {
+    throw new Error('Las notas de rechazo no pueden exceder 2000 caracteres.');
+  }
+  const operationId = String(input.operationId || '').trim();
+  if (!operationId) {
+    throw new Error('operation_id es obligatorio para rechazar la carga.');
+  }
+  return {
+    operation_id: operationId,
+    plan_id: Number(input.planId),
+    picking_id: Number(input.pickingId),
+    rejection_reason_code: input.rejectionReasonCode,
+    rejection_notes: notes,
+  };
+}
+
+function mergeLoadCards(plan: any): Map<number, RouteLoadCard> {
   const rawCards = Array.isArray(plan?.load_pickings) ? plan.load_pickings : [];
   const rawPending = Array.isArray(plan?.pending_loads) ? plan.pending_loads : [];
+  const rawRejected = Array.isArray(plan?.rejected_loads) ? plan.rejected_loads : [];
   const initialPickingId = inferInitialPickingId(plan, rawCards);
   const hasMultipleCards = rawCards.length > 1;
   const cardsById = new Map<number, RouteLoadCard>();
@@ -134,6 +220,31 @@ export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceSta
     if (card) cardsById.set(card.picking_id, { ...cardsById.get(card.picking_id), ...card });
   }
 
+  for (const raw of rawRejected) {
+    const card = normalizeLoadCard(
+      { ...raw, rejected: true, accepted: false },
+      initialPickingId,
+      hasMultipleCards,
+    );
+    if (card) {
+      cardsById.set(card.picking_id, {
+        ...cardsById.get(card.picking_id),
+        ...card,
+        rejected: true,
+        accepted: false,
+      });
+    }
+  }
+
+  return cardsById;
+}
+
+export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceState {
+  const rawPending = Array.isArray(plan?.pending_loads) ? plan.pending_loads : [];
+  const rawCards = Array.isArray(plan?.load_pickings) ? plan.load_pickings : [];
+  const initialPickingId = inferInitialPickingId(plan, rawCards);
+  const hasMultipleCards = rawCards.length > 1;
+  const cardsById = mergeLoadCards(plan);
   const loadCards = Array.from(cardsById.values());
   const pendingLoads = rawPending.length > 0
     ? rawPending
@@ -142,11 +253,13 @@ export function buildRouteLoadAcceptanceState(plan: any): RouteLoadAcceptanceSta
         .filter(isPendingLoadCard)
     : loadCards.filter(isPendingLoadCard);
   const acceptedLoads = loadCards.filter((card) => card.accepted === true);
+  const rejectedLoads = loadCards.filter((card) => card.rejected === true);
 
   return {
     loadCards,
     pendingLoads,
     acceptedLoads,
+    rejectedLoads,
     hasPendingLoad: pendingLoads.length > 0,
     nextPendingLoad: pendingLoads[0] || null,
   };
@@ -156,11 +269,24 @@ export function buildInitialLoadAcceptanceState(plan: unknown): InitialLoadAccep
   const state = buildRouteLoadAcceptanceState(plan);
   const initialLoads = state.loadCards.filter((card) => !card.isRefill);
   const pendingInitialLoads = state.pendingLoads.filter((card) => !card.isRefill);
+  const acceptedInitialLoads = initialLoads.filter((card) => card.accepted === true);
+  const rejectedInitialLoads = initialLoads.filter((card) => card.rejected === true);
+
+  // Rejected must NOT count as accepted. No pending initial AND
+  // (an accepted initial exists OR there are no initial loads at all).
+  // A rejected-only wait is NOT "no initial loads".
+  const initialLoadAccepted = pendingInitialLoads.length === 0
+    && (acceptedInitialLoads.length > 0 || initialLoads.length === 0);
+  const initialLoadRejectedWaiting = pendingInitialLoads.length === 0
+    && acceptedInitialLoads.length === 0
+    && rejectedInitialLoads.length > 0;
 
   return {
     initialLoads,
     pendingInitialLoads,
-    initialLoadAccepted: initialLoads.length === 0 || pendingInitialLoads.length === 0,
+    rejectedInitialLoads,
+    initialLoadAccepted,
+    initialLoadRejectedWaiting,
     nextPendingInitialLoad: pendingInitialLoads[0] || null,
   };
 }

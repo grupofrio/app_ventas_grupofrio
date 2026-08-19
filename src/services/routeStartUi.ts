@@ -13,10 +13,12 @@ export function buildRouteStartUiState(input: {
 }): RouteStartUiState {
   const serverStarted = input.planState === 'in_progress';
   const canRequestStart = input.planState === 'published' && input.readyToStart && input.isOnline;
+  // Do not unlock continue merely because plan.state === in_progress
+  // (seal_load may flip that flag). Operational gates still apply.
   return {
     serverStarted,
     canRequestStart,
-    canContinue: serverStarted || canRequestStart,
+    canContinue: (serverStarted && input.readyToStart) || canRequestStart,
   };
 }
 

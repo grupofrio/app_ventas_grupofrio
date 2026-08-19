@@ -96,6 +96,11 @@ function main() {
 
   assert.match(
     routeStart,
+    /isChecklistServerConfirmed\(header\)/,
+    'Iniciar operación debe desbloquear carga con checklist confirmado por servidor',
+  );
+  assert.match(
+    routeStart,
     /setChecklistCompleteForPlan\(capturedPlanId, done\)/,
     'la observación async del checklist debe escribir usando el plan capturado',
   );

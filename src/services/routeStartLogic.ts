@@ -34,11 +34,94 @@ export function isChecklistComplete(header: GFVehicleChecklist | null): boolean 
   return !!header && header.state === 'completed';
 }
 
+/**
+ * Authoritative start-of-day gate: the server has confirmed `state === 'completed'`.
+ * Answers-only (`isChecklistAnsweredForStart`) must NOT unlock Load / Prepare / Start.
+ * A complete that is only queued offline is NOT server-confirmed.
+ */
+export function isChecklistServerConfirmed(header: GFVehicleChecklist | null): boolean {
+  return isChecklistComplete(header);
+}
+
 export function isChecklistAnsweredForStart(header: GFVehicleChecklist | null): boolean {
   if (!header) return false;
   if (isChecklistComplete(header)) return true;
   if (header.checks_total <= 0) return false;
   return header.checks_answered >= header.checks_total;
+}
+
+export const START_DAY_COPY = {
+  completeChecklistFirst: 'Completa primero el checklist.',
+  checklistSyncPending: 'Checklist pendiente de sincronizar',
+  acceptLoadToPrepare: 'Acepta la carga para preparar tu ruta.',
+  loadRejectedWaiting: 'Tu carga fue rechazada. Espera la corrección de Almacén.',
+} as const;
+
+export interface StartDayStepGates {
+  checklistServerConfirmed: boolean;
+  checklistSyncPending: boolean;
+  loadUnlocked: boolean;
+  prepareUnlocked: boolean;
+  startUnlocked: boolean;
+  loadLockMessage: string | null;
+  prepareLockMessage: string | null;
+}
+
+/**
+ * Sequential start-of-day locks (enforced, not just visual):
+ *   1 Checklist (server-confirmed)
+ *   2 Load accept/reject
+ *   3 Prepare day data
+ *   4 Start route
+ */
+export function computeStartDayStepGates(input: {
+  checklistServerConfirmed: boolean;
+  checklistSyncPending: boolean;
+  initialLoadAccepted: boolean;
+  initialLoadRejectedWaiting: boolean;
+  kmCaptured: boolean;
+  dataMinimumReady: boolean;
+  isOnline: boolean;
+}): StartDayStepGates {
+  const checklistServerConfirmed = input.checklistServerConfirmed === true;
+  const checklistSyncPending = !checklistServerConfirmed && input.checklistSyncPending === true;
+  const loadUnlocked = checklistServerConfirmed;
+  const prepareUnlocked = checklistServerConfirmed && input.initialLoadAccepted === true;
+  const startUnlocked = checklistServerConfirmed
+    && input.kmCaptured === true
+    && input.initialLoadAccepted === true
+    && input.dataMinimumReady === true
+    && input.isOnline === true;
+
+  let loadLockMessage: string | null = null;
+  if (!loadUnlocked) {
+    loadLockMessage = checklistSyncPending
+      ? START_DAY_COPY.checklistSyncPending
+      : START_DAY_COPY.completeChecklistFirst;
+  }
+
+  let prepareLockMessage: string | null = null;
+  if (!prepareUnlocked) {
+    if (!checklistServerConfirmed) {
+      prepareLockMessage = checklistSyncPending
+        ? START_DAY_COPY.checklistSyncPending
+        : START_DAY_COPY.completeChecklistFirst;
+    } else if (input.initialLoadRejectedWaiting) {
+      prepareLockMessage = START_DAY_COPY.loadRejectedWaiting;
+    } else {
+      prepareLockMessage = START_DAY_COPY.acceptLoadToPrepare;
+    }
+  }
+
+  return {
+    checklistServerConfirmed,
+    checklistSyncPending,
+    loadUnlocked,
+    prepareUnlocked,
+    startUnlocked,
+    loadLockMessage,
+    prepareLockMessage,
+  };
 }
 
 function positiveKm(value: number | null | undefined): number | null {

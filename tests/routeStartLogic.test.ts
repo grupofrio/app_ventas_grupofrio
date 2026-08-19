@@ -13,7 +13,31 @@ interface LogicModule {
     answered: number; total: number; passed: number; requiredPending: number;
   };
   isChecklistComplete: (header: GFVehicleChecklist | null) => boolean;
+  isChecklistServerConfirmed: (header: GFVehicleChecklist | null) => boolean;
   isChecklistAnsweredForStart: (header: GFVehicleChecklist | null) => boolean;
+  START_DAY_COPY: {
+    completeChecklistFirst: string;
+    checklistSyncPending: string;
+    acceptLoadToPrepare: string;
+    loadRejectedWaiting: string;
+  };
+  computeStartDayStepGates: (input: {
+    checklistServerConfirmed: boolean;
+    checklistSyncPending: boolean;
+    initialLoadAccepted: boolean;
+    initialLoadRejectedWaiting: boolean;
+    kmCaptured: boolean;
+    dataMinimumReady: boolean;
+    isOnline: boolean;
+  }) => {
+    checklistServerConfirmed: boolean;
+    checklistSyncPending: boolean;
+    loadUnlocked: boolean;
+    prepareUnlocked: boolean;
+    startUnlocked: boolean;
+    loadLockMessage: string | null;
+    prepareLockMessage: string | null;
+  };
   chooseAuthoritativeKm: (input: {
     planKm?: number | null;
     backendKm?: number | null;
@@ -71,6 +95,100 @@ function testChecklistComplete(m: LogicModule) {
   assert.equal(m.isChecklistComplete(makeHeader({ state: 'in_progress' })), false);
   assert.equal(m.isChecklistComplete(makeHeader({ state: 'cancelled' })), false);
   assert.equal(m.isChecklistComplete(makeHeader({ state: 'completed' })), true);
+}
+
+function testChecklistServerConfirmed(m: LogicModule) {
+  assert.equal(m.isChecklistServerConfirmed(null), false);
+  assert.equal(
+    m.isChecklistServerConfirmed(makeHeader({ state: 'in_progress', checks_total: 3, checks_answered: 3 })),
+    false,
+    'answers-only must not unlock Load / Prepare / Start',
+  );
+  assert.equal(m.isChecklistServerConfirmed(makeHeader({ state: 'completed' })), true);
+}
+
+function testStartDayStepGates(m: LogicModule) {
+  const blocked = m.computeStartDayStepGates({
+    checklistServerConfirmed: false,
+    checklistSyncPending: false,
+    initialLoadAccepted: false,
+    initialLoadRejectedWaiting: false,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: true,
+  });
+  assert.equal(blocked.loadUnlocked, false);
+  assert.equal(blocked.prepareUnlocked, false);
+  assert.equal(blocked.startUnlocked, false);
+  assert.equal(blocked.loadLockMessage, m.START_DAY_COPY.completeChecklistFirst);
+  assert.equal(blocked.prepareLockMessage, m.START_DAY_COPY.completeChecklistFirst);
+
+  const pendingSync = m.computeStartDayStepGates({
+    checklistServerConfirmed: false,
+    checklistSyncPending: true,
+    initialLoadAccepted: false,
+    initialLoadRejectedWaiting: false,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: true,
+  });
+  assert.equal(pendingSync.loadUnlocked, false);
+  assert.equal(pendingSync.loadLockMessage, m.START_DAY_COPY.checklistSyncPending);
+  assert.equal(pendingSync.prepareLockMessage, m.START_DAY_COPY.checklistSyncPending);
+
+  const loadOpen = m.computeStartDayStepGates({
+    checklistServerConfirmed: true,
+    checklistSyncPending: false,
+    initialLoadAccepted: false,
+    initialLoadRejectedWaiting: false,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: true,
+  });
+  assert.equal(loadOpen.loadUnlocked, true);
+  assert.equal(loadOpen.prepareUnlocked, false);
+  assert.equal(loadOpen.startUnlocked, false);
+  assert.equal(loadOpen.prepareLockMessage, m.START_DAY_COPY.acceptLoadToPrepare);
+
+  const rejected = m.computeStartDayStepGates({
+    checklistServerConfirmed: true,
+    checklistSyncPending: false,
+    initialLoadAccepted: false,
+    initialLoadRejectedWaiting: true,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: true,
+  });
+  assert.equal(rejected.prepareUnlocked, false);
+  assert.equal(rejected.startUnlocked, false);
+  assert.equal(rejected.prepareLockMessage, m.START_DAY_COPY.loadRejectedWaiting);
+
+  const ready = m.computeStartDayStepGates({
+    checklistServerConfirmed: true,
+    checklistSyncPending: false,
+    initialLoadAccepted: true,
+    initialLoadRejectedWaiting: false,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: true,
+  });
+  assert.equal(ready.loadUnlocked, true);
+  assert.equal(ready.prepareUnlocked, true);
+  assert.equal(ready.startUnlocked, true);
+  assert.equal(ready.loadLockMessage, null);
+  assert.equal(ready.prepareLockMessage, null);
+
+  const offlineStart = m.computeStartDayStepGates({
+    checklistServerConfirmed: true,
+    checklistSyncPending: false,
+    initialLoadAccepted: true,
+    initialLoadRejectedWaiting: false,
+    kmCaptured: true,
+    dataMinimumReady: true,
+    isOnline: false,
+  });
+  assert.equal(offlineStart.prepareUnlocked, true);
+  assert.equal(offlineStart.startUnlocked, false, 'start route requires online');
 }
 
 function testChecklistAnsweredForStart(m: LogicModule) {
@@ -198,6 +316,8 @@ async function main() {
 
   testChecklistProgress(m);
   testChecklistComplete(m);
+  testChecklistServerConfirmed(m);
+  testStartDayStepGates(m);
   testChecklistAnsweredForStart(m);
   testAuthoritativeKm(m);
   testKmValidation(m);

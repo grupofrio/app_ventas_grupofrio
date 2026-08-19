@@ -13,11 +13,20 @@ interface RouteLoadAcceptanceModule {
   buildInitialLoadAcceptanceState: (plan: any) => {
     initialLoads: any[];
     pendingInitialLoads: any[];
+    rejectedInitialLoads: any[];
     initialLoadAccepted: boolean;
+    initialLoadRejectedWaiting: boolean;
     nextPendingInitialLoad: any | null;
   };
   canStartSaleWithRouteLoad: (plan: any) => boolean;
   buildRouteLoadAcceptPayload: (routePlanId: number, pickingId: number) => Record<string, number>;
+  buildRouteLoadRejectPayload: (input: {
+    planId: number;
+    pickingId: number;
+    operationId: string;
+    rejectionReasonCode: string;
+    rejectionNotes?: string;
+  }) => Record<string, string | number>;
 }
 
 function testBuildsInitialLoadAcceptanceState(m: RouteLoadAcceptanceModule) {
@@ -67,7 +76,93 @@ function testBuildsInitialLoadAcceptanceState(m: RouteLoadAcceptanceModule) {
   assert.equal(withPendingRefill.initialLoads.length, 1);
   assert.equal(withPendingRefill.pendingInitialLoads.length, 0);
   assert.equal(withPendingRefill.initialLoadAccepted, true);
+  assert.equal(withPendingRefill.initialLoadRejectedWaiting, false);
   assert.equal(withPendingRefill.nextPendingInitialLoad, null);
+}
+
+function testRejectedInitialDoesNotCountAsAccepted(m: RouteLoadAcceptanceModule) {
+  const rejectedOnly = m.buildInitialLoadAcceptanceState({
+    load_picking_id: 20,
+    load_pickings: [
+      { picking_id: 20, state: 'assigned', accepted: false, rejected: true, load_kind: 'initial' },
+    ],
+    pending_loads: [],
+    rejected_loads: [
+      { picking_id: 20, state: 'assigned', accepted: false, rejected: true, load_kind: 'initial' },
+    ],
+  });
+  assert.equal(rejectedOnly.initialLoadAccepted, false, 'rejected-only wait is not accepted');
+  assert.equal(rejectedOnly.initialLoadRejectedWaiting, true);
+  assert.equal(rejectedOnly.pendingInitialLoads.length, 0);
+  assert.equal(rejectedOnly.rejectedInitialLoads.length, 1);
+  assert.equal(m.canStartSaleWithRouteLoad({
+    load_picking_id: 20,
+    load_pickings: [
+      { picking_id: 20, state: 'assigned', accepted: false, rejected: true, load_kind: 'initial' },
+    ],
+    rejected_loads: [
+      { picking_id: 20, rejected: true, load_kind: 'initial' },
+    ],
+  }), false);
+
+  const rejectedWithPendingFlag = m.buildRouteLoadAcceptanceState({
+    load_picking_id: 20,
+    load_pickings: [
+      { picking_id: 20, state: 'assigned', accepted: false, rejected: true, load_kind: 'initial' },
+    ],
+    pending_loads: [
+      { picking_id: 20, state: 'assigned', accepted: false, rejected: true, load_kind: 'initial' },
+    ],
+  });
+  assert.equal(rejectedWithPendingFlag.hasPendingLoad, false, 'rejected must not remain pending');
+
+  const acceptedThenRefill = m.buildInitialLoadAcceptanceState({
+    load_picking_id: 80,
+    load_pickings: [
+      { picking_id: 80, load_kind: 'initial', accepted: true },
+      { picking_id: 81, load_kind: 'refill', accepted: false, rejected: true, state: 'assigned' },
+    ],
+    rejected_loads: [
+      { picking_id: 81, load_kind: 'refill', rejected: true, state: 'assigned' },
+    ],
+  });
+  assert.equal(acceptedThenRefill.initialLoadAccepted, true, 'rejected refill must not clear initial acceptance');
+  assert.equal(acceptedThenRefill.initialLoadRejectedWaiting, false);
+}
+
+function testRejectPayload(m: RouteLoadAcceptanceModule) {
+  assert.deepEqual(m.buildRouteLoadRejectPayload({
+    planId: 1061,
+    pickingId: 12410,
+    operationId: '11111111-1111-4111-8111-111111111111',
+    rejectionReasonCode: 'wrong_quantity',
+    rejectionNotes: 'faltan 2 cajas',
+  }), {
+    operation_id: '11111111-1111-4111-8111-111111111111',
+    plan_id: 1061,
+    picking_id: 12410,
+    rejection_reason_code: 'wrong_quantity',
+    rejection_notes: 'faltan 2 cajas',
+  });
+
+  assert.throws(
+    () => m.buildRouteLoadRejectPayload({
+      planId: 1,
+      pickingId: 2,
+      operationId: 'op',
+      rejectionReasonCode: 'other',
+    }),
+    /nota/i,
+  );
+  assert.throws(
+    () => m.buildRouteLoadRejectPayload({
+      planId: 1,
+      pickingId: 2,
+      operationId: 'op',
+      rejectionReasonCode: 'not_a_real_code',
+    }),
+    /inválido/i,
+  );
 }
 
 function testSaleStartUsesInitialLoadReadiness(m: RouteLoadAcceptanceModule) {
@@ -198,8 +293,18 @@ function testFrontendWiringUsesSharedAcceptanceFlow() {
   );
   assert.match(
     gfLogistics,
-    /\$\{GF_BASE\}\/route_plan\/seal_load/,
-    'acceptRouteLoad debe usar gf/logistics/api/employee/route_plan/seal_load',
+    /export async function rejectRouteLoad\(/,
+    'gfLogistics debe exponer rejectRouteLoad',
+  );
+  assert.match(
+    gfLogistics,
+    /\$\{GF_BASE\}\/route_plan\/reject_load/,
+    'rejectRouteLoad debe usar gf/logistics/api/employee/route_plan/reject_load',
+  );
+  assert.doesNotMatch(
+    gfLogistics.slice(gfLogistics.indexOf('export async function rejectRouteLoad'), gfLogistics.indexOf('export async function createPayment')),
+    /pt_transfer\/reject/,
+    'rejectRouteLoad no debe usar PT pt_transfer/reject',
   );
   assert.match(
     home,
@@ -281,10 +386,12 @@ async function main() {
 
   testDetectsMultiplePendingRefills(module);
   testBuildsInitialLoadAcceptanceState(module);
+  testRejectedInitialDoesNotCountAsAccepted(module);
   testSaleStartUsesInitialLoadReadiness(module);
   testBlocksSaleWhenLoadIsPending(module);
   testIgnoresAcceptedDoneEntriesInPendingLoads(module);
   testAcceptPayloadIncludesSpecificPicking(module);
+  testRejectPayload(module);
   testFrontendWiringUsesSharedAcceptanceFlow();
 
   console.log('route load acceptance tests: ok');

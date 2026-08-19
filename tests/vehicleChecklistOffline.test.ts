@@ -12,6 +12,7 @@ async function main() {
     collectDeadChecklistAnswerCheckIds,
     collectDeadChecklistAnswerOpIds,
     hasQueuedChecklistComplete,
+    hasQueuedChecklistCompleteForPlan,
     buildVehicleCheckQueuePayload,
     applyLocalCheckAnswer,
     areRequiredChecksAnswered,
@@ -155,6 +156,14 @@ async function main() {
     [...opsQueue, { id: 'c2', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3 } }],
     3,
   ), true);
+  assert.equal(hasQueuedChecklistCompleteForPlan(
+    [{ id: 'c3', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3, plan_id: 77 } }],
+    77,
+  ), true);
+  assert.equal(hasQueuedChecklistCompleteForPlan(
+    [{ id: 'c3', type: 'vehicle_checklist_complete', status: 'pending', payload: { checklist_id: 3, plan_id: 77 } }],
+    88,
+  ), false);
 
   console.log('vehicle checklist offline tests: ok');
 }

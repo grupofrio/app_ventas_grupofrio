@@ -1,17 +1,13 @@
 /**
  * Vehicle checklist screen — Sprint A + A.1.
  *
- * Ports the PWA Colaboradores ScreenChecklistUnidad bootstrap + answer flow:
- *   ensureChecklistReady → render checks → submit each → complete.
- *
- * Supports yes_no / numeric / text / PHOTO checks (A.1). Photo capture reuses
- * the existing camera.ts (takePhoto + readPhotoAsBase64). Online-first: the
- * base64 is sent to /pwa-ruta/vehicle-check immediately (no offline queue for
- * checklist photos in this sprint).
- *
- * On completion, if the checklist has a numeric odometer check, its value is
- * auto-registered as KM inicial via /pwa-ruta/km-update (A.1, Option A) so the
- * vendor doesn't capture KM twice.
+ * Seller answers all questions locally (drafts persist as they type).
+ * ONE primary action "Guardar y completar checklist":
+ *   validate required locally → submit each changed/unsubmitted answer
+ *   via existing submitVehicleCheck → only then completeVehicleChecklist.
+ * Quality fails (not passed) are documented and do NOT block complete.
+ * Offline: queue answers + complete with dependsOn; never mark complete locally
+ * until the server confirms.
  */
 
 import React, { useCallback, useState } from 'react';
@@ -35,10 +31,17 @@ import { updateKm } from '../../src/services/routeKm';
 import {
   chooseAuthoritativeKm,
   extractOdometerKm,
-  isChecklistAnsweredForStart,
+  findOdometerCheck,
 } from '../../src/services/routeStartLogic';
-import { buildYesNoVehicleCheckAnswer } from '../../src/services/vehicleChecklistLogic';
 import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
+import {
+  type ChecklistDraft,
+  buildAnswerFromDraft,
+  collectUnsubmittedChecks,
+  formatMissingRequiredChecks,
+  getChecklistDraft,
+  validateRequiredChecklistDrafts,
+} from '../../src/services/vehicleChecklistSubmit';
 import { GFVehicleCheck, GFVehicleChecklist } from '../../src/types/routeStart';
 import type { SyncQueueItem } from '../../src/types/sync';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
@@ -58,15 +61,6 @@ import {
   collectQueuedChecklistAnswerOps,
   hasQueuedChecklistComplete,
 } from '../../src/services/vehicleChecklistOffline';
-
-interface CheckDraft {
-  bool?: boolean;
-  numeric?: string;
-  text?: string;
-  reason?: string;
-  photoUri?: string; // local file URI of a freshly captured photo (not yet sent)
-  queued?: boolean; // respuesta encolada offline, pendiente de envío
-}
 
 const CHECKLIST_DEAD_REPAIR_COPY = 'Vuelve a responder los puntos obligatorios que fallaron antes de cerrar.';
 
@@ -98,8 +92,7 @@ export default function ChecklistScreen() {
   const [error, setError] = useState<string | null>(null);
   const [header, setHeader] = useState<GFVehicleChecklist | null>(null);
   const [checks, setChecks] = useState<GFVehicleCheck[]>([]);
-  const [drafts, setDrafts] = useState<Record<number, CheckDraft>>({});
-  const [savingId, setSavingId] = useState<number | null>(null);
+  const [drafts, setDrafts] = useState<Record<number, ChecklistDraft>>({});
   const [capturingId, setCapturingId] = useState<number | null>(null);
   const [completing, setCompleting] = useState(false);
   const [usingCachedSnapshot, setUsingCachedSnapshot] = useState(false);
@@ -117,7 +110,7 @@ export default function ChecklistScreen() {
   React.useEffect(() => {
     if (!planIdNum || planIdNum <= 0) return;
     let cancelled = false;
-    void storeLoad<Record<number, CheckDraft>>(checklistDraftsStorageKey(planIdNum))
+    void storeLoad<Record<number, ChecklistDraft>>(checklistDraftsStorageKey(planIdNum))
       .then((saved) => {
         if (cancelled) return;
         if (saved) setDrafts((current) => ({ ...saved, ...current }));
@@ -257,120 +250,108 @@ export default function ChecklistScreen() {
     }
   }
 
-  async function handleAnswer(check: GFVehicleCheck) {
-    if (savingId) return;
-    const capturedPlanId = planIdNum;
-    const draft = drafts[check.id] || {};
-    let payload: Parameters<typeof submitVehicleCheck>[1];
+  function enqueueAnswer(
+    check: GFVehicleCheck,
+    capturedPlanId: number,
+    payload: Parameters<typeof submitVehicleCheck>[1],
+    draft: ChecklistDraft,
+  ): void {
+    enqueue('vehicle_check', buildVehicleCheckQueuePayload({
+      check,
+      checklistId: header?.id ?? 0,
+      planId: capturedPlanId,
+      answer: payload,
+      photoUri: check.check_type === 'photo' ? draft.photoUri : null,
+    }) as unknown as Record<string, unknown>);
+    setChecks((cs) => applyLocalCheckAnswer(cs, check.id, payload));
+    setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], queued: true } }));
+  }
 
-    if (check.check_type === 'yes_no') {
-      if (draft.bool == null) {
-        Alert.alert('Falta respuesta', 'Selecciona Sí o No.');
-        return;
-      }
-      payload = buildYesNoVehicleCheckAnswer({
-        value: draft.bool,
-        expected: check.expected_bool,
-        reason: draft.reason,
-      });
-    } else if (check.check_type === 'numeric') {
-      const n = parseFloat(draft.numeric ?? '');
-      if (!Number.isFinite(n)) {
-        Alert.alert('Valor inválido', 'Captura un número.');
-        return;
-      }
-      payload = { result_numeric: n };
-    } else if (check.check_type === 'text') {
-      const t = (draft.text || '').trim();
-      if (!t) {
-        Alert.alert('Falta texto', 'Escribe una respuesta.');
-        return;
-      }
-      payload = { result_text: t };
-    } else if (check.check_type === 'photo') {
-      if (!draft.photoUri) {
-        Alert.alert('Falta foto', 'Toma la foto antes de guardar este punto.');
-        return;
-      }
-      if (isOnline) {
-        const base64 = await readPhotoAsBase64(draft.photoUri);
-        if (!base64) {
-          Alert.alert('Foto no disponible', 'No se pudo leer la foto. Tómala de nuevo.');
-          return;
-        }
-        payload = {
-          result_photo: base64, // base64 sin prefijo data: — contrato /pwa-ruta/vehicle-check
-          result_photo_filename: `odometro_${check.id}_${Date.now()}.jpg`,
-        };
-      } else {
-        // Offline: la foto queda como URI local y el dispatcher de la cola
-        // lee el base64 al enviar (la cola no serializa megabytes). El
-        // placeholder vacío se poda en buildVehicleCheckQueuePayload.
-        payload = { result_photo: '' };
-      }
+  function alertSubmitError(check: GFVehicleCheck, msg: string): void {
+    const prefix = `${check.sequence}. ${check.name}`;
+    if (/photo_too_large|too.?large|grande|tama/i.test(msg)) {
+      Alert.alert('Foto muy pesada', `${prefix}: la foto es demasiado grande. Toma una nueva con menos detalle o mejor luz.`);
+    } else if (/invalid_photo|formato/i.test(msg)) {
+      Alert.alert('Formato inválido', `${prefix}: la foto no tiene un formato válido. Tómala de nuevo.`);
+    } else if (/requires.?reason|motivo/i.test(msg)) {
+      Alert.alert('Motivo requerido', `${prefix}: el servidor pidió motivo para esta respuesta. Intenta de nuevo.`);
     } else {
-      Alert.alert('Tipo no soportado', `Este punto (${check.check_type}) no se puede responder en esta versión.`);
-      return;
+      Alert.alert('Error al guardar', `${prefix}: ${msg}`);
     }
+  }
 
-    // Encolado offline: la respuesta se guarda local (optimista, mismas
-    // reglas de passed que el backend) y se envía al recuperar señal.
-    // Idempotente: el backend sobreescribe por check_id.
-    const enqueueAnswer = () => {
-      enqueue('vehicle_check', buildVehicleCheckQueuePayload({
-        check,
-        checklistId: header?.id ?? 0,
-        planId: capturedPlanId,
-        answer: payload,
-        photoUri: check.check_type === 'photo' ? draft.photoUri : null,
-      }) as unknown as Record<string, unknown>);
-      setChecks((cs) => applyLocalCheckAnswer(cs, check.id, payload));
-      setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], queued: true } }));
-    };
+  /**
+   * Submit each changed/unsubmitted answer via existing submitVehicleCheck.
+   * Returns false when a non-retryable item failed — caller must NOT complete.
+   * Remaining items stay as drafts so the seller can retry.
+   */
+  async function submitUnsubmittedAnswers(capturedPlanId: number): Promise<boolean> {
+    const toSubmit = collectUnsubmittedChecks(checks, drafts);
+    let hadHardFailure = false;
 
-    if (!isOnline) {
-      enqueueAnswer();
-      return;
-    }
-
-    setSavingId(check.id);
-    try {
+    for (const check of toSubmit) {
       if (!isCurrentPlan(capturedPlanId)) {
         showRouteChangedAlert();
-        return;
+        return false;
       }
-      await submitVehicleCheck(check.id, payload);
-      if (!isCurrentPlan(capturedPlanId)) return;
-      const deadAnswerOpIds = collectDeadChecklistAnswerOpIds(
-        useSyncStore.getState().queue,
-        header?.id ?? 0,
-        check.id,
-      );
-      removeDeadQueueItems(deadAnswerOpIds);
-      // clear the local photo draft after a successful send
-      setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: undefined, queued: false } }));
-      await reloadChecks();
-    } catch (err) {
-      if (!isCurrentPlan(capturedPlanId)) return;
-      const msg = err instanceof Error ? err.message : 'No se pudo guardar la respuesta.';
-      if (isRetryableSyncErrorMessage(msg)) {
-        // Red degradada a media petición: mismo camino que offline.
-        enqueueAnswer();
-        setSavingId(null);
-        return;
+      const draft = getChecklistDraft(drafts, check.id) || {};
+      let photoBase64: string | null = null;
+      if (check.check_type === 'photo' && isOnline && draft.photoUri) {
+        photoBase64 = await readPhotoAsBase64(draft.photoUri);
+        if (!photoBase64) {
+          Alert.alert('Foto no disponible', `${check.sequence}. ${check.name}: no se pudo leer la foto. Tómala de nuevo.`);
+          hadHardFailure = true;
+          continue;
+        }
       }
-      if (/photo_too_large|too.?large|grande|tama/i.test(msg)) {
-        Alert.alert('Foto muy pesada', 'La foto es demasiado grande. Toma una nueva con menos detalle o mejor luz.');
-      } else if (/invalid_photo|formato/i.test(msg)) {
-        Alert.alert('Formato inválido', 'La foto no tiene un formato válido. Tómala de nuevo.');
-      } else if (/requires.?reason|motivo/i.test(msg)) {
-        Alert.alert('Motivo requerido', 'El servidor pidió motivo para esta respuesta. Intenta de nuevo.');
-      } else {
-        Alert.alert('Error', msg);
+
+      const built = buildAnswerFromDraft({
+        check,
+        draft,
+        photoBase64,
+        photoOnline: isOnline && check.check_type === 'photo',
+      });
+      if (!built.ok) {
+        Alert.alert('Falta respuesta', `${check.sequence}. ${check.name}: ${built.error}`);
+        hadHardFailure = true;
+        continue;
       }
-    } finally {
-      setSavingId(null);
+      const payload = built.answer;
+
+      if (!isOnline) {
+        enqueueAnswer(check, capturedPlanId, payload, draft);
+        continue;
+      }
+
+      try {
+        if (!isCurrentPlan(capturedPlanId)) {
+          showRouteChangedAlert();
+          return false;
+        }
+        await submitVehicleCheck(check.id, payload);
+        if (!isCurrentPlan(capturedPlanId)) return false;
+        const deadAnswerOpIds = collectDeadChecklistAnswerOpIds(
+          useSyncStore.getState().queue,
+          header?.id ?? 0,
+          check.id,
+        );
+        removeDeadQueueItems(deadAnswerOpIds);
+        setChecks((cs) => applyLocalCheckAnswer(cs, check.id, payload));
+        setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: undefined, queued: false } }));
+      } catch (err) {
+        if (!isCurrentPlan(capturedPlanId)) return false;
+        const msg = err instanceof Error ? err.message : 'No se pudo guardar la respuesta.';
+        if (isRetryableSyncErrorMessage(msg)) {
+          // Red degradada a media petición: mismo camino que offline.
+          enqueueAnswer(check, capturedPlanId, payload, draft);
+          continue;
+        }
+        hadHardFailure = true;
+        alertSubmitError(check, msg);
+      }
     }
+
+    return !hadHardFailure;
   }
 
   // Cierre offline (P1 Codex): el checklist NO se marca completo localmente
@@ -393,7 +374,7 @@ export default function ChecklistScreen() {
     if (hasRequiredDeadChecklistAnswers(queue)) {
       return false;
     }
-    if (!areRequiredChecksAnswered(checks)) {
+    if (!areRequiredChecksAnswered(checks) && validateRequiredChecklistDrafts(checks, drafts).ok === false) {
       Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
       return false;
     }
@@ -415,78 +396,101 @@ export default function ChecklistScreen() {
   }
 
   async function handleComplete() {
-    if (completing) return;
     const capturedPlanId = planIdNum;
     const queue = useSyncStore.getState().queue;
+    if (!isCurrentPlan(capturedPlanId)) {
+      showRouteChangedAlert();
+      return;
+    }
+    if (hasQueuedChecklistComplete(queue, header?.id ?? 0)) {
+      Alert.alert('Cierre ya encolado', 'Ya hay un cierre pendiente de envío; se completará al sincronizar.');
+      return;
+    }
+    if (hasRequiredDeadChecklistAnswers(queue)) return;
+    const hasQueuedAnswers = collectQueuedChecklistAnswerOps(
+      queue,
+      header?.id ?? 0,
+    ).length > 0;
+    if (!isOnline || hasQueuedAnswers) {
+      completeOffline(capturedPlanId, queue);
+      return;
+    }
+    if (!isCurrentPlan(capturedPlanId)) {
+      showRouteChangedAlert();
+      return;
+    }
+    await completeVehicleChecklist(header?.id ?? 0);
+    void storeRemove(checklistDraftsStorageKey(capturedPlanId));
+    setChecklistCompleteForPlan(capturedPlanId, true);
+
+    // A.1 Option A: feed KM inicial from the checklist odometer numeric
+    // check so the vendor doesn't capture KM twice. Best-effort: a failure
+    // here does NOT fail the checklist — the hub keeps a manual KM fallback.
+    const odoCheck = findOdometerCheck(checks);
+    const draftNumeric = odoCheck ? parseFloat(getChecklistDraft(drafts, odoCheck.id)?.numeric ?? '') : NaN;
+    const checksForKm = odoCheck && Number.isFinite(draftNumeric) && draftNumeric > 0
+      ? applyLocalCheckAnswer(checks, odoCheck.id, { result_numeric: draftNumeric })
+      : checks;
+    const odoKm = extractOdometerKm(checksForKm);
+    if (odoKm != null && capturedPlanId > 0) {
+      try {
+        if (!isCurrentPlan(capturedPlanId)) {
+          showRouteChangedAlert();
+          return;
+        }
+        const res = await updateKm(capturedPlanId, 'departure', odoKm);
+        setKmInitialForPlan(capturedPlanId, chooseAuthoritativeKm({ backendKm: res.departure_km }));
+      } catch {
+        // leave KM to the hub fallback; do not block completion
+      }
+    }
+
+    if (isCurrentPlan(capturedPlanId)) {
+      Alert.alert('Checklist completado', 'La inspección de unidad quedó registrada.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    }
+  }
+
+  async function handleSaveAndComplete() {
+    if (completing) return;
+    const capturedPlanId = planIdNum;
+    if (!isCurrentPlan(capturedPlanId)) {
+      showRouteChangedAlert();
+      return;
+    }
+    const validation = validateRequiredChecklistDrafts(checks, drafts);
+    if (!validation.ok) {
+      Alert.alert('Faltan respuestas', formatMissingRequiredChecks(validation.missing));
+      return;
+    }
+
     setCompleting(true);
     try {
-      if (!isCurrentPlan(capturedPlanId)) {
-        showRouteChangedAlert();
-        return;
+      const submitted = await submitUnsubmittedAnswers(capturedPlanId);
+      if (!submitted) return;
+      if (isOnline) {
+        await reloadChecks();
       }
-      if (hasQueuedChecklistComplete(queue, header?.id ?? 0)) {
-        Alert.alert('Cierre ya encolado', 'Ya hay un cierre pendiente de envío; se completará al sincronizar.');
-        return;
-      }
-      if (hasRequiredDeadChecklistAnswers(queue)) return;
-      const hasQueuedAnswers = collectQueuedChecklistAnswerOps(
-        queue,
-        header?.id ?? 0,
-      ).length > 0;
-      if (!isOnline || hasQueuedAnswers) {
-        completeOffline(capturedPlanId, queue);
-        return;
-      }
-      await completeVehicleChecklist(header?.id ?? 0);
-      void storeRemove(checklistDraftsStorageKey(capturedPlanId));
-      setChecklistCompleteForPlan(capturedPlanId, true);
-
-      // A.1 Option A: feed KM inicial from the checklist odometer numeric
-      // check so the vendor doesn't capture KM twice. Best-effort: a failure
-      // here does NOT fail the checklist — the hub keeps a manual KM fallback.
-      const odoKm = extractOdometerKm(checks);
-      if (odoKm != null && capturedPlanId > 0) {
-        try {
-          if (!isCurrentPlan(capturedPlanId)) {
-            showRouteChangedAlert();
-            return;
-          }
-          const res = await updateKm(capturedPlanId, 'departure', odoKm);
-          setKmInitialForPlan(capturedPlanId, chooseAuthoritativeKm({ backendKm: res.departure_km }));
-        } catch {
-          // leave KM to the hub fallback; do not block completion
+      try {
+        await handleComplete();
+      } catch (err) {
+        if (!isCurrentPlan(capturedPlanId)) return;
+        const msg = err instanceof Error ? err.message : 'No se pudo completar el checklist.';
+        if (isRetryableSyncErrorMessage(msg)) {
+          completeOffline(capturedPlanId, useSyncStore.getState().queue);
+          return;
         }
-      }
-
-      if (isCurrentPlan(capturedPlanId)) {
-        Alert.alert('Checklist completado', 'La inspección de unidad quedó registrada.', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
-      }
-    } catch (err) {
-      if (!isCurrentPlan(capturedPlanId)) return;
-      const msg = err instanceof Error ? err.message : 'No se pudo completar el checklist.';
-      if (isRetryableSyncErrorMessage(msg)) {
-        // Red degradada a media petición: mismo camino que offline (el
-        // backend trata already_completed como éxito si el POST sí llegó).
-        completeOffline(capturedPlanId, useSyncStore.getState().queue);
-        return;
-      }
-      if (/checks_pending|pendiente/i.test(msg)) {
-        Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
-      } else if (/blocking|bloqueante/i.test(msg)) {
-        if (isChecklistAnsweredForStart(header)) {
-          setChecklistCompleteForPlan(capturedPlanId, true);
+        if (/checks_pending|pendiente/i.test(msg)) {
+          Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
+        } else if (/blocking|bloqueante/i.test(msg)) {
           Alert.alert(
-            'Checklist registrado',
-            'Las respuestas quedaron guardadas. Hay puntos no aprobados, pero el estado del vehículo quedó actualizado.',
-            [{ text: 'OK', onPress: () => router.back() }],
+            'No se pudo completar',
+            'Las respuestas quedaron guardadas. Reintenta completar el checklist. Los puntos no aprobados no detienen la salida.',
           );
         } else {
-          Alert.alert('Faltan respuestas', 'Responde todos los puntos antes de continuar.');
+          Alert.alert('Error', msg);
         }
-      } else {
-        Alert.alert('Error', msg);
       }
     } finally {
       setCompleting(false);
@@ -656,45 +660,33 @@ export default function ChecklistScreen() {
                     <Image source={{ uri: draft.photoUri }} style={styles.photoPreview} resizeMode="cover" />
                   ) : null}
 
-                  {!completed && (
-                    <Button
-                      label={
-                        capturingId === check.id
-                          ? 'Abriendo cámara…'
-                          : draft.photoUri
-                            ? '📷 Tomar de nuevo'
-                            : (check.answered ? '📷 Reemplazar foto' : '📷 Tomar foto')
-                      }
-                      variant="secondary"
-                      onPress={() => handleTakePhoto(check)}
-                      disabled={capturingId === check.id}
-                      loading={capturingId === check.id}
-                      small
-                    />
-                  )}
-                </View>
-              )}
-
               {!completed && (
                 <Button
-                  label={check.answered ? 'Actualizar' : 'Guardar'}
-                  variant={check.answered ? 'secondary' : 'primary'}
-                  onPress={() => handleAnswer(check)}
-                  disabled={savingId === check.id || (check.check_type === 'photo' && !draft.photoUri)}
-                  loading={savingId === check.id}
+                  label={
+                    capturingId === check.id
+                      ? 'Abriendo cámara…'
+                      : draft.photoUri
+                        ? '📷 Tomar de nuevo'
+                        : (check.answered ? '📷 Reemplazar foto' : '📷 Tomar foto')
+                  }
+                  variant="secondary"
+                  onPress={() => handleTakePhoto(check)}
+                  disabled={capturingId === check.id || completing}
+                  loading={capturingId === check.id}
                   small
-                  style={check.check_type === 'photo' ? { marginTop: 8 } : undefined}
                 />
               )}
-            </Card>
-          );
-        })}
+            </View>
+          )}
+        </Card>
+      );
+    })}
 
         {!completed && (
           <Button
-            label={completing ? 'Completando…' : 'Completar checklist'}
+            label={completing ? 'Guardando y completando…' : 'Guardar y completar checklist'}
             variant="success"
-            onPress={handleComplete}
+            onPress={() => void handleSaveAndComplete()}
             fullWidth
             disabled={completing}
             loading={completing}

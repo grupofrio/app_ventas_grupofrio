@@ -9,13 +9,14 @@ import {
   receiptToStoreSnapshot,
 } from '../src/services/routePreparationReceipt.ts';
 
+const bundleOperationalDate = '2026-08-19';
+
 const baseContext = {
   companyId: 34,
   employeeId: 501,
-  operationalDate: '2026-08-19',
+  operationalDate: bundleOperationalDate,
   nowMs: Date.parse('2026-08-19T15:00:00.000Z'),
   currentPlanId: 123,
-  bundleEtag: '"etag-abc"',
   bundleCanStartRoute: true,
   hasPlan: true,
   stopsCount: 4,
@@ -27,8 +28,8 @@ function sampleReceipt(overrides: Partial<Parameters<typeof buildRoutePreparatio
     companyId: 34,
     employeeId: 501,
     planId: 123,
-    operationalDate: '2026-08-19',
-    bundleEtag: '"etag-abc"',
+    operationalDate: bundleOperationalDate,
+    bundleEtag: '"etag-old"',
     preparedAtMs: Date.parse('2026-08-19T08:30:00.000Z'),
     customersTotal: 4,
     customersPrepared: 4,
@@ -38,83 +39,79 @@ function sampleReceipt(overrides: Partial<Parameters<typeof buildRoutePreparatio
   });
 }
 
-test('A) same plan receipt survives process restart simulation', () => {
-  const receipt = sampleReceipt();
+test('A) harmless bundle refresh with new ETag keeps route PREPARED', () => {
+  const receipt = sampleReceipt({ bundleEtag: '"etag-old"' });
+  assert.equal(
+    receiptMatchesBinding(receipt, { ...baseContext }),
+    true,
+  );
   const assessment = assessRoutePreparationReceipt(receipt, baseContext);
   assert.equal(assessment.status, 'prepared');
-  if (assessment.status !== 'prepared') return;
+});
+
+test('G) restart after harmless ETag change still hydrates prepared', () => {
+  const receipt = sampleReceipt({ bundleEtag: '"etag-before-refresh"' });
+  const roundTrip = parseRoutePreparationReceipt(JSON.parse(JSON.stringify(receipt)));
+  assert.ok(roundTrip);
+  const assessment = assessRoutePreparationReceipt(roundTrip, baseContext);
+  assert.equal(assessment.status, 'prepared');
   assert.equal(receiptToStoreSnapshot(assessment.receipt).preparedPlanId, 123);
 });
 
-test('B) navigation away/back keeps prepared state in memory (receipt unchanged)', () => {
-  const receipt = sampleReceipt();
-  const roundTrip = parseRoutePreparationReceipt(JSON.parse(JSON.stringify(receipt)));
-  assert.deepEqual(roundTrip, receipt);
-  assert.equal(receiptMatchesBinding(receipt, baseContext), true);
-});
-
-test('C) same-principal session rotation keeps receipt when binding still matches', () => {
-  const receipt = sampleReceipt();
-  assert.equal(receiptMatchesBinding(receipt, baseContext), true);
-});
-
-test('D) same plan refresh keeps receipt when bundle etag unchanged', () => {
-  const receipt = sampleReceipt();
-  assert.equal(
-    receiptMatchesBinding(receipt, { ...baseContext, nowMs: baseContext.nowMs + 60_000 }),
-    true,
-  );
-});
-
-test('E) new plan invalidates preparation receipt', () => {
+test('B) new plan_id invalidates preparation', () => {
   const receipt = sampleReceipt({ planId: 123 });
+  assert.equal(receiptMatchesBinding(receipt, { ...baseContext, currentPlanId: 124 }), false);
   assert.equal(
-    receiptMatchesBinding(receipt, { ...baseContext, currentPlanId: 124 }),
-    false,
+    assessRoutePreparationReceipt(receipt, { ...baseContext, currentPlanId: 124 }).status,
+    'invalid_receipt',
   );
-  const assessment = assessRoutePreparationReceipt(receipt, {
-    ...baseContext,
-    currentPlanId: 124,
-  });
-  assert.equal(assessment.status, 'invalid_receipt');
 });
 
-test('F) expired bundle keeps readable preparation but blocks actions', () => {
-  const receipt = sampleReceipt();
-  const assessment = assessRoutePreparationReceipt(receipt, {
+test('C) different employee/company invalidates preparation', () => {
+  assert.equal(receiptMatchesBinding(sampleReceipt({ employeeId: 777 }), baseContext), false);
+  assert.equal(receiptMatchesBinding(sampleReceipt({ companyId: 99 }), baseContext), false);
+});
+
+test('D) new operational day invalidates preparation', () => {
+  const receipt = sampleReceipt({ operationalDate: '2026-08-18' });
+  assert.equal(receiptMatchesBinding(receipt, baseContext), false);
+});
+
+test('E) bundle actually expired keeps orientation but blocks actions', () => {
+  const assessment = assessRoutePreparationReceipt(sampleReceipt(), {
     ...baseContext,
     bundleCanStartRoute: false,
   });
   assert.equal(assessment.status, 'prepared_bundle_expired');
 });
 
-test('new operational day invalidates prior preparation', () => {
-  const receipt = sampleReceipt({ operationalDate: '2026-08-18' });
-  assert.equal(receiptMatchesBinding(receipt, baseContext), false);
+test('F) mid-route bundle content change (new ETag) does NOT turn route unprepared', () => {
+  const receipt = sampleReceipt({ bundleEtag: '"etag-before-sale"' });
+  assert.equal(
+    assessRoutePreparationReceipt(receipt, {
+      ...baseContext,
+      nowMs: baseContext.nowMs + 4 * 60 * 60_000,
+    }).status,
+    'prepared',
+  );
 });
 
-test('different employee cannot inherit preparation', () => {
-  const receipt = sampleReceipt({ employeeId: 777 });
-  assert.equal(receiptMatchesBinding(receipt, baseContext), false);
-});
-
-test('different company cannot inherit preparation', () => {
-  const receipt = sampleReceipt({ companyId: 99 });
-  assert.equal(receiptMatchesBinding(receipt, baseContext), false);
+test('device local date rollover does not invalidate while bundle operational day matches', () => {
+  const receipt = sampleReceipt({ operationalDate: '2026-08-19' });
+  assert.equal(
+    receiptMatchesBinding(receipt, {
+      ...baseContext,
+      operationalDate: '2026-08-19',
+      nowMs: Date.parse('2026-08-20T01:00:00.000Z'),
+    }),
+    true,
+  );
 });
 
 test('corrupt preparation receipt fails closed', () => {
   assert.equal(parseRoutePreparationReceipt({ version: 2 }), null);
   assert.equal(parseRoutePreparationReceipt({ version: 1, planId: 'x' }), null);
   assert.equal(assessRoutePreparationReceipt({ bad: true }, baseContext).status, 'unprepared');
-});
-
-test('bundle etag drift invalidates stale receipt', () => {
-  const receipt = sampleReceipt({ bundleEtag: '"etag-old"' });
-  assert.equal(
-    receiptMatchesBinding(receipt, { ...baseContext, bundleEtag: '"etag-new"' }),
-    false,
-  );
 });
 
 test('missing cached plan/products invalidates receipt on hydrate', () => {
@@ -124,7 +121,10 @@ test('missing cached plan/products invalidates receipt on hydrate', () => {
 });
 
 test('failed refresh does not require destroying prior receipt artifact itself', () => {
-  const receipt = sampleReceipt();
-  const stillValid = assessRoutePreparationReceipt(receipt, baseContext);
-  assert.equal(stillValid.status, 'prepared');
+  assert.equal(assessRoutePreparationReceipt(sampleReceipt(), baseContext).status, 'prepared');
+});
+
+test('bundleEtag remains stored as diagnostic metadata', () => {
+  const receipt = sampleReceipt({ bundleEtag: '"etag-diagnostic"' });
+  assert.equal(receipt.bundleEtag, '"etag-diagnostic"');
 });

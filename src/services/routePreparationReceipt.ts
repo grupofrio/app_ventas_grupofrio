@@ -1,10 +1,13 @@
 /**
  * Bounded, session-safe receipt for route preparation readiness.
  *
- * Preparation is NOT a blind boolean: the receipt binds to company, employee,
- * operational day, authoritative plan id and the day-bundle etag that was
- * active when preparation completed. On hydrate we re-validate against durable
- * artifacts (bundle lease, cached plan/products) before restoring UI state.
+ * Preparation binds to stable operational assignment facts:
+ * company, employee, authoritative operational day, plan id, plus durable local
+ * artifacts (cached plan/stops, products, fresh bundle lease).
+ *
+ * The day-bundle ETag hashes the full bundle (including mutable snapshots) and
+ * is stored only as freshness/diagnostic metadata — it MUST NOT invalidate
+ * preparation when a harmless refresh produces a new ETag.
  */
 
 export interface RoutePreparationReceiptV1 {
@@ -14,7 +17,9 @@ export interface RoutePreparationReceiptV1 {
     employeeId: number;
   };
   planId: number;
+  /** Authoritative server operational day from the validated day bundle. */
   operationalDate: string;
+  /** Last bundle version seen at prepare time — diagnostic/freshness only. */
   bundleEtag: string;
   preparedAtMs: number;
   customersTotal: number;
@@ -26,10 +31,10 @@ export interface RoutePreparationReceiptV1 {
 export interface RoutePreparationBindingContext {
   companyId: number;
   employeeId: number;
+  /** Authoritative operational day from the validated stored day bundle. */
   operationalDate: string;
   nowMs: number;
   currentPlanId: number | null;
-  bundleEtag: string | null;
   bundleCanStartRoute: boolean;
   hasPlan: boolean;
   stopsCount: number;
@@ -52,6 +57,9 @@ export type RoutePreparationAssessment =
       status: 'invalid_receipt';
       reason: string;
     };
+
+export const ROUTE_PREP_RECEIPT_PERSIST_WARNING =
+  'Ruta preparada, pero no se pudo guardar el estado para recuperación.';
 
 function invalidReceipt(message: string): Error {
   return new Error(`Route preparation receipt inválido: ${message}`);
@@ -87,15 +95,13 @@ export function buildRoutePreparationReceipt(input: {
   employeeId: number;
   planId: number;
   operationalDate: string;
-  bundleEtag: string;
+  bundleEtag?: string | null;
   preparedAtMs: number;
   customersTotal: number;
   customersPrepared: number;
   pricesPrepared: number;
   failures: Array<{ partnerId: number }>;
 }): RoutePreparationReceiptV1 {
-  const bundleEtag = input.bundleEtag.trim();
-  if (!bundleEtag) throw invalidReceipt('bundleEtag es requerido.');
   if (!Number.isSafeInteger(input.preparedAtMs) || input.preparedAtMs <= 0) {
     throw invalidReceipt('preparedAtMs no es válido.');
   }
@@ -107,7 +113,7 @@ export function buildRoutePreparationReceipt(input: {
     },
     planId: positiveInteger(input.planId, 'planId'),
     operationalDate: isoDate(input.operationalDate, 'operationalDate'),
-    bundleEtag,
+    bundleEtag: typeof input.bundleEtag === 'string' ? input.bundleEtag.trim() : '',
     preparedAtMs: input.preparedAtMs,
     customersTotal: nonNegativeInteger(input.customersTotal, 'customersTotal'),
     customersPrepared: nonNegativeInteger(input.customersPrepared, 'customersPrepared'),
@@ -125,8 +131,6 @@ export function parseRoutePreparationReceipt(value: unknown): RoutePreparationRe
     if (!isRecord(identity)) return null;
     const companyId = positiveInteger(identity.companyId, 'identity.companyId');
     const employeeId = positiveInteger(identity.employeeId, 'identity.employeeId');
-    const bundleEtag = typeof value.bundleEtag === 'string' ? value.bundleEtag.trim() : '';
-    if (!bundleEtag) return null;
     const failurePartnerIds = Array.isArray(value.failurePartnerIds)
       ? value.failurePartnerIds.flatMap((entry) => (
         typeof entry === 'number' && Number.isSafeInteger(entry) && entry > 0 ? [entry] : []
@@ -137,7 +141,7 @@ export function parseRoutePreparationReceipt(value: unknown): RoutePreparationRe
       identity: { companyId, employeeId },
       planId: positiveInteger(value.planId, 'planId'),
       operationalDate: isoDate(value.operationalDate, 'operationalDate'),
-      bundleEtag,
+      bundleEtag: typeof value.bundleEtag === 'string' ? value.bundleEtag.trim() : '',
       preparedAtMs: positiveInteger(value.preparedAtMs, 'preparedAtMs'),
       customersTotal: nonNegativeInteger(value.customersTotal, 'customersTotal'),
       customersPrepared: nonNegativeInteger(value.customersPrepared, 'customersPrepared'),
@@ -157,7 +161,6 @@ export function receiptMatchesBinding(
   if (receipt.identity.employeeId !== context.employeeId) return false;
   if (receipt.operationalDate !== context.operationalDate) return false;
   if (context.currentPlanId === null || receipt.planId !== context.currentPlanId) return false;
-  if (!context.bundleEtag || receipt.bundleEtag !== context.bundleEtag) return false;
   if (!context.hasPlan || context.stopsCount <= 0) return false;
   if (context.productCount <= 0) return false;
   return true;
@@ -174,7 +177,7 @@ export function assessRoutePreparationReceipt(
   if (!receiptMatchesBinding(receipt, context)) {
     return {
       status: 'invalid_receipt',
-      reason: 'La preparación guardada no corresponde a esta sesión, plan o bundle.',
+      reason: 'La preparación guardada no corresponde a esta sesión, plan o día operativo.',
     };
   }
   if (!context.bundleCanStartRoute) {

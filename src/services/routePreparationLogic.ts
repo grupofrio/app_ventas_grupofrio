@@ -91,4 +91,5 @@ export {
   parseRoutePreparationReceipt,
   receiptMatchesBinding,
   receiptToStoreSnapshot,
+  ROUTE_PREP_RECEIPT_PERSIST_WARNING,
 } from './routePreparationReceipt.ts';

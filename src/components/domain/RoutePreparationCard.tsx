@@ -44,6 +44,7 @@ export function RoutePreparationCard({
   const failures = useRoutePreparationStore((s) => s.failures);
   const lastError = useRoutePreparationStore((s) => s.lastError);
   const bundleExpired = useRoutePreparationStore((s) => s.bundleExpired);
+  const receiptPersistWarning = useRoutePreparationStore((s) => s.receiptPersistWarning);
   const prepareRouteData = useRoutePreparationStore((s) => s.prepareRouteData);
   const retryFailures = useRoutePreparationStore((s) => s.retryFailures);
 
@@ -119,6 +120,9 @@ export function RoutePreparationCard({
         {freshness.stale && (
           <Text style={styles.staleWarn}>⚠️ Datos viejos: actualiza la ruta para asegurar precios y stock al día.</Text>
         )}
+        {receiptPersistWarning ? (
+          <Text style={styles.persistWarn}>{receiptPersistWarning}</Text>
+        ) : null}
         <Text style={styles.metric}>
           Clientes: {customersPrepared}/{customersTotal} · Precios precargados: {pricesPrepared}
         </Text>
@@ -235,6 +239,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   staleWarn: {
+    fontSize: 11,
+    color: '#F59E0B',
+    fontWeight: '600',
+    marginBottom: 8,
+    lineHeight: 15,
+  },
+  persistWarn: {
     fontSize: 11,
     color: '#F59E0B',
     fontWeight: '600',

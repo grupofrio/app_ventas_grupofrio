@@ -4,7 +4,7 @@
  * in CI to guide the next field capture.
  */
 
-import { createHash } from 'node:crypto';
+import { fingerprintDiagnosticPayload } from './diagnosticFingerprint.ts';
 
 export interface OperationIntentDiagnosticsInput {
   operationType: string;
@@ -15,13 +15,8 @@ export interface OperationIntentDiagnosticsInput {
   reconcileOutcome?: string;
 }
 
-function stablePayloadFingerprint(payload: Record<string, unknown>): string {
-  const canonical = JSON.stringify(payload, Object.keys(payload).sort());
-  return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
-}
-
 export function fingerprintOperationPayload(payload: Record<string, unknown>): string {
-  return stablePayloadFingerprint(payload);
+  return fingerprintDiagnosticPayload(payload);
 }
 
 export function maskOperationId(operationId: string): string {

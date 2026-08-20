@@ -9,7 +9,7 @@ interface Mod {
   };
   describePendingOrdersBanner: (s: { pending: number; failed: number; total: number }) => string | null;
   describeSaleOrderItem: (item: { type: string; status: string; payload?: any; id?: string }) => {
-    customerName: string | null; total: number | null; statusLabel: string; tone: string; operationId: string | null;
+    customerName: string | null; total: number | null; priceConfirmationPending: boolean; statusLabel: string; tone: string; operationId: string | null;
   } | null;
   buildStopOrderStatusMap: (q: Array<{ type: string; status: string; payload?: any }>) => Record<number, string>;
 }

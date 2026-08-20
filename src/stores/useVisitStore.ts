@@ -37,6 +37,8 @@ export interface SaleLineItem {
   productId: number;
   productName: string;
   price: number;
+  /** `pending_confirmation` is display-only; Odoo remains price authority. */
+  priceConfirmation?: 'authorized' | 'pending_confirmation';
   qty: number;
   stock: number;
   weight: number; // kg per unit

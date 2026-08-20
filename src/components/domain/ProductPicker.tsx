@@ -31,6 +31,7 @@ import { clearPricelistCaches, computeCustomerPrices, peekCachedCustomerPrices }
 import { schedulePersistPriceCache } from '../../services/offlineCache';
 import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
+import { resolveSaleLinePrice } from '../../services/salePriceConfirmation';
 import { describeCatalogTrustBanner } from '../../services/trustSignals';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
@@ -48,6 +49,8 @@ interface ProductPickerProps {
   existingProductIds: number[];
   partnerId?: number;
   pricelistId?: number | null;
+  /** Direct-sale-only opt-in. Other carts keep authorized-price blocking. */
+  allowPendingPrice?: boolean;
   /**
    * Optional sink for the selected line. When provided, the picker calls this
    * INSTEAD of writing to useVisitStore.saleLines — used by flows that keep
@@ -112,7 +115,7 @@ type EnrichedProduct = TruckProduct & {
 
 // ═══ Component ═══
 
-export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId, onAddLine }: ProductPickerProps) {
+export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId, allowPendingPrice = false, onAddLine }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
   const inventorySource = useProductStore((s) => s.inventorySource);
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
@@ -139,6 +142,10 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const [priceError, setPriceError] = useState<string | null>(null);
   const [hasAuthorizedPrices, setHasAuthorizedPrices] = useState(!partnerId);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const canUsePendingPrice = Boolean(partnerId) && allowPendingPrice && !isOnline && !priceLoading && !hasAuthorizedPrices;
+  const priceSelectionBlocked = Boolean(partnerId) && !canUsePendingPrice && (
+    priceLoading || !hasAuthorizedPrices || priceError !== null
+  );
 
   // Load base URL for image URLs
   useEffect(() => {
@@ -319,20 +326,22 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // Perf Fase 1C: memoizado para estabilizar el onPress de cada fila.
   const handleSelect = useCallback((product: EnrichedProduct) => {
     if (existingProductIds.includes(product.id)) return;
-    if (partnerId && (priceLoading || !hasAuthorizedPrices || priceError)) {
+    if (priceSelectionBlocked) {
       Alert.alert('Precios no disponibles', priceError ?? 'Espera la respuesta de precios autorizados.');
       return;
     }
 
     const qty = quantities[product.id] || 1;
-    // SaleLineItem.price = base price SIN IVA (for Odoo sync).
-    // Both public and customer pricelist prices are already base values.
-    const rawPrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
-      ? product.customerPrice : 0;
+    const resolvedPrice = resolveSaleLinePrice({
+      customerPrice: product.customerPrice,
+      allowPendingPrice: canUsePendingPrice,
+    });
+    if (!resolvedPrice) return;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
-      price: normalizeSaleLineBasePrice(rawPrice),
+      price: normalizeSaleLineBasePrice(resolvedPrice.price),
+      priceConfirmation: resolvedPrice.priceConfirmation,
       qty,
       stock: product.qty_display,
       weight: product.weight || 5,
@@ -345,7 +354,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     setSearch('');
     setQuantities({});
     onClose();
-  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
+  }, [existingProductIds, quantities, onAddLine, addSaleLine, onClose, canUsePendingPrice, priceSelectionBlocked, priceError]);
 
   // ═══ Product Image ═══
 
@@ -386,7 +395,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const renderListItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
+    const disabled = alreadyAdded || priceSelectionBlocked;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -408,7 +417,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           </View>
           <View style={styles.listMeta}>
             <Text style={[styles.listPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice)}
+              {p.customerPrice === null && canUsePendingPrice ? 'Pendiente de confirmar' : displayPrice(p.customerPrice)}
             </Text>
             {p.hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
             <Text style={styles.sep}>·</Text>
@@ -434,14 +443,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
+  }, [quantities, handleSelect, setQty, priceSelectionBlocked, canUsePendingPrice]);
 
   // ═══ Grid View Card ═══
 
   const renderGridItem = useCallback(({ item: p }: { item: EnrichedProduct }) => {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
-    const disabled = alreadyAdded || (Boolean(partnerId) && (priceLoading || !hasAuthorizedPrices || priceError !== null));
+    const disabled = alreadyAdded || priceSelectionBlocked;
     const qty = quantities[p.id] || 1;
 
     return (
@@ -472,7 +481,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
           <View style={styles.gridPriceRow}>
             <Text style={[styles.gridPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice)}
+              {p.customerPrice === null && canUsePendingPrice ? 'Pendiente de confirmar' : displayPrice(p.customerPrice)}
             </Text>
             {p.hasCustomPrice && <Text style={styles.customPriceTagSm}>cliente</Text>}
           </View>
@@ -498,7 +507,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
         )}
       </View>
     );
-  }, [quantities, handleSelect, setQty, partnerId, priceLoading, hasAuthorizedPrices, priceError]);
+  }, [quantities, handleSelect, setQty, priceSelectionBlocked, canUsePendingPrice]);
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const hasCustomPrices = priceMap.size > 0;

@@ -54,6 +54,32 @@ test('buildSaleTicketSnapshot preserves sale data for a local 58mm ticket', () =
   assert.equal(snapshot.totalKg, 13);
 });
 
+test('pending price tickets omit local monetary amounts until Odoo confirms them', () => {
+  const snapshot = buildSaleTicketSnapshot({
+    saleId: 'sale_pending_price',
+    customerName: 'Abarrotes Centro',
+    sellerName: 'Juan Perez',
+    paymentMethod: 'credit',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [
+      {
+        productId: 10,
+        productName: 'Bolsa 5kg',
+        qty: 2,
+        price: 0,
+        priceConfirmation: 'pending_confirmation',
+        weight: 5,
+      },
+    ],
+  });
+
+  assert.equal(snapshot.priceConfirmationPending, true);
+  const html = buildSaleTicketHtml(snapshot);
+  assert.match(html, /Pendiente de confirmar por Odoo/);
+  assert.doesNotMatch(html, /\$0\.00/);
+  assert.doesNotMatch(html, /Pagar[eé]/);
+});
+
 test('buildSaleTicketSnapshot presents a pending Odoo folio with the local reference', () => {
   const snapshot = buildSaleTicketSnapshot({
     saleId: 'mobile-op-1',

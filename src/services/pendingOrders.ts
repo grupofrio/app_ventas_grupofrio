@@ -40,6 +40,7 @@ export type OrderTone = 'pending' | 'error' | 'sent';
 export interface SaleOrderDisplay {
   customerName: string | null;
   total: number | null;
+  priceConfirmationPending: boolean;
   statusLabel: string;
   tone: OrderTone;
   operationId: string | null;
@@ -62,6 +63,7 @@ export function describeSaleOrderItem(
 ): SaleOrderDisplay | null {
   if (item.type !== 'sale_order') return null;
   const payload = (item.payload ?? {}) as Record<string, unknown>;
+  const priceConfirmationPending = payload._clientPriceConfirmation === 'pending_confirmation';
   let tone: OrderTone;
   let statusLabel: string;
   if (item.status === 'done') { tone = 'sent'; statusLabel = 'Venta enviada'; }
@@ -69,7 +71,8 @@ export function describeSaleOrderItem(
   else { tone = 'pending'; statusLabel = 'Venta pendiente'; }
   return {
     customerName: strOrNull(payload._clientCustomerName),
-    total: numOrNull(payload._clientTotal),
+    total: priceConfirmationPending ? null : numOrNull(payload._clientTotal),
+    priceConfirmationPending,
     statusLabel,
     tone,
     operationId: strOrNull(payload._operationId) ?? (item.id ?? null),

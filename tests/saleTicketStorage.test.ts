@@ -66,6 +66,7 @@ function snapshot(
     subtotal: 100,
     total: 100,
     totalKg: 10,
+    priceConfirmationPending: false,
     ...overrides,
   };
 }
@@ -144,6 +145,16 @@ test('normalizes a legacy stored ticket without an Odoo folio and applies the se
       odooFolio: null,
       sellerName: SALE_TICKET_DEFAULT_SELLER,
     },
+  );
+});
+
+test('normalizes legacy tickets without price confirmation as authorized', () => {
+  const { priceConfirmationPending: _omitted, ...legacySnapshot } = snapshot();
+
+  assert.equal(
+    saleTicketStorage.normalizeStoredSaleTicketSnapshot(legacySnapshot)
+      .priceConfirmationPending,
+    false,
   );
 });
 

@@ -9,7 +9,7 @@ interface Mod {
   };
   describePendingOrdersBanner: (s: { pending: number; failed: number; total: number }) => string | null;
   describeSaleOrderItem: (item: { type: string; status: string; payload?: any; id?: string }) => {
-    customerName: string | null; total: number | null; statusLabel: string; tone: string; operationId: string | null;
+    customerName: string | null; total: number | null; priceConfirmationPending: boolean; statusLabel: string; tone: string; operationId: string | null;
   } | null;
   buildStopOrderStatusMap: (q: Array<{ type: string; status: string; payload?: any }>) => Record<number, string>;
 }
@@ -58,6 +58,17 @@ function run(m: Mod) {
   const noMeta = m.describeSaleOrderItem({ type: 'sale_order', status: 'pending', payload: {} })!;
   assert.equal(noMeta.customerName, null);
   assert.equal(noMeta.total, null);
+
+  const pendingPrice = m.describeSaleOrderItem({
+    ...pendItem,
+    payload: {
+      ...pendItem.payload,
+      _clientTotal: 0,
+      _clientPriceConfirmation: 'pending_confirmation',
+    },
+  })!;
+  assert.equal(pendingPrice.priceConfirmationPending, true);
+  assert.equal(pendingPrice.total, null, 'never presents the local placeholder as money');
 
   // ── buildStopOrderStatusMap (badge por stop) ─────────────────────────────
   const map = m.buildStopOrderStatusMap([

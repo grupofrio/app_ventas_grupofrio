@@ -9,12 +9,14 @@ import {
   type SaleTicketSnapshot,
 } from './saleTicket.ts';
 import { normalizeSellerName } from './saleTicketFormatting.ts';
+import { hasPendingSalePriceConfirmation } from './salePricePresentation.ts';
 
 type StoredSaleTicketSnapshot =
-  Omit<SaleTicketSnapshot, 'odooFolio' | 'sellerName'>
+  Omit<SaleTicketSnapshot, 'odooFolio' | 'sellerName' | 'priceConfirmationPending'>
   & {
     odooFolio?: unknown;
     sellerName?: unknown;
+    priceConfirmationPending?: unknown;
   };
 
 export interface SaleTicketStorageAdapter {
@@ -59,6 +61,8 @@ export function normalizeStoredSaleTicketSnapshot(
     sellerName: normalizeSellerName(
       typeof snapshot.sellerName === 'string' ? snapshot.sellerName : undefined,
     ),
+    priceConfirmationPending: snapshot.priceConfirmationPending === true
+      || hasPendingSalePriceConfirmation(snapshot.lines),
   };
 }
 

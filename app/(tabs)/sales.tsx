@@ -204,7 +204,9 @@ export default function SalesScreen() {
                         : entry.customerName}
                     </Text>
                     <Text style={styles.orderAmount}>
-                      {entry.amountTotal !== null
+                      {entry.priceConfirmationPending
+                        ? 'Pendiente de confirmar'
+                        : entry.amountTotal !== null
                         ? formatCurrency(entry.amountTotal)
                         : LOCAL_AMOUNT_UNAVAILABLE_LABEL}
                     </Text>

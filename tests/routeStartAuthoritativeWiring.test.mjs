@@ -350,7 +350,7 @@ function main() {
     /return fetchMyPlan\([\s\S]*?`\$\{GF_BASE\}\/my_plan`,[\s\S]*?getMyPlanDate\(\)/,
     'getMyPlan must delegate without collapsing transport or session failures to null',
   );
-  // PR-2: la carga del plan es una LECTURA — timeout corto (10s), no el de mutación.
+  // PR-2: la carga del plan es una LECTURA — timeout corto (30s), no el de mutación.
   assert.match(
     logistics.slice(logistics.indexOf('export async function getMyPlan()'), logistics.indexOf('export async function startPlan(')),
     /timeoutMs:\s*DEFAULT_READ_TIMEOUT_MS/,

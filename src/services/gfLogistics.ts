@@ -360,7 +360,7 @@ function getMyPlanDate(): string {
 }
 
 export async function getMyPlan(): Promise<GFPlan | null> {
-  // PR-2: cargar el plan es una LECTURA — usar el timeout corto (10s), no el de
+  // PR-2: cargar el plan es una LECTURA — usar el timeout corto (30s), no el de
   // mutación (45s). Antes, en WiFi congestionado del CEDIS el operador esperaba
   // 45s antes de ver el error. fetchMyPlan lanza en error de red/servidor y solo
   // devuelve null cuando el backend dice found:false (ausencia real de plan).
@@ -396,7 +396,7 @@ export interface PlanStopsResult {
  */
 export async function getPlanStopsResult(planId: number): Promise<PlanStopsResult> {
   try {
-    // Lectura: timeout corto (10s), no el de mutación (45s).
+    // Lectura: timeout corto (30s), no el de mutación (45s).
     // BLD-20260405-021: backend envuelve en { ok, message, data:{ stops:[...] }}.
     // Soportamos ambas formas (envuelta y array pelado) por compatibilidad.
     const result = await postRest<any>(

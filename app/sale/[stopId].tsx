@@ -880,6 +880,7 @@ function SaleScreenInner() {
           existingProductIds={saleLines.map((l) => l.productId)}
           partnerId={salePartnerId}
           pricelistId={stop._pricelistId}
+          allowPendingPrice
         />
 
         {/* Totals card */}

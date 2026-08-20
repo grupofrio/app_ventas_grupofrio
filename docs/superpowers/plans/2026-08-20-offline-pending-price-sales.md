@@ -30,7 +30,7 @@ Expected: FAIL porque el picker actual deshabilita las filas cuando `!hasAuthori
 
 - [ ] **Step 3: Implement minimal behavior**
 
-Agregar un estado explícito de confirmación de precio por línea. Sin caché permitida, crear la línea pendiente; retener `null`/pendiente para la presentación, sin usar precio de lista ni `0`. No modificar stock ni la condición de producto ya agregado.
+Agregar una prop explícita y opt-in para precio pendiente. Sólo la pantalla de Venta directa la habilita; Consignación y Preventa conservan el bloqueo actual. Sin caché permitida en Venta directa, crear la línea pendiente; retener `null`/pendiente para la presentación, sin usar precio de lista ni `0`. No modificar stock ni la condición de producto ya agregado.
 
 - [ ] **Step 4: Verify focused tests**
 

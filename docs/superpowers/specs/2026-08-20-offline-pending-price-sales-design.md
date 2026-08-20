@@ -20,12 +20,13 @@ Al sincronizar, el contrato de `sales/create` sigue excluyendo cualquier `price_
 ## Alcance
 
 - Frontend KOLD Field solamente.
-- Selector de productos, estado de línea/total de venta, ticket local y proyección de venta pendiente.
+- Venta directa: selector de productos, estado de línea/total, ticket local y proyección de venta pendiente.
 - Pruebas de lógica y wiring para precio pendiente, payload sin autoridad de precio, UUID/cola estable y presentación.
 
 ## Fuera de alcance
 
 - Cambios al endpoint Odoo o a la regla de cálculo de precio del backend.
+- Consignación y Preventa. Ambas usan el selector compartido, pero mantienen su política actual de precio autorizado.
 - Cambios al stock, ledger, day-bundle, idempotencia, conciliación, pago por factura o liquidación.
 - Inventar una estimación monetaria para un precio que no está en caché.
 

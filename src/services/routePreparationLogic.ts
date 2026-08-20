@@ -51,6 +51,18 @@ export function buildCustomerNameMap(stops: PartnerLike[]): Map<number, string> 
   return map;
 }
 
+export function describePreparationFailure(
+  failure: PreparationFailure,
+  stops: PartnerLike[],
+): { customerName: string; reason: string } {
+  const capturedName = failure.customerName?.trim();
+  const routeName = buildCustomerNameMap(stops).get(failure.partnerId)?.trim();
+  return {
+    customerName: capturedName || routeName || `Cliente #${failure.partnerId}`,
+    reason: failure.reason,
+  };
+}
+
 /**
  * Decide whether the route is "freshly prepared" relative to the current
  * plan id. Returns true when the last preparation was for the same plan.

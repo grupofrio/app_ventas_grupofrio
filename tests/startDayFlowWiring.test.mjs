@@ -34,6 +34,9 @@ function main() {
 
   assert.match(prepCard, /locked \? \(/);
   assert.match(routeStart, /locked=\{!startDayGates\.prepareUnlocked\}/);
+  assert.match(prepCard, /describePreparationFailure/, 'la tarjeta debe resolver nombres de pendientes desde la ruta local');
+  assert.match(prepCard, /failures\.slice\(0, 8\)\.map/, 'la tarjeta debe mostrar una lista acotada de pendientes');
+  assert.match(prepCard, /Pendientes de precio/, 'la lista debe explicar qué clientes requieren reintento');
 
   assert.match(checklist, /Guardar y completar checklist/);
   assert.doesNotMatch(checklist, /label=\{check\.answered \? 'Actualizar' : 'Guardar'\}/);

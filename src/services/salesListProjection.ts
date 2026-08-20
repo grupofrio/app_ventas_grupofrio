@@ -27,6 +27,7 @@ export interface SalesListEntry {
   origin: 'odoo' | 'local';
   customerName: string;
   amountTotal: number | null;
+  priceConfirmationPending?: boolean;
   kgTotal: number | null;
   createdAtMs: number;
   localStatus?: LocalSaleStatus;
@@ -92,6 +93,8 @@ export function projectLocalSale(
   const payload = (item.payload ?? {}) as Record<string, unknown>;
   const payloadName = strOrNull(payload._clientCustomerName);
   const payloadTotal = numOrNull(payload._clientTotal);
+  const priceConfirmationPending = ticket?.priceConfirmationPending === true
+    || payload._clientPriceConfirmation === 'pending_confirmation';
   const payloadPaymentMethod = strOrNull(payload.payment_method);
 
   return {
@@ -99,7 +102,8 @@ export function projectLocalSale(
     operationId: item.id,
     origin: 'local',
     customerName: ticket?.customerName ?? payloadName ?? LEGACY_CUSTOMER_NAME,
-    amountTotal: ticket ? ticket.total : payloadTotal,
+    amountTotal: priceConfirmationPending ? null : (ticket ? ticket.total : payloadTotal),
+    priceConfirmationPending,
     kgTotal: ticket ? ticket.totalKg : null,
     createdAtMs: item.created_at,
     localStatus,

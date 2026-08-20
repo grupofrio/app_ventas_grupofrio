@@ -59,6 +59,17 @@ function run(m: Mod) {
   assert.equal(noMeta.customerName, null);
   assert.equal(noMeta.total, null);
 
+  const pendingPrice = m.describeSaleOrderItem({
+    ...pendItem,
+    payload: {
+      ...pendItem.payload,
+      _clientTotal: 0,
+      _clientPriceConfirmation: 'pending_confirmation',
+    },
+  })!;
+  assert.equal(pendingPrice.priceConfirmationPending, true);
+  assert.equal(pendingPrice.total, null, 'never presents the local placeholder as money');
+
   // ── buildStopOrderStatusMap (badge por stop) ─────────────────────────────
   const map = m.buildStopOrderStatusMap([
     { type: 'sale_order', status: 'pending', payload: { stop_id: 1 } },

@@ -51,6 +51,9 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
       || !finiteNumber(candidate.unitPrice)
       || !finiteNumber(candidate.lineTotal)
       || !finiteNumber(candidate.weight)
+      || (candidate.priceConfirmation !== undefined
+        && candidate.priceConfirmation !== 'authorized'
+        && candidate.priceConfirmation !== 'pending_confirmation')
     ) {
       return null;
     }
@@ -60,6 +63,7 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
       qty: candidate.qty,
       unitPrice: candidate.unitPrice,
       lineTotal: candidate.lineTotal,
+      ...(candidate.priceConfirmation ? { priceConfirmation: candidate.priceConfirmation } : {}),
       weight: candidate.weight,
     };
   });
@@ -77,6 +81,8 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
     subtotal: value.subtotal,
     total: value.total,
     totalKg: value.totalKg,
+    priceConfirmationPending: value.priceConfirmationPending === true
+      || lines.some((line) => line?.priceConfirmation === 'pending_confirmation'),
   };
 }
 
@@ -91,6 +97,9 @@ export function restoreSaleRecoveryIntent(value: unknown): SaleRecoveryIntentV1 
     if (
       typeof value.queuePayload._clientCustomerName !== 'string'
       || !finiteNumber(value.queuePayload._clientTotal)
+      || (value.queuePayload._clientPriceConfirmation !== undefined
+        && value.queuePayload._clientPriceConfirmation !== 'authorized'
+        && value.queuePayload._clientPriceConfirmation !== 'pending_confirmation')
     ) {
       return null;
     }

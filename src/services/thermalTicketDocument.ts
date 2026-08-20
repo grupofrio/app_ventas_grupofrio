@@ -12,6 +12,7 @@ import {
   normalizeSellerName,
 } from './saleTicketFormatting.ts';
 import type { ThermalTicketDocument } from './thermalPrinterTypes.ts';
+import { PENDING_PRICE_CONFIRMATION_LABEL } from './salePricePresentation.ts';
 
 export type { ThermalTicketDocument } from './thermalPrinterTypes.ts';
 
@@ -41,13 +42,21 @@ export function buildThermalTicketDocument(
     lines: snapshot.lines.map((line) => ({
       productId: line.productId,
       productName: line.productName,
-      quantityAndUnitPrice: formatQuantityAndUnitPrice(line.qty, line.unitPrice),
-      lineTotal: formatTicketCurrency(line.lineTotal),
+      quantityAndUnitPrice: line.priceConfirmation === 'pending_confirmation'
+        ? `${line.qty} pza · ${PENDING_PRICE_CONFIRMATION_LABEL}`
+        : formatQuantityAndUnitPrice(line.qty, line.unitPrice),
+      lineTotal: line.priceConfirmation === 'pending_confirmation'
+        ? PENDING_PRICE_CONFIRMATION_LABEL
+        : formatTicketCurrency(line.lineTotal),
     })),
-    subtotal: formatTicketCurrency(snapshot.subtotal),
+    subtotal: snapshot.priceConfirmationPending
+      ? PENDING_PRICE_CONFIRMATION_LABEL
+      : formatTicketCurrency(snapshot.subtotal),
     totalKg: formatTotalKg(snapshot.totalKg),
-    total: formatTicketCurrency(snapshot.total),
-    ...(snapshot.paymentMethod === 'credit'
+    total: snapshot.priceConfirmationPending
+      ? PENDING_PRICE_CONFIRMATION_LABEL
+      : formatTicketCurrency(snapshot.total),
+    ...(snapshot.paymentMethod === 'credit' && !snapshot.priceConfirmationPending
       ? { creditNote: SALE_TICKET_CREDIT_NOTE }
       : {}),
   };

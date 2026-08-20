@@ -72,6 +72,10 @@ import {
   shouldResumeAfterSale,
 } from '../../src/services/saleConfirmationFlow';
 import { describeOperationIntentDiagnostics } from '../../src/services/operationIntentDiagnostics';
+import {
+  PENDING_PRICE_CONFIRMATION_LABEL,
+  hasPendingSalePriceConfirmation,
+} from '../../src/services/salePricePresentation';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -161,6 +165,7 @@ function SaleScreenInner() {
   const tax = saleTax();
   const total = saleTotal();
   const totalKg = saleTotalKg();
+  const priceConfirmationPending = hasPendingSalePriceConfirmation(saleLines);
   const forecast = stop._koldForecast;
 
   // V1.2: Stock validation + anti-duplicate
@@ -440,6 +445,7 @@ function SaleScreenInner() {
         ...payload,
         _clientCustomerName: stop.customer_name,
         _clientTotal: total,
+        _clientPriceConfirmation: priceConfirmationPending ? 'pending_confirmation' : 'authorized',
         _localStockDelta: localStockDelta,
         _ledgerApplied: true,
       },
@@ -822,7 +828,9 @@ function SaleScreenInner() {
               <View style={{ flex: 1 }}>
                 <Text style={[typography.bodySmall, styles.productName]}>{line.productName}</Text>
                 <Text style={[typography.dimSmall, styles.productInfo]}>
-                  {formatCatalogPrice(line.price)} · Stock: {line.stock}{!isOnline ? ' · ref.' : ''}
+                  {line.priceConfirmation === 'pending_confirmation'
+                    ? PENDING_PRICE_CONFIRMATION_LABEL
+                    : formatCatalogPrice(line.price)} · Stock: {line.stock}{!isOnline ? ' · ref.' : ''}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
@@ -887,11 +895,11 @@ function SaleScreenInner() {
         <Card style={styles.totalsCard}>
           <View style={styles.totalRow}>
             <Text style={[typography.dim, styles.totalLabel]}>Subtotal</Text>
-            <Text style={typography.metricValue}>{formatCurrency(subtotal)}</Text>
+            <Text style={typography.metricValue}>{priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatCurrency(subtotal)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={[typography.dim, styles.totalLabel]}>Impuestos</Text>
-            <Text style={typography.metricValue}>{formatCurrency(tax)}</Text>
+            <Text style={typography.metricValue}>{priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatCurrency(tax)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={[typography.dim, styles.totalLabel]}>Total kg</Text>
@@ -902,7 +910,7 @@ function SaleScreenInner() {
           <View style={styles.divider} />
           <View style={styles.totalRow}>
             <Text style={[typography.body, styles.grandTotalLabel]}>TOTAL</Text>
-            <Text style={[typography.kpiValueLarge, styles.grandTotalValue]}>{formatCurrency(total)}</Text>
+            <Text style={[typography.kpiValueLarge, styles.grandTotalValue]}>{priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatCurrency(total)}</Text>
           </View>
           {!isOnline && (
             <Text style={[typography.dimSmall, styles.referentialNote]}>
@@ -999,7 +1007,7 @@ function SaleScreenInner() {
           <Text style={[typography.dim, styles.fixedBarTotalLabel]}>
             TOTAL{saleLines.length > 0 ? ` · ${saleLines.reduce((sum, l) => sum + l.qty, 0)} piezas` : ''}
           </Text>
-          <Text style={[typography.kpiValueLarge, styles.fixedBarTotalValue]}>{formatCurrency(total)}</Text>
+          <Text style={[typography.kpiValueLarge, styles.fixedBarTotalValue]}>{priceConfirmationPending ? 'Pendiente de confirmar' : formatCurrency(total)}</Text>
         </View>
 
         {saleConfirmed && afterSaleAction ? (

@@ -251,7 +251,9 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
         {orderDetail && (orderDetail.customerName || orderDetail.total != null) && (
           <Text style={styles.syncOrderLine}>
             {orderDetail.customerName ?? 'Cliente'}
-            {orderDetail.total != null
+            {orderDetail.priceConfirmationPending
+              ? ' · Pendiente de confirmar por Odoo'
+              : orderDetail.total != null
               ? ` · ${formatCurrency(orderDetail.total)}${orderDetail.tone === 'sent' ? '' : ' capturado'}`
               : ''}
           </Text>

@@ -12,6 +12,7 @@ import { SALE_TICKET_BRANDING } from '../../src/services/saleTicketBranding';
 import { openSaleTicketPdf } from '../../src/services/saleTicketPdf';
 import { loadSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 import { buildThermalTicketDocument } from '../../src/services/thermalTicketDocument';
+import { PENDING_PRICE_CONFIRMATION_LABEL } from '../../src/services/salePricePresentation';
 import { spacing, radii } from '../../src/theme/tokens';
 import {
   formatQuantityAndUnitPrice,
@@ -79,9 +80,15 @@ export default function PrintTicketScreen() {
                   <Text style={styles.productName}>{line.productName}</Text>
                   <View style={styles.ticketProductMetaRow}>
                     <Text style={styles.productMeta}>
-                      {formatQuantityAndUnitPrice(line.qty, line.unitPrice)}
+                      {line.priceConfirmation === 'pending_confirmation'
+                        ? `${line.qty} pza · ${PENDING_PRICE_CONFIRMATION_LABEL}`
+                        : formatQuantityAndUnitPrice(line.qty, line.unitPrice)}
                     </Text>
-                    <Text style={styles.ticketAmount}>{formatTicketCurrency(line.lineTotal)}</Text>
+                    <Text style={styles.ticketAmount}>
+                      {line.priceConfirmation === 'pending_confirmation'
+                        ? PENDING_PRICE_CONFIRMATION_LABEL
+                        : formatTicketCurrency(line.lineTotal)}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -89,7 +96,7 @@ export default function PrintTicketScreen() {
             <View style={styles.divider} />
             <View style={styles.ticketRow}>
               <Text style={styles.ticketLabel}>Subtotal</Text>
-              <Text style={styles.ticketValue}>{formatTicketCurrency(ticket.subtotal)}</Text>
+              <Text style={styles.ticketValue}>{ticket.priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatTicketCurrency(ticket.subtotal)}</Text>
             </View>
             <View style={styles.ticketRow}>
               <Text style={styles.ticketLabel}>Kg</Text>
@@ -97,9 +104,9 @@ export default function PrintTicketScreen() {
             </View>
             <View style={styles.ticketRow}>
               <Text style={styles.ticketLabel}>Total</Text>
-              <Text style={styles.ticketTotal}>{formatTicketCurrency(ticket.total)}</Text>
+              <Text style={styles.ticketTotal}>{ticket.priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatTicketCurrency(ticket.total)}</Text>
             </View>
-            {ticket.paymentMethod === 'credit' ? (
+            {ticket.paymentMethod === 'credit' && !ticket.priceConfirmationPending ? (
               <>
                 <View style={styles.divider} />
                 <Text style={styles.creditNote}>{SALE_TICKET_CREDIT_NOTE}</Text>

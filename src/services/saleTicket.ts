@@ -6,6 +6,11 @@ import {
   formatTotalKg,
   normalizeSellerName,
 } from './saleTicketFormatting.ts';
+import type { SalePriceConfirmation } from './salePriceConfirmation.ts';
+import {
+  PENDING_PRICE_CONFIRMATION_LABEL,
+  hasPendingSalePriceConfirmation,
+} from './salePricePresentation.ts';
 
 export { SALE_TICKET_DEFAULT_SELLER } from './saleTicketFormatting.ts';
 
@@ -16,6 +21,7 @@ export interface SaleTicketSourceLine {
   productName: string;
   qty: number;
   price: number;
+  priceConfirmation?: SalePriceConfirmation;
   weight: number;
 }
 
@@ -61,6 +67,7 @@ export interface SaleTicketLine {
   qty: number;
   unitPrice: number;
   lineTotal: number;
+  priceConfirmation?: SalePriceConfirmation;
   weight: number;
 }
 
@@ -76,6 +83,8 @@ export interface SaleTicketSnapshot {
   subtotal: number;
   total: number;
   totalKg: number;
+  /** True until Odoo returns the authoritative order totals. */
+  priceConfirmationPending?: boolean;
 }
 
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
@@ -118,6 +127,7 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
     qty: line.qty,
     unitPrice: line.price,
     lineTotal: line.qty * line.price,
+    ...(line.priceConfirmation ? { priceConfirmation: line.priceConfirmation } : {}),
     weight: line.weight,
   }));
   const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
@@ -135,6 +145,7 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
     subtotal,
     total: subtotal,
     totalKg,
+    priceConfirmationPending: hasPendingSalePriceConfirmation(lines),
   };
 }
 
@@ -225,8 +236,10 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
       <td class="product" colspan="2">
         <div class="name">${escapeHtml(line.productName)}</div>
         <div class="product-detail">
-          <span class="meta">${formatQuantityAndUnitPrice(line.qty, line.unitPrice)}</span>
-          <span class="amount">${formatTicketCurrency(line.lineTotal)}</span>
+          ${line.priceConfirmation === 'pending_confirmation'
+            ? `<span class="meta">${line.qty} pza · ${PENDING_PRICE_CONFIRMATION_LABEL}</span>`
+            : `<span class="meta">${formatQuantityAndUnitPrice(line.qty, line.unitPrice)}</span>
+          <span class="amount">${formatTicketCurrency(line.lineTotal)}</span>`}
         </div>
       </td>
     </tr>
@@ -384,10 +397,10 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
   <div class="divider"></div>
   <table>${rows}</table>
   <div class="divider"></div>
-  <div class="row"><span>Subtotal</span><span>${formatTicketCurrency(snapshot.subtotal)}</span></div>
+  <div class="row"><span>Subtotal</span><span>${snapshot.priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatTicketCurrency(snapshot.subtotal)}</span></div>
   <div class="row"><span>Kg</span><span>${formatTotalKg(snapshot.totalKg)}</span></div>
-  <div class="row total"><span>Total</span><span>${formatTicketCurrency(snapshot.total)}</span></div>
-  ${snapshot.paymentMethod === 'credit' ? `
+  <div class="row total"><span>Total</span><span>${snapshot.priceConfirmationPending ? PENDING_PRICE_CONFIRMATION_LABEL : formatTicketCurrency(snapshot.total)}</span></div>
+  ${snapshot.paymentMethod === 'credit' && !snapshot.priceConfirmationPending ? `
   <div class="divider"></div>
   <div class="credit-note">${escapeHtml(SALE_TICKET_CREDIT_NOTE)}</div>
   ` : ''}

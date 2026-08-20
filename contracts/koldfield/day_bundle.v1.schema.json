@@ -26,7 +26,7 @@
         "mode": {"enum": ["cash_only", "credit_allowed", "blocked"]},
         "allowed_payment_methods": {"type": "array", "maxItems": 8, "items": {"enum": ["cash", "credit"]}},
         "credit_limit": {"type": "number", "minimum": 0},
-        "credit_used": {"type": "number", "minimum": 0},
+        "credit_used": {"type": "number"},
         "credit_available": {"type": "number", "minimum": 0},
         "credit_overdue": {"type": "boolean"},
         "credit_over_limit": {"type": "boolean"},

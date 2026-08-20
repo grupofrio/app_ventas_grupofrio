@@ -12,6 +12,10 @@ import assert from 'node:assert/strict';
 interface RoutePrepLogicModule {
   dedupePartnerIds: (stops: any[]) => number[];
   buildCustomerNameMap: (stops: any[]) => Map<number, string>;
+  describePreparationFailure: (
+    failure: { partnerId: number; customerName?: string; reason: string },
+    stops: Array<{ customer_id?: number | null; customer_name?: string | null }>,
+  ) => { customerName: string; reason: string };
   isPreparationFreshForPlan: (preparedPlanId: number | null, currentPlanId: number | null | undefined) => boolean;
   formatPreparedAt: (ts: number | null) => string;
 }
@@ -64,6 +68,22 @@ function testBuildCustomerNameMapKeepsFirstName(m: RoutePrepLogicModule) {
   assert.equal(map.get(10), 'Tienda A');
   assert.equal(map.get(20), 'Tienda B');
   assert.equal(map.has(30), false);
+}
+
+function testDescribePreparationFailureUsesLiveNameThenRouteThenSafeFallback(m: RoutePrepLogicModule) {
+  const stops = [{ customer_id: 20, customer_name: 'Abarrotes Centro' }];
+  assert.deepEqual(
+    m.describePreparationFailure({ partnerId: 20, customerName: 'Nombre capturado', reason: 'Sin precio' }, stops),
+    { customerName: 'Nombre capturado', reason: 'Sin precio' },
+  );
+  assert.deepEqual(
+    m.describePreparationFailure({ partnerId: 20, reason: 'Tiempo agotado' }, stops),
+    { customerName: 'Abarrotes Centro', reason: 'Tiempo agotado' },
+  );
+  assert.deepEqual(
+    m.describePreparationFailure({ partnerId: 99, reason: 'Sin conexión' }, stops),
+    { customerName: 'Cliente #99', reason: 'Sin conexión' },
+  );
 }
 
 function testFreshnessIsPlanScoped(m: RoutePrepLogicModule) {
@@ -128,6 +148,7 @@ async function main() {
   testDedupeFiltersInvalidIds(logic);
   testDedupePreservesFirstOccurrenceOrder(logic);
   testBuildCustomerNameMapKeepsFirstName(logic);
+  testDescribePreparationFailureUsesLiveNameThenRouteThenSafeFallback(logic);
   testFreshnessIsPlanScoped(logic);
   testFormatPreparedAtPadsTwoDigits(logic);
 

@@ -19,6 +19,7 @@ import { useRoutePreparationStore } from '../../stores/useRoutePreparationStore'
 import { useRouteStore } from '../../stores/useRouteStore';
 import { useSyncStore } from '../../stores/useSyncStore';
 import {
+  describePreparationFailure,
   formatPreparedAt,
   isPreparationFreshForPlan,
 } from '../../services/routePreparationLogic';
@@ -49,6 +50,7 @@ export function RoutePreparationCard({
   const retryFailures = useRoutePreparationStore((s) => s.retryFailures);
 
   const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
+  const routeStops = useRouteStore((s) => s.stops);
   const isOnline = useSyncStore((s) => s.isOnline);
 
   const isFresh = isPreparationFreshForPlan(preparedPlanId, planId);
@@ -131,6 +133,19 @@ export function RoutePreparationCard({
             <Text style={[styles.metric, { color: '#EF4444' }]}>
               Pendientes: {failures.length}
             </Text>
+            <Text style={styles.pendingTitle}>Pendientes de precio</Text>
+            {failures.slice(0, 8).map((failure) => {
+              const pending = describePreparationFailure(failure, routeStops);
+              return (
+                <View key={failure.partnerId} style={styles.pendingItem}>
+                  <Text style={styles.pendingName}>{pending.customerName}</Text>
+                  <Text style={styles.pendingReason} numberOfLines={2}>{pending.reason}</Text>
+                </View>
+              );
+            })}
+            {failures.length > 8 ? (
+              <Text style={styles.pendingMore}>Y {failures.length - 8} más.</Text>
+            ) : null}
             <TouchableOpacity
               style={styles.btn}
               onPress={() => { void retryFailures(); }}
@@ -232,6 +247,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.text,
     marginBottom: 4,
+  },
+  pendingTitle: {
+    fontSize: 12,
+    color: colors.text,
+    fontWeight: '700',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  pendingItem: {
+    borderLeftWidth: 2,
+    borderLeftColor: colors.warning,
+    paddingLeft: 8,
+    marginBottom: 5,
+  },
+  pendingName: {
+    fontSize: 12,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  pendingReason: {
+    fontSize: 11,
+    color: colors.textDim,
+    lineHeight: 15,
+  },
+  pendingMore: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginBottom: 3,
   },
   errorMsg: {
     fontSize: 11,

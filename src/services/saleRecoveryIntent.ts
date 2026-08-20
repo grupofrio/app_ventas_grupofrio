@@ -69,6 +69,9 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
   });
   if (lines.some((line) => line === null)) return null;
 
+  const priceConfirmationPending = value.priceConfirmationPending === true
+    || lines.some((line) => line?.priceConfirmation === 'pending_confirmation');
+
   return {
     saleId: value.saleId,
     odooFolio: normalizeOdooFolio(value.odooFolio),
@@ -81,8 +84,7 @@ function restoreTicketSnapshot(value: unknown, operationId: string): SaleTicketS
     subtotal: value.subtotal,
     total: value.total,
     totalKg: value.totalKg,
-    priceConfirmationPending: value.priceConfirmationPending === true
-      || lines.some((line) => line?.priceConfirmation === 'pending_confirmation'),
+    ...(priceConfirmationPending ? { priceConfirmationPending: true } : {}),
   };
 }
 

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const CONTRACT_ROOT = resolve('contracts/koldfield');
-const EXPECTED_SCHEMA_SHA256 = '394648af216001a44563add00d07417043001e8e10eca2f9bf03085304ba9df9';
+const EXPECTED_SCHEMA_SHA256 = 'eb1ffec1c8e877e8d4509b74172c7a30062602eaa8f95b5682dfcc8e1553fa58';
 
 interface DayBundleLogic {
   evaluateStoredDayBundle: (record: unknown, context: {
@@ -57,6 +57,8 @@ test('day-bundle contract artifact pins the mobile schema and backend-compatible
   assert.equal(fixture.schema_version, 'day_bundle.v1');
   assert.equal(schemaDocument.required.includes('invoice_snapshots'), false);
   assert.equal(schemaDocument.properties.invoice_snapshots.maxItems, 1000);
+  const paymentPolicy = schemaDocument.$defs.payment_policy.properties ?? {};
+  assert.equal('minimum' in (paymentPolicy.credit_used as Record<string, unknown>), false);
   assert.deepEqual(schemaDocument.$defs.invoice_snapshot.required, ['stop_id', 'invoices', 'as_of']);
   assert.deepEqual(schemaDocument.$defs.open_invoice.required, [
     'invoice_id', 'name', 'invoice_date', 'due_date', 'currency', 'amount_residual',
@@ -270,6 +272,99 @@ test('fresh bundle permits route start and operational actions', async () => {
   assert.deepEqual(access, {
     mode: 'fresh', canRead: true, canStartRoute: true, canRunActions: true,
   });
+});
+
+test('negative credit_used keeps the day bundle operational with a local data-quality warning', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+  const base = validRecord().bundle as Record<string, unknown>;
+  const paymentPolicy = {
+    mode: 'credit_allowed',
+    allowed_payment_methods: ['cash', 'credit'],
+    credit_limit: 500,
+    credit_used: -12.5,
+    credit_available: 500,
+    credit_overdue: false,
+    credit_over_limit: false,
+    credit_hold: false,
+    payment_term: null,
+  };
+  const accepted = logic.replaceDayBundleAtomically(validRecord({
+    bundle: {
+      ...base,
+      directory: [{ id: 72, name: 'Cliente afectado', payment_term: null, payment_policy: paymentPolicy }],
+    },
+  }), context) as {
+    bundle: { directory: Array<{ payment_policy: { credit_used: number } }> };
+    data_quality_warnings: unknown[];
+  };
+
+  assert.equal(accepted.bundle.directory[0].payment_policy.credit_used, -12.5);
+  assert.deepEqual(accepted.data_quality_warnings, [{
+    code: 'negative_credit_used',
+    scope: 'directory',
+    entity_id: 72,
+    path: 'directory[0].payment_policy.credit_used',
+  }]);
+  assert.equal(logic.evaluateStoredDayBundle(accepted, context).canRunActions, true);
+});
+
+test('negative credit_used is flagged for stops while malformed values stay invalid and warnings are recomputed', async () => {
+  const logic = await loadLogic();
+  const context = { ...identity, operationalDate: '2026-08-14', nowMs: Date.parse('2026-08-14T12:00:00Z') };
+  const base = validRecord().bundle as Record<string, unknown>;
+  const validPolicy = (creditUsed: unknown) => ({
+    mode: 'credit_allowed',
+    allowed_payment_methods: ['cash', 'credit'],
+    credit_limit: 500,
+    credit_used: creditUsed,
+    credit_available: 500,
+    credit_overdue: false,
+    credit_over_limit: false,
+    credit_hold: false,
+    payment_term: null,
+  });
+  const record = validRecord({
+    bundle: {
+      ...base,
+      stops: [{
+        id: 33,
+        sequence: 1,
+        state: 'pending',
+        kind: 'customer',
+        customer: { id: 72, name: 'Cliente afectado' },
+        payment_term: null,
+        payment_policy: validPolicy(-1),
+      }],
+    },
+  });
+
+  const accepted = logic.replaceDayBundleAtomically(record, context) as {
+    data_quality_warnings: unknown[];
+  };
+  assert.deepEqual(accepted.data_quality_warnings, [{
+    code: 'negative_credit_used',
+    scope: 'stop',
+    entity_id: 33,
+    path: 'stops[0].payment_policy.credit_used',
+  }]);
+  const tampered = { ...accepted, data_quality_warnings: [] };
+  assert.deepEqual(
+    (logic.replaceDayBundleAtomically(tampered, context) as { data_quality_warnings: unknown[] }).data_quality_warnings,
+    accepted.data_quality_warnings,
+  );
+
+  for (const invalidCreditUsed of [undefined, null, ' -1 ', NaN, Infinity]) {
+    assert.throws(
+      () => logic.replaceDayBundleAtomically(validRecord({
+        bundle: {
+          ...base,
+          directory: [{ id: 72, name: 'Cliente afectado', payment_term: null, payment_policy: validPolicy(invalidCreditUsed) }],
+        },
+      }), context),
+      /credit_used/i,
+    );
+  }
 });
 
 test('day-bundle replacement accepts one complete validated version without mixing old sections', async () => {

@@ -25,8 +25,9 @@ The exception is deliberately narrow:
 stops and directory. For each negative `credit_used`, it will create a typed
 local warning containing only a safe bundle path and the customer or stop id.
 The warning will be attached to the validated `StoredDayBundle` record outside
-of the server-owned `bundle` payload, so the server schema stays unchanged and
-the original payload remains auditable.
+of the server-owned `bundle` payload. The shared schema will permit a signed
+numeric `credit_used`; the local warning supplies the quality signal while the
+original payload remains auditable.
 
 The validator will continue to return a fully immutable clone. Cached records
 will recompute the warning from the raw bundle during validation, preventing a

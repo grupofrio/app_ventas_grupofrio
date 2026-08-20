@@ -21,6 +21,14 @@ export interface StoredDayBundle {
   etag: string;
   fetched_at_ms: number;
   bundle: DayBundle;
+  data_quality_warnings: DayBundleDataQualityWarning[];
+}
+
+export interface DayBundleDataQualityWarning {
+  code: 'negative_credit_used';
+  scope: 'stop' | 'directory';
+  entity_id: number;
+  path: string;
 }
 
 export interface DayBundle {
@@ -177,7 +185,30 @@ function paymentTerm(value: unknown, field: string): void {
   text(term.name, `${field}.name`, 256, false);
 }
 
-function paymentPolicy(value: unknown, field: string): void {
+function creditUsed(
+  value: unknown,
+  field: string,
+  warning: Omit<DayBundleDataQualityWarning, 'code' | 'path'>,
+  warnings: DayBundleDataQualityWarning[],
+): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw invalid(`${field} debe ser un número.`);
+  }
+  if (value < 0) {
+    warnings.push({
+      code: 'negative_credit_used',
+      ...warning,
+      path: field,
+    });
+  }
+}
+
+function paymentPolicy(
+  value: unknown,
+  field: string,
+  warning: Omit<DayBundleDataQualityWarning, 'code' | 'path'>,
+  warnings: DayBundleDataQualityWarning[],
+): void {
   if (value === undefined) return;
   const policy = object(value, field);
   allowOnly(policy, [
@@ -202,7 +233,7 @@ function paymentPolicy(value: unknown, field: string): void {
     }
   });
   nonNegativeNumber(policy.credit_limit, `${field}.credit_limit`);
-  nonNegativeNumber(policy.credit_used, `${field}.credit_used`);
+  creditUsed(policy.credit_used, `${field}.credit_used`, warning, warnings);
   nonNegativeNumber(policy.credit_available, `${field}.credit_available`);
   if (typeof policy.credit_overdue !== 'boolean') throw invalid(`${field}.credit_overdue debe ser booleano.`);
   // Older bundles may omit credit_over_limit; default false when absent.
@@ -230,18 +261,18 @@ function reason(value: unknown, field: string): void {
   text(entry.name, `${field}.name`, 256, false);
 }
 
-function validateStops(values: unknown[]): void {
+function validateStops(values: unknown[], warnings: DayBundleDataQualityWarning[]): void {
   values.forEach((value, index) => {
     const field = `stops[${index}]`;
     const entry = object(value, field);
     allowOnly(entry, ['id', 'sequence', 'state', 'kind', 'customer', 'payment_term', 'payment_policy'], field);
-    positiveInteger(entry.id, `${field}.id`);
+    const id = positiveInteger(entry.id, `${field}.id`);
     nonNegativeInteger(entry.sequence, `${field}.sequence`);
     if (!['pending', 'in_progress', 'done'].includes(entry.state as string)) throw invalid(`${field}.state no es válido.`);
     if (!['customer', 'lead'].includes(entry.kind as string)) throw invalid(`${field}.kind no es válido.`);
     customer(entry.customer, `${field}.customer`);
     paymentTerm(entry.payment_term, `${field}.payment_term`);
-    paymentPolicy(entry.payment_policy, `${field}.payment_policy`);
+    paymentPolicy(entry.payment_policy, `${field}.payment_policy`, { scope: 'stop', entity_id: id }, warnings);
   });
 }
 
@@ -266,15 +297,15 @@ function validateCatalog(values: unknown[]): void {
   });
 }
 
-function validateDirectory(values: unknown[]): void {
+function validateDirectory(values: unknown[], warnings: DayBundleDataQualityWarning[]): void {
   values.forEach((value, index) => {
     const field = `directory[${index}]`;
     const entry = object(value, field);
     allowOnly(entry, ['id', 'name', 'payment_term', 'payment_policy', 'zone', 'address', 'latitude', 'longitude'], field);
-    positiveInteger(entry.id, `${field}.id`);
+    const id = positiveInteger(entry.id, `${field}.id`);
     text(entry.name, `${field}.name`, 512, false);
     paymentTerm(entry.payment_term, `${field}.payment_term`);
-    paymentPolicy(entry.payment_policy, `${field}.payment_policy`);
+    paymentPolicy(entry.payment_policy, `${field}.payment_policy`, { scope: 'directory', entity_id: id }, warnings);
     optionalNullableText(entry.zone, `${field}.zone`, 256);
     optionalNullableText(entry.address, `${field}.address`, 512);
     optionalNumberInRange(entry.latitude, `${field}.latitude`, -90, 90);
@@ -308,7 +339,7 @@ function validateInvoiceSnapshots(values: unknown[]): InvoiceSnapshot[] {
   });
 }
 
-function validateBundle(value: unknown): DayBundle {
+function validateBundle(value: unknown, warnings: DayBundleDataQualityWarning[]): DayBundle {
   const data = object(value, 'bundle');
   allowOnly(data, [
     'schema_version', 'operational_date', 'expires_at', 'plan', 'stops', 'catalog', 'directory',
@@ -336,9 +367,9 @@ function validateBundle(value: unknown): DayBundle {
   const invoiceSnapshots = data.invoice_snapshots === undefined
     ? undefined
     : validateInvoiceSnapshots(array(data.invoice_snapshots, 'invoice_snapshots', 1000));
-  validateStops(stops);
+  validateStops(stops, warnings);
   validateCatalog(catalog);
-  validateDirectory(directory);
+  validateDirectory(directory, warnings);
   noSaleReasons.forEach((entry, index) => reason(entry, `no_sale_reasons[${index}]`));
   giftReasons.forEach((entry, index) => reason(entry, `gift_reasons[${index}]`));
   competitors.forEach((entry, index) => reason(entry, `competitors[${index}]`));
@@ -381,7 +412,8 @@ function validateRecord(
   if (typeof record.fetched_at_ms !== 'number' || !Number.isSafeInteger(record.fetched_at_ms) || record.fetched_at_ms <= 0) {
     throw invalid('fetched_at_ms no es válido.');
   }
-  const bundle = validateBundle(record.bundle);
+  const dataQualityWarnings: DayBundleDataQualityWarning[] = [];
+  const bundle = validateBundle(record.bundle, dataQualityWarnings);
   if (bundle.plan.date !== bundle.operational_date) {
     throw invalid('la fecha operativa del plan no corresponde al bundle.');
   }
@@ -395,6 +427,7 @@ function validateRecord(
     etag: record.etag,
     fetched_at_ms: record.fetched_at_ms,
     bundle,
+    data_quality_warnings: dataQualityWarnings,
   };
 }
 

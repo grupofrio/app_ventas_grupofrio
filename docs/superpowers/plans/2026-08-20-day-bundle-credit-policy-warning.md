@@ -4,7 +4,7 @@
 
 **Goal:** Keep a valid Kold Field day bundle operational when a finite negative `payment_policy.credit_used` is received, while preserving a typed local warning.
 
-**Architecture:** The strict structural validator remains the only entry point for the encrypted day-bundle record. It will collect an internal `data_quality_warnings` array while traversing stops and directory entries. Only the negative finite `credit_used` case is tolerated; raw server values remain unchanged and all other malformed values still reject atomically.
+**Architecture:** The strict structural validator remains the only entry point for the encrypted day-bundle record. It will collect an internal `data_quality_warnings` array while traversing stops and directory entries. Only the negative finite `credit_used` case is tolerated; raw server values remain unchanged and all other malformed values still reject atomically. The shared schema will permit signed numeric credit usage so the artifact and runtime policy remain aligned.
 
 **Tech Stack:** TypeScript, Node built-in test runner, Expo/React Native encrypted field-data persistence.
 
@@ -70,6 +70,7 @@ Expected: PASS for the added scenario.
 **Files:**
 - Modify: `tests/employeeDayBundleLogic.test.ts`
 - Modify: `src/services/employeeDayBundleLogic.ts:180-277`
+- Modify: `contracts/koldfield/day_bundle.v1.schema.json`
 
 - [ ] **Step 1: Write failing tests for stop warnings and malformed values**
 
@@ -107,7 +108,13 @@ Do not trust `data_quality_warnings` supplied by a stored record. Ignore any
 input metadata and return warnings rebuilt from `bundle` each time
 `validateRecord()` runs.
 
-- [ ] **Step 5: Run the focused test to verify it passes**
+- [ ] **Step 5: Align the contract artifact**
+
+Remove only the `minimum: 0` constraint from `payment_policy.credit_used`,
+update its pinned SHA assertion, and retain the minimum constraints for
+`credit_limit` and `credit_available`.
+
+- [ ] **Step 6: Run the focused test to verify it passes**
 
 Run: `node --test --experimental-strip-types tests/employeeDayBundleLogic.test.ts`
 

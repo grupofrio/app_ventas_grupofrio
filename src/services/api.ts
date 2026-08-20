@@ -34,12 +34,12 @@ export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio-gf
 export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
 /**
  * Perf Fase 1B: timeout corto para LECTURAS (getRest). En red muerta, una
- * lectura cacheable no debe colgar 45s — falla rápido (10s) y el llamador usa
+ * lectura cacheable no debe colgar 45s — falla rápido (30s) y el llamador usa
  * caché/fallback. Las mutaciones REST (venta, pago, cierre)
  * conservan el timeout conservador de 45s. No oculta errores: el timeout sigue
  * lanzando y el llamador lo maneja.
  */
-export const DEFAULT_READ_TIMEOUT_MS = 10_000;
+export const DEFAULT_READ_TIMEOUT_MS = 30_000;
 /**
  * Timeout para handshakes de autenticacion (login, /web/session/authenticate).
  * Antes corrian con fetch SIN timeout: en red degradada el login colgaba

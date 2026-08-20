@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 /**
  * Wiring PR-2 — estado vacío/error de ruta CEDIS:
- *  #1 plan/stops usan timeout de LECTURA (10s), no el de mutación (45s);
+ *  #1 plan/stops usan timeout de LECTURA (30s), no el de mutación (45s);
  *  #2 getPlanStopsResult devuelve estado discriminado (no [] silencioso);
  *  #3 loadPlan guarda loadOutcome estructurado (no_plan vs error clasificado);
  *  #4 route-start diferencia copy + ofrece Reintentar;

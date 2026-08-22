@@ -28,7 +28,44 @@ Run: `node --test tests/saleConfirmFeedback.test.mjs tests/visitState.test.ts`
 
 Expected: PASS before edits.
 
-### Task 1: Derive and expose mobile sale payment presentation
+### Task 1: Make the Bearer sales endpoint the payment authority
+
+**Files:**
+- Modify: `gf_logistics_ops/services/koldfield_bundle.py`
+- Modify: `gf_logistics_ops/controllers/gf_api.py`
+- Modify or create: `gf_logistics_ops/models/sale_order.py`
+- Test: `gf_logistics_ops/tests/test_koldfield_payment_policy.py`
+- Test: `gf_logistics_ops/tests/test_employee_api_authorization_matrix.py`
+
+- [ ] **Step 1: Write failing backend tests**
+
+Create a scoped-stop Bearer sale test for each policy mode. Assert the server derives `cash`, `credit`, and `credit + review marker` respectively, with no caller method dependency. Add a rollout test proving legacy `payment_method`, aliases, and `create_invoice` are ignored: they neither alter the derived value nor block an old app from selling.
+
+- [ ] **Step 2: Execute red test**
+
+Run the smallest existing Odoo test command for the new test class. If local Odoo runtime is unavailable, run source-contract coverage and record the runtime test for CI; do not claim it passed locally.
+
+Expected: FAIL because `_handle_sales_create` currently reads `_payload_sale_payment_method()` and `create_invoice` from the client.
+
+- [ ] **Step 3: Extract a canonical server policy resolver**
+
+Move the partner mode mapping into a shared, server-only resolver used by both the day-bundle serializer and sale creation. Do not infer from payment-term names. Return the derived method and a review reason for `blocked`/unknown configuration.
+
+- [ ] **Step 4: Remove client payment authority**
+
+After scoped partner/stop resolution, use only the shared resolver. Ignore (do not interpret) mobile `payment_method` and `create_invoice` in the Kold Field route during the compatibility window. Add an explicit persisted review field/reason only if the target `sale.order` model provides a stable namespaced field; never overload user-entered notes.
+
+- [ ] **Step 5: Run backend focused tests green**
+
+Run the same command as Step 2 plus the employee authorization matrix.
+
+Expected: PASS; a replay with the same UUID returns its stored sale/result without recalculating a conflicting client-supplied method.
+
+- [ ] **Step 6: Commit the backend authority change**
+
+Run: `git status --short && git add gf_logistics_ops/services/koldfield_bundle.py gf_logistics_ops/controllers/gf_api.py gf_logistics_ops/models/sale_order.py gf_logistics_ops/tests/test_koldfield_payment_policy.py gf_logistics_ops/tests/test_employee_api_authorization_matrix.py && git commit -m "fix(sale): derive Kold payment from customer policy"`
+
+### Task 2: Derive and expose mobile sale payment presentation
 
 **Files:**
 - Create: `src/services/koldfieldSalePaymentPolicy.ts`
@@ -82,43 +119,6 @@ Expected: PASS.
 - [ ] **Step 9: Commit the mobile-only presentation change**
 
 Run: `git status --short && git add app/sale/[stopId].tsx src/stores/useVisitStore.ts src/services/visitState.ts src/services/koldfieldSalePaymentPolicy.ts tests/koldfieldSalePaymentPolicy.test.ts tests/saleConfirmFeedback.test.mjs tests/visitState.test.ts && git commit -m "refactor(sale): derive payment display from customer policy"`
-
-### Task 2: Make the Bearer sales endpoint the payment authority
-
-**Files:**
-- Modify: `gf_logistics_ops/services/koldfield_bundle.py`
-- Modify: `gf_logistics_ops/controllers/gf_api.py`
-- Modify or create: `gf_logistics_ops/models/sale_order.py`
-- Test: `gf_logistics_ops/tests/test_koldfield_payment_policy.py`
-- Test: `gf_logistics_ops/tests/test_employee_api_authorization_matrix.py`
-
-- [ ] **Step 1: Write failing backend tests**
-
-Create a scoped-stop Bearer sale test for each policy mode. Assert the server derives `cash`, `credit`, and `credit + review marker` respectively, with no caller method dependency. Add a negative test proving `payment_method`, all aliases, and `create_invoice` in a Kold Field sales payload produce a deterministic 422 before side effects.
-
-- [ ] **Step 2: Execute red test**
-
-Run the smallest existing Odoo test command for the new test class. If local Odoo runtime is unavailable, run source-contract coverage and record the runtime test for CI; do not claim it passed locally.
-
-Expected: FAIL because `_handle_sales_create` currently reads `_payload_sale_payment_method()` and `create_invoice` from the client.
-
-- [ ] **Step 3: Extract a canonical server policy resolver**
-
-Move the partner mode mapping into a shared, server-only resolver used by both the day-bundle serializer and sale creation. Do not infer from payment-term names. Return the derived method and a review reason for `blocked`/unknown configuration.
-
-- [ ] **Step 4: Remove client payment authority**
-
-After scoped partner/stop resolution, use only the shared resolver. Remove mobile `payment_method` and `create_invoice` interpretation from the Kold Field route. Add an explicit persisted review field/reason only if the target `sale.order` model provides a stable namespaced field; never overload user-entered notes.
-
-- [ ] **Step 5: Run backend focused tests green**
-
-Run the same command as Step 2 plus the employee authorization matrix.
-
-Expected: PASS; a replay with the same UUID returns its stored sale/result without recalculating a conflicting client-supplied method.
-
-- [ ] **Step 6: Commit the backend authority change**
-
-Run: `git status --short && git add gf_logistics_ops/services/koldfield_bundle.py gf_logistics_ops/controllers/gf_api.py gf_logistics_ops/models/sale_order.py gf_logistics_ops/tests/test_koldfield_payment_policy.py gf_logistics_ops/tests/test_employee_api_authorization_matrix.py && git commit -m "fix(sale): derive Kold payment from customer policy"`
 
 ### Task 3: Integrate authoritative results into mobile receipts and recovery
 

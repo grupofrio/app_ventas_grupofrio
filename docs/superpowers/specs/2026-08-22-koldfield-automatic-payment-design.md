@@ -27,7 +27,7 @@ Una métrica de crédito anómala, por ejemplo `credit_used < 0`, es una adverte
 2. La cola offline congela líneas, parada y `operation_id`, pero no transmite método de pago ni `create_invoice` como decisión móvil.
 3. Al sincronizar, el endpoint Bearer resuelve employee, compañía, plan, parada y partner; calcula de nuevo la política canónica en el servidor.
 4. El backend persiste `payment_method` y la marca de revisión derivadas. El resultado del servidor es la autoridad para ticket, lista y liquidación.
-5. Un cliente antiguo que aún envíe aliases de método o `create_invoice` no puede cambiar el resultado: el endpoint los rechaza con un error de contrato determinista.
+5. Durante el despliegue, una versión antigua que aún envíe aliases de método o `create_invoice` no puede cambiar el resultado: el endpoint los ignora y calcula el resultado canónico. Cuando la app nueva esté distribuida se podrá auditar la ausencia de esos campos sin bloquear ventas.
 
 ## Límites
 

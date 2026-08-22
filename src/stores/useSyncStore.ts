@@ -122,7 +122,7 @@ import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
-import { promoteStoredSaleTicketOdooFolio } from '../services/saleTicketStorage';
+import { promoteStoredSaleTicketServerResult } from '../services/saleTicketStorage';
 import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
 
 // ═══ Constants ═══
@@ -1385,7 +1385,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         buildSalesCreatePayload(payload as Record<string, unknown>),
         meta,
       );
-      const promotion = await promoteStoredSaleTicketOdooFolio(item.id, saleResult.name);
+      const promotion = await promoteStoredSaleTicketServerResult(item.id, saleResult);
       if (promotion === 'missing') {
         logWarn('sync', 'sale_ticket_odoo_folio_missing', {
           operation_id: item.id,

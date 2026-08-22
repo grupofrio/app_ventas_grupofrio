@@ -220,6 +220,64 @@ test('promotes an existing stored ticket to an official Odoo folio', async () =>
   );
 });
 
+test('promotes an offline ticket with the server-derived payment decision', async () => {
+  const values = new Map<string, unknown>([
+    ['sale-ticket:sale-payment-promote', snapshot({
+      saleId: 'sale-payment-promote',
+      paymentMethod: 'cash',
+      paymentLabel: 'Contado · revisar',
+    })],
+  ]);
+  const adapter: SaleTicketStorageAdapter = {
+    async load<T>(key: string): Promise<T | null> {
+      return (values.get(key) ?? null) as T | null;
+    },
+    async save<T>(key: string, value: T): Promise<void> {
+      values.set(key, value);
+    },
+  };
+
+  assert.equal(
+    await saleTicketStorage.promoteStoredSaleTicketServerResult(
+      'sale-payment-promote',
+      { name: 'S00043', payment_method: 'credit', payment_review_required: true },
+      adapter,
+    ),
+    'updated',
+  );
+  const stored = values.get('sale-ticket:sale-payment-promote') as SaleTicketSnapshot;
+  assert.equal(stored.odooFolio, 'S00043');
+  assert.equal(stored.paymentMethod, 'credit');
+  assert.equal(stored.paymentLabel, 'Crédito · revisar');
+});
+
+test('server payment promotion never erases an already stored official folio', async () => {
+  const values = new Map<string, unknown>([
+    ['sale-ticket:sale-preserve-folio', snapshot({
+      saleId: 'sale-preserve-folio',
+      odooFolio: 'S00044',
+      paymentMethod: 'cash',
+    })],
+  ]);
+  const adapter: SaleTicketStorageAdapter = {
+    async load<T>(key: string): Promise<T | null> {
+      return (values.get(key) ?? null) as T | null;
+    },
+    async save<T>(key: string, value: T): Promise<void> {
+      values.set(key, value);
+    },
+  };
+
+  await saleTicketStorage.promoteStoredSaleTicketServerResult(
+    'sale-preserve-folio',
+    { name: ' ', payment_method: 'credit', payment_review_required: false },
+    adapter,
+  );
+  const stored = values.get('sale-ticket:sale-preserve-folio') as SaleTicketSnapshot;
+  assert.equal(stored.odooFolio, 'S00044');
+  assert.equal(stored.paymentMethod, 'credit');
+});
+
 test('promotion reports missing only after a successful strict read finds no ticket', async () => {
   let saveCalled = false;
   const adapter: SaleTicketStorageAdapter = {

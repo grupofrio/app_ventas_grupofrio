@@ -6,6 +6,7 @@ import {
 import {
   getSaleTicketStorageKey,
   normalizeOdooFolio,
+  withSaleTicketServerPayment,
   type SaleTicketSnapshot,
 } from './saleTicket.ts';
 import { normalizeSellerName } from './saleTicketFormatting.ts';
@@ -97,16 +98,39 @@ export async function promoteStoredSaleTicketOdooFolio(
   odooFolio: string,
   storage: SaleTicketStorageAdapter = defaultStrictStorageAdapter,
 ): Promise<'updated' | 'missing'> {
+  return promoteStoredSaleTicketServerResult(saleId, { name: odooFolio }, storage);
+}
+
+/**
+ * Promotes an offline ticket only after the server has confirmed its stable
+ * operation ID. The payment policy is persisted by the server, not inferred
+ * again from the queued request.
+ */
+export async function promoteStoredSaleTicketServerResult(
+  saleId: string,
+  result: {
+    name: unknown;
+    payment_method?: unknown;
+    payment_review_required?: unknown;
+  },
+  storage: SaleTicketStorageAdapter = defaultStrictStorageAdapter,
+): Promise<'updated' | 'missing'> {
   return serializeCriticalSaleTicketOperation(saleId, async () => {
     const key = getSaleTicketStorageKey(saleId);
     const current = await storage.load<StoredSaleTicketSnapshot>(key);
     if (current === null) return 'missing';
 
     const normalizedCurrent = normalizeStoredSaleTicketSnapshot(current);
-    const promoted = mergeStoredSaleTicketSnapshot(current, {
-      ...normalizedCurrent,
-      odooFolio: normalizeOdooFolio(odooFolio),
-    });
+    const promoted = withSaleTicketServerPayment(
+      {
+        ...normalizedCurrent,
+        odooFolio: normalizeOdooFolio(result.name) ?? normalizedCurrent.odooFolio,
+      },
+      {
+        paymentMethod: result.payment_method,
+        reviewRequired: result.payment_review_required,
+      },
+    );
     await storage.save(key, promoted);
     return 'updated';
   });

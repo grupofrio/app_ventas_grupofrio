@@ -9,7 +9,7 @@ const source = readFileSync(
 
 assert.match(
   source,
-  /import\s*\{\s*promoteStoredSaleTicketOdooFolio\s*\}\s*from\s*['"]\.\.\/services\/saleTicketStorage['"]/,
+  /import\s*\{\s*promoteStoredSaleTicketServerResult\s*\}\s*from\s*['"]\.\.\/services\/saleTicketStorage['"]/,
   'la cola debe importar la promoción estricta del ticket almacenado',
 );
 
@@ -23,7 +23,7 @@ const createIndex = saleCase.indexOf(
   'const saleResult = await createSale(',
 );
 const promotionIndex = saleCase.indexOf(
-  'const promotion = await promoteStoredSaleTicketOdooFolio(item.id, saleResult.name);',
+  'const promotion = await promoteStoredSaleTicketServerResult(item.id, saleResult);',
 );
 assert(
   createIndex >= 0 && promotionIndex > createIndex,

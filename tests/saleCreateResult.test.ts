@@ -60,6 +60,30 @@ test('trims the authoritative sale name while preserving all response data field
   assert.deepEqual(validated, { ...data, name: 'S00042' });
 });
 
+test('accepts only the server payment decision expected for a Kold Field sale', () => {
+  const data = {
+    success: true as const,
+    order_id: 81,
+    name: 'S00042',
+    operation_id: 'sale-op-1',
+    payment_method: 'credit',
+    payment_review_required: true,
+    payment_review_reason: 'credit_hold',
+  };
+  const validated = validateSaleCreateResult({ ok: true, data }, 'sale-op-1');
+  assert.equal(validated.payment_method, 'credit');
+  assert.equal(validated.payment_review_required, true);
+  assert.equal(validated.payment_review_reason, 'credit_hold');
+
+  assert.throws(
+    () => validateSaleCreateResult({
+      ok: true,
+      data: { ...data, payment_method: 'transfer' },
+    }, 'sale-op-1'),
+    /Respuesta inválida al confirmar la venta/,
+  );
+});
+
 test('sanitizes exceptions thrown while inspecting the response envelope', () => {
   const result = new Proxy({}, {
     get(_target, property) {

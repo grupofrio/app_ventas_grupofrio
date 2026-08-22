@@ -8,6 +8,7 @@ import {
   getSaleTicketFolioPresentation,
   getSaleTicketStorageKey,
   mergeSaleTicketFromOrder,
+  withSaleTicketServerPayment,
   withSaleTicketOdooFolio,
 } from '../src/services/saleTicket.ts';
 import { formatTicketDate } from '../src/services/saleTicketFormatting.ts';
@@ -129,6 +130,29 @@ test('withSaleTicketOdooFolio leaves a pending snapshot unchanged for a blank fo
   });
 
   assert.strictEqual(withSaleTicketOdooFolio(pending, '   '), pending);
+});
+
+test('withSaleTicketServerPayment replaces provisional policy display with the server decision', () => {
+  const provisional = buildSaleTicketSnapshot({
+    saleId: 'mobile-op-payment',
+    customerName: 'Abarrotes Centro',
+    paymentMethod: 'cash',
+    paymentLabel: 'Contado · revisar',
+    createdAt: '2026-05-28T18:30:00.000Z',
+    lines: [],
+  });
+
+  assert.deepEqual(
+    withSaleTicketServerPayment(provisional, {
+      paymentMethod: 'credit',
+      reviewRequired: true,
+    }),
+    {
+      ...provisional,
+      paymentMethod: 'credit',
+      paymentLabel: 'Crédito · revisar',
+    },
+  );
 });
 
 test('buildSaleTicketHtml creates escaped 58mm receipt markup', () => {

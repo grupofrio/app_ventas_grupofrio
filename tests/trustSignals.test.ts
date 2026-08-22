@@ -16,7 +16,7 @@ interface Mod {
     accuracyMeters?: number | null; withinThresholdMeters?: number; lowAccuracyMeters?: number;
   }) => { tone: string; label: string; withinRange: boolean; distanceKnown: boolean; distanceMeters: number | null };
   describeSaleConfirmBlock: (i: {
-    hasLines: boolean; photoTaken: boolean; paymentSelected: boolean;
+    hasLines: boolean; photoTaken: boolean;
     hasPlaza: boolean; hasWarehouse: boolean; routeLoadAccepted: boolean;
   }) => string | null;
   describeRetryBlock: (i: { isOnline: boolean; pendingCount: number; isSyncing: boolean }) => string | null;
@@ -116,24 +116,24 @@ function testGeoNoFictitiousDistance(m: Mod) {
 function testDisabledReasons(m: Mod) {
   // Sin líneas → null (no se muestra hint).
   assert.equal(m.describeSaleConfirmBlock({
-    hasLines: false, photoTaken: true, paymentSelected: true,
+    hasLines: false, photoTaken: true,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }), null);
   // Todo OK → null.
   assert.equal(m.describeSaleConfirmBlock({
-    hasLines: true, photoTaken: true, paymentSelected: true,
+    hasLines: true, photoTaken: true,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }), null);
   // Stock referencial (2026-08-06): exceder la referencia ya NO bloquea
-  // confirmar; el orden de prioridad arranca en foto → pago.
+  // confirmar; el orden de prioridad arranca en foto, sin selector de pago.
   assert.match(m.describeSaleConfirmBlock({
-    hasLines: true, photoTaken: false, paymentSelected: false,
+    hasLines: true, photoTaken: false,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
   }) ?? '', /foto/i);
-  assert.match(m.describeSaleConfirmBlock({
-    hasLines: true, photoTaken: true, paymentSelected: false,
+  assert.equal(m.describeSaleConfirmBlock({
+    hasLines: true, photoTaken: true,
     hasPlaza: true, hasWarehouse: true, routeLoadAccepted: true,
-  }) ?? '', /pago/i);
+  }), null);
 
   // Retry.
   assert.match(m.describeRetryBlock({ isOnline: true, pendingCount: 1, isSyncing: true }) ?? '', /sincronizando/i);

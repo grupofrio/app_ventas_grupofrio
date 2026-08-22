@@ -110,6 +110,23 @@ export function withSaleTicketOdooFolio(
   return odooFolio === null ? snapshot : { ...snapshot, odooFolio };
 }
 
+/** Apply only an explicit server-side payment decision to a local ticket. */
+export function withSaleTicketServerPayment(
+  snapshot: SaleTicketSnapshot,
+  input: { paymentMethod: unknown; reviewRequired: unknown },
+): SaleTicketSnapshot {
+  if (input.paymentMethod !== 'cash' && input.paymentMethod !== 'credit') return snapshot;
+  const reviewRequired = input.reviewRequired === true;
+  const paymentLabel = input.paymentMethod === 'credit'
+    ? (reviewRequired ? 'Crédito · revisar' : 'Crédito')
+    : (reviewRequired ? 'Contado · revisar' : 'Efectivo');
+  return {
+    ...snapshot,
+    paymentMethod: input.paymentMethod,
+    paymentLabel,
+  };
+}
+
 export function getSaleTicketFolioPresentation(snapshot: SaleTicketSnapshot): {
   odooFolio: string;
   localReference: string | null;

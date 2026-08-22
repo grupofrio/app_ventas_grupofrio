@@ -39,7 +39,7 @@ function main() {
     /React\.useRef[^\n]*SaleConfirmationSingleFlight|React\.useRef<[^>]*SaleConfirmationSingleFlight/,
     'La pantalla debe conservar una sola instancia single-flight por montaje',
   );
-  const validationIndex = saleScreen.indexOf('if (!confirmedPaymentMethod) return;');
+  const validationIndex = saleScreen.indexOf('if (!stop) return;');
   const freshConfirmedIndex = saleScreen.indexOf('useVisitStore.getState().saleConfirmed', validationIndex);
   const acquireIndex = saleScreen.indexOf('saleConfirmationSingleFlight.tryAcquire()', validationIndex);
   const submittingIndex = saleScreen.indexOf('setSaleSubmitting(true)', validationIndex);
@@ -101,19 +101,24 @@ function main() {
     /defaultPaymentJournalId|hasCashPaymentJournal|diario de efectivo del CEDIS|Configura el diario de efectivo/,
     'La venta en efectivo no debe bloquearse si el login no incluyo default_payment_journal_id; backend resuelve el diario del empleado',
   );
-  assert.match(
+  assert.doesNotMatch(
     saleScreen,
-    /payment_method:\s*salePaymentMethod/,
-    'La venta debe enviar al backend el metodo seleccionado para que efectivo cree pago atomico',
+    /salePaymentMethod|setSalePayment|payment_method:|create_invoice:/,
+    'La venta no conserva selector ni transmite decisiones de cobro al backend',
   );
   assert.match(
     saleScreen,
-    /create_invoice:\s*salePaymentMethod === 'cash'/,
-    'Una venta en efectivo debe pedir al backend generar el account.move',
+    /salePaymentPresentationFromDayBundle\(/,
+    'La pantalla solo presenta la política ya incluida en el bundle validado',
+  );
+  assert.match(
+    saleScreen,
+    /paymentPresentation\.label/,
+    'La política se muestra como una etiqueta de solo lectura',
   );
   assert.doesNotMatch(
     saleScreen,
-    /salePaymentMethod === 'cash'[\s\S]*?enqueue\('payment'/,
+    /paymentPresentation\.method === 'cash'[\s\S]*?enqueue\('payment'/,
     'El efectivo no debe depender de un segundo item de sync; el backend crea el pago con la venta',
   );
 

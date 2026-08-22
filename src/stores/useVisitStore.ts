@@ -59,7 +59,6 @@ interface VisitState {
 
   // Sale data
   saleLines: SaleLineItem[];
-  salePaymentMethod: 'cash' | 'credit' | null;
   analyticPlazaId: number | null;
   analyticUnId: number | null;
   salePhotoTaken: boolean;
@@ -85,7 +84,6 @@ interface VisitState {
   addSaleLine: (line: SaleLineItem) => void;
   updateSaleQty: (productId: number, qty: number) => void;
   removeSaleLine: (productId: number) => void;
-  setSalePayment: (method: 'cash' | 'credit') => void;
   setSaleAnalyticPlaza: (analyticPlazaId: number | null) => void;
   setSaleAnalyticUn: (analyticUnId: number | null) => void;
   setSalePhoto: (uri: string) => void;
@@ -216,7 +214,6 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     saleLines: get().saleLines.filter((l) => l.productId !== productId),
   }),
 
-  setSalePayment: (method) => set({ salePaymentMethod: method }),
   setSaleAnalyticPlaza: (analyticPlazaId) => set({ analyticPlazaId }),
   setSaleAnalyticUn: (analyticUnId) => set({ analyticUnId }),
   setSalePhoto: (uri) => set((state) => ({

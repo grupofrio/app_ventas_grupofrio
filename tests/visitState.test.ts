@@ -25,7 +25,6 @@ interface VisitStateModule {
     checkInLon: number;
     elapsedSeconds: number;
     saleLines: [];
-    salePaymentMethod: null;
     analyticPlazaId: null;
     analyticUnId: null;
     salePhotoTaken: false;
@@ -77,7 +76,6 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.equal(started.offrouteVisitId, 12345);
   assert.equal(started.elapsedSeconds, 0);
   assert.deepEqual(started.saleLines, []);
-  assert.equal(started.salePaymentMethod, null);
   assert.equal(started.analyticPlazaId, null);
   assert.equal(started.analyticUnId, null);
   assert.equal(started.salePhotoTaken, false);

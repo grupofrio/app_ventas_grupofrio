@@ -4,6 +4,10 @@ export interface SaleCreateResultData {
   name: string;
   operation_id: string;
   duplicate?: boolean;
+  /** Present only on servers that derive Kold Field payment policy. */
+  payment_method?: 'cash' | 'credit';
+  payment_review_required?: boolean;
+  payment_review_reason?: string | false;
   [key: string]: unknown;
 }
 
@@ -46,6 +50,16 @@ export function validateSaleCreateResult(
       || data.operation_id.trim().length === 0
       || data.operation_id !== expectedOperationId
       || (data.duplicate !== undefined && typeof data.duplicate !== 'boolean')
+      || (data.payment_method !== undefined
+        && data.payment_method !== 'cash'
+        && data.payment_method !== 'credit')
+      || (data.payment_review_required !== undefined
+        && typeof data.payment_review_required !== 'boolean')
+      || (data.payment_review_reason !== undefined
+        && data.payment_review_reason !== false
+        && (typeof data.payment_review_reason !== 'string' || !data.payment_review_reason.trim()))
+      || ((data.payment_review_required !== undefined || data.payment_review_reason !== undefined)
+        && data.payment_method === undefined)
     ) {
       throw invalidSaleCreateResponse();
     }

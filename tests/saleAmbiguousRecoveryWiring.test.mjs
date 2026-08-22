@@ -109,7 +109,7 @@ const resultCaptureIndex = createPhase.tryBody.indexOf(
   'const saleResult = await createSale(buildSalesCreatePayload(payload));',
 );
 const confirmedSnapshotIndex = createPhase.tryBody.indexOf(
-  'confirmedTicketSnapshot = withSaleTicketOdooFolio(',
+  'confirmedTicketSnapshot = withSaleTicketServerPayment(',
 );
 assert(
   resultCaptureIndex >= 0 && confirmedSnapshotIndex > resultCaptureIndex,
@@ -117,7 +117,7 @@ assert(
 );
 assert.match(
   createPhase.tryBody,
-  /confirmedTicketSnapshot = withSaleTicketOdooFolio\(\s*recoveryIntent\.ticketSnapshot,\s*saleResult\.name,?\s*\)/,
+  /confirmedTicketSnapshot = withSaleTicketServerPayment\([\s\S]*?withSaleTicketOdooFolio\(recoveryIntent\.ticketSnapshot, saleResult\.name\)[\s\S]*?paymentMethod: saleResult\.payment_method,[\s\S]*?reviewRequired: saleResult\.payment_review_required/,
 );
 assert.doesNotMatch(
   sale,

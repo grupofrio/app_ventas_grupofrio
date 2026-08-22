@@ -174,8 +174,8 @@ assert(/_ledgerApplied:\s*true/.test(sale),
 // El snapshot del ticket online se guarda DESPUÉS de que Odoo acepta.
 assert.match(
   sale,
-  /const saleResult = await createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?confirmedTicketSnapshot = withSaleTicketOdooFolio\(\s*recoveryIntent\.ticketSnapshot,\s*saleResult\.name,?\s*\)[\s\S]*?saveSaleTicketSnapshot\(confirmedTicketSnapshot\)/,
-  'online: captura el resultado validado, promueve el folio y guarda el ticket oficial',
+  /const saleResult = await createSale\(buildSalesCreatePayload\(payload\)\)[\s\S]*?confirmedTicketSnapshot = withSaleTicketServerPayment\([\s\S]*?withSaleTicketOdooFolio\(recoveryIntent\.ticketSnapshot, saleResult\.name\)[\s\S]*?paymentMethod: saleResult\.payment_method,[\s\S]*?reviewRequired: saleResult\.payment_review_required,[\s\S]*?\)[\s\S]*?saveSaleTicketSnapshot\(confirmedTicketSnapshot\)/,
+  'online: captura el resultado validado, promueve folio y pago autoritativos y guarda el ticket oficial',
 );
 assert.doesNotMatch(
   sale,

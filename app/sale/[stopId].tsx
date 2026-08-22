@@ -22,6 +22,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
+import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
@@ -55,6 +56,7 @@ import { applySaleStockViaLedger, buildSaleLedgerMovements, commitQueuedOperatio
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
 import {
   buildSaleTicketSnapshot,
+  withSaleTicketServerPayment,
   withSaleTicketOdooFolio,
 } from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
@@ -76,6 +78,7 @@ import {
   PENDING_PRICE_CONFIRMATION_LABEL,
   hasPendingSalePriceConfirmation,
 } from '../../src/services/salePricePresentation';
+import { salePaymentPresentationFromDayBundle } from '../../src/services/koldfieldSalePaymentPolicy';
 
 function SaleScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -104,17 +107,16 @@ function SaleScreenInner() {
   // (elapsedSeconds), aunque la venta NO lo muestra. Con selectors deja de
   // re-renderizar por el timer.
   const saleLines = useVisitStore((s) => s.saleLines);
-  const salePaymentMethod = useVisitStore((s) => s.salePaymentMethod);
   const salePhotoTaken = useVisitStore((s) => s.salePhotoTaken);
   const salePhotoUris = useVisitStore((s) => s.salePhotoUris);
   const updateSaleQty = useVisitStore((s) => s.updateSaleQty);
-  const setSalePayment = useVisitStore((s) => s.setSalePayment);
   const saleSubtotal = useVisitStore((s) => s.saleSubtotal);
   const saleTax = useVisitStore((s) => s.saleTax);
   const saleTotal = useVisitStore((s) => s.saleTotal);
   const saleTotalKg = useVisitStore((s) => s.saleTotalKg);
   const resetVisit = useVisitStore((s) => s.resetVisit);
   const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
+  const dayBundleRecord = useEmployeeDayBundleStore((s) => s.record);
 
   const isOnline = useSyncStore((s) => s.isOnline);
   const enqueue = useSyncStore((s) => s.enqueue);
@@ -194,10 +196,16 @@ function SaleScreenInner() {
   const hasWarehouse = typeof warehouseId === 'number' && warehouseId > 0;
   const routeLoadState = buildRouteLoadAcceptanceState(plan);
   const canStartSale = canStartSaleWithRouteLoad(plan);
-  const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
+  const salePartnerId = stop ? getLeadPartnerId(stop) ?? stop.customer_id : 0;
+  const paymentPresentation = salePaymentPresentationFromDayBundle({
+    stopId: stop?.id ?? 0,
+    customerId: salePartnerId,
+    stops: dayBundleRecord?.bundle.stops ?? [],
+    directory: dayBundleRecord?.bundle.directory ?? [],
+  });
+  const canConfirm = saleLines.length > 0 && salePhotoTaken
                      && hasAnalyticSelection && hasWarehouse
                      && canStartSale && !saleConfirmed;
-  const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
   // Aviso offline + estado del pedido. Con pedido offline pendiente (S1), el
   // pedido se encola como sale_order y su estado se rastrea por saleOperationId.
   const saleOffline = describeSaleOfflineUx(isOnline);
@@ -333,7 +341,6 @@ function SaleScreenInner() {
       const missing = [];
       if (saleLines.length === 0) missing.push('productos');
       if (!salePhotoTaken) missing.push('foto del congelador');
-      if (!salePaymentMethod) missing.push('metodo de pago');
       if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       if (!hasWarehouse) missing.push('almacén del empleado');
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
@@ -345,8 +352,7 @@ function SaleScreenInner() {
       Alert.alert('Prospecto no vendible', 'Primero completa Datos para crear o enlazar el contacto del prospecto.');
       return;
     }
-    const confirmedPaymentMethod = salePaymentMethod;
-    if (!confirmedPaymentMethod) return;
+    const confirmedPaymentMethod = paymentPresentation.method;
 
     if (useVisitStore.getState().saleConfirmed) return;
     if (!saleConfirmationSingleFlight.tryAcquire()) return;
@@ -411,8 +417,6 @@ function SaleScreenInner() {
       analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
       analytic_un_id: implicitAnalytics.analytic_un_id,
       analytic_distribution: implicitAnalytics.analytic_distribution,
-      payment_method: salePaymentMethod,
-      create_invoice: salePaymentMethod === 'cash',
       lines: saleLines.map((l) => ({
         product_id: l.productId,
         quantity: l.qty,
@@ -596,9 +600,12 @@ function SaleScreenInner() {
     let confirmedTicketSnapshot: typeof recoveryIntent.ticketSnapshot;
     try {
       const saleResult = await createSale(buildSalesCreatePayload(payload));
-      confirmedTicketSnapshot = withSaleTicketOdooFolio(
-        recoveryIntent.ticketSnapshot,
-        saleResult.name,
+      confirmedTicketSnapshot = withSaleTicketServerPayment(
+        withSaleTicketOdooFolio(recoveryIntent.ticketSnapshot, saleResult.name),
+        {
+          paymentMethod: saleResult.payment_method,
+          reviewRequired: saleResult.payment_review_required,
+        },
       );
       // F3.2 / POST-R1A: Odoo confirmed — ledger apply for sellable projection.
       await deductLocalStockOptimistically();
@@ -919,20 +926,19 @@ function SaleScreenInner() {
           )}
         </Card>
 
-        {/* Payment method */}
-        <View style={styles.paymentRow}>
-          <Button
-            label="💵 Efectivo"
-            variant={salePaymentMethod === 'cash' ? 'primary' : 'secondary'}
-            onPress={() => setSalePayment('cash')}
-            style={{ flex: 1 }}
-          />
-          <Button
-            label="💳 Crédito"
-            variant={salePaymentMethod === 'credit' ? 'primary' : 'secondary'}
-            onPress={() => setSalePayment('credit')}
-            style={{ flex: 1 }}
-          />
+        <View style={styles.paymentPolicy}>
+          <Text style={typography.sectionTitle}>Pago</Text>
+          <Text style={[typography.body, styles.paymentPolicyLabel]}>
+            {paymentPresentation.label}
+          </Text>
+          <Text style={[typography.dimSmall, styles.paymentPolicyHint]}>
+            El método se confirma con la política del cliente al sincronizar.
+          </Text>
+          {paymentPresentation.reviewRequired ? (
+            <Text style={[typography.dimSmall, styles.paymentPolicyReview]}>
+              Revisión de Corte requerida al confirmar la venta.
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.analyticsInfo}>
@@ -1058,7 +1064,6 @@ function SaleScreenInner() {
               const reason = describeSaleConfirmBlock({
                 hasLines: saleLines.length > 0,
                 photoTaken: salePhotoTaken,
-                paymentSelected: !!salePaymentMethod,
                 hasPlaza: !!implicitAnalytics.analytic_plaza_id,
                 hasWarehouse,
                 routeLoadAccepted: canStartSale,
@@ -1139,8 +1144,15 @@ const styles = StyleSheet.create({
   referentialNote: { color: colors.warning, fontFamily: fonts.bodyBold, fontWeight: '700', marginTop: 8, lineHeight: 15 },
   grandTotalLabel: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
   grandTotalValue: { color: colors.success },
-  // Payment
-  paymentRow: { flexDirection: 'row', gap: 6, marginVertical: 10 },
+  paymentPolicy: {
+    backgroundColor: colors.cardLighter,
+    borderRadius: radii.card,
+    padding: 12,
+    marginBottom: 10,
+  },
+  paymentPolicyLabel: { color: colors.primary, marginTop: 4 },
+  paymentPolicyHint: { color: colors.textDim, marginTop: 3 },
+  paymentPolicyReview: { color: colors.warning, marginTop: 6 },
   analyticsInfo: {
     backgroundColor: colors.cardLighter,
     borderRadius: radii.card,

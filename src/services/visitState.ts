@@ -14,7 +14,6 @@ export interface VisitDataState {
   checkInLon: number | null;
   elapsedSeconds: number;
   saleLines: never[];
-  salePaymentMethod: 'cash' | 'credit' | null;
   analyticPlazaId: number | null;
   analyticUnId: number | null;
   salePhotoTaken: boolean;
@@ -126,7 +125,6 @@ export function createInitialVisitState(): VisitDataState {
     checkInLon: null,
     elapsedSeconds: 0,
     saleLines: [],
-    salePaymentMethod: null,
     analyticPlazaId: null,
     analyticUnId: null,
     salePhotoTaken: false,

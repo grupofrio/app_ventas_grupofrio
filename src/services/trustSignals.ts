@@ -227,7 +227,6 @@ export function describeGeoStatus(input: {
 export function describeSaleConfirmBlock(input: {
   hasLines: boolean;
   photoTaken: boolean;
-  paymentSelected: boolean;
   hasPlaza: boolean;
   hasWarehouse: boolean;
   routeLoadAccepted: boolean;
@@ -236,7 +235,6 @@ export function describeSaleConfirmBlock(input: {
   // bloquea confirmar — se avisa en el flujo y el backend valida el real.
   if (!input.hasLines) return null; // sin líneas no se muestra hint (igual que hoy)
   if (!input.photoTaken) return '📸 Toma la foto del congelador';
-  if (!input.paymentSelected) return '💰 Selecciona método de pago';
   if (!input.hasPlaza) return '📍 Configura la plaza del empleado';
   if (!input.hasWarehouse) return '🏬 Configura el almacén del empleado';
   if (!input.routeLoadAccepted) return '📦 Acepta la carga pendiente de la ruta';

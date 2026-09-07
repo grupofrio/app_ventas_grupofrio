@@ -6,7 +6,7 @@ export type StagingIdentityReason =
   | 'invalid_response';
 
 export type StagingBackendIdentity = {
-  status: 'verified' | 'unverified';
+  status: 'verified' | 'configured' | 'unverified';
   baseUrl: string;
   host: string | null;
   db: string | null;
@@ -36,14 +36,26 @@ function unverifiedIdentity(
   };
 }
 
+const APPROVED_TEST_URL = 'https://odoo-staging.grupofrio.mx';
+const APPROVED_TEST_DB = 'grupofrio-gf-staging280826-37235488';
+
+export function isStagingIdentityAllowed(identity: StagingBackendIdentity): boolean {
+  return identity.status === 'verified' || (identity.status === 'configured'
+    && identity.baseUrl === APPROVED_TEST_URL && identity.db === APPROVED_TEST_DB);
+}
+
 export async function resolveStagingBackendIdentity({
   baseUrl,
   expectedBaseUrl,
   fetcher = fetch,
+  useConfiguredDatabase = false,
+  configuredDatabase,
 }: {
   baseUrl: string;
   expectedBaseUrl: string;
   fetcher?: StagingBackendFetch;
+  useConfiguredDatabase?: boolean;
+  configuredDatabase?: string;
 }): Promise<StagingBackendIdentity> {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   const normalizedExpectedBaseUrl = normalizeBaseUrl(expectedBaseUrl);
@@ -57,6 +69,15 @@ export async function resolveStagingBackendIdentity({
     }
   } catch {
     return unverifiedIdentity(normalizedBaseUrl, null, 'host_not_allowed');
+  }
+
+  // Explicit temporary QA mode: configuration is pinned, not server-verified.
+  if (useConfiguredDatabase) {
+    if (normalizedBaseUrl !== APPROVED_TEST_URL || normalizedExpectedBaseUrl !== APPROVED_TEST_URL
+      || configuredDatabase !== APPROVED_TEST_DB) {
+      return unverifiedIdentity(normalizedBaseUrl, host, 'host_not_allowed');
+    }
+    return { status: 'configured', baseUrl: normalizedBaseUrl, host, db: configuredDatabase, reason: null };
   }
 
   try {

@@ -139,3 +139,9 @@ Dominio de staging autorizado: `https://odoo-staging.grupofrio.mx`. DB configura
 ## Nota operativa
 
 La URL base de staging para la app móvil debe guardarse sin sufijo `/odoo`, porque la app compone rutas como `/web/database/list` y `/api/employee-sign-in` sobre esa base.
+
+## Modo temporal de pruebas Android
+
+`staging-android.env.EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB=true` permite usar la DB configurada sin consultar `/current_database`, por autorización de pruebas. Solo acepta `https://odoo-staging.grupofrio.mx` y `grupofrio-gf-staging280826-37235488`. La UI muestra CONFIGURADA, nunca VERIFIED. Código/PIN, autenticación y permisos del backend siguen siendo obligatorios. Producción e iOS no activan este modo.
+
+Para volver a verificación automática: quitar el flag o ponerlo en `false` y generar un nuevo APK con EAS. La configuración de un APK instalado no cambia al editar eas.json.

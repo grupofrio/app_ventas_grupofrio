@@ -95,3 +95,28 @@ test('does not verify unavailable, invalid, or failed backend responses', async 
   assert.equal(networkIdentity.status, 'unverified');
   assert.equal(networkIdentity.reason, 'network_error');
 });
+
+test('explicit staging test mode uses only the approved pinned host and DB without discovery', async () => {
+  let calls = 0;
+  const identity = await resolveStagingBackendIdentity({
+    baseUrl: 'https://odoo-staging.grupofrio.mx', expectedBaseUrl: 'https://odoo-staging.grupofrio.mx',
+    useConfiguredDatabase: true, configuredDatabase: 'grupofrio-gf-staging280826-37235488',
+    fetcher: async () => { calls++; throw new Error('HTTP 500'); },
+  });
+  assert.equal(identity.status, 'configured');
+  assert.equal(identity.db, 'grupofrio-gf-staging280826-37235488');
+  assert.equal(calls, 0);
+});
+
+test('configured test mode rejects production, different DB and insecure URL', async () => {
+  for (const [url,db] of [
+    ['https://grupofrio-gf.odoo.com','grupofrio-gf-main-34980678'],
+    ['https://odoo-staging.grupofrio.mx','grupofrio-gf-main-34980678'],
+    ['http://odoo-staging.grupofrio.mx','grupofrio-gf-staging280826-37235488'],
+  ]) {
+    let calls=0;
+    const identity=await resolveStagingBackendIdentity({baseUrl:url,expectedBaseUrl:url,useConfiguredDatabase:true,configuredDatabase:db,
+      fetcher:async()=>{calls++;return jsonResponse(200,{db});}});
+    assert.equal(identity.status,'unverified');assert.equal(calls,0);
+  }
+});

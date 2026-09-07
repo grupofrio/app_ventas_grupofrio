@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StagingBackendIdentity } from '../services/stagingBackendIdentity.ts';
+import { isStagingIdentityAllowed, type StagingBackendIdentity } from '../services/stagingBackendIdentity.ts';
 
 export class StagingBackendUnverifiedError extends Error {
   constructor() {
@@ -21,7 +21,7 @@ export function createStagingMutationGuard(
 ): (requestUrl: string) => void {
   return (requestUrl) => {
     const identity = getIdentity();
-    if (identity.status !== 'verified') {
+    if (!isStagingIdentityAllowed(identity)) {
       throw new StagingBackendUnverifiedError();
     }
 

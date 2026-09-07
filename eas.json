@@ -26,7 +26,8 @@
         "EXPO_PUBLIC_APP_ENV": "staging",
         "EXPO_PUBLIC_BUILD_PROFILE": "staging",
         "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://odoo-staging.grupofrio.mx",
-        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37235488"
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37235488",
+        "EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB": "true"
       }
     },
     "staging-ios": {

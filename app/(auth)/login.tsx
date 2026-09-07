@@ -108,7 +108,11 @@ export default function LoginScreen() {
                 <Text style={[typography.dim, styles.backendStatusText]}>
                   {identity.status === 'verified'
                     ? `STAGING verificado: ${identity.host} / ${identity.db}`
-                    : 'STAGING no verificado. Confirma host y DB antes de operar.'}
+                    : identity.status === 'configured'
+                      ? `STAGING · modo de pruebas: ${identity.host} / ${identity.db}. DB configurada, sin verificación automática.`
+                      : Constants.expoConfig?.extra?.stagingUseConfiguredDb === true
+                        ? 'STAGING · modo de pruebas con DB configurada. Ingresa tu código y PIN.'
+                        : 'STAGING no verificado. Confirma host y DB antes de operar.'}
                 </Text>
               </View>
             ) : null}

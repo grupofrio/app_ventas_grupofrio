@@ -13,12 +13,13 @@ import {
   setAuthTokens,
   clearAuthTokens,
   setBaseUrl,
+  getBaseUrl,
   fetchWithTimeout,
   AUTH_TIMEOUT_MS,
 } from '../services/api';
 import { signOut } from '../services/gfLogistics';
 import { resolveOdooDatabase } from '../services/odooDatabase';
-import { resolveStagingBackendIdentity } from '../services/stagingBackendIdentity.ts';
+import { resolveStagingBackendIdentity, isStagingIdentityAllowed } from '../services/stagingBackendIdentity.ts';
 import { getRuntimeAppEnvironment } from '../config/appEnvironment.ts';
 import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
 import {
@@ -251,6 +252,20 @@ export const useAuthStore = create<AuthState>((set) => ({
         await storeRemove(STORAGE_KEYS.AUTH_STATE);
         return false;
       }
+      const extra = Constants.expoConfig?.extra;
+      if (getRuntimeAppEnvironment(extra?.appEnvironment as string | undefined) === 'staging'
+        && extra?.stagingUseConfiguredDb === true) {
+        useStagingBackendStore.getState().clearIdentity();
+        const identity = await resolveStagingBackendIdentity({
+          baseUrl: await getBaseUrl(),
+          expectedBaseUrl: String(extra.defaultBaseUrl ?? ''),
+          configuredDatabase: String(extra.defaultOdooDb ?? ''),
+          useConfiguredDatabase: true,
+        });
+        useStagingBackendStore.getState().setIdentity(identity);
+        if (!isStagingIdentityAllowed(identity)) return false;
+      }
+
       const employeeId = saved.employeeId as number;
       const warehouseId = typeof saved.warehouseId === 'number' && saved.warehouseId > 0
         ? saved.warehouseId
@@ -314,9 +329,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         const identity = await resolveStagingBackendIdentity({
           baseUrl,
           expectedBaseUrl,
+          useConfiguredDatabase: Constants.expoConfig?.extra?.stagingUseConfiguredDb === true,
+          configuredDatabase: String(Constants.expoConfig?.extra?.defaultOdooDb ?? ''),
         });
         useStagingBackendStore.getState().setIdentity(identity);
-        if (identity.status !== 'verified') {
+        if (!isStagingIdentityAllowed(identity)) {
           set({
             error: 'Staging no verificado. Confirma host y DB antes de iniciar sesion.',
             isLoading: false,

@@ -37,3 +37,11 @@ test('accepts only requests below the verified staging base URL', () => {
     StagingBackendUnverifiedError,
   );
 });
+
+test('configured staging permits its origin but rejects production and other DBs', () => {
+  const identity = {status:'configured' as const,baseUrl:'https://odoo-staging.grupofrio.mx',host:'odoo-staging.grupofrio.mx',db:'grupofrio-gf-staging280826-37235488',reason:null};
+  const guard=createStagingMutationGuard(()=>identity);
+  assert.doesNotThrow(()=>guard(identity.baseUrl+'/gf/logistics/api/employee/sales/create'));
+  assert.throws(()=>guard('https://grupofrio-gf.odoo.com/api/employee-sign-in'),StagingBackendUnverifiedError);
+  assert.throws(()=>createStagingMutationGuard(()=>({...identity,db:'production'}))(identity.baseUrl+'/api'),StagingBackendUnverifiedError);
+});

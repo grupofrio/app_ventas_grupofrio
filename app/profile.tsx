@@ -155,7 +155,7 @@ export default function ProfileScreen() {
           <>
             <Text style={styles.sectionTitle}>BACKEND STAGING</Text>
             <Card>
-              <View style={styles.infoRow}><Text style={styles.infoLabel}>Estado</Text><Text style={styles.infoValue}>{identity.status.toUpperCase()}</Text></View>
+              <View style={styles.infoRow}><Text style={styles.infoLabel}>Estado</Text><Text style={styles.infoValue}>{identity.status === 'configured' ? 'PRUEBAS · DB CONFIGURADA' : identity.status.toUpperCase()}</Text></View>
               <View style={styles.infoRow}><Text style={styles.infoLabel}>Host</Text><Text style={styles.infoValue}>{identity.host || '--'}</Text></View>
               <View style={styles.infoRow}><Text style={styles.infoLabel}>DB</Text><Text style={styles.infoValue}>{identity.db || '--'}</Text></View>
               {identity.reason ? <View style={styles.infoRow}><Text style={styles.infoLabel}>Motivo</Text><Text style={styles.infoValue}>{identity.reason}</Text></View> : null}

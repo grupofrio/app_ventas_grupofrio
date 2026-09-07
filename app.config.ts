@@ -135,7 +135,7 @@ export function buildExpoConfig(
     },
     android: {
       ...BASE_EXPO_CONFIG.android,
-      versionCode: isProduction ? BASE_EXPO_CONFIG.android?.versionCode : 7,
+      versionCode: isProduction ? BASE_EXPO_CONFIG.android?.versionCode : 8,
       package: `mx.grupofrio.koldfield${env.bundleSuffix}`,
       adaptiveIcon: {
         ...BASE_EXPO_CONFIG.android?.adaptiveIcon,
@@ -151,6 +151,8 @@ export function buildExpoConfig(
       appEnvironment: env.environment,
       defaultBaseUrl: env.defaultBaseUrl,
       defaultOdooDb: env.defaultOdooDb,
+      stagingUseConfiguredDb: env.environment === 'staging'
+        && (envOverrides.EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB ?? process.env.EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB) === 'true',
       eas: {
         projectId: EAS_PROJECT_ID,
       },

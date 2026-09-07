@@ -63,6 +63,13 @@ test('development keeps dev runtime metadata but reuses the staging native ident
 });
 
 test('staging Android update advances independently of production', () => {
-  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' }).android.versionCode, 7);
+  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' }).android.versionCode, 8);
   assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'production' }).android.versionCode, 6);
+});
+
+test('pinned database bypass is disabled by default and never enabled for production', () => {
+  const enabled={EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB:'true'};
+  assert.equal(buildExpoConfig({...enabled,EXPO_PUBLIC_APP_ENV:'staging'}).extra.stagingUseConfiguredDb,true);
+  assert.equal(buildExpoConfig({...enabled,EXPO_PUBLIC_APP_ENV:'production'}).extra.stagingUseConfiguredDb,false);
+  assert.equal(buildExpoConfig({EXPO_PUBLIC_APP_ENV:'staging',EXPO_PUBLIC_KF_STAGING_USE_CONFIGURED_DB:undefined}).extra.stagingUseConfiguredDb,false);
 });

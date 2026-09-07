@@ -36,9 +36,9 @@ const STORE_KEYS = {
   SESSION_ID: buildEnvironmentStorageKey(APP_ENVIRONMENT, 'kf_employee_session_id'),
 } as const;
 
-const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefined>)[
-  'EXPO_PUBLIC_KF_DEFAULT_BASE_URL'
-]?.trim().replace(/\/+$/, '');
+// Keep direct property access so Expo embeds this value in Android/iOS bundles.
+const PUBLIC_DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_KF_DEFAULT_BASE_URL
+  ?.trim().replace(/\/+$/, '');
 
 export const DEFAULT_BASE_URL = PUBLIC_DEFAULT_BASE_URL || 'https://grupofrio-gf.odoo.com';
 export const DEFAULT_FETCH_TIMEOUT_MS = 45_000;

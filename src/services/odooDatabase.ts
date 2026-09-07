@@ -1,6 +1,5 @@
-const PUBLIC_DEFAULT_ODOO_DB = (process.env as Record<string, string | undefined>)[
-  'EXPO_PUBLIC_KF_ODOO_DB'
-]?.trim();
+// Keep direct property access so Expo embeds this value in Android/iOS bundles.
+const PUBLIC_DEFAULT_ODOO_DB = process.env.EXPO_PUBLIC_KF_ODOO_DB?.trim();
 
 // DB de producción de la instancia grupofrio-gf. Es el fallback DETERMINISTA
 // cuando `/web/database/list` no responde (list_db deshabilitado o red caída

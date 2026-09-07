@@ -125,7 +125,7 @@ export default function LoginScreen() {
             />
           </View>
 
-          <Text style={[typography.dimSmall, styles.version]}>KOLD Field v1.0 · Grupo Frio</Text>
+          <Text style={[typography.dimSmall, styles.version]}>KOLD Field v{Constants.expoConfig?.version ?? '?'} · build {Constants.expoConfig?.android?.versionCode ?? '?'} · Grupo Frio</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

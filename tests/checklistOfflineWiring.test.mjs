@@ -33,7 +33,7 @@ function main() {
   // Una respuesta reparada online borra exclusivamente sus residuos terminales.
   assert.match(
     syncStore,
-    /removeDeadQueueItems:\s*\(ids\)\s*=>\s*\{[\s\S]{0,900}i\.status !== 'dead' \|\| !ids\.includes\(i\.id\)/,
+    /removeDeadQueueItems:\s*\(ids\)\s*=>\s*\{[\s\S]{0,900}removeUnprotectedDead\(get\(\)\.queue, ids\)/,
     'el store expone eliminación selectiva que nunca borra IDs vivos',
   );
   assert.match(

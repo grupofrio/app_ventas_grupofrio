@@ -1,3 +1,8 @@
+import { useRouteStore } from './useRouteStore';
+import { createCustomerDeactivationRequest, persistCustomerDeactivationResult, assertCustomerDeactivationScope } from '../services/customerDeactivation';
+import { buildCustomerDeactivationStopPatch } from '../services/customerDeactivationLogic';
+import { markStockReview, removeUnprotectedDead, retryStockReview } from '../services/stockReviewRetention.ts';
+import { getInsufficientStockDetail, describeInsufficientStock } from '../services/insufficientStock.ts';
 /**
  * Sync queue store V2 — offline operation management with PERSISTENCE.
  *
@@ -263,6 +268,7 @@ interface SyncState {
   removeDeadQueueItems: (ids: string[]) => number;
 
   // Persistence
+  retryStockReview: (operationId: string) => Promise<void>;
   persistQueue: () => Promise<void>;
   /**
    * Replace in-memory queue after a durable envelope commit that already
@@ -571,9 +577,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // operador sin necesidad de consultar el queue de vuelta.
   clearDead: () => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter(
-      (i) => i.status !== 'dead' || isProtectedPhysicalReviewItem(i),
-    );
+    const newQueue = removeUnprotectedDead(get().queue);
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -588,9 +592,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // anterior jamás borren una operación que ya volvió a estar viva.
   removeDeadQueueItems: (ids) => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter(
-      (i) => i.status !== 'dead' || !ids.includes(i.id),
-    );
+    const newQueue = removeUnprotectedDead(get().queue, ids);
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -601,6 +603,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   // ═══ Persistence ═══
+
+  retryStockReview: async (operationId) => {
+    await queuePersistence.transformAndPersist(queue => retryStockReview(queue, operationId));
+    if (get().isOnline) void get().processQueue();
+  },
 
   persistQueue: () => {
     // Un write inmediato cancela cualquier persistencia agendada (sería
@@ -1196,6 +1203,22 @@ async function processOneItemUnheld(
       return 'deferred';
     }
 
+    const stockFailure = item.type === 'sale_order' ? getInsufficientStockDetail(error) : null;
+    if (stockFailure) {
+      try {
+        // Preserve the original operation and physical evidence before publishing rejection.
+        // No local stock reversal or visit unlocking: the sale is still unresolved.
+        await queuePersistence.transformAndPersist(queue => markStockReview(
+          queue, item.id, describeInsufficientStock(stockFailure),
+        ));
+      } catch (persistError) {
+        get().markError(item.id, 'No se pudo guardar el rechazo por inventario. Se reintentará la misma operación.');
+        logWarn('sync', 'stock_review_persist_failed', { id: item.id, error: String(persistError) });
+        return 'deferred';
+      }
+      return 'failed';
+    }
+
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
     const shouldRetry = shouldRetrySyncItemError(item.type, error);
@@ -1592,6 +1615,18 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     // (vendible + merma) se captura en el Corte. Cualquier evento legacy que quede
     // en cola lo intercepta el guard de processOneItem (isLegacyRefillUnloadItem) y
     // se migra (revierte stock + descarta); nunca llega a este dispatcher.
+
+    case 'customer_deactivation_request': {
+      const result = await createCustomerDeactivationRequest(payload);
+      const scope = payload._deactivationScope as import('../types/customerDeactivation').CustomerDeactivationScope;
+      // Persist under the captured encrypted session, never the session active after an await.
+      await persistCustomerDeactivationResult(scope, Number(payload.stop_id), result);
+      await assertCustomerDeactivationScope(scope, Number(payload.stop_id));
+      const route = useRouteStore.getState();
+      if (route.plan?.plan_id !== scope.planId) throw new Error('Cambió la ruta de la solicitud.');
+      route.patchStop(Number(payload.stop_id), buildCustomerDeactivationStopPatch({requestId: result.request_id, state: result.state, reason: result.reason}));
+      break;
+    }
 
     case 'customer_update':
       await syncCustomerContactUpdate(payload as Record<string, unknown>);

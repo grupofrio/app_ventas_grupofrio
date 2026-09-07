@@ -1,3 +1,4 @@
+import { isCustomerDeactivationUnderReview } from '../../src/services/customerDeactivationLogic';
 /**
  * Stop Detail screen — s-stop / s-beto in mockup.
  * F2: Shell with correct routing, customer context, and geo-fence bar.
@@ -162,6 +163,7 @@ export default function StopDetailScreen() {
   // WhatsApp normalizado lo administra el bot y queda fuera de esta lógica).
   const showMissingPhoneNotice =
     stop._entityType !== 'lead' && !!editablePartnerId && !hasContactPhone(stop);
+  const deactivationUnderReview = isCustomerDeactivationUnderReview(stop.deactivation_state);
 
   const address = formatCustomerAddress(stop, stop);
 
@@ -242,6 +244,9 @@ export default function StopDetailScreen() {
             </View>
           )}
         </Card>
+
+        {deactivationUnderReview ? <Badge label="Baja en revisión" variant="orange" /> : null}
+        {stop._entityType !== 'lead' ? <Button label="Consultar o reportar posible baja" variant="secondary" onPress={() => router.push(`/customer-deactivation/${stop.id}` as never)} fullWidth /> : null}
 
         {/* KoldScore card — actionable intelligence */}
         {hasScore ? (

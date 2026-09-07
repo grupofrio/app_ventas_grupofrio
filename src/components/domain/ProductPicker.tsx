@@ -351,6 +351,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
     } else {
       addSaleLine(line); // default: active-visit cart
     }
+    void useProductStore.getState().rememberRecentProduct(product.id).catch(() => {});
     setSearch('');
     setQuantities({});
     onClose();

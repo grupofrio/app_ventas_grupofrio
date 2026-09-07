@@ -14,7 +14,7 @@ function readModuleFile(relativePath) {
   return readFileSync(path, 'utf8');
 }
 
-test('registers the local Android module and config plugin', () => {
+test('registers the local Android module and config plugin', async () => {
   const moduleConfig = JSON.parse(readModuleFile('expo-module.config.json'));
   assert.deepEqual(moduleConfig, {
     platforms: ['android'],
@@ -23,9 +23,10 @@ test('registers the local Android module and config plugin', () => {
     },
   });
 
-  const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
+  const { buildExpoConfig } = await import('../app.config.ts');
+  const appConfig = buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' });
   assert.equal(
-    appConfig.expo.plugins.includes('./modules/thermal-printer/app.plugin.js'),
+    appConfig.plugins.includes('./modules/thermal-printer/app.plugin.js'),
     true,
     'app.json must register the tracked thermal-printer config plugin',
   );

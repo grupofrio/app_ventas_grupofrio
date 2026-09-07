@@ -1,3 +1,6 @@
+import { sameCatalogContext, type CatalogIdentity } from '../services/lastKnownCatalog.ts';
+import { loadLastKnownCatalog, saveLastKnownCatalog, rememberLastKnownProduct } from '../services/lastKnownCatalogRepository.ts';
+import { getFieldDataSession } from '../services/fieldDataSession.ts';
 /**
  * Product store V2 — employee-scoped truck inventory + context cache.
  *
@@ -97,6 +100,7 @@ interface ProductState {
    * NO hace red; la carga online sigue siendo `loadProducts`.
    */
   hydrateFromCache: (warehouseId: number | null) => Promise<number>;
+  rememberRecentProduct: (productId: number) => Promise<void>;
   reset: () => void;
 }
 
@@ -139,7 +143,8 @@ interface CatalogCachePayload {
 /** contextKey de catálogo: día + empleado + empresa + almacén. */
 function buildCatalogContextKey(planId: number | null): string {
   const auth = useAuthStore.getState();
-  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, planId]);
+  const plan = useRouteStore.getState().plan;
+  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, planId, plan?.warehouse_id, plan?.mobile_location_id]);
 }
 
 /** Persiste el catálogo actual en disco (fire-and-forget). */
@@ -153,6 +158,15 @@ function persistCatalogToDisk(
   const payload: CatalogCachePayload = { products, inventorySource, hasStockData };
   const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(planId), Date.now());
   void storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
+}
+
+let catalogGeneration = 0;
+function currentCatalogIdentity(): CatalogIdentity | null {
+  const auth = useAuthStore.getState();
+  const plan = useRouteStore.getState().plan;
+  const context = { companyId: auth.companyId ?? 0, employeeId: auth.employeeId ?? 0,
+    warehouseId: plan?.warehouse_id ?? 0, mobileLocationId: plan?.mobile_location_id ?? 0 };
+  return sameCatalogContext(context, context) ? context : null;
 }
 
 export const useProductStore = create<ProductState>((set, get) => ({
@@ -180,6 +194,20 @@ export const useProductStore = create<ProductState>((set, get) => ({
       return;
     }
 
+    const generation = ++catalogGeneration;
+    const authAtStart = useAuthStore.getState();
+    const contextAtStart = currentCatalogIdentity();
+    const contextKeyAtStart = buildCatalogContextKey(planId);
+    const stillCurrent = () => generation === catalogGeneration
+      && contextKeyAtStart === buildCatalogContextKey(planId)
+      && useRouteStore.getState().plan?.plan_id === planId
+      && useAuthStore.getState().employeeId === authAtStart.employeeId
+      && useAuthStore.getState().companyId === authAtStart.companyId;
+    const discardStaleResponse = () => {
+      if (stillCurrent()) return false;
+      if (generation === catalogGeneration) set({ isLoading: false, error: 'Cambió el contexto de inventario. Actualiza la ruta.' });
+      return true;
+    };
     set({ isLoading: true, error: null });
 
     // Preserve current reserved amounts (for refresh during active operations)
@@ -212,8 +240,11 @@ export const useProductStore = create<ProductState>((set, get) => ({
         });
       }
 
+      const catalogSession = await getFieldDataSession();
+      if (discardStaleResponse()) return;
       const snapshotAtMs = Date.now();
       const scoped = await fetchTruckStock(planId);
+      if (discardStaleResponse()) return;
       const rawProducts = scoped.products as Product[];
       const source: InventorySource = 'truck_stock';
       const hasStockData = scoped.hasStockData;
@@ -280,6 +311,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
         });
       }
 
+      if (discardStaleResponse()) return;
+
       // BLD-20260424-BUGA: resumen estructurado de la carga para poder
       // diagnosticar en campo sin rebuild. Útil cuando el operador reporta
       // "no salen productos" — con esta línea sabemos inmediatamente si
@@ -303,8 +336,14 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // valida stock/precio al confirmar. Limpiamos la key legacy sin uso.
       void storeRemove(STORAGE_KEYS.PRODUCTS);
       persistCatalogToDisk(products, source, hasStockData, planId);
+      if (catalogSession && contextAtStart && sameCatalogContext(contextAtStart, currentCatalogIdentity())
+        && scoped.warehouseId === contextAtStart.warehouseId && scoped.locationId === contextAtStart.mobileLocationId) {
+        void saveLastKnownCatalog(catalogSession, contextAtStart, products, snapshotAtMs)
+          .catch(error => logWarn('inventory', 'last_known_save_failed', { error: String(error) }));
+      }
       schedulePersistPriceCache();
     } catch (error: unknown) {
+      if (discardStaleResponse()) return;
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
       set({ error: msg, isLoading: false });
       logWarn('inventory', 'load_failed', { error: msg });
@@ -406,12 +445,30 @@ export const useProductStore = create<ProductState>((set, get) => ({
   getProduct: (productId) => get().products.find((p) => p.id === productId),
 
   hydrateFromCache: async (planId: number | null) => {
+    const generation = catalogGeneration;
+    const context = currentCatalogIdentity();
+    const contextKey = buildCatalogContextKey(planId);
+    const stillCurrent = () => generation === catalogGeneration && contextKey === buildCatalogContextKey(planId)
+      && useRouteStore.getState().plan?.plan_id === planId;
+    const restoreLastKnown = async (): Promise<number> => {
+      const session = await getFieldDataSession();
+      if (!session || !context || !stillCurrent()) return 0;
+      const snapshot = await loadLastKnownCatalog(session, context);
+      if (!snapshot || !stillCurrent() || !sameCatalogContext(context, currentCatalogIdentity())) return 0;
+      // Last-known products carry reference quantities, never authoritative inventory.
+      set({ products: snapshot.products, productCount: snapshot.products.length,
+        totalStockKg: Math.round(snapshot.products.reduce((sum,p)=>sum+p._totalKg,0)),
+        lastSync: snapshot.fetchedAtMs, fromCache: true, cachedAtMs: snapshot.fetchedAtMs,
+        hasStockData: null, inventorySource: null, loadedWarehouseId: null, loadedPlanId: null });
+      return snapshot.products.length;
+    };
     try {
       const raw = await storeLoad<unknown>(STORAGE_KEYS.PRODUCTS_CATALOG);
-      if (raw === null) return 0;
+      if (!stillCurrent()) return 0;
+      if (raw === null) return await restoreLastKnown();
       const result = readCacheEnvelope<CatalogCachePayload>(
         raw,
-        buildCatalogContextKey(planId),
+        contextKey,
         CATALOG_CACHE_TTL_MS,
         Date.now(),
       );
@@ -421,8 +478,9 @@ export const useProductStore = create<ProductState>((set, get) => ({
         if (result.status === 'stale') {
           logInfo('inventory', 'catalog_cache_stale_cleared', {});
         }
-        return 0;
+        return await restoreLastKnown();
       }
+      if (!stillCurrent()) return 0;
       const products = result.payload.products;
       const totalKg = products.reduce((sum, p) => sum + (p._totalKg || 0), 0);
       set({
@@ -447,11 +505,20 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
   },
 
-  reset: () => set({
+  rememberRecentProduct: async (productId) => {
+    const context = currentCatalogIdentity();
+    const generation = catalogGeneration;
+    const session = await getFieldDataSession();
+    if (session && context && generation === catalogGeneration && sameCatalogContext(context, currentCatalogIdentity())) {
+      await rememberLastKnownProduct(session, context, productId);
+    }
+  },
+
+  reset: () => { catalogGeneration += 1; set({
     products: [], isLoading: false, error: null,
     lastSync: null, totalStockKg: 0, productCount: 0,
     inventorySource: null, loadedWarehouseId: null, loadedPlanId: null,
     hasStockData: null, inventoryContext: 'ready',
     fromCache: false, cachedAtMs: null,
-  }),
+  }); },
 }));

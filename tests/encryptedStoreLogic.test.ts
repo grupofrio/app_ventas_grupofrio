@@ -138,9 +138,9 @@ test('bundle and queue records reject plaintext persistence', async () => {
   assert.doesNotThrow(() => storage.assertEncryptedRecord('invoice-collection:intents', 'encrypted'));
 });
 
-test('Android backups are disabled for the native encrypted field store', () => {
-  const appConfig = JSON.parse(readFileSync('app.json', 'utf8')) as {
-    expo?: { android?: { allowBackup?: boolean } };
-  };
-  assert.equal(appConfig.expo?.android?.allowBackup, false);
+test('Android backups are disabled for the native encrypted field store', async () => {
+  const { buildExpoConfig } = await import('../app.config.ts');
+  for (const environment of ['production', 'staging']) {
+    assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: environment }).android?.allowBackup, false);
+  }
 });

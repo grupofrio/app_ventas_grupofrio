@@ -101,3 +101,15 @@ test('ticket persistence is best effort after durable recovery', async () => {
     saveTicket: async () => { throw new Error('ticket disk full'); },
   }));
 });
+
+test('restart retains a stock-rejected sale until explicit retry', async () => {
+  let enqueues = 0;
+  const result = await recoverPersistedSaleIntent({
+    saleConfirmed: true, saleReadyToContinue: false, intent,
+    queue: [{id:intent.operationId,type:'sale_order',status:'dead',payload:{_stockReviewRequired:true}}],
+    enqueue:()=>{enqueues++;return 'unexpected';}, persistQueue:async()=>{},
+    releaseProcessingHolds:()=>{},saveTicket:async()=>{},
+  });
+  assert.equal(enqueues,0);
+  assert.equal(result.status,'already_queued');
+});

@@ -1,3 +1,4 @@
+import { isStockReviewItem } from './stockReviewRetention.ts';
 import type { SyncEnqueueOptions, SyncItemType } from '../types/sync.ts';
 import { persistAmbiguousSaleRecovery } from './saleAmbiguousRecovery.ts';
 import type { SaleRecoveryIntentV1 } from './saleRecoveryIntent.ts';
@@ -13,6 +14,8 @@ export interface RehydrateSaleQueueItem {
   id: string;
   type: string;
   status?: string;
+  payload?: Record<string, unknown>;
+  error_message?: string | null;
 }
 
 export interface RecoverPersistedSaleIntentInput {
@@ -47,7 +50,7 @@ export async function recoverPersistedSaleIntent({
   const alreadyQueued = queue.some((item) => (
     item.type === 'sale_order'
     && item.id === intent.operationId
-    && item.status !== 'dead'
+    && (item.status !== 'dead' || isStockReviewItem(item))
   ));
 
   if (!alreadyQueued) {

@@ -60,7 +60,9 @@ assert(
     && markerBranchIndex < rollbackIndex,
   'la rama local precede classifier, markDead y rollback',
 );
-const markerBranch = catchBody.slice(markerBranchIndex, classifierIndex);
+const stockBranchIndex = catchBody.indexOf('const stockFailure');
+assert(stockBranchIndex > markerBranchIndex);
+const markerBranch = catchBody.slice(markerBranchIndex, stockBranchIndex);
 assert.match(markerBranch, /const\s+backoffMs\s*=\s*calculateBackoff\(0\)/);
 assert.match(markerBranch, /const\s+retryAt\s*=\s*Date\.now\(\)\s*\+\s*backoffMs/);
 assert.match(

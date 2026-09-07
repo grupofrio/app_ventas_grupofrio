@@ -30,6 +30,7 @@ export const SYNC_ITEM_TYPES = [
   'vehicle_check',
   'vehicle_checklist_complete',
   'customer_update',
+  'customer_deactivation_request',
 ] as const;
 
 export type SyncItemType = typeof SYNC_ITEM_TYPES[number];
@@ -65,6 +66,7 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   no_sale: 1,
   payment: 1,
   customer_update: 1,
+  customer_deactivation_request: 1,
   prospection: 1,
   offroute_visit_close: 1,
   gift: 1,

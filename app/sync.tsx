@@ -1,3 +1,4 @@
+import { isStockReviewItem, protectedReviewIds } from '../src/services/stockReviewRetention.ts';
 /**
  * Sync screen — queue visibility and management.
  */
@@ -20,11 +21,13 @@ import { formatCurrency } from '../src/utils/time';
 import { isProtectedPhysicalReviewItem } from '../src/services/consignmentPhysicalReview';
 
 const typeIcons: Record<string, string> = {
+  customer_deactivation_request: '📋',
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
   no_sale: '✕', payment: '💰', prospection: '📋', gps: '🛰',
 };
 
 const typeLabels: Record<string, string> = {
+  customer_deactivation_request: 'Solicitud de baja',
   sale_order: 'Venta', checkin: 'Check-in', checkout: 'Check-out',
   photo: 'Foto', no_sale: 'No venta', payment: 'Cobro',
   prospection: 'Prospecto', gps: 'GPS',
@@ -48,7 +51,9 @@ export default function SyncScreen() {
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
   const physicalReview = dead.filter(isProtectedPhysicalReviewItem);
-  const purgeableDead = dead.filter((item) => !isProtectedPhysicalReviewItem(item));
+  const reviewIds = protectedReviewIds(queue);
+  const stockReview = dead.filter(item => reviewIds.has(item.id) && !isProtectedPhysicalReviewItem(item));
+  const purgeableDead = dead.filter(item => !reviewIds.has(item.id));
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
@@ -65,7 +70,7 @@ export default function SyncScreen() {
     if (purgeableDead.length === 0) {
       Alert.alert(
         'Revisión requerida',
-        'Hay una consignación física pendiente de conciliación. No se puede borrar desde el historial.',
+        'Hay operaciones pendientes de revisión. No se pueden borrar desde el historial.',
       );
       return;
     }
@@ -183,6 +188,26 @@ export default function SyncScreen() {
             </Text>
             {physicalReview.map((item) => (
               <SyncItem key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {stockReview.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>INVENTARIO POR RESOLVER ({stockReview.length})</Text>
+            <Text style={styles.deadHint}>Estas operaciones se conservan. Después de resolver el inventario, reintenta la misma venta.</Text>
+            {stockReview.map(item => (
+              <View key={item.id}>
+                <SyncItem item={item} />
+                {isStockReviewItem(item) && (
+                  <Button label="Reintentar venta" variant="secondary" small disabled={isSyncing || !isOnline}
+                    onPress={() => {
+                      void useSyncStore.getState().retryStockReview(item.id).catch(() => {
+                        Alert.alert('No se pudo reintentar', 'La venta sigue guardada. Intenta nuevamente.');
+                      });
+                    }} />
+                )}
+              </View>
             ))}
           </>
         )}

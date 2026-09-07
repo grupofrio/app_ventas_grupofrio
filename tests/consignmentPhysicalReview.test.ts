@@ -51,7 +51,7 @@ test('sync terminal path marks review before any ledger reversal and clearDead r
   const clearDead = source.slice(source.indexOf('clearDead: () => {'), source.indexOf('\n  removeDeadQueueItems:', source.indexOf('clearDead: () => {')));
   assert.match(
     clearDead,
-    /i\.status !== 'dead' \|\| isProtectedPhysicalReviewItem\(i\)/,
+    /removeUnprotectedDead\(get\(\)\.queue\)/,
   );
 
   const syncScreen = readFileSync(resolve(process.cwd(), 'app/sync.tsx'), 'utf8');

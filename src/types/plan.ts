@@ -104,6 +104,10 @@ export interface GFStop {
   phone?: string;
   mobile?: string;
   email?: string;
+  deactivation_request_id?: number | null;
+  deactivation_state?: string | null;
+  deactivation_reason?: string | null;
+  deactivation_under_review?: boolean;
   customer_latitude?: number;
   customer_longitude?: number;
   google_maps_url?: string;

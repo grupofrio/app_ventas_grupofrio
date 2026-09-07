@@ -16,7 +16,7 @@ assert.equal(
 );
 assert.equal(
   eas.build['staging-android'].env.EXPO_PUBLIC_KF_DEFAULT_BASE_URL,
-  'https://grupofrio-gf-staging280826-37235488.dev.odoo.com',
+  'https://odoo-staging.grupofrio.mx',
   'staging Android profile must target the staging Odoo host without the /odoo suffix',
 );
 assert.equal(
@@ -31,7 +31,7 @@ assert.equal(
 );
 assert.equal(
   eas.build['staging-ios'].env.EXPO_PUBLIC_KF_DEFAULT_BASE_URL,
-  'https://grupofrio-gf-staging280826-37235488.dev.odoo.com',
+  'https://odoo-staging.grupofrio.mx',
   'staging iOS profile must target the staging Odoo host without the /odoo suffix',
 );
 assert.equal(

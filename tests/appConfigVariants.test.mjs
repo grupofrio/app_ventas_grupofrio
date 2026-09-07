@@ -61,3 +61,8 @@ test('development keeps dev runtime metadata but reuses the staging native ident
   assert.equal(config.extra.defaultOdooDb, 'grupofrio-gf-staging280826-37133857');
   assert.equal(config.extra.eas.projectId, '0a24997e-51fe-417a-a8d7-4bc83a1d7dff');
 });
+
+test('staging Android update advances independently of production', () => {
+  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' }).android.versionCode, 7);
+  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'production' }).android.versionCode, 6);
+});

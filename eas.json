@@ -13,7 +13,7 @@
       "env": {
         "EXPO_PUBLIC_APP_ENV": "development",
         "EXPO_PUBLIC_BUILD_PROFILE": "development",
-        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37235488.dev.odoo.com",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://odoo-staging.grupofrio.mx",
         "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37235488"
       }
     },
@@ -25,7 +25,7 @@
       "env": {
         "EXPO_PUBLIC_APP_ENV": "staging",
         "EXPO_PUBLIC_BUILD_PROFILE": "staging",
-        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37235488.dev.odoo.com",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://odoo-staging.grupofrio.mx",
         "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37235488"
       }
     },
@@ -34,7 +34,7 @@
       "env": {
         "EXPO_PUBLIC_APP_ENV": "staging",
         "EXPO_PUBLIC_BUILD_PROFILE": "staging-ios",
-        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37235488.dev.odoo.com",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://odoo-staging.grupofrio.mx",
         "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37235488"
       }
     },

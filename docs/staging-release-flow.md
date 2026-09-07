@@ -12,7 +12,7 @@ Definir un flujo simple para un equipo de 3 personas donde `staging` sirva para 
   - no se distribuye para QA formal
 - `staging`
   - uso interno del equipo
-  - backend: `https://grupofrio-gf-staging280826-37235488.dev.odoo.com`
+  - backend: `https://odoo-staging.grupofrio.mx`
   - DB: `grupofrio-gf-staging280826-37235488`
 - `production`
   - uso operativo real
@@ -134,7 +134,7 @@ Promover a `production` solo si:
 - Confirmar que la DB fue resuelta por `GET /current_database` en la sesion actual.
 - No permitir que una operacion pendiente de la cola se envie mientras el backend este no verificado.
 
-No cambiar la URL de staging a `https://odoo-staging.grupofrio.com` hasta confirmar DNS, HTTPS, `current_database` y el mapeo de la rama activa en Odoo.sh. Cuando ese dominio este activo, staging no debe usar una DB fija en `EXPO_PUBLIC_KF_ODOO_DB`; la DB se resuelve en runtime.
+Dominio de staging autorizado: `https://odoo-staging.grupofrio.mx`. DB configurada: `grupofrio-gf-staging280826-37235488`. El login confirma la DB activa mediante `/current_database`; no omite esa verificación si el servidor devuelve un error.
 
 ## Nota operativa
 

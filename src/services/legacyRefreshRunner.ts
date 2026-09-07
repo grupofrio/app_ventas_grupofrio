@@ -31,6 +31,7 @@ export type InventoryLoadResult =
         | 'global_legacy_fallback'
         | 'warehouse_mismatch'
         | 'missing_warehouse'
+        | 'plan_unavailable'
         | 'unknown';
       source?: string;
     };

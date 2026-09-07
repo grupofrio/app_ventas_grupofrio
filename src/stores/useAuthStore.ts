@@ -237,15 +237,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   /**
    * BLD-20260408-P0: Restore employee data from AsyncStorage.
    * Called on startup BEFORE setting isAuthenticated.
-   * Returns true if a valid session was restored (employeeId + warehouseId present).
+   * Returns true if a valid session was restored (employeeId present).
    */
   rehydrateAuth: async () => {
     try {
       const saved = await storeLoad<Record<string, unknown>>(STORAGE_KEYS.AUTH_STATE);
 
-      // A valid local session MUST have employeeId + warehouseId (sin ellos,
-      // inventario y ruta fallarían en silencio). Regla centralizada en
-      // isRestorableSession para poder testearla sin RN/zustand.
+      // El inventario se resuelve desde el plan activo; la sesión solo requiere
+      // identidad de empleado. Regla centralizada para probarla sin RN/zustand.
       const check = isRestorableSession(saved);
       if (!check.ok || !saved || typeof saved !== 'object') {
         console.warn(`[auth] Rehydrate: ${check.reason}, forcing re-login`);
@@ -253,7 +252,9 @@ export const useAuthStore = create<AuthState>((set) => ({
         return false;
       }
       const employeeId = saved.employeeId as number;
-      const warehouseId = saved.warehouseId as number;
+      const warehouseId = typeof saved.warehouseId === 'number' && saved.warehouseId > 0
+        ? saved.warehouseId
+        : null;
 
       set({
         isAuthenticated: true,

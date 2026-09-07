@@ -13,28 +13,34 @@ function main() {
     resolve(REPO_ROOT, 'src/stores/useProductStore.ts'),
     'utf8',
   );
+  const truckStock = gfLogistics.slice(gfLogistics.indexOf('export async function fetchTruckStock'));
 
   assert.match(
-    gfLogistics,
-    /mobileLocationId: number \| null \| undefined/,
-    'fetchTruckStock debe aceptar mobileLocationId ademas de warehouseId',
+    truckStock,
+    /fetchTruckStock\(\s*planId: number \| null \| undefined/,
+    'truck_stock debe requerir solamente el plan activo',
   );
   assert.match(
-    gfLogistics,
-    /body\.mobile_location_id = mobileLocationId/,
-    'truck_stock debe enviar mobile_location_id cuando la sesion tenga ubicacion movil',
+    truckStock,
+    /buildTruckStockPlanRequest\(planId\)/,
+    'la petición debe construirse desde plan_id, no desde los datos de almacén del empleado',
+  );
+  assert.doesNotMatch(
+    truckStock,
+    /mobile_location_id|warehouse_id/,
+    'el cliente no debe seleccionar ubicación ni almacén para truck_stock',
   );
   assert.match(
     productStore,
-    /useAuthStore\.getState\(\)\.mobileLocationId/,
-    'loadProducts debe usar mobileLocationId de auth al consultar truck_stock',
+    /const planId = useRouteStore\.getState\(\)\.plan\?\.plan_id/,
+    'loadProducts debe tomar el plan activo como contexto',
   );
   assert.match(
     productStore,
-    /fetchTruckStock\(warehouseId,\s*mobileLocationId\)/,
-    'loadProducts debe pasar mobileLocationId al endpoint truck_stock',
+    /fetchTruckStock\(planId\)/,
+    'loadProducts debe consultar truck_stock con el plan activo',
   );
-  console.log('truck stock mobile location tests: ok');
+  console.log('truck stock plan context wiring tests: ok');
 }
 
 main();

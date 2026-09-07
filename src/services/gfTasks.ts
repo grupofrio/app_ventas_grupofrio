@@ -1,5 +1,6 @@
 import { getRest, postRest } from './api';
 import type { TaskItem } from '../types/tasks';
+import { areEmployeeTasksEnabled, TASKS_UNAVAILABLE_MESSAGE } from './taskAvailability';
 
 const MAX_COMPLETION_NOTES_LENGTH = 1000;
 
@@ -18,6 +19,7 @@ function normalize(input: unknown): TaskItem {
 
 /** Tareas derivadas de la identidad del empleado contenida en el Bearer token. */
 export async function fetchMyTasks(): Promise<TaskItem[]> {
+  if (!areEmployeeTasksEnabled()) return [];
   const data = await getRest<{
     data?: { count?: number; tasks?: TaskItem[] };
     tasks?: TaskItem[];
@@ -33,6 +35,7 @@ export async function fetchMyTasks(): Promise<TaskItem[]> {
 
 /** Marca una tarea como completada. */
 export async function completeMyTask(taskId: number, notes = ''): Promise<TaskItem> {
+  if (!areEmployeeTasksEnabled()) throw new Error(TASKS_UNAVAILABLE_MESSAGE);
   const data = await postRest<Record<string, unknown>>('/gf/logistics/api/employee/tasks/complete', {
     task_id: taskId,
     completion_notes: notes.trim().slice(0, MAX_COMPLETION_NOTES_LENGTH),
@@ -42,6 +45,7 @@ export async function completeMyTask(taskId: number, notes = ''): Promise<TaskIt
 
 /** Inicia una tarea. */
 export async function startMyTask(taskId: number): Promise<TaskItem> {
+  if (!areEmployeeTasksEnabled()) throw new Error(TASKS_UNAVAILABLE_MESSAGE);
   const data = await postRest<Record<string, unknown>>('/gf/logistics/api/employee/tasks/start', {
     task_id: taskId,
   });

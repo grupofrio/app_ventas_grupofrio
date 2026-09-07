@@ -27,7 +27,7 @@ export interface PlanRefreshEvidence {
 
 /**
  * Explicit inventory refresh evidence.
- * Authoritative success requires truck_stock for the expected warehouse.
+ * Authoritative success requires truck_stock to return its resolved warehouse.
  */
 export interface InventoryRefreshEvidence {
   ok: boolean;
@@ -146,28 +146,24 @@ export function evaluateInventoryRefreshEvidence(
     source?: string;
     reason?: string;
   },
-  expectedWarehouseId: number,
+  _legacyExpectedWarehouseId?: number,
 ): InventoryRefreshEvidence {
-  const expected = Number(expectedWarehouseId);
   if (
     result.ok === true
     && result.authoritative === true
-    && Number(result.warehouseId) === expected
+    && Number(result.warehouseId) > 0
     && result.source === 'truck_stock'
   ) {
     return {
       ok: true,
       authoritative: true,
-      warehouseId: expected,
+      warehouseId: Number(result.warehouseId),
       source: 'truck_stock',
     };
   }
   let reason = result.reason || 'unknown';
   if (!result.reason && result.source && result.source !== 'truck_stock') {
     reason = 'not_truck_stock';
-  }
-  if (!result.reason && result.warehouseId != null && Number(result.warehouseId) !== expected) {
-    reason = 'warehouse_mismatch';
   }
   return {
     ok: false,
@@ -217,7 +213,7 @@ export async function runRouteLoadAcceptAndRefresh(args: {
   isOnline: boolean;
   accept: (planId: number, pickingId: number) => Promise<RouteLoadAcceptServerResult>;
   refreshPlan: () => Promise<PlanRefreshEvidence>;
-  refreshInventory: (warehouseId: number) => Promise<InventoryRefreshEvidence>;
+  refreshInventory: () => Promise<InventoryRefreshEvidence>;
   offlineMessage?: string;
 }): Promise<RouteLoadAcceptAndRefreshOutcome> {
   const planId = requirePositivePlanId(args.planId);
@@ -244,22 +240,16 @@ export async function runRouteLoadAcceptAndRefresh(args: {
 
   let inventoryRefreshOk = false;
   let inventoryRefreshError: string | null = null;
-  const warehouseId = args.warehouseId != null ? Number(args.warehouseId) : NaN;
-  if (!Number.isFinite(warehouseId) || warehouseId <= 0) {
+  try {
+    const invEvidence = await args.refreshInventory();
+    const evaluated = evaluateInventoryRefreshEvidence(invEvidence);
+    inventoryRefreshOk = evaluated.ok === true && evaluated.authoritative === true;
+    inventoryRefreshError = inventoryRefreshOk
+      ? null
+      : (evaluated.reason || 'inventory_refresh_failed');
+  } catch (error) {
     inventoryRefreshOk = false;
-    inventoryRefreshError = 'missing_warehouse';
-  } else {
-    try {
-      const invEvidence = await args.refreshInventory(warehouseId);
-      const evaluated = evaluateInventoryRefreshEvidence(invEvidence, warehouseId);
-      inventoryRefreshOk = evaluated.ok === true && evaluated.authoritative === true;
-      inventoryRefreshError = inventoryRefreshOk
-        ? null
-        : (evaluated.reason || 'inventory_refresh_failed');
-    } catch (error) {
-      inventoryRefreshOk = false;
-      inventoryRefreshError = error instanceof Error ? error.message : 'inventory_refresh_threw';
-    }
+    inventoryRefreshError = error instanceof Error ? error.message : 'inventory_refresh_threw';
   }
 
   return {

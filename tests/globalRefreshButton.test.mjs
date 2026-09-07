@@ -40,13 +40,18 @@ function main() {
   );
   assert.match(
     refreshButton,
-    /loadProducts\(warehouseId\)/,
-    'el refresh debe recargar inventario del almacen del chofer',
+    /await loadProducts\(\)/,
+    'el refresh debe recargar inventario usando el plan activo',
   );
   assert.match(
     refreshButton,
-    /loadPlan\(\)/,
-    'el refresh debe recargar plan y estados de visitas',
+    /await loadPlan\(\{ force: true \}\)/,
+    'el refresh debe obtener primero el plan activo',
+  );
+  assert.doesNotMatch(
+    refreshButton,
+    /loadProducts\(warehouseId\)/,
+    'el refresh no debe depender del almacen del empleado',
   );
 
   console.log('global refresh button tests: ok');

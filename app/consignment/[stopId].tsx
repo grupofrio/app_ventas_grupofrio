@@ -206,8 +206,8 @@ function ConsignmentScreenInner() {
 
   React.useEffect(() => { void fetchActive(); }, [fetchActive]);
   React.useEffect(() => {
-    if (products.length === 0 && warehouseId && isOnline) void loadProducts(warehouseId);
-  }, [products.length, warehouseId, isOnline, loadProducts]);
+    if (products.length === 0 && isOnline) void loadProducts();
+  }, [products.length, isOnline, loadProducts]);
 
   const addLine = useCallback((line: SaleLineItem) => {
     setCart((prev) => {

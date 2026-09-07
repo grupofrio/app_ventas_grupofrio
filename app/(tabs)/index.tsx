@@ -327,7 +327,6 @@ export default function HomeScreen() {
             <RouteLoadAcceptanceCard
               plan={plan}
               isOnline={isOnline}
-              warehouseId={warehouseId}
               loadPlan={loadPlan}
               loadProductsAuthoritative={loadProductsAuthoritative}
             />

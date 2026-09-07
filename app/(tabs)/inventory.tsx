@@ -31,31 +31,33 @@ export default function InventoryScreen() {
   const { plan, loadPlan } = useRouteStore();
   const {
     products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
-    productCount, lastSync: productsLastSync, hasStockData,
+    productCount, lastSync: productsLastSync, hasStockData, inventoryContext,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
-    const tasks: Promise<void>[] = [];
-    if (warehouseId) {
-      tasks.push(Promise.resolve(loadProducts(warehouseId)));
-    }
     if (isOnline) {
-      tasks.push(loadPlan());
+      await loadPlan({ force: true });
     }
-    await Promise.all(tasks);
-  }, [isOnline, loadPlan, warehouseId, loadProducts]);
+    await loadProducts();
+  }, [isOnline, loadPlan, loadProducts]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
   // BLD-20260424-LOOP: ver nota en productLoading.ts. Pasamos productCount
   // y lastSync para evitar el ciclo de re-fetch en cada cambio de loading.
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(
+      if (isOnline) {
+        void (async () => {
+          await loadPlan();
+          if (shouldRefreshProductsOnFocus(
+            warehouseId, isLoading, productCount, productsLastSync,
+          )) {
+            await loadProducts();
+          }
+        })();
+      } else if (shouldRefreshProductsOnFocus(
         warehouseId, isLoading, productCount, productsLastSync,
       )) {
-        void loadProducts(warehouseId!);
-      }
-      if (isOnline) {
-        void loadPlan();
+        void loadProducts();
       }
     }, [warehouseId, isLoading, productCount, productsLastSync, loadProducts, isOnline, loadPlan])
   );
@@ -71,6 +73,7 @@ export default function InventoryScreen() {
   const productListState = getInventoryProductListState({
     hasStockData,
     visibleProductCount: visibleProducts.length,
+    context: inventoryContext,
   });
 
   return (
@@ -128,7 +131,6 @@ export default function InventoryScreen() {
         <RouteLoadAcceptanceCard
           plan={plan}
           isOnline={isOnline}
-          warehouseId={warehouseId}
           loadPlan={loadPlan}
           loadProductsAuthoritative={loadProductsAuthoritative}
           showLoadLines

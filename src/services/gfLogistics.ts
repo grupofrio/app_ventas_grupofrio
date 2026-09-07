@@ -39,6 +39,7 @@ import { validateSaleCreateResult } from './saleCreateResult';
 import type { SaleCreateResultData } from './saleCreateResult';
 import { buildFieldLeadCreatePayload } from './fieldLeadCreatePayload';
 import { parseTruckStockResponse, type TruckStockResponse } from './truckStockResponse';
+import { buildTruckStockPlanRequest } from './truckStockPlanContext';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -1356,7 +1357,7 @@ export async function signOut(): Promise<void> {
 //
 // Contract:
 //   POST /gf/logistics/api/employee/truck_stock
-//   Body: { warehouse_id?: number, mobile_location_id?: number }
+//   Body: { plan_id: number }
 //   Response: {
 //     ok: true,
 //     data: {
@@ -1385,12 +1386,12 @@ export async function signOut(): Promise<void> {
 export { type TruckStockResponse } from './truckStockResponse';
 
 export async function fetchTruckStock(
-  warehouseId: number | null | undefined,
-  mobileLocationId: number | null | undefined,
+  planId: number | null | undefined,
 ): Promise<TruckStockResponse> {
-  const body: Record<string, unknown> = {};
-  if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
-  if (mobileLocationId && mobileLocationId > 0) body.mobile_location_id = mobileLocationId;
-  const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
+  const request = buildTruckStockPlanRequest(planId);
+  if (!request.ok) {
+    throw new Error('Plan no disponible para consultar inventario.');
+  }
+  const result = await postRest<any>(`${GF_BASE}/truck_stock`, request.body);
   return parseTruckStockResponse(result);
 }

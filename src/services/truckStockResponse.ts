@@ -11,6 +11,9 @@ export class TruckStockPayloadError extends Error {
 export interface TruckStockResponse {
   products: Product[];
   hasStockData: boolean;
+  warehouseId: number;
+  locationId: number;
+  inventorySource: string;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -52,9 +55,24 @@ export function parseTruckStockResponse(result: unknown): TruckStockResponse {
     throw new TruckStockPayloadError();
   }
   const data = envelope.data as Record<string, unknown>;
-  if (typeof data.has_stock_data !== 'boolean' || !Array.isArray(data.products)) {
+  if (
+    typeof data.has_stock_data !== 'boolean'
+    || !Array.isArray(data.products)
+    || !isFiniteNumber(data.warehouse_id)
+    || data.warehouse_id <= 0
+    || !isFiniteNumber(data.location_id)
+    || data.location_id <= 0
+    || typeof data.inventory_source !== 'string'
+    || data.inventory_source.trim().length === 0
+  ) {
     throw new TruckStockPayloadError();
   }
   if (!data.products.every(isTruckProduct)) throw new TruckStockPayloadError();
-  return { products: data.products, hasStockData: data.has_stock_data };
+  return {
+    products: data.products,
+    hasStockData: data.has_stock_data,
+    warehouseId: data.warehouse_id,
+    locationId: data.location_id,
+    inventorySource: data.inventory_source,
+  };
 }

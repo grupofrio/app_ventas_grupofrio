@@ -13,11 +13,19 @@ export function formatInventoryKg(input: {
 export function getInventoryProductListState(input: {
   hasStockData: boolean | null;
   visibleProductCount: number;
+  context?: 'ready' | 'plan_unavailable';
 }): {
-  kind: 'unknown' | 'empty' | 'products';
+  kind: 'unknown' | 'plan_unavailable' | 'empty' | 'products';
   title?: string;
   detail?: string;
 } {
+  if (input.context === 'plan_unavailable') {
+    return {
+      kind: 'plan_unavailable',
+      title: 'Plan no disponible',
+      detail: 'No hay una ruta activa para consultar el inventario de tu unidad.',
+    };
+  }
   if (input.hasStockData !== true) {
     return {
       kind: 'unknown',

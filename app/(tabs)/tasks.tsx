@@ -16,6 +16,7 @@ import { fonts } from '../../src/theme/typography';
 import { useTasksStore } from '../../src/stores/useTasksStore';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import type { TaskItem, TaskPriority, TaskState } from '../../src/types/tasks';
+import { areEmployeeTasksEnabled, TASKS_UNAVAILABLE_MESSAGE } from '../../src/services/taskAvailability';
 
 // ── Priority & state metadata ─────────────────────────────────────────────────
 
@@ -102,6 +103,7 @@ const TaskCard = React.memo(function TaskCard({
 
 export default function TasksScreen() {
   const { tasks, loading, error, pendingCount, loadTasks, completeTask, startTask } = useTasksStore();
+  const tasksAvailable = areEmployeeTasksEnabled();
 
   const doLoad = useCallback(async () => {
     await loadTasks();
@@ -157,7 +159,13 @@ export default function TasksScreen() {
           <RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} tintColor={colors.primary} />
         }
       >
-        {error ? (
+        {!tasksAvailable ? (
+          <View style={styles.emptyBox}>
+            <Text style={{ fontSize: 36 }}>ℹ️</Text>
+            <Text style={styles.emptyTitle}>Tareas no disponibles</Text>
+            <Text style={styles.emptyBody}>{TASKS_UNAVAILABLE_MESSAGE}</Text>
+          </View>
+        ) : error ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}>⚠️ {error}</Text>
             <TouchableOpacity onPress={() => void doLoad()} style={styles.retryBtn}>

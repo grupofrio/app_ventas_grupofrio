@@ -1,12 +1,13 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 import { createEnvironmentConfig } from './src/config/appEnvironment.expo.js';
 
-const EAS_PROJECT_ID = 'b7e8dcec-cf03-4dbc-9919-34022d5468ea';
+const EAS_PROJECT_ID = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
 
 const BASE_EXPO_CONFIG: ExpoConfig = {
   name: 'KOLD Field',
   slug: 'kold-field',
-  version: '1.4.1',
+  owner: 'grupofrio',
+  version: '1.4.2',
   orientation: 'portrait',
   icon: './assets/grupofrio-icon.png',
   userInterfaceStyle: 'dark',
@@ -35,7 +36,7 @@ const BASE_EXPO_CONFIG: ExpoConfig = {
   },
   android: {
     package: 'mx.grupofrio.koldfield',
-    versionCode: 5,
+    versionCode: 6,
     allowBackup: false,
     config: {
       googleMaps: {

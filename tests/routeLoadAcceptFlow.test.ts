@@ -40,7 +40,7 @@ const okAccept = (planId: number, pickingId: number, extra: Record<string, unkno
 });
 
 const okPlan = async () => ({ ok: true as const });
-const okInventory = async (warehouseId: number) => ({
+const okInventory = async (warehouseId = 137) => ({
   ok: true as const,
   authoritative: true as const,
   warehouseId,
@@ -125,25 +125,22 @@ describe('R1B-B refresh evidence helpers', () => {
     );
   });
 
-  it('inventory: only authoritative truck_stock for expected warehouse', () => {
+  it('inventory: only authoritative truck_stock response is accepted', () => {
     assert.equal(
       evaluateInventoryRefreshEvidence(
         { ok: true, authoritative: true, warehouseId: 7, source: 'truck_stock' },
-        7,
       ).ok,
       true,
     );
     assert.equal(
       evaluateInventoryRefreshEvidence(
         { ok: false, authoritative: false, reason: 'network_error' },
-        7,
       ).ok,
       false,
     );
     assert.equal(
       evaluateInventoryRefreshEvidence(
         { ok: true, authoritative: true, warehouseId: 7, source: 'stock_quant' },
-        7,
       ).ok,
       false,
     );
@@ -166,17 +163,17 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
         calls.push('plan');
         return { ok: true };
       },
-      refreshInventory: async (wid) => {
-        calls.push(`inv:${wid}`);
+      refreshInventory: async () => {
+        calls.push('inv');
         return {
           ok: true,
           authoritative: true,
-          warehouseId: wid,
+          warehouseId: 137,
           source: 'truck_stock',
         };
       },
     });
-    assert.deepEqual(calls, ['accept:100:200', 'plan', 'inv:7']);
+    assert.deepEqual(calls, ['accept:100:200', 'plan', 'inv']);
     assert.equal(outcome.accept.ok, true);
     assert.equal(outcome.planRefreshOk, true);
     assert.equal(outcome.inventoryRefreshOk, true);
@@ -246,7 +243,7 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
     assert.match(copy.body, /no se pudo actualizar el inventario/i);
   });
 
-  it('D: missing warehouse → inventoryRefreshOk false; refreshInventory NOT called', async () => {
+  it('D: missing employee warehouse still refreshes stock from the active plan', async () => {
     let invCalls = 0;
     const outcome = await runRouteLoadAcceptAndRefresh({
       planId: 1,
@@ -260,10 +257,10 @@ describe('R1B-B runRouteLoadAcceptAndRefresh', () => {
         return okInventory(99);
       },
     });
-    assert.equal(invCalls, 0);
+    assert.equal(invCalls, 1);
     assert.equal(outcome.accept.ok, true);
-    assert.equal(outcome.inventoryRefreshOk, false);
-    assert.equal(outcome.inventoryRefreshError, 'missing_warehouse');
+    assert.equal(outcome.inventoryRefreshOk, true);
+    assert.equal(outcome.inventoryRefreshError, null);
   });
 
   it('E: accept success + both refresh fail → accept stays success', async () => {
@@ -520,7 +517,7 @@ describe('R1B-B wiring contracts', () => {
     assert.match(logistics, /idempotent_replay/);
 
     const flow = readFileSync(resolve(root, 'src/services/routeLoadAcceptFlow.ts'), 'utf8');
-    assert.match(flow, /missing_warehouse/);
+    assert.doesNotMatch(flow, /missing_warehouse/);
     assert.match(flow, /source === 'truck_stock'/);
   });
 

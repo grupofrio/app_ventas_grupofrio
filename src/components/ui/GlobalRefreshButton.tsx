@@ -11,7 +11,6 @@ import { useRouteStore } from '../../stores/useRouteStore';
 export function GlobalRefreshButton() {
   const segments = useSegments();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const warehouseId = useAuthStore((s) => s.warehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
   const loadPlan = useRouteStore((s) => s.loadPlan);
   const inAuthGroup = segments[0] === '(auth)';
@@ -26,14 +25,13 @@ export function GlobalRefreshButton() {
     setRefreshing(true);
     clearPricelistCaches();
     try {
-      await Promise.all([
-        loadPlan(),
-        warehouseId ? loadProducts(warehouseId) : Promise.resolve(),
-      ]);
+      // truck_stock resolves the virtual warehouse from the freshly loaded plan.
+      await loadPlan({ force: true });
+      await loadProducts();
     } finally {
       setRefreshing(false);
     }
-  }, [loadPlan, loadProducts, refreshing, warehouseId]);
+  }, [loadPlan, loadProducts, refreshing]);
 
   if (!isAuthenticated || inAuthGroup || inSaleScreen) {
     return null;

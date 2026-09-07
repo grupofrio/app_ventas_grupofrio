@@ -9,8 +9,8 @@
  *    (token + datos persistidos en login previo). Esta es la única vía offline.
  *
  * `isRestorableSession` centraliza qué cuenta como sesión local válida para
- * restaurar (misma regla que usaba rehydrateAuth inline): requiere employeeId y
- * warehouseId — sin ellos, inventario/ruta fallarían en silencio.
+ * restaurar: requiere employeeId. Para choferes, el almacén de inventario se
+ * resuelve desde el plan activo al consultar Odoo.
  */
 
 export interface RestorableSessionCheck {
@@ -24,8 +24,7 @@ export function isRestorableSession(saved: unknown): RestorableSessionCheck {
   }
   const s = saved as Record<string, unknown>;
   const hasEmployee = typeof s.employeeId === 'number' && s.employeeId > 0;
-  const hasWarehouse = typeof s.warehouseId === 'number' && s.warehouseId > 0;
-  if (!hasEmployee || !hasWarehouse) {
+  if (!hasEmployee) {
     return { ok: false, reason: 'incomplete' };
   }
   return { ok: true, reason: 'ok' };

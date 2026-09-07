@@ -183,7 +183,8 @@ assert(!/catch/.test(strictLoadBlock[0]),
 const productStore = read('src/stores/useProductStore.ts');
 assert(/loadProductsAuthoritative:/.test(productStore), 'useProductStore expone loadProductsAuthoritative');
 assert(!/global_legacy_fallback|stock_quant/.test(productStore), 'el refresh autoritativo no conserva fallbacks de inventario legacy');
-assert(/warehouse_mismatch/.test(productStore), 'detecta warehouse distinto');
+assert(/loadedWarehouseId: scoped\.warehouseId/.test(productStore),
+  'el refresh autoritativo conserva el almacén resuelto por el servidor');
 
 // ── copy de refill retirado; sync.tsx ya no usa syncItemLabel ────────────────
 const copy = read('src/services/secondaryFlowCopy.ts');

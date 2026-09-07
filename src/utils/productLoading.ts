@@ -1,13 +1,11 @@
 export function shouldAutoLoadProducts(
-  warehouseId: number | null | undefined,
+  _warehouseId: number | null | undefined,
   productCount: number,
   isLoading: boolean,
   lastSyncMs: number | null = null,
   error: string | null = null,
 ): boolean {
-  return !!warehouseId
-    && warehouseId > 0
-    && productCount === 0
+  return productCount === 0
     && !isLoading
     && !lastSyncMs
     && !error;
@@ -35,12 +33,11 @@ export function shouldAutoLoadProducts(
 const MIN_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
 
 export function shouldRefreshProductsOnFocus(
-  warehouseId: number | null | undefined,
+  _warehouseId: number | null | undefined,
   isLoading: boolean,
   productCount = 0,
   lastSyncMs: number | null = null,
 ): boolean {
-  if (!warehouseId || warehouseId <= 0) return false;
   if (isLoading) return false;
   // Caché vacía → siempre refresca
   if (productCount === 0) return true;

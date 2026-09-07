@@ -124,12 +124,12 @@ export default function PresaleScreen() {
     return operationIdRef.current;
   }
 
-  // Ensure catalog is available (presale may be opened without a loaded plan).
+  // Ensure catalog is available when the active route has been loaded.
   React.useEffect(() => {
-    if (products.length === 0 && warehouseId && isOnline) {
-      void loadProducts(warehouseId);
+    if (products.length === 0 && isOnline) {
+      void loadProducts();
     }
-  }, [products.length, warehouseId, isOnline, loadProducts]);
+  }, [products.length, isOnline, loadProducts]);
 
   const runSearch = useCallback(async () => {
     const q = query.trim();

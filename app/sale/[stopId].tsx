@@ -678,7 +678,7 @@ function SaleScreenInner() {
         // intacto para que el vendedor ajuste cantidades. NO se marca como venta.
         const insufficient = getInsufficientStockDetail(error);
         if (insufficient) {
-          if (warehouseId) void loadProducts(warehouseId);
+          void loadProducts();
           Alert.alert(
             'Stock insuficiente (servidor)',
             `${describeInsufficientStock(insufficient)}\n\n${insufficientStockActionHint()}`,
@@ -792,9 +792,7 @@ function SaleScreenInner() {
     }
 
     setSaleSubmitting(false);
-    if (warehouseId) {
-      void loadProducts(warehouseId);
-    }
+    void loadProducts();
 
     if (shouldSkipStopCheckout(stop.id)) {
       if (offrouteVisitId) {

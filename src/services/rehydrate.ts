@@ -141,8 +141,8 @@ export async function rehydrateAppState(): Promise<{
     // sigue online-first y el backend valida stock/precio al confirmar.
     // Limpiamos la key legacy `entities:products` que ya no se usa.
     await storeRemove(STORAGE_KEYS.PRODUCTS);
-    const warehouseId = useAuthStore.getState().warehouseId;
-    productCount = await useProductStore.getState().hydrateFromCache(warehouseId);
+    const planId = useRouteStore.getState().plan?.plan_id ?? null;
+    productCount = await useProductStore.getState().hydrateFromCache(planId);
     const restoredPrices = await hydratePriceCacheFromDisk();
 
     // 3b. Day bundle + route preparation receipt (after plan/products/prices).

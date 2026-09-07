@@ -6,11 +6,11 @@ function testAutoloadWhenWarehousePresentAndStoreEmpty(
   assert.equal(shouldAutoLoadProducts(12, 0, false), true);
 }
 
-function testSkipsAutoloadWithoutWarehouse(
+function testAutoloadDoesNotDependOnEmployeeWarehouse(
   shouldAutoLoadProducts: (warehouseId: number | null | undefined, productCount: number, isLoading: boolean) => boolean,
 ) {
-  assert.equal(shouldAutoLoadProducts(null, 0, false), false);
-  assert.equal(shouldAutoLoadProducts(0, 0, false), false);
+  assert.equal(shouldAutoLoadProducts(null, 0, false), true);
+  assert.equal(shouldAutoLoadProducts(0, 0, false), true);
 }
 
 function testSkipsAutoloadWhenAlreadyLoadedOrLoading(
@@ -55,11 +55,11 @@ function testRefreshesOnFocusWhenWarehousePresentAndIdle(
   assert.equal(shouldRefreshProductsOnFocus(12, false, 14, Date.now() - 10 * 60 * 1000), true);
 }
 
-function testSkipsFocusRefreshWithoutWarehouseOrWhileLoading(
+function testFocusRefreshDoesNotDependOnEmployeeWarehouseOrWhileLoading(
   shouldRefreshProductsOnFocus: RefreshOnFocusFn,
 ) {
-  assert.equal(shouldRefreshProductsOnFocus(null, false, 0, null), false);
-  assert.equal(shouldRefreshProductsOnFocus(0, false, 0, null), false);
+  assert.equal(shouldRefreshProductsOnFocus(null, false, 0, null), true);
+  assert.equal(shouldRefreshProductsOnFocus(0, false, 0, null), true);
   assert.equal(shouldRefreshProductsOnFocus(12, true, 0, null), false);
 }
 
@@ -82,11 +82,11 @@ async function main() {
   );
 
   testAutoloadWhenWarehousePresentAndStoreEmpty(productLoading.shouldAutoLoadProducts);
-  testSkipsAutoloadWithoutWarehouse(productLoading.shouldAutoLoadProducts);
+  testAutoloadDoesNotDependOnEmployeeWarehouse(productLoading.shouldAutoLoadProducts);
   testSkipsAutoloadWhenAlreadyLoadedOrLoading(productLoading.shouldAutoLoadProducts);
   testSkipsAutoloadAfterAttemptOrError(productLoading.shouldAutoLoadProducts);
   testRefreshesOnFocusWhenWarehousePresentAndIdle(productLoading.shouldRefreshProductsOnFocus);
-  testSkipsFocusRefreshWithoutWarehouseOrWhileLoading(productLoading.shouldRefreshProductsOnFocus);
+  testFocusRefreshDoesNotDependOnEmployeeWarehouseOrWhileLoading(productLoading.shouldRefreshProductsOnFocus);
   testDoesNotRefreshWhenCacheIsFreshAndPopulated(productLoading.shouldRefreshProductsOnFocus);
   console.log('product loading tests: ok');
 }

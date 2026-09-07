@@ -21,11 +21,13 @@ function run(m: Mod) {
   assert.equal(m.isRestorableSession(undefined).ok, false);
   assert.equal(m.isRestorableSession('x').ok, false);
 
-  // Sesión incompleta (sin warehouse o sin employee) → bloquea.
-  assert.equal(m.isRestorableSession({ employeeId: 42 }).reason, 'incomplete');
+  // El almacén se resuelve desde el plan; una sesión de chofer sin warehouse
+  // sigue siendo restaurable.
+  assert.equal(m.isRestorableSession({ employeeId: 42 }).ok, true);
+  // Sin empleado → bloquea.
   assert.equal(m.isRestorableSession({ warehouseId: 7 }).reason, 'incomplete');
   assert.equal(m.isRestorableSession({ employeeId: 0, warehouseId: 7 }).ok, false, 'id 0 inválido');
-  assert.equal(m.isRestorableSession({ employeeId: 42, warehouseId: 0 }).ok, false);
+  assert.equal(m.isRestorableSession({ employeeId: 42, warehouseId: 0 }).ok, true);
 
   // Aviso offline: solo sin conexión, honesto (login nuevo requiere internet;
   // sesión previa se restaura al abrir la app).

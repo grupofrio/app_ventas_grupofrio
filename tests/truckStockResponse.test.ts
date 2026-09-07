@@ -19,10 +19,25 @@ const validProduct = {
 function main() {
   const parsed = parseTruckStockResponse({
     ok: true,
-    data: { has_stock_data: false, products: [validProduct] },
+    data: {
+      warehouse_id: 137,
+      location_id: 1908,
+      inventory_source: 'route_plan',
+      has_stock_data: false,
+      products: [validProduct],
+    },
   });
   assert.equal(parsed.hasStockData, false);
   assert.equal(parsed.products[0].id, validProduct.id);
+  assert.equal(parsed.warehouseId, 137);
+  assert.equal(parsed.locationId, 1908);
+  assert.equal(parsed.inventorySource, 'route_plan');
+
+  assert.throws(
+    () => parseTruckStockResponse({ ok: false, message: 'Sesión expirada' }),
+    TruckStockPayloadError,
+    'una respuesta ok:false debe conservar la ruta de error y no mutar el catálogo',
+  );
 
   for (const malformed of [
     { ok: true, data: { products: [validProduct] } },

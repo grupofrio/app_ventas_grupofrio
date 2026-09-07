@@ -17,7 +17,7 @@ test('production config keeps official identity', () => {
   assert.equal(config.android.package, 'mx.grupofrio.koldfield');
   assert.equal(config.extra.appEnvironment, 'production');
   assert.equal(config.extra.defaultBaseUrl, 'https://grupofrio-gf.odoo.com');
-  assert.equal(config.extra.eas.projectId, 'b7e8dcec-cf03-4dbc-9919-34022d5468ea');
+  assert.equal(config.extra.eas.projectId, '0a24997e-51fe-417a-a8d7-4bc83a1d7dff');
 });
 
 test('staging config changes visible identity and backend target', () => {
@@ -38,7 +38,7 @@ test('staging config changes visible identity and backend target', () => {
     'https://grupofrio-gf-staging280826-37133857.dev.odoo.com',
   );
   assert.equal(config.extra.defaultOdooDb, 'grupofrio-gf-staging280826-37133857');
-  assert.equal(config.extra.eas.projectId, 'b7e8dcec-cf03-4dbc-9919-34022d5468ea');
+  assert.equal(config.extra.eas.projectId, '0a24997e-51fe-417a-a8d7-4bc83a1d7dff');
 });
 
 test('development keeps dev runtime metadata but reuses the staging native identity', () => {
@@ -59,5 +59,5 @@ test('development keeps dev runtime metadata but reuses the staging native ident
     'https://grupofrio-gf-staging280826-37133857.dev.odoo.com',
   );
   assert.equal(config.extra.defaultOdooDb, 'grupofrio-gf-staging280826-37133857');
-  assert.equal(config.extra.eas.projectId, 'b7e8dcec-cf03-4dbc-9919-34022d5468ea');
+  assert.equal(config.extra.eas.projectId, '0a24997e-51fe-417a-a8d7-4bc83a1d7dff');
 });

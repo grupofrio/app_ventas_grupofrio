@@ -75,6 +75,16 @@ assert.equal(
   'package.json must expose an Android production build command',
 );
 
+const productionApk = eas.build['production-apk'];
+assert.ok(productionApk, 'production-apk profile must exist for direct Android distribution');
+assert.equal(productionApk.distribution, 'internal');
+assert.equal(productionApk.android?.buildType, 'apk');
+assert.deepEqual(productionApk.env, {
+  EXPO_PUBLIC_BUILD_PROFILE: 'production-apk',
+  EXPO_PUBLIC_KF_DEFAULT_BASE_URL: 'https://grupofrio-gf.odoo.com',
+  EXPO_PUBLIC_KF_ODOO_DB: 'grupofrio-gf-main-34980678',
+});
+
 const source = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
 assert.match(
   source,

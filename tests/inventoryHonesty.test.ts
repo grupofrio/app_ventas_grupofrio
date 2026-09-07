@@ -35,6 +35,20 @@ function main() {
     'la lista no debe caer al estado vacío cuando el stock de unidad es desconocido',
   );
 
+  assert.deepEqual(
+    getInventoryProductListState({
+      hasStockData: null,
+      visibleProductCount: 0,
+      context: 'plan_unavailable',
+    }),
+    {
+      kind: 'plan_unavailable',
+      title: 'Plan no disponible',
+      detail: 'No hay una ruta activa para consultar el inventario de tu unidad.',
+    },
+    'sin plan activo no debe parecer inventario desconocido ni disparar truck_stock',
+  );
+
   console.log('inventory honesty tests: ok');
 }
 

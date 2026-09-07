@@ -57,6 +57,17 @@
         "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
         "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
       }
+    },
+    "production-apk": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BUILD_PROFILE": "production-apk",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
+      }
     }
   },
   "submit": {

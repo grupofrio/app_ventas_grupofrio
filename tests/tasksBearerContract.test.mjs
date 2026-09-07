@@ -22,6 +22,8 @@ function testEmployeeTaskServiceHasNoClientSelectedAuthority() {
 
   assert.match(list, /fetchMyTasks\(\): Promise<TaskItem\[\]>/,
     'task list must derive its employee scope solely from the Bearer token');
+  assert.match(list, /if \(!areEmployeeTasksEnabled\(\)\) return \[\];/,
+    'task list must stay offline when the independently deployed tasks addon is unavailable');
   assert.match(list, /getRest[\s\S]*?['"]\/gf\/logistics\/api\/employee\/tasks['"]/,
     'task list must use the employee-scoped REST endpoint');
   assert.doesNotMatch(list, /\/tasks\?|assignee_id|company_id|employeeId|companyId|branchId/,
@@ -77,6 +79,8 @@ function testStoreAndMiDiaOnlyUseTheScopedTaskAdapter() {
     'Tasks screen must use the task store');
   assert.match(tasksScreen, /await loadTasks\(\);/,
     'Tasks screen must refresh through the scoped store call');
+  assert.match(tasksScreen, /areEmployeeTasksEnabled\(\)/,
+    'Tasks screen must explain when the optional backend capability is unavailable');
   assert.doesNotMatch(tasksScreen, /useAuthStore|employeeId|companyId|assignee_id|company_id|gfTasks/,
     'Tasks screen must not read identity merely to construct task requests');
 

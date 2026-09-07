@@ -107,9 +107,9 @@ export default function RefillAcceptScreen() {
                     routeFreshness: snap.routeFreshness,
                   });
                 },
-                refreshInventory: async (wid) => {
-                  const result = await loadProductsAuthoritative(wid);
-                  return evaluateInventoryRefreshEvidence(result, wid);
+                refreshInventory: async () => {
+                  const result = await loadProductsAuthoritative();
+                  return evaluateInventoryRefreshEvidence(result);
                 },
               });
               const copy = describeRouteLoadAcceptSuccess({

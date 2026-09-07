@@ -292,7 +292,16 @@ assert.doesNotMatch(definitive.body, /unlockSaleConfirm\(\)/);
 assert.match(definitive.body, /sale_definitive_clear_persist_failed/);
 assert.match(definitive.body, /getInsufficientStockDetail\(error\)/);
 assert.match(definitive.body, /describeInsufficientStock\(insufficient\)/);
-assert.match(definitive.body, /void loadProducts\(warehouseId\)/);
+assert.match(
+  definitive.body,
+  /void loadProducts\(\)/,
+  'la recuperacion de inventario debe usar el plan activo',
+);
+assert.doesNotMatch(
+  definitive.body,
+  /loadProducts\(warehouseId\)/,
+  'la recuperacion no debe depender del almacen del empleado',
+);
 assert.match(definitive.body, /Alert\.alert\(\s*['"]Venta rechazada['"]/);
 assert.match(definitive.body, /return;/);
 

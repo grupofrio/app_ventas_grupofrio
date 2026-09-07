@@ -17,6 +17,7 @@ import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/
 import { fetchTruckStock } from '../services/gfLogistics';
 import { logInfo, logWarn } from '../utils/logger';
 import { useAuthStore } from './useAuthStore';
+import { useRouteStore } from './useRouteStore';
 import {
   buildCacheEnvelope,
   readCacheEnvelope,
@@ -41,9 +42,12 @@ interface ProductState {
   error: string | null;
   lastSync: number | null;
   inventorySource: InventorySource | null;
-  /** warehouseId al que corresponde la ÚLTIMA carga exitosa (para verificar que
-   * un refresh es autoritativo para el almacén esperado). null si no hay carga. */
+  /** warehouseId informado por el servidor en la ÚLTIMA carga exitosa. */
   loadedWarehouseId: number | null;
+  /** plan_id de la respuesta de camioneta actualmente cargada. */
+  loadedPlanId: number | null;
+  /** Sin plan nunca se consulta truck_stock: la UI lo expresa sin fingir cero. */
+  inventoryContext: 'ready' | 'plan_unavailable';
   /**
    * BLD-20260424-STOCKMETA: viene del flag `has_stock_data` que Sebastián
    * agregó al endpoint /truck_stock. true = el almacén tiene stock real
@@ -68,14 +72,15 @@ interface ProductState {
   productCount: number;
 
   // Actions
-  loadProducts: (warehouseId: number) => Promise<void>;
+  /** @deprecated warehouseId is ignored; truck stock is scoped by the active plan. */
+  loadProducts: (_legacyWarehouseId?: number | null) => Promise<void>;
   /**
    * Carga de inventario con RESULTADO AUTORITATIVO explícito (P1-2). Envuelve
-   * loadProducts y devuelve si la carga fue autoritativa para el warehouse
-   * esperado (fuente employee-scoped, sin error de red). El consumidor
+   * loadProducts y devuelve si la carga fue autoritativa según el endpoint
+   * scoped por plan (sin error de red). El consumidor
    * NO debe inferir éxito por Promise resuelta ni por `error === null`.
    */
-  loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
+  loadProductsAuthoritative: (_legacyWarehouseId?: number | null) => Promise<InventoryLoadResult>;
   updateLocalStock: (productId: number, qtyChange: number) => void;
   /**
    * POST-R1A: apply ledger sellable projection without a second delta pass.
@@ -132,9 +137,9 @@ interface CatalogCachePayload {
 }
 
 /** contextKey de catálogo: día + empleado + empresa + almacén. */
-function buildCatalogContextKey(warehouseId: number | null): string {
+function buildCatalogContextKey(planId: number | null): string {
   const auth = useAuthStore.getState();
-  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, warehouseId]);
+  return buildContextKey([todayLocalISO(), auth.employeeId, auth.companyId, planId]);
 }
 
 /** Persiste el catálogo actual en disco (fire-and-forget). */
@@ -142,11 +147,11 @@ function persistCatalogToDisk(
   products: TruckProduct[],
   inventorySource: InventorySource | null,
   hasStockData: boolean | null,
-  warehouseId: number | null,
+  planId: number | null,
 ): void {
   if (products.length === 0) return;
   const payload: CatalogCachePayload = { products, inventorySource, hasStockData };
-  const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(warehouseId), Date.now());
+  const envelope = buildCacheEnvelope(payload, buildCatalogContextKey(planId), Date.now());
   void storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
 }
 
@@ -157,22 +162,21 @@ export const useProductStore = create<ProductState>((set, get) => ({
   lastSync: null,
   inventorySource: null,
   loadedWarehouseId: null,
+  loadedPlanId: null,
+  inventoryContext: 'ready',
   hasStockData: null,
   fromCache: false,
   cachedAtMs: null,
   totalStockKg: 0,
   productCount: 0,
 
-  loadProducts: async (warehouseId: number) => {
-    // BLD-20260408-P0: Guard against null/0 warehouseId — this was the root
-    // cause of inventory loading the global product list (104 products,
-    // 595k kg) instead of the truck's scoped stock.
-    if (!warehouseId || warehouseId <= 0) {
-      logWarn('inventory', 'load_skipped_no_warehouse', {
-        warehouseId,
-        message: 'Cannot load inventory without a valid warehouseId',
+  loadProducts: async (_legacyWarehouseId?: number | null) => {
+    const planId = useRouteStore.getState().plan?.plan_id;
+    if (!planId || planId <= 0) {
+      logWarn('inventory', 'load_skipped_no_plan', {
+        message: 'Cannot load inventory without an active route plan',
       });
-      set({ error: 'Sin almacén asignado. Cierra sesión e inicia de nuevo.', isLoading: false });
+      set({ error: null, isLoading: false, inventoryContext: 'plan_unavailable' });
       return;
     }
 
@@ -209,14 +213,15 @@ export const useProductStore = create<ProductState>((set, get) => ({
       }
 
       const snapshotAtMs = Date.now();
-      const mobileLocationId = useAuthStore.getState().mobileLocationId;
-      const scoped = await fetchTruckStock(warehouseId, mobileLocationId);
+      const scoped = await fetchTruckStock(planId);
       const rawProducts = scoped.products as Product[];
       const source: InventorySource = 'truck_stock';
       const hasStockData = scoped.hasStockData;
       logInfo('inventory', scoped.hasStockData === false ? 'loaded_truck_stock_reference' : 'loaded_truck_stock', {
-        warehouse: warehouseId,
-        mobileLocationId,
+        planId,
+        warehouseId: scoped.warehouseId,
+        locationId: scoped.locationId,
+        inventorySource: scoped.inventorySource,
         count: rawProducts.length,
         hasStockData: scoped.hasStockData,
       });
@@ -255,8 +260,10 @@ export const useProductStore = create<ProductState>((set, get) => ({
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         inventorySource: source,
-        loadedWarehouseId: warehouseId,
+        loadedWarehouseId: scoped.warehouseId,
+        loadedPlanId: planId,
         hasStockData,
+        inventoryContext: 'ready',
         // Carga fresca de red → ya no provienen del caché.
         fromCache: false,
         cachedAtMs: null,
@@ -284,8 +291,10 @@ export const useProductStore = create<ProductState>((set, get) => ({
         count: products.length,
         withStock,
         totalKg: Math.round(totalKg),
-        warehouseId,
-        mobileLocationId,
+        planId,
+        warehouseId: scoped.warehouseId,
+        locationId: scoped.locationId,
+        inventorySource: scoped.inventorySource,
       });
 
       // Perf Fase 2B: persistir catálogo para sobrevivir reinicios en ruta.
@@ -293,7 +302,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
       // se guarda como referencial — la venta sigue online-first y el backend
       // valida stock/precio al confirmar. Limpiamos la key legacy sin uso.
       void storeRemove(STORAGE_KEYS.PRODUCTS);
-      persistCatalogToDisk(products, source, hasStockData, warehouseId);
+      persistCatalogToDisk(products, source, hasStockData, planId);
       schedulePersistPriceCache();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
@@ -305,12 +314,9 @@ export const useProductStore = create<ProductState>((set, get) => ({
   // P1-2: solo la respuesta employee-scoped puede ser autoritativa. Un error
   // explícito conserva el catálogo contextual ya rehidratado, sin consultar
   // ninguna fuente alternativa.
-  loadProductsAuthoritative: async (warehouseId: number): Promise<InventoryLoadResult> => {
-    if (!warehouseId || warehouseId <= 0) {
-      return { ok: false, authoritative: false, reason: 'missing_warehouse' };
-    }
+  loadProductsAuthoritative: async (_legacyWarehouseId?: number | null): Promise<InventoryLoadResult> => {
     try {
-      await get().loadProducts(warehouseId);
+      await get().loadProducts();
     } catch (e) {
       logWarn('inventory', 'authoritative_load_threw', {
         message: e instanceof Error ? e.message : String(e),
@@ -320,14 +326,14 @@ export const useProductStore = create<ProductState>((set, get) => ({
     const err = get().error;
     const source = get().inventorySource;
     const loadedWh = get().loadedWarehouseId;
+    if (get().inventoryContext === 'plan_unavailable') {
+      return { ok: false, authoritative: false, reason: 'plan_unavailable' };
+    }
     if (err) {
       return { ok: false, authoritative: false, reason: 'network_error', source: source ?? undefined };
     }
-    if (loadedWh !== warehouseId) {
-      return { ok: false, authoritative: false, reason: 'warehouse_mismatch', source: source ?? undefined };
-    }
-    if (source === 'truck_stock') {
-      return { ok: true, authoritative: true, warehouseId, source };
+    if (source === 'truck_stock' && typeof loadedWh === 'number' && loadedWh > 0) {
+      return { ok: true, authoritative: true, warehouseId: loadedWh, source };
     }
     return { ok: false, authoritative: false, reason: 'unknown', source: source ?? undefined };
   },
@@ -366,7 +372,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
       products,
       get().inventorySource,
       get().hasStockData,
-      useAuthStore.getState().warehouseId,
+      useRouteStore.getState().plan?.plan_id ?? null,
     );
   },
 
@@ -393,19 +399,19 @@ export const useProductStore = create<ProductState>((set, get) => ({
       products,
       get().inventorySource,
       get().hasStockData,
-      useAuthStore.getState().warehouseId,
+      useRouteStore.getState().plan?.plan_id ?? null,
     );
   },
 
   getProduct: (productId) => get().products.find((p) => p.id === productId),
 
-  hydrateFromCache: async (warehouseId: number | null) => {
+  hydrateFromCache: async (planId: number | null) => {
     try {
       const raw = await storeLoad<unknown>(STORAGE_KEYS.PRODUCTS_CATALOG);
       if (raw === null) return 0;
       const result = readCacheEnvelope<CatalogCachePayload>(
         raw,
-        buildCatalogContextKey(warehouseId),
+        buildCatalogContextKey(planId),
         CATALOG_CACHE_TTL_MS,
         Date.now(),
       );
@@ -444,7 +450,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   reset: () => set({
     products: [], isLoading: false, error: null,
     lastSync: null, totalStockKg: 0, productCount: 0,
-    inventorySource: null, hasStockData: null,
+    inventorySource: null, loadedWarehouseId: null, loadedPlanId: null,
+    hasStockData: null, inventoryContext: 'ready',
     fromCache: false, cachedAtMs: null,
   }),
 }));

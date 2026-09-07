@@ -27,10 +27,9 @@ import { logWarn } from '../../utils/logger';
 interface Props {
   plan: GFPlan | null;
   isOnline: boolean;
-  warehouseId?: number | null;
   loadPlan: (opts?: { force?: boolean }) => Promise<void>;
   /** Authoritative inventory loader — Promise resolve is NOT success evidence. */
-  loadProductsAuthoritative: (warehouseId: number) => Promise<InventoryLoadResult>;
+  loadProductsAuthoritative: () => Promise<InventoryLoadResult>;
   showLoadLines?: boolean;
   showAcceptedLoads?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -39,7 +38,6 @@ interface Props {
 export function RouteLoadAcceptanceCard({
   plan,
   isOnline,
-  warehouseId,
   loadPlan,
   loadProductsAuthoritative,
   showLoadLines = false,
@@ -68,7 +66,6 @@ export function RouteLoadAcceptanceCard({
       const outcome = await runRouteLoadAcceptAndRefresh({
         planId,
         pickingId,
-        warehouseId,
         isOnline: true,
         accept: acceptRouteLoad,
         refreshPlan: async () => {
@@ -80,9 +77,9 @@ export function RouteLoadAcceptanceCard({
             routeFreshness: snap.routeFreshness,
           });
         },
-        refreshInventory: async (wid) => {
-          const result = await loadProductsAuthoritative(wid);
-          return evaluateInventoryRefreshEvidence(result, wid);
+        refreshInventory: async () => {
+          const result = await loadProductsAuthoritative();
+          return evaluateInventoryRefreshEvidence(result);
         },
       });
       const copy = describeRouteLoadAcceptSuccess({
@@ -117,7 +114,6 @@ export function RouteLoadAcceptanceCard({
     loadProductsAuthoritative,
     pendingLoad,
     plan?.plan_id,
-    warehouseId,
   ]);
 
   const acceptedLoads = showAcceptedLoads ? routeLoadState.acceptedLoads : [];

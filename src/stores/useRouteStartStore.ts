@@ -12,7 +12,7 @@
  */
 
 import { create } from 'zustand';
-import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
+import { storeSave, storeSaveStrict, storeLoad, STORAGE_KEYS } from '../persistence/storage';
 import { computeRouteStartReadiness } from '../services/routeStartLogic';
 import { RouteStartReadiness } from '../types/routeStart';
 import { logInfo } from '../utils/logger';
@@ -141,7 +141,7 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
     const current = get();
     if (current.planId !== planId) return false;
     const next = { ...current, routeStartedPlanId: planId };
-    await storeSave(STORAGE_KEYS.ROUTE_START, persistedSnapshot(next));
+    await storeSaveStrict(STORAGE_KEYS.ROUTE_START, persistedSnapshot(next));
     if (get().planId !== planId) return false;
     set({ routeStartedPlanId: planId });
     return true;

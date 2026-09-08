@@ -52,7 +52,7 @@ export const useEmployeeDayBundleStore = create<EmployeeDayBundleState>((set) =>
       }
       set({ record: loaded.record, access: loaded.access, ...catalogue(loaded.record), error: null });
     } catch (error) {
-      set({ ...empty, error: error instanceof Error ? error.message : 'No se pudo validar el bundle local.' });
+      set({ ...empty, error: error instanceof Error ? error.message : 'No se pudieron validar los datos guardados.' });
     }
   },
   prepare: async () => {
@@ -61,11 +61,11 @@ export const useEmployeeDayBundleStore = create<EmployeeDayBundleState>((set) =>
       const prepared = await prepareCurrentEmployeeDayBundle();
       const loaded = await loadCurrentEmployeeDayBundle();
       if (!loaded || loaded.record.etag !== prepared.record.etag) {
-        throw new Error('El bundle recibido no se pudo validar localmente.');
+        throw new Error('Los datos recibidos no se pudieron validar en el dispositivo.');
       }
       set({ record: loaded.record, access: loaded.access, ...catalogue(loaded.record), isRefreshing: false, error: null });
     } catch (error) {
-      set({ isRefreshing: false, error: error instanceof Error ? error.message : 'No se pudo preparar el bundle.' });
+      set({ isRefreshing: false, error: error instanceof Error ? error.message : 'No se pudieron preparar los datos del día.' });
       throw error;
     }
   },

@@ -20,20 +20,20 @@ export function describeDayBundleActionBlock(
   switch (error.reason) {
     case 'expired':
       return {
-        title: 'Bundle vencido',
-        message: 'El bundle del día venció. Renúevalo antes de registrar cambios.',
+        title: 'Datos del día vencidos',
+        message: 'Los datos del día vencieron. Actualízalos antes de registrar cambios.',
         canRefresh: true,
       };
     case 'invalid':
       return {
-        title: 'Bundle no disponible',
-        message: 'El bundle local no se pudo validar. Renúevalo antes de registrar cambios.',
+        title: 'Datos del día no disponibles',
+        message: 'Los datos guardados no se pudieron validar. Actualízalos antes de registrar cambios.',
         canRefresh: true,
       };
     case 'missing':
       return {
-        title: 'Bundle no disponible',
-        message: 'No hay un bundle del día disponible en este dispositivo. Renúevalo antes de registrar cambios.',
+        title: 'Datos del día no disponibles',
+        message: 'Este dispositivo aún no tiene los datos del día. Prepáralos antes de registrar cambios.',
         canRefresh: true,
       };
   }

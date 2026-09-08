@@ -71,11 +71,10 @@ import {
   isSameStartedRoutePlan,
 } from '../src/services/routeStartUi';
 
-type StepStatus = 'pending' | 'done' | 'skip';
+type StepStatus = 'pending' | 'done';
 
 function StatusBadge({ status }: { status: StepStatus }) {
   if (status === 'done') return <Badge label="✓ Listo" variant="green" />;
-  if (status === 'skip') return <Badge label="Sin pendiente" variant="dim" />;
   return <Badge label="Pendiente" variant="orange" />;
 }
 
@@ -160,9 +159,7 @@ export default function RouteStartScreen() {
   const loadStatus: StepStatus =
     initialLoadState.initialLoadRejectedWaiting
       ? 'pending'
-      : initialLoadState.initialLoads.length === 0
-        ? 'skip'
-        : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
+      : (initialLoadState.initialLoadAccepted ? 'done' : 'pending');
 
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
@@ -291,6 +288,10 @@ export default function RouteStartScreen() {
                 });
               }
               Alert.alert(copy.title, copy.body);
+              // Once the initial load is accepted, begin downloading the day
+              // automatically. The explicit "Iniciar ruta" action remains
+              // locked until this preparation completes successfully.
+              void useRoutePreparationStore.getState().prepareRouteData();
             } catch (err) {
               Alert.alert('Error al aceptar', err instanceof Error ? err.message : 'Intenta de nuevo.');
             } finally {
@@ -480,6 +481,17 @@ export default function RouteStartScreen() {
         Alert.alert(
           'La ruta cambió',
           'La ruta cambió mientras se iniciaba. Revisa el plan actual.',
+        );
+        return;
+      }
+
+      const startMarkerPersisted = await useRouteStartStore
+        .getState()
+        .markRouteStartedForPlan(capturedPlanId);
+      if (!startMarkerPersisted) {
+        Alert.alert(
+          'No se pudo guardar el inicio',
+          'La ruta no se abrirá hasta guardar de forma segura el inicio. Intenta nuevamente.',
         );
         return;
       }
@@ -705,8 +717,21 @@ export default function RouteStartScreen() {
             <Text style={[typography.dim, styles.stepBody]}>
               {startDayGates.loadLockMessage}
             </Text>
-          ) : loadStatus === 'skip' ? (
-            <Text style={[typography.dim, styles.stepBody]}>No tienes carga pendiente de aceptar.</Text>
+          ) : initialLoadState.initialLoads.length === 0 ? (
+            <>
+              <Text style={[typography.dim, styles.stepBody]}>
+                No encontramos la carga inicial de esta ruta. Actualiza los datos; si sigue sin aparecer,
+                Almacén debe vincular la carga al plan antes de que puedas iniciar.
+              </Text>
+              <Button
+                label={loading ? 'Actualizando…' : 'Actualizar carga'}
+                variant="secondary"
+                onPress={() => { void refresh(); }}
+                disabled={!isOnline || loading}
+                loading={loading}
+                fullWidth
+              />
+            </>
           ) : loadStatus === 'done' ? (
             <Text style={[typography.dim, styles.stepBody]}>✓ Tu carga ya fue aceptada.</Text>
           ) : initialLoadState.initialLoadRejectedWaiting ? (

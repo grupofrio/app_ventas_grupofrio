@@ -14,6 +14,12 @@ export interface OperationReadinessInput {
   checklistDone: boolean;
   kmCaptured: boolean;
   loadAccepted: boolean;
+  /** Durable confirmation produced only by the explicit "Iniciar ruta" action. */
+  routeStartConfirmed: boolean;
+  /** The current plan has a durable preparation receipt and its minimum data. */
+  dataPrepared: boolean;
+  /** Compatibility evidence for routes already visited before this marker existed. */
+  routeAlreadyUnderway?: boolean;
   mode?: OperationMode;
 }
 
@@ -85,6 +91,22 @@ export function deriveOperationReadiness(input: OperationReadinessInput): Operat
     }
 
     case 'in_progress':
+      // seal_load can move the plan to in_progress before the seller has
+      // prepared the day or explicitly started the route. Existing routes with
+      // real visit progress remain available during upgrade from older builds.
+      if (input.routeAlreadyUnderway) return allowed();
+      if (!input.dataPrepared) {
+        return blocked(
+          ['preparar datos del día'],
+          'La carga fue aceptada, pero todavía faltan datos del día. Termina la preparación antes de entrar a Ruta.',
+        );
+      }
+      if (!input.routeStartConfirmed) {
+        return blocked(
+          ['confirmar inicio de ruta'],
+          'Los datos están listos. Toca "Iniciar ruta" para comenzar el recorrido.',
+        );
+      }
       return allowed();
 
     case 'closed':

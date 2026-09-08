@@ -196,7 +196,7 @@ export async function prepareCurrentEmployeeDayBundle(
   if (!session) {
     // TEMP DIAGNOSTIC LOG (fix/daily-bundle-validation) — remove after investigation
     diagWarn('prepare_error', { reason: 'no_encrypted_session' });
-    throw new Error('La sesión cifrada del bundle no está disponible.');
+    throw new Error('La sesión segura de los datos del día no está disponible.');
   }
   const bearerToken = await api.getEmployeeBearerToken();
   if (!bearerToken) {

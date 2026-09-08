@@ -7,32 +7,32 @@ import {
   describeDayBundleActionBlock,
 } from '../src/services/dayBundleMutationGate.ts';
 
-test('an absent bundle is not reported as expired', () => {
+test('absent day data is not reported as expired and uses seller-facing copy', () => {
   const error = new DayBundleActionBlockedError('missing');
 
   assert.deepEqual(describeDayBundleActionBlock(error), {
-    title: 'Bundle no disponible',
-    message: 'No hay un bundle del día disponible en este dispositivo. Renúevalo antes de registrar cambios.',
+    title: 'Datos del día no disponibles',
+    message: 'Este dispositivo aún no tiene los datos del día. Prepáralos antes de registrar cambios.',
     canRefresh: true,
   });
 });
 
-test('an expired bundle keeps the expired message', () => {
+test('expired day data keeps the expired message without technical bundle wording', () => {
   const error = new DayBundleActionBlockedError('expired');
 
   assert.deepEqual(describeDayBundleActionBlock(error), {
-    title: 'Bundle vencido',
-    message: 'El bundle del día venció. Renúevalo antes de registrar cambios.',
+    title: 'Datos del día vencidos',
+    message: 'Los datos del día vencieron. Actualízalos antes de registrar cambios.',
     canRefresh: true,
   });
 });
 
-test('an invalid local bundle is reported as unreadable instead of expired', () => {
+test('invalid local day data is reported as unreadable instead of expired', () => {
   const error = new DayBundleActionBlockedError('invalid');
 
   assert.deepEqual(describeDayBundleActionBlock(error), {
-    title: 'Bundle no disponible',
-    message: 'El bundle local no se pudo validar. Renúevalo antes de registrar cambios.',
+    title: 'Datos del día no disponibles',
+    message: 'Los datos guardados no se pudieron validar. Actualízalos antes de registrar cambios.',
     canRefresh: true,
   });
 });

@@ -13,6 +13,9 @@ interface Input {
   checklistDone: boolean;
   kmCaptured: boolean;
   loadAccepted: boolean;
+  routeStartConfirmed: boolean;
+  dataPrepared: boolean;
+  routeAlreadyUnderway?: boolean;
   mode?: OperationMode;
 }
 
@@ -33,6 +36,8 @@ const ready: Input = {
   checklistDone: true,
   kmCaptured: true,
   loadAccepted: true,
+  routeStartConfirmed: true,
+  dataPrepared: true,
 };
 
 function assertBlocked(result: Result, context: string): void {
@@ -88,13 +93,16 @@ function run(m: Mod) {
     }
   }
 
-  // Alemán case: Odoo already started the plan. Cached phone facts, including
-  // a missing KM and a different persisted plan id, cannot revoke that state.
+  // A route with real visit progress remains operable after an app upgrade even
+  // if the older build did not persist the explicit local start marker.
   const aleman = m.deriveOperationReadiness({
     ...ready,
     planState: 'in_progress',
     planMatchesReadiness: false,
     kmCaptured: false,
+    routeStartConfirmed: false,
+    dataPrepared: false,
+    routeAlreadyUnderway: true,
   });
   assert.deepEqual(aleman, {
     canOperate: true,
@@ -102,6 +110,29 @@ function run(m: Mod) {
     warnings: [],
     reason: null,
   });
+
+  // seal_load may also flip the Odoo plan to in_progress. Without a completed
+  // preparation and the explicit "Iniciar ruta" confirmation, that state must
+  // not unlock the route tab or transactional screens.
+  const sealedLoadOnly = m.deriveOperationReadiness({
+    ...ready,
+    planState: 'in_progress',
+    routeStartConfirmed: false,
+    dataPrepared: false,
+    routeAlreadyUnderway: false,
+  });
+  assertBlocked(sealedLoadOnly, 'in_progress produced only by load acceptance');
+  assert.deepEqual(sealedLoadOnly.missing, ['preparar datos del día']);
+
+  const preparedButNotStarted = m.deriveOperationReadiness({
+    ...ready,
+    planState: 'in_progress',
+    routeStartConfirmed: false,
+    dataPrepared: true,
+    routeAlreadyUnderway: false,
+  });
+  assertBlocked(preparedButNotStarted, 'prepared route without explicit start');
+  assert.deepEqual(preparedButNotStarted.missing, ['confirmar inicio de ruta']);
 
   // A published plan may only use readiness facts persisted for that plan.
   // All-true stale flags from a different plan are equivalent to no facts.

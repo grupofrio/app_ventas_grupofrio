@@ -109,7 +109,7 @@ export default function OffRouteScreen() {
 
   async function handleSelect(result: OffrouteSearchResult) {
     if (!dayBundleAccess?.canRunActions) {
-      Alert.alert('Bundle vencido', 'La información del día solo está disponible para consulta. Renueva el bundle antes de iniciar una visita.');
+      Alert.alert('Datos del día vencidos', 'La información del día solo está disponible para consulta. Actualiza los datos antes de iniciar una visita.');
       return;
     }
     const selectionKey = offrouteEntityKey(result);

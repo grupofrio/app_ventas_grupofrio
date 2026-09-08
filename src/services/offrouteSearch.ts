@@ -11,7 +11,7 @@ export async function searchOffrouteEntities(
   const q = query.trim();
   if (q.length < 3) return [];
   const loaded = await loadCurrentEmployeeDayBundle();
-  if (!loaded) throw new Error('Prepara el bundle del día antes de buscar fuera de ruta.');
+  if (!loaded) throw new Error('Prepara los datos del día antes de buscar fuera de ruta.');
   const customers: OffrouteCustomerRecord[] = loaded.record.bundle.directory.flatMap((entry) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return [];
     const item = entry as Record<string, unknown>;

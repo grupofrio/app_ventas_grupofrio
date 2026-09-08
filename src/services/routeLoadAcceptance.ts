@@ -272,11 +272,12 @@ export function buildInitialLoadAcceptanceState(plan: unknown): InitialLoadAccep
   const acceptedInitialLoads = initialLoads.filter((card) => card.accepted === true);
   const rejectedInitialLoads = initialLoads.filter((card) => card.rejected === true);
 
-  // Rejected must NOT count as accepted. No pending initial AND
-  // (an accepted initial exists OR there are no initial loads at all).
-  // A rejected-only wait is NOT "no initial loads".
+  // Fail closed: the start-of-day flow requires positive evidence that the
+  // initial load exists and was accepted. An empty payload can mean that the
+  // picking was not linked or did not reach the phone, so it must not be
+  // interpreted as an automatic acceptance.
   const initialLoadAccepted = pendingInitialLoads.length === 0
-    && (acceptedInitialLoads.length > 0 || initialLoads.length === 0);
+    && acceptedInitialLoads.length > 0;
   const initialLoadRejectedWaiting = pendingInitialLoads.length === 0
     && acceptedInitialLoads.length === 0
     && rejectedInitialLoads.length > 0;

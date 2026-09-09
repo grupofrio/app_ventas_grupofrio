@@ -43,6 +43,27 @@ import { logInfo, logWarn } from '../utils/logger';
 
 const PREPARE_CONCURRENCY = 4; // matches preloadRouteCustomerPrices for parity
 
+/** Warm the exact pricing inputs used by ProductPicker for every stop of a client. */
+async function preparePartnerPrices(
+  partnerId: number,
+  products: Parameters<typeof computeCustomerPrices>[1],
+  stops: Array<{ customer_id: number; _pricelistId?: number | null }>,
+  companyId: number | null,
+): Promise<number> {
+  const pricelistIds = new Set(stops
+    .filter(stop => stop.customer_id === partnerId)
+    .map(stop => stop._pricelistId ?? null));
+  if (pricelistIds.size === 0) pricelistIds.add(null);
+  let count = 0;
+  for (const fallbackPricelistId of pricelistIds) {
+    const options = { companyId, fallbackPricelistId };
+    const prices = peekCachedCustomerPrices(partnerId, products, options)
+      ?? await computeCustomerPrices(partnerId, products, options);
+    count += prices.size;
+  }
+  return count;
+}
+
 function buildPreparationErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/tiempo de espera|timeout/i.test(message)) {
@@ -292,27 +313,10 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
           const idx = cursor++;
           const partnerId = partnerIds[idx];
 
-          // Skip cached — preload (or another worker) already populated it.
-          const cached = peekCachedCustomerPrices(partnerId, products, {
-            companyId: auth.companyId,
-          });
-          if (cached) {
-            prepared += 1;
-            pricesCount += cached.size;
-            set({
-              customersPrepared: prepared,
-              pricesPrepared: pricesCount,
-              progressDone: prepared,
-            });
-            continue;
-          }
-
           try {
-            const map = await computeCustomerPrices(partnerId, products, {
-              companyId: auth.companyId,
-            });
+            const count = await preparePartnerPrices(partnerId, products, stops, auth.companyId);
             prepared += 1;
-            pricesCount += map.size;
+            pricesCount += count;
             set({
               customersPrepared: prepared,
               pricesPrepared: pricesCount,
@@ -402,11 +406,10 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
 
     for (const failure of failures) {
       try {
-        const map = await computeCustomerPrices(failure.partnerId, products, {
-          companyId: auth.companyId,
-        });
+        const newPrices = await preparePartnerPrices(
+          failure.partnerId, products, useRouteStore.getState().stops, auth.companyId,
+        );
         recovered += 1;
-        const newPrices = map.size;
         set((prev) => ({
           customersPrepared: prev.customersPrepared + 1,
           pricesPrepared: prev.pricesPrepared + newPrices,

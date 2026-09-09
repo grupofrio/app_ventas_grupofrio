@@ -63,7 +63,7 @@ test('development keeps dev runtime metadata but reuses the staging native ident
 });
 
 test('staging Android update advances independently of production', () => {
-  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' }).android.versionCode, 11);
+  assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'staging' }).android.versionCode, 12);
   assert.equal(buildExpoConfig({ EXPO_PUBLIC_APP_ENV: 'production' }).android.versionCode, 6);
 });
 

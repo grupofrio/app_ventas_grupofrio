@@ -135,7 +135,7 @@ export function buildExpoConfig(
     },
     android: {
       ...BASE_EXPO_CONFIG.android,
-      versionCode: isProduction ? BASE_EXPO_CONFIG.android?.versionCode : 11,
+      versionCode: isProduction ? BASE_EXPO_CONFIG.android?.versionCode : 12,
       package: `mx.grupofrio.koldfield${env.bundleSuffix}`,
       adaptiveIcon: {
         ...BASE_EXPO_CONFIG.android?.adaptiveIcon,

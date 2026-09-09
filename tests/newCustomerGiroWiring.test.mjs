@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 const REPO_ROOT = process.cwd();
 const screen = readFileSync(resolve(REPO_ROOT, 'app/newcustomer.tsx'), 'utf8');
+const native = readFileSync(resolve(REPO_ROOT, 'src/services/fieldLeadIntakeNative.ts'), 'utf8');
 const service = readFileSync(resolve(REPO_ROOT, 'src/services/leadIntake.ts'), 'utf8');
 
 function main() {
@@ -18,7 +19,7 @@ function main() {
     'el alta debe mostrar el canal derivado del giro seleccionado',
   );
   assert.match(
-    screen,
+    native,
     /enqueue\('prospection', buildProspectionPayload\(form,/,
     'el alta debe encolar prospection con el payload del helper (cola offline intacta)',
   );

@@ -344,3 +344,8 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   clearSaleConfirmationLock: (operationId) =>
     visitStatePersistence.clearSaleConfirmationLock(operationId),
 }));
+
+/** Flush a newly prepared visit before navigating away from its durable intake. */
+export function persistCurrentVisit(): Promise<void> {
+  return visitStatePersistence.persistCurrent();
+}

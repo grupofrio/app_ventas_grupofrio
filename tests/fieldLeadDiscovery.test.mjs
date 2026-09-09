@@ -36,18 +36,18 @@ test('postvisit sends server special visit identity instead of a virtual stop', 
   assert.equal(result.offroute_visit_id,90);
   assert.equal(result.stop_id,undefined);
 });
-test('saving waits for durable persistence and retries the same queued draft', async () => {
+test('screen retries the persisted capture instead of creating a second lead', async () => {
   const source=readFileSync(new URL('../app/newcustomer.tsx',import.meta.url),'utf8');
   const tree=ts.createSourceFile('newcustomer.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   let handler;
   function visit(n){if(ts.isFunctionDeclaration(n)&&n.name?.text==='handleSave')handler=n.getText(tree);ts.forEachChild(n,visit);}visit(tree);
-  let writes=0,enqueues=0,saved=false,fail=true;
-  const queuedIdRef={current:null},savingRef={current:false};
-  const state={enqueue:()=>{enqueues++;return 'op-1';},persistQueue:async()=>{writes++;if(fail)throw Error('disk full');},releaseProcessingHolds:()=>{},processQueue:async()=>{}};
-  const ctx={form:{nombre:'PROSPECTO 1'},latitude:0,longitude:0,enqueue:state.enqueue,buildProspectionPayload:()=>({}),useSyncStore:{getState:()=>state},queuedIdRef,savingRef,durableRef:{current:false},setSaving:()=>{},setSaved:v=>saved=v,setQueueId:()=>{},Alert:{alert:()=>{}},router:{back:()=>{}},saved:false};
+  const {createFieldLeadIntakeFlow}=load('src/services/fieldLeadIntakeFlow.ts');
+  let fail=true, n=0;const ids=[];
+  const flow=createFieldLeadIntakeFlow({uuid:()=>`op-${++n}`,save:async()=>{},load:async()=>null,remove:async()=>{},enqueue:id=>{ids.push(id);return id;},persistQueue:async()=>{if(fail)throw Error('disk');},release:()=>{},process:()=>{}});
+  const ctx={busyRef:{current:false},nativeRef:{current:{flow}},mounted:{current:true},form:{nombre:'PROSPECTO 1',giro:'abarrotes_miscelanea'},giroToCanal:()=>true,gps:null,draft:null,saved:false,editing:false,setEditing:()=>{},setForm:()=>{},setGps:()=>{},setSaving:()=>{},setDraft:value=>ctx.draft=value,Alert:{alert:()=>{}}};
   vm.runInNewContext(ts.transpileModule(handler,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText+';globalThis.save=handleSave;',ctx);
-  await ctx.save();assert.equal(saved,false);assert.equal(writes,1);
-  fail=false;await ctx.save();assert.equal(saved,true);assert.equal(enqueues,1);assert.equal(writes,2);
+  await ctx.save();assert.equal(ctx.draft.phase,'captured');
+  fail=false;await ctx.save();assert.equal(ctx.draft.phase,'queued');assert.deepEqual(ids,['op-1','op-1']);
 });
 test('saving data refreshes persisted phone and GPS while preserving local visit identity', () => {
   const {applyLeadUpsertToStop} = load('src/services/leadVisit.ts');
@@ -75,10 +75,10 @@ test('an unconfirmed held draft guards native stack removal until persisted', ()
   let hook;
   function visit(n){if(ts.isCallExpression(n)&&n.expression.getText(tree)==='usePreventRemove')hook=n.getText(tree);ts.forEachChild(n,visit);}visit(tree);
   let blocked;
-  const ctx={saving:false,queueId:'op-1',saved:false,Alert:{alert:()=>{}},usePreventRemove:flag=>blocked=flag};
+  const ctx={saving:false,draft:{phase:'captured'},Alert:{alert:()=>{}},usePreventRemove:flag=>blocked=flag};
   const code=ts.transpileModule(hook,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(code,ctx);assert.equal(blocked,true);
-  ctx.saved=true;vm.runInNewContext(code,ctx);assert.equal(blocked,false);
+  ctx.draft.phase='queued';vm.runInNewContext(code,ctx);assert.equal(blocked,false);
 });
 test('lead search failure preserves cached customers and explicitly warns', async () => {
   const logic=load('src/services/offrouteSearchLogic.ts');let warning='';

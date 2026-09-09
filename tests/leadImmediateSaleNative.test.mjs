@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 function load(file,mocks={}) {const exports={};vm.runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/services/${file}.ts`,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>{if(!(name in mocks))throw Error(name);return mocks[name];},setTimeout,clearTimeout});return exports;}
 function setup() {
+ let responseCode=null;
  let stored=null, seq=0, failResponse=false, failStorage=false, captures=0, resets=0;
  const requests=[]; const session={sessionId:'s1',employeeId:682,companyId:34};
  const queue=[];
@@ -23,11 +24,11 @@ function setup() {
   '../stores/useVisitStore':{useVisitStore:{getState:()=>visit},persistCurrentVisit:async()=>{if(failStorage)throw Error('storage failed');}},
   '../utils/clientEvent':{createUuidV4:()=>`id-${++seq}`},
   './apiRequestError':{getApiErrorCode:e=>e?.code},
-  './api':{postRest:async(path,payload)=>{requests.push({path,payload:structuredClone(payload)});if(failResponse)throw Error('response lost');return {data:result};}},
+  './api':{postRest:async(path,payload)=>{requests.push({path,payload:structuredClone(payload)});if(failResponse)throw Object.assign(Error('response lost'),{code:responseCode});return {data:result};}},
   './planStopPayload':load('planStopPayload'),
   '../persistence/storage':{STORAGE_KEYS:{STOPS:'stops'},storeSaveStrict:async()=>{}},
  };
- return {native:load('fieldLeadIntakeNative',mocks),requests,visit,route,result,getStored:()=>stored,getCaptures:()=>captures,getResets:()=>resets,setFailResponse:v=>failResponse=v,setFailStorage:v=>failStorage=v};
+ return {native:load('fieldLeadIntakeNative',mocks),requests,visit,route,result,getStored:()=>stored,getCaptures:()=>captures,getResets:()=>resets,setFailResponse:v=>failResponse=v,setResponseCode:v=>responseCode=v,setFailStorage:v=>failStorage=v};
 }
 const form={nombre:'Uno',telefono:'7331234567',direccion:'Negocio',giro:'abarrotes_miscelanea',notas:''};
 test('fresh GPS then same lead opens one linked sale with server prices',async()=>{
@@ -65,5 +66,14 @@ test('local guard after a lost response preserves the recovery operation and blo
  assert.equal(n.flow.getDraft().phase,'selling');
  await assert.rejects(()=>n.flow.decline());assert.equal(h.getStored().saleOperationId,operationId);
  h.visit.phase='checked_out';await n.flow.sell();
+ assert.deepEqual(h.requests[0].payload,h.requests[1].payload);
+});
+
+test('missing price configuration keeps the prospect and permits retry after setup',async()=>{
+ const h=setup();const n=await h.native.createNativeFieldLeadIntake();await n.flow.capture(form,null);
+ const operation=n.flow.getDraft().saleOperationId;
+ h.setResponseCode('lead_pricelist_unconfigured');h.setFailResponse(true);
+ await assert.rejects(()=>n.flow.sell());assert.equal(n.flow.getDraft().phase,'queued');
+ h.setFailResponse(false);await n.flow.sell();assert.equal(n.flow.getDraft().saleOperationId,operation);
  assert.deepEqual(h.requests[0].payload,h.requests[1].payload);
 });

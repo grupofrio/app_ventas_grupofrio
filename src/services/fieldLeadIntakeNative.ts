@@ -68,7 +68,7 @@ export async function createNativeFieldLeadIntake() {
     isDefinitiveFailure: (error, previousPhase) => {
       const code = getApiErrorCode(error);
       if (code === 'lead_sale_local_guard') return previousPhase === 'queued';
-      return ['review_required_duplicate', 'lead_data_incomplete', 'lead_sale_visit_closed'].includes(code ?? '');
+      return ['review_required_duplicate', 'lead_data_incomplete', 'lead_pricelist_unconfigured', 'lead_sale_visit_closed'].includes(code ?? '');
     },
     async updateLead(payload) {
       await assertSession();

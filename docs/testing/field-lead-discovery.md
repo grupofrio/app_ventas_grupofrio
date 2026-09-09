@@ -11,7 +11,7 @@
 
 ## Dependencia de despliegue
 
-Backend `grupofrio/gf`, rama `codex/fix-field-lead-discovery` hacia `staging280826`; actualizar `gf_logistics_ops` a 18.0.1.26.5 (campos nuevos). Después integrar la app en `codex/mastermind-appventas-staging` y generar APK con Expo. El PR de horario CDMX es independiente.
+Backend `grupofrio/gf`, rama `codex/fix-field-lead-discovery` hacia `staging280826`; actualizar `gf_logistics_ops` a 18.0.1.26.6 (campos nuevos). Después integrar la app en `codex/mastermind-appventas-staging` y generar APK con Expo. El PR de horario CDMX es independiente.
 
 ## Prueba en celular
 
@@ -42,3 +42,9 @@ Pruebas locales: suite Node completa y TypeScript; backend pruebas unitarias/con
 6. Denegar GPS o estar lejos del negocio → guardar dirección sin GPS; no inventar coordenadas ni habilitar conversión hasta completarlas.
 
 Validación local del alcance ampliado: 886 pruebas de app y TypeScript; 369 pruebas de backend y 56 subpruebas. Odoo TransactionCase y E2E del nuevo flujo pendientes.
+
+## Configuración de precios por plaza y canal
+
+Antes de probar nuevas altas, un administrador configura en Odoo: GF Logistics Ops → Configuración → Listas de precios por plaza y canal. Seleccionar compañía, [IGU] IGUALA, canal y lista activa. No se crea ninguna regla para [IGU34] Iguala Glaciem ni se migran clientes existentes.
+
+Probar alta con regla, falta de regla (guardar prospecto y mostrar pendiente antes de vender), cambio de canal, regla archivada, lista especial conservada y conversión desde CRM. La app trata la falta de configuración como rechazo confirmado y permite reintentar la misma operación después de configurarla.

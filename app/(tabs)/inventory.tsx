@@ -19,7 +19,7 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
-import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { startFocusedProductRefresh } from '../../src/utils/productLoading';
 import {
   formatInventoryKg,
   getInventoryProductListState,
@@ -29,6 +29,7 @@ export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const isOnline = useSyncStore((s) => s.isOnline);
   const { plan, loadPlan } = useRouteStore();
+  const planId = plan?.plan_id ?? null;
   const {
     products, totalStockKg, isLoading, error, loadProducts, loadProductsAuthoritative,
     productCount, lastSync: productsLastSync, hasStockData, inventoryContext,
@@ -41,25 +42,25 @@ export default function InventoryScreen() {
   }, [isOnline, loadPlan, loadProducts]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
-  // BLD-20260424-LOOP: ver nota en productLoading.ts. Pasamos productCount
-  // y lastSync para evitar el ciclo de re-fetch en cada cambio de loading.
   useFocusEffect(
     useCallback(() => {
-      if (isOnline) {
-        void (async () => {
-          await loadPlan();
-          if (shouldRefreshProductsOnFocus(
-            warehouseId, isLoading, productCount, productsLastSync,
-          )) {
-            await loadProducts();
-          }
-        })();
-      } else if (shouldRefreshProductsOnFocus(
-        warehouseId, isLoading, productCount, productsLastSync,
-      )) {
-        void loadProducts();
-      }
-    }, [warehouseId, isLoading, productCount, productsLastSync, loadProducts, isOnline, loadPlan])
+      if (!isOnline) return;
+      let active = true;
+      let cancelProducts: (() => void) | undefined;
+      void (async () => {
+        await loadPlan();
+        if (!active || !useSyncStore.getState().isOnline
+          || !useRouteStore.getState().plan?.plan_id) return;
+        const expectedPlanId = useRouteStore.getState().plan?.plan_id;
+        cancelProducts = startFocusedProductRefresh({
+          getState: useProductStore.getState,
+          subscribe: useProductStore.subscribe,
+          isCurrent: () => active && useSyncStore.getState().isOnline
+            && useRouteStore.getState().plan?.plan_id === expectedPlanId,
+        });
+      })();
+      return () => { active = false; cancelProducts?.(); };
+    }, [warehouseId, isOnline, loadPlan, planId]),
   );
 
   // Forecast total for route (F5: real aggregation)

@@ -28,7 +28,7 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
-import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { startFocusedProductRefresh } from '../../src/utils/productLoading';
 import { createUuidV4 } from '../../src/utils/clientEvent';
 import {
   applyExchangeStockViaLedger,
@@ -96,11 +96,10 @@ function hasIncompleteLines(lines: DraftLine[]): boolean {
 export default function CambioProductoScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
+  const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const products = useProductStore((s) => s.products);
-  const productCount = useProductStore((s) => s.productCount);
-  const productsLastSync = useProductStore((s) => s.lastSync);
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
@@ -122,17 +121,19 @@ export default function CambioProductoScreen() {
   const capturingPhotoRef = useRef(false);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
 
+  // Read live state once on focus/reconnection. Loading/error renders must
+  // never recreate this callback and start another request.
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(
-        warehouseId,
-        isLoadingProducts,
-        productCount,
-        productsLastSync,
-      )) {
-        void loadProducts(warehouseId!);
-      }
-    }, [warehouseId, isLoadingProducts, productCount, productsLastSync, loadProducts]),
+      if (!isOnline || !planId) return;
+      const expectedPlanId = planId;
+      return startFocusedProductRefresh({
+        getState: useProductStore.getState,
+        subscribe: useProductStore.subscribe,
+        isCurrent: () => useSyncStore.getState().isOnline
+          && useRouteStore.getState().plan?.plan_id === expectedPlanId,
+      });
+    }, [warehouseId, isOnline, planId]),
   );
 
   const productMap = useMemo(

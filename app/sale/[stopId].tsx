@@ -44,7 +44,7 @@ import { decideSalePricelist } from '../../src/services/salePricelistDecision';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logError, logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
-import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { startFocusedProductRefresh } from '../../src/utils/productLoading';
 import {
   buildRouteLoadAcceptanceState,
   canStartSaleWithRouteLoad,
@@ -89,6 +89,7 @@ function SaleScreenInner() {
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const plan = useRouteStore((s) => s.plan);
+  const planId = plan?.plan_id ?? null;
   const removeStop = useRouteStore((s) => s.removeStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
   const stop = stops.find((s) => s.id === Number(stopId));
@@ -101,10 +102,6 @@ function SaleScreenInner() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
-  // BLD-20260424-LOOP: pasamos productCount y lastSync al guard del
-  // useFocusEffect para evitar el loop de /truck_stock (18 reqs en 7s).
-  const productCount = useProductStore((s) => s.productCount);
-  const productsLastSync = useProductStore((s) => s.lastSync);
 
   // Perf Fase 1C: selectors por campo. Antes el destructuring del store hacía
   // que la pantalla de venta re-renderizara cada segundo por el tick del timer
@@ -143,17 +140,19 @@ function SaleScreenInner() {
   }
   const saleConfirmationSingleFlight = saleConfirmationSingleFlightRef.current;
 
+  // Read live state once on focus/reconnection. Loading/error renders must
+  // never recreate this callback and start another request.
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(
-        warehouseId,
-        isLoadingProducts,
-        productCount,
-        productsLastSync,
-      )) {
-        void loadProducts(warehouseId!);
-      }
-    }, [warehouseId, isLoadingProducts, productCount, productsLastSync, loadProducts])
+      if (!isOnline || !planId) return;
+      const expectedPlanId = planId;
+      return startFocusedProductRefresh({
+        getState: useProductStore.getState,
+        subscribe: useProductStore.subscribe,
+        isCurrent: () => useSyncStore.getState().isOnline
+          && useRouteStore.getState().plan?.plan_id === expectedPlanId,
+      });
+    }, [warehouseId, isOnline, planId]),
   );
 
   if (!stop) {

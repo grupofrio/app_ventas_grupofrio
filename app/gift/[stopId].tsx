@@ -22,7 +22,7 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
-import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { startFocusedProductRefresh } from '../../src/utils/productLoading';
 import {
   buildGiftPayload,
   getGiftSubmitIssues,
@@ -72,6 +72,7 @@ export default function GiftScreen() {
   const { stopId, from } = useLocalSearchParams<{ stopId: string; from?: string }>();
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
+  const planId = plan?.plan_id ?? null;
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
@@ -80,8 +81,6 @@ export default function GiftScreen() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
-  const productCount = useProductStore((s) => s.productCount);
-  const productsLastSync = useProductStore((s) => s.lastSync);
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
 
@@ -101,17 +100,19 @@ export default function GiftScreen() {
     return operationIdRef.current;
   }
 
+  // Read live state once on focus/reconnection. Loading/error renders must
+  // never recreate this callback and start another request.
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(
-        warehouseId,
-        isLoadingProducts,
-        productCount,
-        productsLastSync,
-      )) {
-        void loadProducts(warehouseId!);
-      }
-    }, [warehouseId, isLoadingProducts, productCount, productsLastSync, loadProducts]),
+      if (!isOnline || !planId) return;
+      const expectedPlanId = planId;
+      return startFocusedProductRefresh({
+        getState: useProductStore.getState,
+        subscribe: useProductStore.subscribe,
+        isCurrent: () => useSyncStore.getState().isOnline
+          && useRouteStore.getState().plan?.plan_id === expectedPlanId,
+      });
+    }, [warehouseId, isOnline, planId]),
   );
 
   const partnerId = useMemo(() => {

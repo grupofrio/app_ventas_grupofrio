@@ -1,18 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
-const screen = readFileSync(resolve(process.cwd(), 'app/newcustomer.tsx'), 'utf8');
-
-assert.match(
-  screen,
-  /Alert\.alert\(\s*['"]Prospecto guardado\. Pendiente de sincronizar\.['"],/,
-  'el alta debe confirmar prospecto guardado pendiente de sincronizar (no "localmente")',
-);
-assert.match(
-  screen,
-  /sincronizar(?:á|a) con Odoo cuando haya conexi[oó]n/i,
-  'la confirmación debe indicar sincronización diferida con Odoo',
-);
-
-console.log('newcustomer lead confirmation tests: ok');
+const screen = readFileSync(new URL('../app/newcustomer.tsx', import.meta.url), 'utf8');
+assert.match(screen, /status === 'done'[\s\S]*Prospecto registrado en Odoo/);
+assert.match(screen, /Esperando confirmación de Odoo/);
+assert.match(screen, /Se enviará al recuperar conexión/);
+assert.ok(screen.indexOf('await useSyncStore.getState().persistQueue()') < screen.indexOf('setSaved(true)'));

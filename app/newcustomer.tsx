@@ -3,10 +3,11 @@
  * Encola como 'prospection' para sincronizar con Odoo (crm.lead) al tener conexión.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { usePreventRemove } from '@react-navigation/native';
 import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { Input } from '../src/components/ui/Input';
@@ -36,25 +37,45 @@ export default function NewCustomerScreen() {
     notas: '',
   });
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [queueId, setQueueId] = useState<string | null>(null);
+  const queuedIdRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
+  usePreventRemove(saving || (queueId !== null && !saved), () => {
+    Alert.alert('Guardado sin confirmar', 'Reintenta guardar este prospecto antes de salir para no perder la solicitud.');
+  });
+  const status = useSyncStore((s) => s.queue.find((item) => item.id === queueId)?.status);
+  const isOnline = useSyncStore((s) => s.isOnline);
 
   function updateField(key: keyof NewLeadForm, value: string) {
+    if (queuedIdRef.current) return;
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleSave() {
+  async function handleSave() {
+    if (savingRef.current || saved) return;
     if (!form.nombre.trim()) {
       Alert.alert('Falta nombre', 'El nombre del prospecto es obligatorio.');
       return;
     }
-
-    enqueue('prospection', buildProspectionPayload(form, { latitude, longitude }));
-
-    setSaved(true);
-    Alert.alert(
-      'Prospecto guardado. Pendiente de sincronizar.',
-      `"${form.nombre.trim()}" se sincronizará con Odoo cuando haya conexión. Puedes continuar la ruta.`,
-      [{ text: 'OK', onPress: () => router.back() }],
-    );
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (!queuedIdRef.current) {
+        queuedIdRef.current = enqueue('prospection', buildProspectionPayload(form, { latitude, longitude }), { holdProcessing: true });
+      }
+      const id = queuedIdRef.current;
+      setQueueId(id);
+      await useSyncStore.getState().persistQueue();
+      setSaved(true);
+      useSyncStore.getState().releaseProcessingHolds([id]);
+      void useSyncStore.getState().processQueue();
+    } catch {
+      Alert.alert('No se pudo guardar', 'No se confirmó el guardado en el dispositivo. Reintenta antes de salir; se conservará la misma solicitud.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
 
   return (
@@ -69,6 +90,7 @@ export default function NewCustomerScreen() {
           <Input
             label="NOMBRE *"
             placeholder="Nombre del negocio o persona"
+            editable={!saving && !saved && !queuedIdRef.current}
             value={form.nombre}
             onChangeText={(v) => updateField('nombre', v)}
           />
@@ -79,6 +101,7 @@ export default function NewCustomerScreen() {
             label="TELÉFONO"
             placeholder="10 dígitos"
             keyboardType="phone-pad"
+            editable={!saving && !saved && !queuedIdRef.current}
             value={form.telefono}
             onChangeText={(v) => updateField('telefono', v)}
           />
@@ -88,6 +111,7 @@ export default function NewCustomerScreen() {
           <Input
             label="DIRECCIÓN"
             placeholder="Calle, número, colonia"
+            editable={!saving && !saved && !queuedIdRef.current}
             value={form.direccion}
             onChangeText={(v) => updateField('direccion', v)}
           />
@@ -120,6 +144,7 @@ export default function NewCustomerScreen() {
             multiline
             numberOfLines={3}
             style={styles.inputMultiline}
+            editable={!saving && !saved && !queuedIdRef.current}
             value={form.notas}
             onChangeText={(v) => updateField('notas', v)}
           />
@@ -129,9 +154,23 @@ export default function NewCustomerScreen() {
           label={saved ? '✓ Prospecto Guardado' : 'Guardar Prospecto'}
           onPress={handleSave}
           fullWidth
-          disabled={saved}
+          disabled={saved || saving}
           style={{ marginTop: 8 }}
         />
+        {saved ? (
+          <View accessibilityLiveRegion="polite" style={{ marginTop: spacing.lg }}>
+            <Text style={typography.bodySmall}>
+              {status === 'done'
+                ? 'Prospecto registrado en Odoo. Ya puedes buscarlo por nombre en Visita especial.'
+                : status === 'error' || status === 'dead'
+                  ? 'Prospecto guardado en el dispositivo. El envío no se confirmó; revisa Sincronización.'
+                  : isOnline
+                    ? 'Prospecto guardado en el dispositivo. Esperando confirmación de Odoo.'
+                    : 'Prospecto guardado en el dispositivo. Se enviará al recuperar conexión.'}
+            </Text>
+            <Button label="Continuar ruta" onPress={() => router.back()} fullWidth style={{ marginTop: spacing.md }} />
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

@@ -37,7 +37,7 @@ import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
 import { validateSaleCreateResult } from './saleCreateResult';
 import type { SaleCreateResultData } from './saleCreateResult';
-import { buildFieldLeadCreatePayload } from './fieldLeadCreatePayload';
+import { buildFieldLeadCreatePayload, requireCreatedFieldLead } from './fieldLeadCreatePayload';
 import { parseTruckStockResponse, type TruckStockResponse } from './truckStockResponse';
 import { buildTruckStockPlanRequest } from './truckStockPlanContext';
 
@@ -1104,7 +1104,7 @@ export async function upsertLeadData(
   if (!result || typeof result !== 'object') return null;
   const data = result.data !== undefined ? result.data : result;
   const lead = data?.lead ?? data;
-  return lead && typeof lead === 'object' ? lead : null;
+  return lead && typeof lead === 'object' ? { ...lead, stop: data?.stop } : null;
 }
 
 /** Creates an independent field lead; route-stop lead updates stay in upsertLeadData. */
@@ -1114,10 +1114,10 @@ export async function createFieldLeadData(
 ): Promise<Record<string, unknown> | null> {
   const body = attachClientMetaToRestPayload(buildFieldLeadCreatePayload(payload), meta ?? null);
   const result = await postRest<any>(`${GF_BASE}/lead/create`, body);
-  if (!result || typeof result !== 'object') return null;
+  if (!result || typeof result !== 'object') return requireCreatedFieldLead(null);
   const data = result.data !== undefined ? result.data : result;
   const lead = data?.lead ?? data;
-  return lead && typeof lead === 'object' ? lead : null;
+  return requireCreatedFieldLead(lead);
 }
 
 /**
@@ -1128,14 +1128,15 @@ export async function createFieldLeadData(
 export async function convertLeadData(
   payload: {
     operation_id: string;
-    stop_id: number;
+    stop_id?: number;
+    offroute_visit_id?: number;
     lead_id?: number | null;
   },
   meta?: ClientEventMeta | null,
 ): Promise<Record<string, unknown> | null> {
   const body: Record<string, unknown> = {
     operation_id: payload.operation_id,
-    stop_id: payload.stop_id,
+    ...(payload.offroute_visit_id ? { offroute_visit_id: payload.offroute_visit_id } : { stop_id: payload.stop_id }),
   };
   if (typeof payload.lead_id === 'number' && payload.lead_id > 0) {
     body.lead_id = payload.lead_id;

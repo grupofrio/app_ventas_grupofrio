@@ -14,6 +14,8 @@ export interface OffrouteCustomerRecord {
 }
 
 export interface OffrouteLeadRecord {
+  partner_latitude?: number;
+  partner_longitude?: number;
   id: number;
   name: string;
   partner_name?: string;
@@ -32,6 +34,8 @@ export interface OffrouteDirectorySearchable {
 }
 
 export interface OffrouteSearchResult {
+  phone?: string;
+  mobile?: string;
   id: number;
   entityType: 'customer' | 'lead';
   name: string;
@@ -125,12 +129,14 @@ export function buildOffrouteResults(
       entityType: 'lead' as const,
       name: lead.name,
       subtitle: joinParts(lead.partner_name, lead.street, lead.city),
+      phone: lead.phone,
+      mobile: lead.mobile,
       contact: lead.phone || lead.mobile || lead.email_from || '',
       partnerId: lead.partner_id ? lead.partner_id[0] : null,
       pricelistId: null,
       pricelistName: null,
-      customerLatitude: null,
-      customerLongitude: null,
+      customerLatitude: typeof lead.partner_latitude === 'number' ? lead.partner_latitude : null,
+      customerLongitude: typeof lead.partner_longitude === 'number' ? lead.partner_longitude : null,
       googleMapsUrl: null,
       street: lead.street || null,
       city: lead.city || null,

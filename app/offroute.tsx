@@ -80,7 +80,7 @@ export default function OffRouteScreen() {
     setIsSearching(true);
     setHasSearched(true);
     try {
-      const searchResults = await searchOffrouteEntities(q);
+      const searchResults = await searchOffrouteEntities(q, (message) => Alert.alert('Búsqueda de prospectos', message));
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
@@ -108,6 +108,10 @@ export default function OffRouteScreen() {
   }
 
   async function handleSelect(result: OffrouteSearchResult) {
+    if (result.entityType === 'lead' && !isOnline) {
+      Alert.alert('Sin conexión', 'Para iniciar la visita a un prospecto necesitas conexión.');
+      return;
+    }
     if (!dayBundleAccess?.canRunActions) {
       Alert.alert('Datos del día vencidos', 'La información del día solo está disponible para consulta. Actualiza los datos antes de iniciar una visita.');
       return;
@@ -135,7 +139,7 @@ export default function OffRouteScreen() {
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : 'No se pudo iniciar la visita especial.';
-          if (!isRetryableSyncErrorMessage(message)) {
+          if (result.entityType === 'lead' || !isRetryableSyncErrorMessage(message)) {
             Alert.alert('Visita especial rechazada', message);
             return;
           }
@@ -144,6 +148,11 @@ export default function OffRouteScreen() {
             'No se pudo registrar la visita especial en servidor. Continuará solo localmente.',
           );
         }
+      }
+
+      if (result.entityType === 'lead' && !offrouteVisitId) {
+        Alert.alert('Visita sin confirmar', 'No se confirmó la visita al prospecto. Vuelve a intentarlo con conexión.');
+        return;
       }
 
       const virtualStopId = addVirtualStop(
@@ -163,6 +172,7 @@ export default function OffRouteScreen() {
           city: result.city,
         },
       );
+      patchStop(virtualStopId, { phone: result.phone, mobile: result.mobile });
       updateStopState(virtualStopId, 'in_progress');
 
       // Start a visit for this virtual stop
@@ -173,6 +183,8 @@ export default function OffRouteScreen() {
           id: virtualStopId,
           customer_id: result.partnerId ?? result.id,
           customer_name: result.name,
+          phone: result.phone,
+          mobile: result.mobile,
           state: 'in_progress',
           source_model: 'gf.route.stop',
           _entityType: result.entityType,

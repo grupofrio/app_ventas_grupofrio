@@ -8,6 +8,7 @@ export interface LeadStageOption {
 
 export interface LeadUpsertResponse {
   id: number;
+  stop?: Partial<GFStop> & { customer_mobile?: string };
   type?: string;
   stage_id?: [number, string] | number | false | null;
   partner_id?: [number, string] | number | false | null;
@@ -76,6 +77,10 @@ export function applyLeadUpsertToStop(
 
   return {
     ...stop,
+    phone: typeof lead.phone === 'string' ? lead.phone : stop.phone,
+    mobile: typeof lead.stop?.customer_mobile === 'string' ? lead.stop.customer_mobile : stop.mobile,
+    customer_latitude: typeof lead.stop?.customer_latitude === 'number' ? lead.stop.customer_latitude : stop.customer_latitude,
+    customer_longitude: typeof lead.stop?.customer_longitude === 'number' ? lead.stop.customer_longitude : stop.customer_longitude,
     _entityType: 'lead',
     _leadId: typeof lead.id === 'number' ? lead.id : stop._leadId ?? null,
     _partnerId: partnerId,

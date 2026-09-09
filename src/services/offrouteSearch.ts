@@ -1,3 +1,5 @@
+import { searchFieldLeads } from './fieldLeadSearch';
+import { useSyncStore } from '../stores/useSyncStore';
 import { loadCurrentEmployeeDayBundle } from './employeeDayBundle';
 import { buildOffrouteResults, matchesOffrouteDirectoryQuery } from './offrouteSearchLogic';
 import type { OffrouteCustomerRecord, OffrouteLeadRecord, OffrouteSearchResult } from './offrouteSearchLogic';
@@ -7,6 +9,7 @@ export { buildOffrouteResults };
 
 export async function searchOffrouteEntities(
   query: string,
+  onLeadSearchWarning?: (message: string) => void,
 ): Promise<OffrouteSearchResult[]> {
   const q = query.trim();
   if (q.length < 3) return [];
@@ -29,5 +32,12 @@ export async function searchOffrouteEntities(
       partner_longitude: typeof item.longitude === 'number' ? item.longitude : undefined,
     }];
   });
-  return buildOffrouteResults(customers.slice(0, 20), []);
+  let leads: OffrouteLeadRecord[] = [];
+  if (useSyncStore.getState().isOnline) {
+    try { leads = await searchFieldLeads(q); }
+    catch { onLeadSearchWarning?.('No se pudieron consultar los prospectos. Los clientes guardados siguen disponibles; vuelve a buscar con conexión.'); }
+  } else {
+    onLeadSearchWarning?.('Sin conexión: puedes buscar clientes guardados. Para buscar prospectos necesitas conexión.');
+  }
+  return buildOffrouteResults(customers.slice(0, 20), leads);
 }

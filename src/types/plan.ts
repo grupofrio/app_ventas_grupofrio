@@ -94,6 +94,7 @@ export type StopState =
   | 'closed';
 
 export interface GFStop {
+  _leadSaleOperationId?: string;
   id: OdooId;
   customer_id: number;
   customer_name: string;

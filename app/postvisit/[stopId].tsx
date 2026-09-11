@@ -65,8 +65,8 @@ export default function ProspeccionScreen() {
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
-  const [contactName, setContactName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [contactName, setContactName] = useState(stop?.contact_name ?? stop?.customer_name ?? '');
+  const [phone, setPhone] = useState(stop?.phone || stop?.mobile || '');
   const [email, setEmail] = useState('');
   const [competitor, setCompetitor] = useState('');
   const [freezer, setFreezer] = useState<'yes' | 'no'>('no');
@@ -151,7 +151,7 @@ export default function ProspeccionScreen() {
     if (!currentStop._isOffroute) return;
     Alert.alert(
       'Cerrar visita especial',
-      'Esta visita especial solo existe localmente en la app. Se cerrará y ya podrás abrir otra visita.',
+      'Se cerrará la visita especial y podrás abrir otra visita. Si no hay conexión, el cierre quedará pendiente de sincronizar.',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -159,9 +159,10 @@ export default function ProspeccionScreen() {
           style: 'destructive',
           onPress: () => {
             void (async () => {
-              const closePayload = offrouteVisitId
+              const confirmedVisitId = currentStop._offrouteVisitId ?? offrouteVisitId;
+              const closePayload = confirmedVisitId
                 ? {
-                    visit_id: offrouteVisitId,
+                    visit_id: confirmedVisitId,
                     result_status: 'lead_data' as const,
                     latitude: latitude || 0,
                     longitude: longitude || 0,
@@ -212,6 +213,10 @@ export default function ProspeccionScreen() {
 
   async function handleConvert() {
     if (!readyToConvert || saving) return;
+    if (currentStop._isOffroute && !currentStop._offrouteVisitId) {
+      Alert.alert('Visita sin confirmar', 'Vuelve a iniciar la visita especial con conexión antes de convertir.');
+      return;
+    }
 
     if (!isOnline) {
       Alert.alert(
@@ -244,7 +249,7 @@ export default function ProspeccionScreen() {
     try {
       const convertResult = await convertLeadData({
         operation_id: operationId,
-        stop_id: currentStop.id,
+        ...(currentStop._isOffroute ? { offroute_visit_id: currentStop._offrouteVisitId ?? undefined } : { stop_id: currentStop.id }),
         lead_id: currentStop._leadId ?? null,
       });
       if (!convertResult) {
@@ -332,6 +337,10 @@ export default function ProspeccionScreen() {
       return;
     }
     if (saving) return;
+    if (currentStop._isOffroute && !currentStop._offrouteVisitId) {
+      Alert.alert('Visita sin confirmar', 'Vuelve a iniciar la visita especial con conexión antes de guardar datos.');
+      return;
+    }
 
     const payload = buildPostvisitPayload({
       stop: currentStop,
@@ -363,6 +372,9 @@ export default function ProspeccionScreen() {
     setSaving(true);
     try {
       const lead = await upsertLeadData(payload);
+      if (!lead || typeof lead.id !== 'number' || lead.id <= 0) {
+        throw new Error('No se confirmó el guardado de los datos del prospecto.');
+      }
       if (lead) {
         // Upsert must not create customers; only refresh lead fields / existing partner.
         const nextStop = applyLeadUpsertToStop(currentStop, lead as any);

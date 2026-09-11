@@ -141,7 +141,18 @@ export function mergeBackendStopsWithDrafts(
   const fresh = dedupeActiveVirtualDrafts(pruneStaleVirtualDrafts(drafts, now));
   if (fresh.length === 0) return backendStops;
 
+  const matchedDraftIds = new Set<number>();
+  const reconciled = backendStops.map((serverStop) => {
+    const draft = serverStop._offrouteVisitId
+      ? fresh.find((item) => item._offrouteVisitId === serverStop._offrouteVisitId)
+      : undefined;
+    if (!draft) return serverStop;
+    matchedDraftIds.add(draft.id);
+    // Keep the id used by the active screen, while refreshing confirmed data.
+    return { ...draft, ...serverStop, id: draft.id, _isOffroute: true,
+      _virtualCreatedAt: draft._virtualCreatedAt };
+  });
   const backendIds = new Set(backendStops.map((s) => s.id));
-  const survivingDrafts = fresh.filter((d) => !backendIds.has(d.id));
-  return [...backendStops, ...survivingDrafts];
+  const survivingDrafts = fresh.filter((d) => !backendIds.has(d.id) && !matchedDraftIds.has(d.id));
+  return [...reconciled, ...survivingDrafts];
 }

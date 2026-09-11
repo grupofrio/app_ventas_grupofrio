@@ -14,7 +14,7 @@ interface PostvisitFormValues {
 }
 
 interface BuildPostvisitPayloadInput {
-  stop: Pick<GFStop, 'id' | 'customer_name' | '_entityType' | '_leadId' | '_partnerId' | 'partner_id'>;
+  stop: Pick<GFStop, 'id' | 'customer_name' | '_entityType' | '_leadId' | '_partnerId' | 'partner_id' | '_isOffroute' | '_offrouteVisitId'>;
   form: PostvisitFormValues;
   stageId: number;
 }
@@ -51,7 +51,7 @@ function extractLeadPartnerId(
 
 export function buildPostvisitPayload({ stop, form, stageId }: BuildPostvisitPayloadInput) {
   return {
-    stop_id: stop.id,
+    ...(stop._isOffroute ? { offroute_visit_id: stop._offrouteVisitId ?? undefined } : { stop_id: stop.id }),
     lead_id: stop._entityType === 'lead' ? stop._leadId || null : null,
     partner_id: extractLeadPartnerId(stop),
     customer_name: stop.customer_name,

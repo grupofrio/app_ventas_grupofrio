@@ -17,3 +17,12 @@ export function buildFieldLeadCreatePayload(
     operation_id: operationId,
   };
 }
+
+/** A transport response without a lead id is not proof of creation. */
+export function requireCreatedFieldLead(value: unknown): Record<string, unknown> {
+  const lead = value as Record<string, unknown> | null;
+  if (!lead || typeof lead.id !== 'number' || !Number.isInteger(lead.id) || lead.id <= 0) {
+    throw new Error('No se pudo confirmar el registro del prospecto. Se reintentará con la misma operación.');
+  }
+  return lead;
+}

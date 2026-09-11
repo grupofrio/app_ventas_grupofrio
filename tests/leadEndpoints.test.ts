@@ -110,7 +110,7 @@ function main() {
 
   assert.match(
     newcustomer,
-    /Prospecto guardado\. Pendiente de sincronizar\./,
+    /Prospecto guardado en el dispositivo/,
   );
   assert.match(syncScreen, /describeProspectionSyncLabel/);
   assert.doesNotMatch(syncScreen, /prospection: 'Operacion'/);

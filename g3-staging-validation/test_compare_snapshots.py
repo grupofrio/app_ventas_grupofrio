@@ -49,6 +49,13 @@ def refresh_section(value):
     })
 
 
+def refresh_snapshot_business(value):
+    value["business_sha256"] = rows_sha256({
+        name: section_value["business_sha256"]
+        for name, section_value in value["models"].items()
+    })
+
+
 def module_section(rows):
     return {
         "available": True,
@@ -77,10 +84,10 @@ def snapshot():
         {"id": 23, "key": "gf_plant_energy.rolito_cycle_max_minutes", "value": "35"},
         {"id": 24, "key": "gf_milling_control.variance_threshold_pct", "value": "5"},
     ]
-    return {"schema": "g3_business_snapshot_v2", "database": "g3-copy",
-            "warehouse_id": 89, "warehouse_code": "PIGU", "company_id": 34,
-            "outside_sentinels": {"gf.energy.reading@outside": {"count": 2, "sha256": "stable"}},
-            "modules": module_section([
+    value = {"schema": "g3_business_snapshot_v2", "database": "g3-copy",
+             "warehouse_id": 89, "warehouse_code": "PIGU", "company_id": 34,
+             "outside_sentinels": {"gf.energy.reading@outside": {"count": 2, "sha256": "stable"}},
+             "modules": module_section([
                 {"id": 1, "name": "gf_plant_energy", "state": "installed",
                  "installed_version": "18.0.1.2.2", "latest_version": None,
                  "write_date": "stable"},
@@ -99,8 +106,10 @@ def snapshot():
                                                "price_intermedia": 1.45, "price_punta": 1.67,
                                                "demand_charge_per_kw_month": 234.0,
                                                "source_note": "Recibo CFE jul-26", "active": True}]),
-                "ir.config_parameter@g3": section(config),
-            }}
+                 "ir.config_parameter@g3": section(config),
+             }}
+    refresh_snapshot_business(value)
+    return value
 
 
 class CompareSnapshotsTest(unittest.TestCase):
@@ -144,6 +153,7 @@ class CompareSnapshotsTest(unittest.TestCase):
     def test_bootstrap_rejects_inventory_mutation(self):
         before, after = snapshot(), snapshot()
         after["models"]["stock.quant"] = section([{"id": 7, "quantity": 0}])
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("outside bootstrap contract", result.stdout)
@@ -183,12 +193,36 @@ class CompareSnapshotsTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout)
                 self.assertIn("model section", result.stdout)
 
+    def test_bootstrap_rejects_extra_or_missing_model_even_when_sections_are_coherent(self):
+        before, after = snapshot(), snapshot()
+        after["models"]["unexpected.model"] = section([], ["id"])
+        refresh_snapshot_business(after)
+        result = self.run_compare(before, after, "--mode", "bootstrap")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("model set mismatch", result.stdout)
+
+        before, after = snapshot(), snapshot()
+        after["models"].pop("stock.quant")
+        refresh_snapshot_business(after)
+        result = self.run_compare(before, after, "--mode", "bootstrap")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("model set mismatch", result.stdout)
+
+    def test_bootstrap_rejects_tampered_aggregate_business_hash(self):
+        before, after = snapshot(), snapshot()
+        after["business_sha256"] = "tampered"
+        result = self.run_compare(before, after, "--mode", "bootstrap")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("aggregate business_sha256 mismatch", result.stdout)
+
     def test_bootstrap_rejects_reading_deletion(self):
         before, after = snapshot(), snapshot()
         before["models"]["gf.energy.reading"] = section(
             [{"id": 3, "meter_multiplier": 0}])
         after["models"]["gf.energy.reading"] = section(
             [], ["id", "meter_multiplier"])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("action=deleted", result.stdout)
@@ -202,6 +236,8 @@ class CompareSnapshotsTest(unittest.TestCase):
             {"id": 3, "meter_id": 8, "meter_multiplier": 1200,
              "multiplier_source": "backfill"},
         ])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -221,6 +257,8 @@ class CompareSnapshotsTest(unittest.TestCase):
             {"id": 3, "meter_id": 8, "meter_multiplier": 999,
              "multiplier_source": "backfill"},
         ])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("invalid backfill", result.stdout)
@@ -229,6 +267,7 @@ class CompareSnapshotsTest(unittest.TestCase):
         before, after = snapshot(), snapshot()
         after["models"]["ir.config_parameter@g3"]["rows"][0]["value"] = "999"
         refresh_section(after["models"]["ir.config_parameter@g3"])
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("config values mismatch", result.stdout)
@@ -240,6 +279,8 @@ class CompareSnapshotsTest(unittest.TestCase):
         after["models"]["gf.transformation.order"] = section([
             {"id": 77, "warehouse_id": 999, "state": "done"},
         ])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         contract = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
                     "allowed_changes": {
                         "gf.transformation.order:created:77": {
@@ -284,6 +325,8 @@ class CompareSnapshotsTest(unittest.TestCase):
              "variance_threshold_pct": 5.0, "exceeds_variance_threshold": True,
              "write_date": "2026-09-17T16:21:59"},
         ])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -349,6 +392,8 @@ class CompareSnapshotsTest(unittest.TestCase):
              "recount_by_employee_id": None, "recount_at": False,
              "variance_threshold_pct": 999.0, "exceeds_variance_threshold": False},
         ])
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("threshold value mismatch", result.stdout)

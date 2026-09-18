@@ -144,6 +144,14 @@ def _model_sections_errors(snapshot, label):
             errors.append("%s sha256 mismatch" % prefix)
         if section.get("business_sha256") != _section_digest(_business_rows(rows)):
             errors.append("%s business_sha256 mismatch" % prefix)
+    if all(isinstance(section, dict) and "business_sha256" in section
+           for section in models.values()):
+        expected_aggregate = _section_digest({
+            name: section["business_sha256"]
+            for name, section in models.items()
+        })
+        if snapshot.get("business_sha256") != expected_aggregate:
+            errors.append("snapshot aggregate business_sha256 mismatch %s" % label)
     return errors, not errors
 
 
@@ -491,7 +499,15 @@ def main(before_path, after_path, mode, contract_path=None, contract_sha256=None
     after_model_errors, after_models_valid = _model_sections_errors(after, "after")
     errors.extend(before_model_errors)
     errors.extend(after_model_errors)
-    if not before_models_valid or not after_models_valid:
+    before_model_names = set(before.get("models", {}))
+    after_model_names = set(after.get("models", {}))
+    model_sets_match = before_model_names == after_model_names
+    if not model_sets_match:
+        errors.append("model set mismatch missing=%s extra=%s" % (
+            sorted(before_model_names - after_model_names),
+            sorted(after_model_names - before_model_names),
+        ))
+    if not before_models_valid or not after_models_valid or not model_sets_match:
         report = {"schema": "g3_snapshot_comparison_v2", "mode": mode,
                   "database": before.get("database"), "changes": {},
                   "errors": errors, "pass": False}

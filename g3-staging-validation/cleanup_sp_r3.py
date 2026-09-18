@@ -55,6 +55,12 @@ class OdooCleanupOps:
         self.env = env
         self.cr = env.cr
 
+    @classmethod
+    def model_for_alias(cls, alias):
+        if alias.startswith("haccp_check_"):
+            return "gf.haccp.check"
+        return cls.MODEL_BY_ALIAS.get(alias)
+
     def begin(self):
         return None
 
@@ -84,15 +90,21 @@ class OdooCleanupOps:
         else:
             params.set_param(key, value)
 
+    def params_restored(self, previous):
+        params = self.env["ir.config_parameter"].sudo()
+        rows = params.search([("key", "in", list(previous))])
+        actual = {row.key: row.value for row in rows}
+        return all(actual.get(key) == value for key, value in previous.items())
+
     def _record(self, alias, data):
-        model = data.get("model") or self.MODEL_BY_ALIAS.get(alias)
+        model = data.get("model") or self.model_for_alias(alias)
         if not model:
             return self.env["ir.model"]
         return self.env[model].sudo().browse(data["id"]).exists()
 
     def dependencies(self, setup, runtime):
         shift_id = setup["records"]["shift"]["id"]
-        declared = {(item.get("model") or self.MODEL_BY_ALIAS.get(alias), item["id"])
+        declared = {(item.get("model") or self.model_for_alias(alias), item["id"])
                     for manifest in (setup, runtime)
                     for alias, item in manifest.get("records", {}).items()}
         unexpected = []
@@ -147,9 +159,9 @@ class OdooCleanupOps:
             if not shift or shift.id != expected_shift_id:
                 raise RuntimeError("STOP: relation mismatch")
             marker_value = " ".join(str(getattr(record, field, "") or "")
-                                    for field in ("notes", "reason", "name", "description"))
+                                    for field in ("notes", "reason", "name", "description", "result_text"))
             marker_aliases = {"shift", "haccp", "cycle", "downtime", "issue", "settlement"}
-            if alias in marker_aliases and marker not in marker_value:
+            if (alias in marker_aliases or alias.startswith("haccp_check_")) and marker not in marker_value:
                 raise RuntimeError("STOP: marker mismatch")
             record.unlink()
 
@@ -202,15 +214,15 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
             raise RuntimeError("STOP: runtime model is outside cleanup whitelist")
         if item.get("shift_id") != shift_id or not isinstance(item.get("id"), int):
             raise RuntimeError("STOP: runtime record relation/id mismatch")
-    setup_by_model = {
-        OdooCleanupOps.MODEL_BY_ALIAS.get(alias): value.get("id")
-        for alias, value in setup.get("records", {}).items()
-    }
+    setup_by_model = {}
+    for alias, value in setup.get("records", {}).items():
+        model = OdooCleanupOps.model_for_alias(alias)
+        setup_by_model.setdefault(model, set()).add(value.get("id"))
     for item in runtime.get("updates", {}).values():
         model = item.get("model")
         if model not in RUNTIME_UPDATE_MODELS:
             raise RuntimeError("STOP: runtime model is outside update whitelist")
-        if item.get("shift_id") != shift_id or setup_by_model.get(model) != item.get("id"):
+        if item.get("shift_id") != shift_id or item.get("id") not in setup_by_model.get(model, set()):
             raise RuntimeError("STOP: runtime update does not target a setup record")
 
 
@@ -220,7 +232,10 @@ def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,
     expected_db = expected_db or os.environ.get("SP_EXPECTED_DB")
     _ensure_context(operations, expected_db)
     _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode)
-    if operations.is_clean(setup, runtime):
+    previous_params = setup.get("previous_params", {})
+    if set(previous_params) != set(CONFIG_KEYS):
+        raise RuntimeError("STOP: previous parameter set is incomplete")
+    if operations.is_clean(setup, runtime) and operations.params_restored(previous_params):
         report = {"schema": "sp_r3_cleanup_result_v1", "database": expected_db,
                   "warehouse_id": WAREHOUSE_ID, "company_id": COMPANY_ID,
                   "already_clean": True, "writes": 0}
@@ -233,10 +248,9 @@ def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,
             raise RuntimeError("STOP: unexpected dependencies or stock records")
         operations.delete_exact(setup, runtime, MARKER)
         for key in CONFIG_KEYS:
-            if key not in setup.get("previous_params", {}):
-                raise RuntimeError("STOP: previous parameter set is incomplete")
-            operations.set_param(key, setup["previous_params"][key])
-        if not operations.is_clean(setup, runtime):
+            operations.set_param(key, previous_params[key])
+        if (not operations.is_clean(setup, runtime) or
+                not operations.params_restored(previous_params)):
             raise RuntimeError("STOP: cleanup postcondition failed")
         report = {"schema": "sp_r3_cleanup_result_v1", "database": expected_db,
                   "warehouse_id": WAREHOUSE_ID, "company_id": COMPANY_ID,
@@ -253,20 +267,28 @@ def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,
         raise
 
 
-def _load(path):
-    return json.loads(Path(path).read_bytes())
+def _load(path, expected):
+    raw = Path(path).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise RuntimeError("STOP: sealed input hash mismatch")
+    return json.loads(raw)
 
 
 def main(env):
     # Direct comparison is intentional and covered by the static safety contract.
     if env.cr.dbname != os.environ.get("SP_EXPECTED_DB"):
         raise RuntimeError("STOP: SP_EXPECTED_DB mismatch")
-    setup = _load(os.environ["SP_SETUP_PATH"])
-    runtime = _load(os.environ["SP_RUNTIME_MANIFEST_PATH"])
-    return cleanup_fixture(env, os.environ.get("SP_CLEANUP_PATH", "/tmp/sp-r3-cleanup.json"),
-                           setup, runtime, os.environ["SP_SETUP_SHA256"],
-                           os.environ["SP_RUNTIME_MANIFEST_SHA256"],
-                           mode=os.environ.get("SP_CLEANUP_MODE", "runtime"))
+    setup = _load(os.environ["SP_SETUP_PATH"], os.environ["SP_SETUP_SHA256"])
+    runtime = _load(os.environ["SP_RUNTIME_MANIFEST_PATH"],
+                    os.environ["SP_RUNTIME_MANIFEST_SHA256"])
+    output = os.environ.get("SP_CLEANUP_PATH", "/tmp/sp-r3-cleanup.json")
+    result = cleanup_fixture(env, output, setup, runtime, os.environ["SP_SETUP_SHA256"],
+                             os.environ["SP_RUNTIME_MANIFEST_SHA256"],
+                             mode=os.environ.get("SP_CLEANUP_MODE", "runtime"))
+    print(json.dumps({"output": output,
+                      "sha256": hashlib.sha256(Path(output).read_bytes()).hexdigest()},
+                     sort_keys=True))
+    return result
 
 
 if "env" in globals():  # pragma: no cover - odoo-bin shell wrapper

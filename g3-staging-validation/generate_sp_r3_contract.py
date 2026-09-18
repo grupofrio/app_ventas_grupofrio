@@ -115,6 +115,10 @@ def _single_related(snapshot, model, field, value):
     return rows[0] if len(rows) == 1 else None
 
 
+def _haccp_marker(plan, check):
+    return "%s HACCP:%s" % (plan["marker"], check["template_id"])
+
+
 def _ui_rules(plan, pre_e2e, shift_id):
     allowed = {}
     shift_fields = [
@@ -158,9 +162,20 @@ def _ui_rules(plan, pre_e2e, shift_id):
     ]
     checklist = _single_related(pre_e2e, "gf.haccp.checklist", "shift_id", shift_id)
     if checklist:
-        aliases.append(_created_rule(pre_e2e, "gf.haccp.check", "haccp_check", {
-            "checklist_id": checklist["id"], "passed": True,
-        }, {"checklist_id": checklist["id"]}))
+        check_rows = _rows(pre_e2e, "gf.haccp.check")
+        for index, check in enumerate(plan["haccp_checks"], 1):
+            marker = _haccp_marker(plan, check)
+            matches = [row for row in check_rows
+                       if row.get("checklist_id") == checklist["id"] and
+                       row.get("result_text") == marker]
+            if len(matches) != 1:
+                raise RuntimeError("STOP: PRE_E2E HACCP check catalog mismatch")
+            row = matches[0]
+            result_field = ("result_numeric" if check["check_type"] == "numeric"
+                            else "result_bool")
+            allowed["gf.haccp.check:updated:%s" % row["id"]] = _updated_rule(
+                pre_e2e, "gf.haccp.check", row["id"],
+                ["passed", result_field, "write_date"], {"passed": True})
     return allowed, aliases
 
 
@@ -248,12 +263,20 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
     identity = _identity(plan, before if mode in ("fixture", "cleanup") else pre_e2e)
     if mode == "fixture":
         config_changes, config_aliases = _config_rules(before, plan["planned_params"])
+        haccp_aliases = ["haccp_check_%s" % index
+                         for index, _check in enumerate(plan["haccp_checks"], 1)]
+        haccp_rules = [
+            _created_rule(before, "gf.haccp.check", "haccp_check_%s" % index, {
+                "result_text": _haccp_marker(plan, check),
+            }, {"result_text": _haccp_marker(plan, check)})
+            for index, check in enumerate(plan["haccp_checks"], 1)
+        ]
         return {
             "schema": "sp_r3_fixture_contract_v1", **identity,
             "write_class": "FIXTURE_SETUP",
             "planned_params": dict(plan["planned_params"]),
             "expected_blockers": list(plan["expected_blockers"]),
-            "aliases": ["shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"],
+            "aliases": ["shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"] + haccp_aliases,
             "allowed_changes": config_changes,
             "allowed_change_rules": [
                 _created_rule(before, "gf.production.shift", "shift", {
@@ -278,7 +301,7 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
                 _created_rule(before, "gf.production.material.settlement", "settlement", {
                     "state": "draft", "notes": plan["marker"],
                 }),
-            ] + config_aliases,
+            ] + haccp_rules + config_aliases,
         }
     if mode == "ui":
         shifts = _rows(pre_e2e, "gf.production.shift")
@@ -293,19 +316,30 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
             "schema": "sp_r3_ui_contract_v1", **identity, "shift_id": shift_id,
             "allowed_runtime_models": sorted(RUNTIME_RELATIONS),
             "allowed_runtime_fields": {
-                "gf.production.shift": ["state", "closed_by_employee_id", "closed_at", "end_time",
+                "gf.production.shift": ["state", "energy_end_id", "energy_kwh",
+                                        "energy_kwh_per_kg", "energy_cost_total",
+                                        "energy_cost_per_kg", "energy_vs_target_pct",
+                                        "closed_by_employee_id", "closed_at", "end_time",
                                         "x_barra_closed", "x_barra_closed_at",
                                         "x_rolito_closed", "x_rolito_closed_at", "write_date"],
                 "gf.haccp.checklist": ["state", "all_passed", "completed_by_id", "completed_at", "write_date"],
                 "gf.haccp.check": ["passed", "result_bool", "result_numeric", "result_text", "write_date"],
                 "gf.production.downtime": ["state", "end_time", "minutes", "ended_by_employee_id", "write_date"],
-                "gf.evaporator.cycle": ["state", "freeze_end", "defrost_start", "defrost_end", "write_date"],
+                "gf.evaporator.cycle": ["state", "freeze_end", "defrost_start", "defrost_end",
+                                        "kg_dumped", "kg_deviation_pct",
+                                        "dumped_by_employee_id", "dumped_at", "write_date"],
                 "gf.production.material.settlement": ["state", "write_date"],
             },
             "allowed_changes": allowed_changes,
             "allowed_change_rules": allowed_change_rules,
         }
     if mode == "runtime":
+        _identity(plan, current)
+        if ui_contract.get("schema") != "sp_r3_ui_contract_v1":
+            raise RuntimeError("STOP: invalid sealed UI contract")
+        for key, value in identity.items():
+            if ui_contract.get(key) != value:
+                raise RuntimeError("STOP: UI contract identity mismatch")
         records, updates = _runtime(plan, pre_e2e, current, ui_contract)
         return {
             "schema": "sp_r3_runtime_contract_v1", **identity,

@@ -89,6 +89,12 @@ class FakeOps:
             "frontend_sha": "fe-sha",
             "module_versions": {"gf_production_ops": "18.0.1.0.16"},
             "params": copy.deepcopy(self.params),
+            "haccp_template": {"id": 501, "checks": [
+                {"template_id": 601, "check_type": "numeric", "min_value": 0.2, "max_value": 1.5},
+                {"template_id": 602, "check_type": "yes_no", "min_value": 0, "max_value": 0},
+                {"template_id": 603, "check_type": "numeric", "min_value": -18, "max_value": 0},
+                {"template_id": 604, "check_type": "yes_no", "min_value": 0, "max_value": 0},
+            ]},
         }
 
     def occupied_shifts(self):
@@ -97,6 +103,9 @@ class FakeOps:
     def set_param(self, key, value):
         self.mutating_calls.append(("set_param", key, value))
         self.params[key] = value
+
+    def params_restored(self, previous):
+        return all(self.params.get(key) == value for key, value in previous.items())
 
     def create_fixture(self, plan, marker):
         self.mutating_calls.append(("create_fixture", plan["date"], plan["shift_code"]))
@@ -108,6 +117,14 @@ class FakeOps:
             ids[alias] = self.next_id
             self.created.setdefault(alias, {})[self.next_id] = {
                 "id": self.next_id, "shift_id": ids.get("shift"), "marker": marker,
+            }
+        for index, check in enumerate(plan["haccp_checks"], 1):
+            alias = f"haccp_check_{index}"
+            self.next_id += 1
+            ids[alias] = self.next_id
+            self.created.setdefault(alias, {})[self.next_id] = {
+                "id": self.next_id, "shift_id": ids["shift"], "marker": marker,
+                "check_template_id": check["template_id"],
             }
         self.shifts.append({"id": ids["shift"], "date": plan["date"],
                             "shift_code": plan["shift_code"], "warehouse_id": 76,
@@ -188,6 +205,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.mutating_calls, [])
         self.assertEqual(self.ops.cr.commits, 0)
         self.assertEqual(stat.S_IMODE(self.output("plan.json").stat().st_mode), 0o600)
+        self.assertEqual(len(plan["haccp_checks"]), 4)
         self.assertEqual(hashlib.sha256(self.output("plan.json").read_bytes()).hexdigest(),
                          self.planner.digest(plan))
 
@@ -253,6 +271,16 @@ class SpR3ScriptTest(unittest.TestCase):
                 self.generator.digest(plan), self.generator.digest(contract), "g3-clean")
         self.assertEqual(self.ops.mutating_calls, [])
 
+    def test_prepare_rejects_configuration_drift_before_writes(self):
+        plan = self.make_plan()
+        contract = self.contract(plan)
+        self.ops.params["gf_production.require_energy_for_close"] = "1"
+        with self.assertRaisesRegex(RuntimeError, "baseline drift"):
+            self.prepare.prepare_fixture(
+                self.ops, self.output("setup.json"), plan, contract,
+                self.generator.digest(plan), self.generator.digest(contract), "g3-clean")
+        self.assertEqual(self.ops.mutating_calls, [])
+
     def test_prepare_exact_config_blockers_permissions_redaction_and_commit(self):
         plan = self.make_plan()
         contract = self.contract(plan)
@@ -264,6 +292,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.params["gf_production.handover_blocking"], "0")
         self.assertEqual(self.ops.params["gf_production_ops.material_stock_enabled"], "0")
         self.assertEqual(set(report["blocker_codes"]), self.ops.blockers)
+        self.assertEqual(len([key for key in report["records"] if key.startswith("haccp_check_")]), 4)
         self.assertEqual(report["write_class"], "FIXTURE_SETUP")
         self.assertEqual(self.ops.cr.commits, 1)
         self.assertEqual(stat.S_IMODE(self.output("setup.json").stat().st_mode), 0o600)
@@ -335,6 +364,12 @@ class SpR3ScriptTest(unittest.TestCase):
                                              pre_e2e=pre_e2e, current=pre_e2e,
                                              ui_contract={"schema": "sp_r3_ui_contract_v1",
                                                           "shift_id": 777,
+                                                          "database": "g3-clean",
+                                                          "warehouse_id": 76,
+                                                          "company_id": 35,
+                                                          "marker": plan["marker"],
+                                                          "date": plan["date"],
+                                                          "shift_code": plan["shift_code"],
                                                           "allowed_runtime_models": []},
                                              module_seal={"modules": []})
             self.assertEqual(result["schema"], f"sp_r3_{mode}_contract_v1")
@@ -342,6 +377,50 @@ class SpR3ScriptTest(unittest.TestCase):
                 self.assertTrue(result["allowed_changes"])
                 self.assertTrue(any(rule["alias"] == "energy_end"
                                     for rule in result["allowed_change_rules"]))
+
+    def test_fixture_and_ui_contract_seal_all_four_haccp_checks(self):
+        plan = self.make_plan()
+        fixture = self.contract(plan)
+        self.assertEqual(
+            [alias for alias in fixture["aliases"] if alias.startswith("haccp_check_")],
+            ["haccp_check_1", "haccp_check_2", "haccp_check_3", "haccp_check_4"],
+        )
+        haccp_rules = [rule for rule in fixture["allowed_change_rules"]
+                       if rule["model"] == "gf.haccp.check"]
+        self.assertEqual(len(haccp_rules), 4)
+        identity = {"database": "g3-clean", "warehouse_id": 76,
+                    "warehouse_code": "PIGU-PLANTA", "company_id": 35}
+        rows = [{"id": 810 + index, "checklist_id": 800,
+                 "result_text": self.generator._haccp_marker(plan, check),
+                 "passed": False, "result_bool": False, "result_numeric": 0}
+                for index, check in enumerate(plan["haccp_checks"], 1)]
+        pre_e2e = {**identity, "models": {
+            "gf.production.shift": {"fields": ["id", "date", "shift_code",
+                                                  "plant_warehouse_id", "state"],
+                                    "rows": [{"id": 777, "date": plan["date"],
+                                              "shift_code": plan["shift_code"],
+                                              "plant_warehouse_id": 76,
+                                              "state": "in_progress"}]},
+            "gf.haccp.checklist": {"fields": ["id", "shift_id", "state"],
+                                    "rows": [{"id": 800, "shift_id": 777,
+                                              "state": "pending"}]},
+            "gf.haccp.check": {"fields": ["id", "checklist_id", "passed",
+                                             "result_bool", "result_numeric",
+                                             "result_text", "write_date"],
+                               "rows": rows},
+        }}
+        ui = self.generator.generate("ui", plan=plan, pre_e2e=pre_e2e)
+        check_updates = [key for key in ui["allowed_changes"]
+                         if key.startswith("gf.haccp.check:updated:")]
+        self.assertEqual(len(check_updates), 4)
+        for change_key, rule in ui["allowed_changes"].items():
+            model = change_key.split(":", 1)[0]
+            self.assertLessEqual(set(rule["fields"]),
+                                 set(ui["allowed_runtime_fields"].get(model, [])))
+        tampered = copy.deepcopy(pre_e2e)
+        tampered["models"]["gf.haccp.check"]["rows"][0]["result_text"] = "wrong"
+        with self.assertRaisesRegex(RuntimeError, "HACCP check catalog mismatch"):
+            self.generator.generate("ui", plan=plan, pre_e2e=tampered)
 
     def test_contract_modes_require_exact_inputs_and_cleanup_schema(self):
         plan = self.make_plan()
@@ -386,6 +465,16 @@ class SpR3ScriptTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "hash mismatch"):
                     self.generator.load_sealed(path, expected)
 
+    def test_prepare_and_cleanup_loaders_hash_exact_file_bytes(self):
+        raw = self.generator.canonical({"schema": "sealed"})
+        expected = hashlib.sha256(raw).hexdigest()
+        for script in (self.prepare, self.cleanup):
+            with self.subTest(script=script.__name__):
+                path = self.output(script.__name__ + ".json")
+                path.write_bytes(raw + b"\n")
+                with self.assertRaisesRegex(RuntimeError, "hash mismatch"):
+                    script._load(path, expected)
+
     def test_contract_writer_uses_0600_and_hashes_exact_bytes(self):
         output = self.output("contract.json")
         value = {"schema": "example", "value": 1}
@@ -404,6 +493,9 @@ class SpR3ScriptTest(unittest.TestCase):
             self.generator.generate(
                 "runtime", plan=plan, pre_e2e=base, current=current,
                 ui_contract={"schema": "sp_r3_ui_contract_v1", "shift_id": 777,
+                             "database": "g3-clean", "warehouse_id": 76,
+                             "company_id": 35, "marker": plan["marker"],
+                             "date": plan["date"], "shift_code": plan["shift_code"],
                              "allowed_runtime_models": ["gf.energy.reading"]})
 
     def test_runtime_rejects_deletion_or_unsealed_update(self):
@@ -416,6 +508,9 @@ class SpR3ScriptTest(unittest.TestCase):
              "plant_warehouse_id": 76, "state": "closed", "notes": "real"},
         ]}}}
         ui = {"schema": "sp_r3_ui_contract_v1", "shift_id": 777,
+              "database": "g3-clean", "warehouse_id": 76, "company_id": 35,
+              "marker": plan["marker"], "date": plan["date"],
+              "shift_code": plan["shift_code"],
               "allowed_runtime_models": ["gf.production.shift"],
               "allowed_runtime_fields": {"gf.production.shift": ["state"]}}
         deleted = {**identity, "models": {"gf.production.shift": {"rows": [before["models"]["gf.production.shift"]["rows"][0]]}}}
@@ -437,10 +532,31 @@ class SpR3ScriptTest(unittest.TestCase):
         runtime = self.generator.generate(
             "runtime", plan=plan, pre_e2e=before, current=current,
             ui_contract={"schema": "sp_r3_ui_contract_v1", "shift_id": 777,
+                         "database": "g3-clean", "warehouse_id": 76,
+                         "company_id": 35, "marker": plan["marker"],
+                         "date": plan["date"], "shift_code": plan["shift_code"],
                          "allowed_runtime_models": ["gf.production.shift"],
                          "allowed_runtime_fields": {"gf.production.shift": ["state"]}})
         self.assertEqual(runtime["records"], {})
         self.assertEqual(runtime["updates"]["gf.production.shift:777"]["changed_fields"], ["state"])
+
+    def test_runtime_rejects_current_or_ui_contract_identity_drift(self):
+        plan = self.make_plan()
+        identity = {"database": "g3-clean", "warehouse_id": 76, "company_id": 35}
+        snapshot = {**identity, "models": {}}
+        ui = {"schema": "sp_r3_ui_contract_v1", "shift_id": 777,
+              **identity, "marker": plan["marker"], "date": plan["date"],
+              "shift_code": plan["shift_code"], "allowed_runtime_models": []}
+        wrong_current = copy.deepcopy(snapshot)
+        wrong_current["warehouse_id"] = 115
+        with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+            self.generator.generate("runtime", plan=plan, pre_e2e=snapshot,
+                                    current=wrong_current, ui_contract=ui)
+        wrong_ui = copy.deepcopy(ui)
+        wrong_ui["company_id"] = 34
+        with self.assertRaisesRegex(RuntimeError, "UI contract identity mismatch"):
+            self.generator.generate("runtime", plan=plan, pre_e2e=snapshot,
+                                    current=snapshot, ui_contract=wrong_ui)
 
     def _prepared(self):
         plan = self.make_plan()
@@ -471,6 +587,49 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertTrue(second["already_clean"])
         self.assertEqual(self.ops.cr.commits, commits)
         self.assertEqual(len(self.ops.mutating_calls), writes)
+
+    def test_cleanup_restores_params_when_fixture_rows_are_already_absent(self):
+        setup, runtime = self._prepared()
+        self.ops.created = {}
+        self.ops.shifts = []
+        result = self.cleanup.cleanup_fixture(
+            self.ops, self.output("cleanup.json"), setup, runtime,
+            self.generator.digest(setup), self.generator.digest(runtime),
+            "g3-clean", "setup-only")
+        self.assertFalse(result["already_clean"])
+        self.assertEqual(self.ops.params,
+                         setup["previous_params"] | {"database.is_neutralized": "true"})
+
+    def test_cleanup_accepts_updates_to_each_sealed_haccp_check_only(self):
+        setup, runtime = self._prepared()
+        shift_id = setup["records"]["shift"]["id"]
+        runtime["updates"] = {
+            "gf.haccp.check:%s" % item["id"]: {
+                "id": item["id"], "model": "gf.haccp.check",
+                "action": "updated", "changed_fields": ["result_bool"],
+                "shift_id": shift_id,
+            }
+            for alias, item in setup["records"].items()
+            if alias.startswith("haccp_check_")
+        }
+        result = self.cleanup.cleanup_fixture(
+            self.ops, self.output("cleanup.json"), setup, runtime,
+            self.generator.digest(setup), self.generator.digest(runtime),
+            "g3-clean", "runtime")
+        self.assertFalse(result["already_clean"])
+        bad_ops = FakeOps()
+        self.ops = bad_ops
+        setup, runtime = self._prepared()
+        runtime["updates"] = {"gf.haccp.check:999999": {
+            "id": 999999, "model": "gf.haccp.check", "action": "updated",
+            "changed_fields": ["result_bool"],
+            "shift_id": setup["records"]["shift"]["id"],
+        }}
+        with self.assertRaisesRegex(RuntimeError, "setup record"):
+            self.cleanup.cleanup_fixture(
+                bad_ops, self.output("cleanup-bad.json"), setup, runtime,
+                self.generator.digest(setup), self.generator.digest(runtime),
+                "g3-clean", "runtime")
 
     def test_cleanup_report_failure_rolls_back_before_commit(self):
         setup, runtime = self._prepared()
@@ -534,6 +693,9 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertIn("env.cr.dbname", cleanup)
         self.assertIn("operations.commit()", prepare)
         self.assertIn("operations.commit()", cleanup)
+        self.assertIn("shift._get_close_readiness()", prepare)
+        self.assertNotIn("_get_shift_close_readiness", prepare)
+        self.assertIn("create_period_reading", prepare)
         self.assertIn("gf_material_issue_id", cleanup)
         self.assertIn("gf_material_settlement_id", cleanup)
         self.assertIn("move_id", cleanup)

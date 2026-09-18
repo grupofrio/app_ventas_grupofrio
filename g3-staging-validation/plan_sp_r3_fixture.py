@@ -57,35 +57,46 @@ class OdooReadOnlyOps:
         return str(value).strip().lower() in ("1", "true", "yes")
 
     def environment(self):
-        warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
+        target_warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
         employees = self.env["hr.employee"].sudo().browse(EMPLOYEE_IDS).exists()
         employee_data = {}
         for employee in employees:
             role = getattr(getattr(employee, "job_id", False), "x_job_key", False) or ""
-            warehouse = getattr(employee, "warehouse_id", False)
+            employee_warehouse = getattr(employee, "warehouse_id", False)
             employee_data[employee.id] = {
                 "id": employee.id,
                 "company_id": employee.company_id.id,
-                "warehouse_ids": [warehouse.id] if warehouse else [],
+                "warehouse_ids": [employee_warehouse.id] if employee_warehouse else [],
                 "role": role,
             }
         params = self.env["ir.config_parameter"].sudo()
+        param_rows = params.search([("key", "in", list(CONFIG_KEYS))])
+        existing_params = {row.key: row.value for row in param_rows}
         modules = self.env["ir.module.module"].sudo().search([
             ("name", "in", ["gf_production_ops", "gf_plant_energy", "gf_milling_control"])
         ])
+        haccp_template = self.env["gf.haccp.template"].sudo().search([
+            ("active", "=", True), ("line_type", "in", ["all", "rolito"]),
+        ], limit=1)
+        checks = haccp_template.check_template_ids.sorted(key=lambda row: (row.sequence, row.id))
         return {
             "database": self.cr.dbname,
             "neutralized": self.neutralized,
             "warehouse": {
-                "id": warehouse.id,
-                "company_id": warehouse.company_id.id,
-                "code": warehouse.code,
+                "id": target_warehouse.id,
+                "company_id": target_warehouse.company_id.id,
+                "code": target_warehouse.code,
             },
             "employees": employee_data,
             "backend_sha": os.environ.get("SP_BACKEND_SHA", ""),
             "frontend_sha": os.environ.get("SP_FRONTEND_SHA", ""),
             "module_versions": {module.name: module.installed_version for module in modules},
-            "params": {key: params.get_param(key) for key in CONFIG_KEYS},
+            "params": {key: existing_params.get(key) for key in CONFIG_KEYS},
+            "haccp_template": {"id": haccp_template.id, "checks": [
+                {"template_id": row.id, "check_type": row.check_type,
+                 "min_value": row.min_value, "max_value": row.max_value}
+                for row in checks
+            ]},
         }
 
     def occupied_shifts(self):
@@ -148,6 +159,16 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
     _verify_environment(info, seal, expected_db)
     date_value, shift_code = _free_tuple(
         operations.occupied_shifts(), today or dt.date.today().isoformat())
+    haccp = info.get("haccp_template") or {}
+    if not haccp.get("id") or not haccp.get("checks"):
+        raise RuntimeError("STOP: HACCP template/check catalog is incomplete")
+    if any(check.get("check_type") not in ("numeric", "yes_no")
+           for check in haccp["checks"]):
+        raise RuntimeError("STOP: HACCP fixture only supports numeric/yes_no checks")
+    if any(check.get("check_type") == "numeric" and
+           not (check.get("min_value") or check.get("max_value"))
+           for check in haccp["checks"]):
+        raise RuntimeError("STOP: numeric HACCP fixture checks require a bound")
     plan = {
         "schema": "sp_r3_fixture_plan_v1",
         "database": expected_db,
@@ -160,6 +181,8 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
         "operator_employee_id": 2549,
         "negative_employee_id": 2550,
         "negative_employee_warehouse_id": 115,
+        "haccp_template_id": haccp["id"],
+        "haccp_checks": list(haccp["checks"]),
         "marker": MARKER,
         "backend_sha": info["backend_sha"],
         "frontend_sha": info["frontend_sha"],
@@ -188,7 +211,11 @@ def main(env):
     expected = os.environ["G3_SEAL_SHA256"]
     if hashlib.sha256(seal_raw).hexdigest() != expected:
         raise RuntimeError("STOP: environment seal hash mismatch")
-    return plan_fixture(env, json.loads(seal_raw), output)
+    result = plan_fixture(env, json.loads(seal_raw), output)
+    print(json.dumps({"output": output,
+                      "sha256": hashlib.sha256(Path(output).read_bytes()).hexdigest()},
+                     sort_keys=True))
+    return result
 
 
 if "env" in globals():  # pragma: no cover - odoo-bin shell wrapper

@@ -64,28 +64,33 @@ class OdooPrepareOps:
         return str(value).strip().lower() in ("1", "true", "yes")
 
     def environment(self):
-        warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
+        target_warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
         employees = self.env["hr.employee"].sudo().browse(list(EXPECTED_EMPLOYEES)).exists()
         info = {}
         for employee in employees:
             role = getattr(getattr(employee, "job_id", False), "x_job_key", False) or ""
-            warehouse = getattr(employee, "warehouse_id", False)
+            employee_warehouse = getattr(employee, "warehouse_id", False)
             info[employee.id] = {"id": employee.id, "company_id": employee.company_id.id,
-                                 "warehouse_ids": [warehouse.id] if warehouse else [], "role": role}
+                                 "warehouse_ids": ([employee_warehouse.id]
+                                                   if employee_warehouse else []),
+                                 "role": role}
         params = self.env["ir.config_parameter"].sudo()
+        param_rows = params.search([("key", "in", list(PLANNED_PARAMS))])
+        existing_params = {row.key: row.value for row in param_rows}
         modules = self.env["ir.module.module"].sudo().search([
             ("name", "in", ["gf_production_ops", "gf_plant_energy", "gf_milling_control"])
         ])
         return {
             "database": self.cr.dbname,
             "neutralized": self.neutralized,
-            "warehouse": {"id": warehouse.id, "company_id": warehouse.company_id.id,
-                          "code": warehouse.code},
+            "warehouse": {"id": target_warehouse.id,
+                          "company_id": target_warehouse.company_id.id,
+                          "code": target_warehouse.code},
             "employees": info,
             "backend_sha": os.environ.get("SP_BACKEND_SHA", ""),
             "frontend_sha": os.environ.get("SP_FRONTEND_SHA", ""),
             "module_versions": {record.name: record.installed_version for record in modules},
-            "params": {key: params.get_param(key) for key in PLANNED_PARAMS},
+            "params": {key: existing_params.get(key) for key in PLANNED_PARAMS},
         }
 
     def occupied_shifts(self):
@@ -117,25 +122,41 @@ class OdooPrepareOps:
             "operator_employee_ids": [(6, 0, [2549])], "state": "in_progress",
             "line_ids": [(6, 0, lines.ids)], "notes": self._marked("turno"),
         })
-        meter = self.env["gf.energy.meter"].sudo().search([
-            ("warehouse_id", "=", WAREHOUSE_ID), ("active", "=", True),
-        ], limit=1)
-        energy = self.env["gf.energy.reading"].sudo().create({
-            "shift_id": shift.id, "reading_type": "start", "employee_id": 2548,
-            "meter_id": meter.id, "kwh_value": 0,
-            "kwh_base": 0, "kwh_intermedia": 0, "kwh_punta": 0,
-        })
-        shift.write({"energy_start_id": energy.id})
-        template = self.env["gf.haccp.template"].sudo().search([
-            ("active", "=", True), ("line_type", "in", ["all", "rolito"]),
-        ], limit=1)
-        if not template:
+        employee = self.env["hr.employee"].sudo().browse(2548).exists()
+        Energy = self.env["gf.energy.reading"].sudo()
+        energy = Energy.create_period_reading(
+            shift, "start", {"base": 0, "intermedia": 0, "punta": 0},
+            employee=employee)
+        template = self.env["gf.haccp.template"].sudo().browse(
+            plan["haccp_template_id"]).exists()
+        if not template or not template.active or template.line_type not in ("all", "rolito"):
             raise RuntimeError("STOP: no HACCP template available")
+        actual_checks = [
+            {"template_id": row.id, "check_type": row.check_type,
+             "min_value": row.min_value, "max_value": row.max_value}
+            for row in template.check_template_ids.sorted(key=lambda row: (row.sequence, row.id))
+        ]
+        expected_checks = plan["haccp_checks"]
+        if actual_checks != expected_checks:
+            raise RuntimeError("STOP: HACCP template/check catalog drift")
         haccp = self.env["gf.haccp.checklist"].sudo().create({
             "shift_id": shift.id, "template_id": template.id,
             "state": "pending", "notes": self._marked("HACCP pendiente"),
         })
         shift.write({"haccp_checklist_id": haccp.id})
+        haccp_checks = {}
+        for index, check in enumerate(expected_checks, 1):
+            values = {
+                "checklist_id": haccp.id,
+                "check_template_id": check["template_id"],
+                "result_text": "%s HACCP:%s" % (marker, check["template_id"]),
+            }
+            if check["check_type"] == "numeric":
+                values["result_numeric"] = (
+                    check["min_value"] - 1 if check["min_value"]
+                    else check["max_value"] + 1)
+            check_row = self.env["gf.haccp.check"].sudo().create(values)
+            haccp_checks["haccp_check_%s" % index] = check_row.id
         machine = self.env["gf.production.machine"].sudo().search([
             ("line_id.plant_warehouse_id", "=", WAREHOUSE_ID),
             ("line_id.line_type", "=", "rolito"),
@@ -175,11 +196,11 @@ class OdooPrepareOps:
         })
         return {"shift": shift.id, "energy_start": energy.id, "haccp": haccp.id,
                 "cycle": cycle.id, "downtime": downtime.id, "issue": issue.id,
-                "settlement": settlement.id}
+                "settlement": settlement.id, **haccp_checks}
 
     def fixture_blockers(self, shift_id):
         shift = self.env["gf.production.shift"].sudo().browse(shift_id).exists()
-        readiness = shift._get_shift_close_readiness()
+        readiness = shift._get_close_readiness()
         return {item["code"] for item in readiness.get("blockers", [])}
 
     def fixture_state(self, ids):
@@ -191,7 +212,9 @@ class OdooPrepareOps:
         }
         result = {}
         for alias, record_id in ids.items():
-            record = self.env[model_by_alias[alias]].sudo().browse(record_id).exists()
+            model = ("gf.haccp.check" if alias.startswith("haccp_check_")
+                     else model_by_alias[alias])
+            record = self.env[model].sudo().browse(record_id).exists()
             result[alias] = {"id": record.id, "state": getattr(record, "state", "created")}
         return result
 
@@ -230,6 +253,18 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
             raise RuntimeError("STOP: plan/contract identity mismatch")
     if plan.get("marker") != MARKER or contract.get("write_class") != "FIXTURE_SETUP":
         raise RuntimeError("STOP: fixture marker/write class mismatch")
+    if (plan.get("leader_employee_id"), plan.get("operator_employee_id"),
+            plan.get("negative_employee_id"), plan.get("negative_employee_warehouse_id")) != (
+            2548, 2549, 2550, 115):
+        raise RuntimeError("STOP: fixture employee identity mismatch")
+    checks = plan.get("haccp_checks") or []
+    check_ids = [item.get("template_id") for item in checks]
+    if (not isinstance(plan.get("haccp_template_id"), int) or not checks or
+            len(check_ids) != len(set(check_ids)) or
+            any(item.get("check_type") not in ("numeric", "yes_no") for item in checks) or
+            any(item.get("check_type") == "numeric" and
+                not (item.get("min_value") or item.get("max_value")) for item in checks)):
+        raise RuntimeError("STOP: invalid sealed HACCP catalog")
     if plan.get("planned_params") != PLANNED_PARAMS:
         raise RuntimeError("STOP: planned configuration mismatch")
     if set(plan.get("expected_blockers", [])) != EXPECTED_BLOCKERS:
@@ -238,8 +273,12 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
         raise RuntimeError("STOP: FIXTURE_SETUP configuration mismatch")
     if set(contract.get("expected_blockers", [])) != EXPECTED_BLOCKERS:
         raise RuntimeError("STOP: FIXTURE_SETUP blocker mismatch")
-    if set(contract.get("aliases", [])) != {
-            "shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"}:
+    expected_aliases = {
+        "shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement",
+        *("haccp_check_%s" % index
+          for index, _check in enumerate(plan.get("haccp_checks", []), 1)),
+    }
+    if set(contract.get("aliases", [])) != expected_aliases:
         raise RuntimeError("STOP: FIXTURE_SETUP alias mismatch")
 
 
@@ -267,6 +306,11 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
     _verify_seals(plan, contract, plan_sha256, contract_sha256)
     info = _ensure_context(operations, expected_db)
     _tuple_is_free(operations, plan)
+    if plan.get("warehouse_code") != (info.get("warehouse") or {}).get("code"):
+        raise RuntimeError("STOP: warehouse code mismatch")
+    current_params = {key: (info.get("params") or {}).get(key) for key in PLANNED_PARAMS}
+    if plan.get("previous_params") != current_params:
+        raise RuntimeError("STOP: planned configuration baseline drift")
     if plan.get("backend_sha") != info.get("backend_sha") or plan.get("frontend_sha") != info.get("frontend_sha"):
         raise RuntimeError("STOP: deployed SHA mismatch")
     if plan.get("module_versions") != info.get("module_versions"):
@@ -282,7 +326,7 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
         if blockers != EXPECTED_BLOCKERS:
             raise RuntimeError("STOP: exact blocker postcondition failed: %s" % sorted(blockers))
         states = operations.fixture_state(ids)
-        if set(states) != {"shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"}:
+        if set(states) != set(contract["aliases"]):
             raise RuntimeError("STOP: fixture record postcondition failed")
         report = {
             "schema": "sp_r3_fixture_setup_v1", "database": expected_db,
@@ -306,10 +350,9 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
 
 def _load(path, expected):
     raw = Path(path).read_bytes()
-    value = json.loads(raw)
-    if digest(value) != expected:
+    if hashlib.sha256(raw).hexdigest() != expected:
         raise RuntimeError("STOP: sealed input hash mismatch")
-    return value
+    return json.loads(raw)
 
 
 def main(env):
@@ -319,9 +362,13 @@ def main(env):
     plan = _load(os.environ["SP_PLAN_PATH"], os.environ["SP_PLAN_SHA256"])
     contract = _load(os.environ["SP_FIXTURE_CONTRACT_PATH"],
                      os.environ["SP_FIXTURE_CONTRACT_SHA256"])
-    return prepare_fixture(env, os.environ.get("SP_SETUP_PATH", "/tmp/sp-r3-fixture-setup.json"),
-                           plan, contract, os.environ["SP_PLAN_SHA256"],
-                           os.environ["SP_FIXTURE_CONTRACT_SHA256"])
+    output = os.environ.get("SP_SETUP_PATH", "/tmp/sp-r3-fixture-setup.json")
+    result = prepare_fixture(env, output, plan, contract, os.environ["SP_PLAN_SHA256"],
+                             os.environ["SP_FIXTURE_CONTRACT_SHA256"])
+    print(json.dumps({"output": output,
+                      "sha256": hashlib.sha256(Path(output).read_bytes()).hexdigest()},
+                     sort_keys=True))
+    return result
 
 
 if "env" in globals():  # pragma: no cover - odoo-bin shell wrapper

@@ -52,7 +52,8 @@ def row_changes(left, right):
     left_rows = {row.get("id"): row for row in left.get("rows", [])}
     right_rows = {row.get("id"): row for row in right.get("rows", [])}
     changes = []
-    for record_id in sorted(set(left_rows) | set(right_rows)):
+    for record_id in sorted(set(left_rows) | set(right_rows),
+                            key=lambda value: (type(value).__name__, repr(value))):
         before, after = left_rows.get(record_id), right_rows.get(record_id)
         if before == after:
             continue
@@ -303,6 +304,46 @@ def _cleanup_contract_errors(contract, before):
     return errors, declared
 
 
+def _module_container_errors(section, label):
+    errors = []
+    expected_keys = {"available", "count", "fields", "ids", "rows", "sha256"}
+    if not isinstance(section, dict) or set(section) != expected_keys:
+        actual = set(section) if isinstance(section, dict) else set()
+        errors.append("module container fields mismatch %s: %s" %
+                      (label, sorted(actual ^ expected_keys)))
+        return errors, False
+    expected_fields = [
+        "id", "name", "state", "installed_version", "latest_version", "write_date",
+    ]
+    if section.get("available") is not True:
+        errors.append("module container available mismatch %s" % label)
+    if section.get("fields") != expected_fields:
+        errors.append("module container fields list mismatch %s" % label)
+    rows, ids = section.get("rows"), section.get("ids")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        errors.append("module container rows invalid %s" % label)
+        return errors, False
+    if not isinstance(ids, list):
+        errors.append("module container ids invalid %s" % label)
+        return errors, False
+    row_ids = [row.get("id") for row in rows]
+    if any(type(record_id) is not int for record_id in row_ids):
+        errors.append("module row ids invalid %s" % label)
+        return errors, False
+    if len(row_ids) != len(set(row_ids)):
+        errors.append("duplicate module row ids %s" % label)
+    if ids != row_ids:
+        errors.append("module container ids mismatch %s" % label)
+    if type(section.get("count")) is not int or section.get("count") != len(rows):
+        errors.append("module container count mismatch %s" % label)
+    expected_sha256 = hashlib.sha256(json.dumps(
+        rows, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode()).hexdigest()
+    if section.get("sha256") != expected_sha256:
+        errors.append("module container sha256 mismatch %s" % label)
+    return errors, not errors
+
+
 def _cleanup_errors(before, after, contract):
     errors, declared = _cleanup_contract_errors(contract, before)
     if before.get("models") != after.get("models"):
@@ -310,8 +351,17 @@ def _cleanup_errors(before, after, contract):
     if before.get("outside_sentinels") != after.get("outside_sentinels"):
         errors.append("outside sentinels differ after cleanup")
 
-    before_rows = {row.get("id"): row for row in before.get("modules", {}).get("rows", [])}
-    after_rows = {row.get("id"): row for row in after.get("modules", {}).get("rows", [])}
+    before_container_errors, before_valid = _module_container_errors(
+        before.get("modules"), "before")
+    after_container_errors, after_valid = _module_container_errors(
+        after.get("modules"), "after")
+    errors.extend(before_container_errors)
+    errors.extend(after_container_errors)
+    if not before_valid or not after_valid:
+        return errors
+
+    before_rows = {row["id"]: row for row in before["modules"]["rows"]}
+    after_rows = {row["id"]: row for row in after["modules"]["rows"]}
     if set(before_rows) != set(after_rows):
         errors.append("module rows must not be created or deleted")
     exact_row_fields = {

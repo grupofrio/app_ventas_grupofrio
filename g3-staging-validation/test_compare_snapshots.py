@@ -7,6 +7,34 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("compare_snapshots.py")
+MODULE_FIELDS = [
+    "id", "name", "state", "installed_version", "latest_version", "write_date",
+]
+
+
+def rows_sha256(rows):
+    raw = json.dumps(rows, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def module_section(rows):
+    return {
+        "available": True,
+        "count": len(rows),
+        "fields": list(MODULE_FIELDS),
+        "ids": [row["id"] for row in rows],
+        "rows": rows,
+        "sha256": rows_sha256(rows),
+    }
+
+
+def refresh_modules(value):
+    rows = value["modules"]["rows"]
+    value["modules"].update({
+        "count": len(rows),
+        "ids": [row["id"] for row in rows],
+        "sha256": rows_sha256(rows),
+    })
 
 
 def snapshot():
@@ -23,12 +51,15 @@ def snapshot():
     return {"schema": "g3_business_snapshot_v2", "database": "g3-copy",
             "warehouse_id": 89, "warehouse_code": "PIGU", "company_id": 34,
             "outside_sentinels": {"gf.energy.reading@outside": {"count": 2, "sha256": "stable"}},
-            "modules": section([
+            "modules": module_section([
                 {"id": 1, "name": "gf_plant_energy", "state": "installed",
                  "installed_version": "18.0.1.2.2", "latest_version": None,
                  "write_date": "stable"},
                 {"id": 2, "name": "gf_milling_control", "state": "installed",
                  "installed_version": "18.0.1.0.0", "latest_version": None,
+                 "write_date": "stable"},
+                {"id": 3, "name": "gf_production_ops", "state": "installed",
+                 "installed_version": "18.0.1.0.15", "latest_version": "18.0.1.0.15",
                  "write_date": "stable"},
             ]), "models": {
                 "stock.quant": copy.deepcopy(empty),
@@ -76,8 +107,8 @@ class CompareSnapshotsTest(unittest.TestCase):
             "company_id": 34,
             "modules": [{
                 "name": "gf_production_ops",
-                "installed_version": "18.0.1.0.16",
-                "latest_version": "18.0.1.0.16",
+                "installed_version": "18.0.1.0.15",
+                "latest_version": "18.0.1.0.15",
             }],
         }
 
@@ -165,7 +196,9 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_bootstrap_accepts_created_target_modules(self):
         before, after = snapshot(), snapshot()
-        before["modules"] = {"available": True, "count": 0, "rows": [], "sha256": "none"}
+        before["modules"] = module_section([
+            copy.deepcopy(after["modules"]["rows"][2]),
+        ])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -262,17 +295,18 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_cleanup_accepts_exact_business_restore_and_sealed_module_metadata(self):
         before, after = snapshot(), snapshot()
-        before["modules"]["rows"].append({
-            "id": 3, "name": "gf_production_ops", "state": "installed",
-            "installed_version": "18.0.1.0.15", "latest_version": "18.0.1.0.15",
-            "write_date": "before",
-        })
-        after["modules"]["rows"].append({
-            "id": 3, "name": "gf_production_ops", "state": "installed",
-            "installed_version": "18.0.1.0.16", "latest_version": "18.0.1.0.16",
+        after["modules"]["rows"][2].update({
+            "installed_version": "18.0.1.0.16",
+            "latest_version": "18.0.1.0.16",
             "write_date": "after",
         })
-        result = self.run_cleanup(before, after, self.cleanup_contract())
+        refresh_modules(after)
+        contract = self.cleanup_contract()
+        contract["modules"][0].update({
+            "installed_version": "18.0.1.0.16",
+            "latest_version": "18.0.1.0.16",
+        })
+        result = self.run_cleanup(before, after, contract)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_cleanup_requires_exact_models_not_only_equal_rows(self):
@@ -292,10 +326,11 @@ class CompareSnapshotsTest(unittest.TestCase):
     def test_cleanup_rejects_module_row_addition(self):
         before, after = snapshot(), snapshot()
         after["modules"]["rows"].append({
-            "id": 3, "name": "gf_production_ops", "state": "installed",
+            "id": 4, "name": "unexpected_module", "state": "installed",
             "installed_version": "18.0.1.0.16", "latest_version": "18.0.1.0.16",
             "write_date": "after",
         })
+        refresh_modules(after)
         result = self.run_cleanup(before, after, self.cleanup_contract())
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("module rows must not be created or deleted", result.stdout)
@@ -304,6 +339,8 @@ class CompareSnapshotsTest(unittest.TestCase):
         before, after = snapshot(), snapshot()
         before["modules"]["rows"][0]["unexpected"] = "same"
         after["modules"]["rows"][0]["unexpected"] = "same"
+        refresh_modules(before)
+        refresh_modules(after)
         result = self.run_cleanup(before, after, self.cleanup_contract())
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("module row fields mismatch", result.stdout)
@@ -311,12 +348,14 @@ class CompareSnapshotsTest(unittest.TestCase):
     def test_cleanup_rejects_unsealed_module_or_field(self):
         before, after = snapshot(), snapshot()
         after["modules"]["rows"][0]["write_date"] = "after"
+        refresh_modules(after)
         result = self.run_cleanup(before, after, self.cleanup_contract())
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("module is not declared", result.stdout)
 
         after = snapshot()
         after["modules"]["rows"][0]["state"] = "to upgrade"
+        refresh_modules(after)
         contract = self.cleanup_contract()
         contract["modules"].append({
             "name": "gf_plant_energy",
@@ -329,17 +368,17 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_cleanup_rejects_wrong_declared_version_or_contract_hash(self):
         before, after = snapshot(), snapshot()
-        before["modules"]["rows"].append({
-            "id": 3, "name": "gf_production_ops", "state": "installed",
-            "installed_version": "18.0.1.0.15", "latest_version": "18.0.1.0.15",
-            "write_date": "before",
-        })
-        after["modules"]["rows"].append({
-            "id": 3, "name": "gf_production_ops", "state": "installed",
+        after["modules"]["rows"][2].update({
             "installed_version": "18.0.1.0.17", "latest_version": "18.0.1.0.17",
             "write_date": "after",
         })
-        result = self.run_cleanup(before, after, self.cleanup_contract())
+        refresh_modules(after)
+        contract = self.cleanup_contract()
+        contract["modules"][0].update({
+            "installed_version": "18.0.1.0.16",
+            "latest_version": "18.0.1.0.16",
+        })
+        result = self.run_cleanup(before, after, contract)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("sealed version mismatch", result.stdout)
 
@@ -355,6 +394,44 @@ class CompareSnapshotsTest(unittest.TestCase):
             ], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("contract hash mismatch", result.stdout)
+
+    def test_cleanup_rejects_additional_module_container_field(self):
+        before, after = snapshot(), snapshot()
+        after["modules"]["unexpected"] = "not part of snapshot schema"
+        result = self.run_cleanup(before, after, self.cleanup_contract())
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("module container fields mismatch", result.stdout)
+
+    def test_cleanup_rejects_incoherent_module_container_metadata(self):
+        mutations = {
+            "count": lambda modules: modules.__setitem__("count", 999),
+            "ids": lambda modules: modules.__setitem__("ids", [999]),
+            "sha256": lambda modules: modules.__setitem__("sha256", "tampered"),
+            "fields": lambda modules: modules.__setitem__("fields", ["id", "name"]),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                before, after = snapshot(), snapshot()
+                mutate(after["modules"])
+                result = self.run_cleanup(before, after, self.cleanup_contract())
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("module container", result.stdout)
+
+    def test_cleanup_rejects_duplicate_module_row_ids(self):
+        before, after = snapshot(), snapshot()
+        after["modules"]["rows"].append(copy.deepcopy(after["modules"]["rows"][0]))
+        refresh_modules(after)
+        result = self.run_cleanup(before, after, self.cleanup_contract())
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("duplicate module row ids", result.stdout)
+
+    def test_cleanup_rejects_non_integer_module_row_id(self):
+        before, after = snapshot(), snapshot()
+        after["modules"]["rows"][0]["id"] = "1"
+        refresh_modules(after)
+        result = self.run_cleanup(before, after, self.cleanup_contract())
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("module row ids invalid", result.stdout)
 
 
 if __name__ == "__main__":

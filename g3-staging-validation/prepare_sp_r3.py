@@ -11,6 +11,7 @@ MARKER = "[SP-R3 FIXTURE 2026-09-18]"
 WAREHOUSE_ID = 76
 COMPANY_ID = 35
 EXPECTED_EMPLOYEES = {
+    586: ("operador_rolito", COMPANY_ID, None),
     2548: ("supervisor_produccion", COMPANY_ID, WAREHOUSE_ID),
     2549: ("operador_barra", COMPANY_ID, WAREHOUSE_ID),
     2550: ("supervisor_produccion", COMPANY_ID, 115),
@@ -116,6 +117,12 @@ class OdooPrepareOps:
     def set_param(self, key, value):
         self.env["ir.config_parameter"].sudo().set_param(key, value)
 
+    def set_employee_warehouse(self, employee_id, warehouse_id):
+        employee = self.env["hr.employee"].sudo().browse(employee_id).exists()
+        if not employee:
+            raise RuntimeError("STOP: fixture employee is missing")
+        employee.write({"warehouse_id": warehouse_id or False})
+
     def _marked(self, text):
         return "%s %s" % (MARKER, text)
 
@@ -130,7 +137,7 @@ class OdooPrepareOps:
         shift = Shift.create({
             "date": plan["date"], "shift_code": plan["shift_code"],
             "plant_warehouse_id": WAREHOUSE_ID, "leader_employee_id": 2548,
-            "operator_employee_ids": [(6, 0, [2549])], "state": "in_progress",
+            "operator_employee_ids": [(6, 0, [2549, 586])], "state": "in_progress",
             "line_ids": [(6, 0, lines.ids)], "notes": self._marked("turno"),
         })
         employee = self.env["hr.employee"].sudo().browse(2548).exists()
@@ -247,7 +254,8 @@ def _ensure_context(ops, expected_db):
         actual = (info.get("employees") or {}).get(employee_id) or {}
         if actual.get("role") != role or actual.get("company_id") != company_id:
             raise RuntimeError("STOP: employee identity/role mismatch")
-        if warehouse_id not in actual.get("warehouse_ids", []):
+        expected_warehouses = [] if warehouse_id is None else [warehouse_id]
+        if actual.get("warehouse_ids", []) != expected_warehouses:
             raise RuntimeError("STOP: employee warehouse mismatch")
     return info
 
@@ -265,11 +273,16 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
     if plan.get("marker") != MARKER or contract.get("write_class") != "FIXTURE_SETUP":
         raise RuntimeError("STOP: fixture marker/write class mismatch")
     if (plan.get("leader_employee_id"), plan.get("operator_employee_id"),
+            plan.get("rolito_employee_id"),
             plan.get("negative_employee_id"), plan.get("negative_employee_warehouse_id")) != (
-            2548, 2549, 2550, 115):
+            2548, 2549, 586, 2550, 115):
         raise RuntimeError("STOP: fixture employee identity mismatch")
     if plan.get("employee_contexts") != EMPLOYEE_CONTEXTS:
         raise RuntimeError("STOP: sealed employee contexts mismatch")
+    if plan.get("employee_warehouse_adjustment") != {
+            "employee_id": 586, "before": None, "after": WAREHOUSE_ID,
+            "write_class": "FIXTURE_SETUP"}:
+        raise RuntimeError("STOP: employee warehouse adjustment mismatch")
     if (plan.get("fixture_photo_sha256") != ENERGY_FIXTURE_PHOTO_SHA256 or
             contract.get("fixture_photo_sha256") != ENERGY_FIXTURE_PHOTO_SHA256):
         raise RuntimeError("STOP: sanitized fixture photo seal mismatch")
@@ -287,6 +300,10 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
         raise RuntimeError("STOP: expected blocker contract mismatch")
     if contract.get("planned_params") != PLANNED_PARAMS:
         raise RuntimeError("STOP: FIXTURE_SETUP configuration mismatch")
+    if contract.get("employee_warehouse_adjustment") != {
+            "employee_id": 586, "before": None, "after": WAREHOUSE_ID,
+            "write_class": "FIXTURE_SETUP"}:
+        raise RuntimeError("STOP: employee warehouse FIXTURE_SETUP rule mismatch")
     if set(contract.get("expected_blockers", [])) != EXPECTED_BLOCKERS:
         raise RuntimeError("STOP: FIXTURE_SETUP blocker mismatch")
     expected_aliases = {
@@ -338,6 +355,12 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
     try:
         operations.begin()
         previous = {key: info["params"].get(key) for key in PLANNED_PARAMS}
+        operations.set_employee_warehouse(586, WAREHOUSE_ID)
+        adjusted = (operations.environment().get("employees") or {}).get(586) or {}
+        if (adjusted.get("role"), adjusted.get("company_id"),
+                adjusted.get("warehouse_ids")) != (
+                "operador_rolito", COMPANY_ID, [WAREHOUSE_ID]):
+            raise RuntimeError("STOP: employee warehouse adjustment postcondition failed")
         for key, value in PLANNED_PARAMS.items():
             if str(previous.get(key)) != str(value):
                 operations.set_param(key, value)
@@ -354,6 +377,14 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
             "marker": MARKER, "date": plan["date"], "shift_code": plan["shift_code"],
             "write_class": "FIXTURE_SETUP", "previous_params": previous,
             "employee_contexts": list(EMPLOYEE_CONTEXTS),
+            "employee_warehouse_restore": {
+                "employee_id": 586, "warehouse_id": None,
+            },
+            "fixture_setup_changes": [{
+                "model": "hr.employee", "id": 586, "field": "warehouse_id",
+                "before": None, "after": WAREHOUSE_ID,
+                "write_class": "FIXTURE_SETUP",
+            }],
             "fixture_photo_sha256": ENERGY_FIXTURE_PHOTO_SHA256,
             "applied_params": dict(PLANNED_PARAMS),
             "blocker_codes": sorted(blockers), "records": states,

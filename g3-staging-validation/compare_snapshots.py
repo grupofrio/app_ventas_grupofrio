@@ -309,7 +309,7 @@ def _e2e_errors(changes, contract):
             if item["change"] == "updated":
                 fields = set(item.get("fields", {}))
                 permitted = set(rule.get("fields", []))
-                if fields != permitted:
+                if not fields or not fields <= permitted:
                     errors.append("field mismatch %s actual=%s expected=%s" %
                                   (key, sorted(fields), sorted(permitted)))
                 expected_after = rule.get("after", {})
@@ -317,7 +317,7 @@ def _e2e_errors(changes, contract):
                 if fields - set(expected_after) - dynamic:
                     errors.append("updated fields lack exact/dynamic declaration: %s" % key)
                 for field, value in expected_after.items():
-                    if item.get("after", {}).get(field) != value:
+                    if field in fields and item.get("after", {}).get(field) != value:
                         errors.append("after-value mismatch %s.%s" % (key, field))
             elif item["change"] == "created":
                 expected_after = rule.get("after")

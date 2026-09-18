@@ -16,8 +16,9 @@ from pathlib import Path
 MARKER = "[SP-R3 FIXTURE 2026-09-18]"
 WAREHOUSE_ID = 76
 COMPANY_ID = 35
-EMPLOYEE_IDS = (2548, 2549, 2550)
+EMPLOYEE_IDS = (586, 2548, 2549, 2550)
 APPROVED_EMPLOYEES = {
+    586: ("operador_rolito", COMPANY_ID, None),
     2548: ("supervisor_produccion", COMPANY_ID, 76),
     2549: ("operador_barra", COMPANY_ID, 76),
     2550: ("supervisor_produccion", COMPANY_ID, 115),
@@ -153,8 +154,9 @@ def _verify_environment(info, seal, expected_db):
     employees = info.get("employees") or {}
     for employee_id, (role, company_id, warehouse_id) in APPROVED_EMPLOYEES.items():
         actual = employees.get(employee_id) or {}
+        expected_warehouses = [] if warehouse_id is None else [warehouse_id]
         if (actual.get("role"), actual.get("company_id"), actual.get("warehouse_ids")) != (
-                role, company_id, [warehouse_id]):
+                role, company_id, expected_warehouses):
             raise RuntimeError("STOP: employee identity/role/company/warehouse mismatch")
 
 
@@ -196,6 +198,7 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
         "shift_code": shift_code,
         "leader_employee_id": 2548,
         "operator_employee_id": 2549,
+        "rolito_employee_id": 586,
         "negative_employee_id": 2550,
         "negative_employee_warehouse_id": 115,
         "employee_contexts": [
@@ -203,6 +206,10 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
              "warehouse_id": warehouse_id}
             for employee_id, (role, company_id, warehouse_id) in sorted(APPROVED_EMPLOYEES.items())
         ],
+        "employee_warehouse_adjustment": {
+            "employee_id": 586, "before": None, "after": WAREHOUSE_ID,
+            "write_class": "FIXTURE_SETUP",
+        },
         "fixture_photo_sha256": ENERGY_FIXTURE_PHOTO_SHA256,
         "haccp_template_id": haccp["id"],
         "haccp_checks": list(haccp["checks"]),

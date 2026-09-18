@@ -40,6 +40,7 @@ class FakeOps:
         self.neutralized = True
         self.warehouse = {"id": 76, "company_id": 35, "code": "PIGU-PLANTA"}
         self.employees = {
+            586: {"id": 586, "company_id": 35, "warehouse_ids": [], "role": "operador_rolito"},
             2548: {"id": 2548, "company_id": 35, "warehouse_ids": [76], "role": "supervisor_produccion"},
             2549: {"id": 2549, "company_id": 35, "warehouse_ids": [76], "role": "operador_barra"},
             2550: {"id": 2550, "company_id": 35, "warehouse_ids": [115], "role": "supervisor_produccion"},
@@ -69,7 +70,8 @@ class FakeOps:
         return copy.deepcopy(self)
 
     def begin(self):
-        self._transaction = copy.deepcopy((self.params, self.shifts, self.created, self.next_id))
+        self._transaction = copy.deepcopy(
+            (self.params, self.shifts, self.created, self.next_id, self.employees))
 
     def commit(self):
         self.cr.commit()
@@ -78,7 +80,8 @@ class FakeOps:
     def rollback(self):
         self.cr.rollback()
         if self._transaction is not None:
-            self.params, self.shifts, self.created, self.next_id = self._transaction
+            (self.params, self.shifts, self.created, self.next_id,
+             self.employees) = self._transaction
             self._transaction = None
 
     def environment(self):
@@ -106,6 +109,12 @@ class FakeOps:
         self.mutating_calls.append(("set_param", key, value))
         self.params[key] = value
 
+    def set_employee_warehouse(self, employee_id, warehouse_id):
+        self.mutating_calls.append(
+            ("set_employee_warehouse", employee_id, warehouse_id))
+        self.employees[employee_id]["warehouse_ids"] = (
+            [warehouse_id] if warehouse_id is not None else [])
+
     def params_restored(self, previous):
         return all(self.params.get(key) == value for key, value in previous.items())
 
@@ -119,6 +128,8 @@ class FakeOps:
         self.received_photo_sha256 = hashlib.sha256(decoded).hexdigest()
         if self.received_photo_sha256 != plan["fixture_photo_sha256"]:
             raise RuntimeError("photo hash mismatch")
+        if self.employees[586]["warehouse_ids"] != [76]:
+            raise RuntimeError("rolito warehouse loan missing")
         if self.fail_after_create:
             raise RuntimeError("boom during setup")
         ids = {}
@@ -201,6 +212,14 @@ class SpR3ScriptTest(unittest.TestCase):
         return self.planner.plan_fixture(self.ops, self.seal(), self.output("plan.json"),
                                          expected_db="g3-clean", today="2026-09-18")
 
+    def run_cleanup(self, operations, output_path, setup, runtime,
+                    setup_sha256, runtime_sha256, expected_db, mode):
+        return self.cleanup.cleanup_fixture(
+            operations, output_path, setup, runtime, setup_sha256,
+            runtime_sha256, expected_db, mode,
+            ui_contract=self.ui_contract,
+            ui_contract_sha256=self.generator.digest(self.ui_contract))
+
     def contract(self, plan):
         before = {"schema": "g3_business_snapshot_v2", "database": "g3-clean",
                   "warehouse_id": 76, "warehouse_code": "PIGU-PLANTA", "company_id": 35,
@@ -216,6 +235,11 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.cr.commits, 0)
         self.assertEqual(stat.S_IMODE(self.output("plan.json").stat().st_mode), 0o600)
         self.assertEqual(len(plan["haccp_checks"]), 4)
+        self.assertEqual(plan["rolito_employee_id"], 586)
+        self.assertEqual(plan["employee_warehouse_adjustment"], {
+            "employee_id": 586, "before": None, "after": 76,
+            "write_class": "FIXTURE_SETUP",
+        })
         self.assertEqual(len(plan["fixture_photo_sha256"]), 64)
         self.assertEqual(hashlib.sha256(self.output("plan.json").read_bytes()).hexdigest(),
                          self.planner.digest(plan))
@@ -333,6 +357,10 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(report["fixture_photo_sha256"], plan["fixture_photo_sha256"])
         self.assertEqual(self.ops.received_photo_sha256, plan["fixture_photo_sha256"])
         self.assertEqual(report["write_class"], "FIXTURE_SETUP")
+        self.assertEqual(report["employee_warehouse_restore"], {
+            "employee_id": 586, "warehouse_id": None,
+        })
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [76])
         self.assertEqual(self.ops.cr.commits, 1)
         self.assertEqual(stat.S_IMODE(self.output("setup.json").stat().st_mode), 0o600)
         raw = self.output("setup.json").read_text().lower()
@@ -352,6 +380,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.params, plan["previous_params"] | {"database.is_neutralized": "true"})
         self.assertEqual(self.ops.shifts, [])
         self.assertEqual(self.ops.created, {})
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [])
         self.assertFalse(self.output("setup.json").exists())
 
     def test_prepare_exception_rolls_back(self):
@@ -367,6 +396,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.params, plan["previous_params"] | {"database.is_neutralized": "true"})
         self.assertEqual(self.ops.shifts, [])
         self.assertEqual(self.ops.created, {})
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [])
 
     def test_prepare_report_failure_rolls_back_before_commit(self):
         plan = self.make_plan()
@@ -447,6 +477,11 @@ class SpR3ScriptTest(unittest.TestCase):
                                              "result_bool", "result_numeric",
                                              "result_text", "write_date"],
                                "rows": rows},
+            "gf.evaporator.cycle": {
+                "fields": ["id", "shift_id", "state", "dumped_by_employee_id"],
+                "rows": [{"id": 900, "shift_id": 777, "state": "freezing",
+                          "dumped_by_employee_id": None}],
+            },
         }}
         ui = self.generator.generate("ui", plan=plan, pre_e2e=pre_e2e)
         check_updates = [key for key in ui["allowed_changes"]
@@ -456,6 +491,9 @@ class SpR3ScriptTest(unittest.TestCase):
             model = change_key.split(":", 1)[0]
             self.assertLessEqual(set(rule["fields"]),
                                  set(ui["allowed_runtime_fields"].get(model, [])))
+        cycle_rule = next(rule for key, rule in ui["allowed_changes"].items()
+                          if key.startswith("gf.evaporator.cycle:updated:"))
+        self.assertEqual(cycle_rule["after"]["dumped_by_employee_id"], 586)
         tampered = copy.deepcopy(pre_e2e)
         tampered["models"]["gf.haccp.check"]["rows"][0]["result_text"] = "wrong"
         with self.assertRaisesRegex(RuntimeError, "HACCP check catalog mismatch"):
@@ -623,7 +661,7 @@ class SpR3ScriptTest(unittest.TestCase):
         accepted["updates"] = {"gf.production.shift:%s" % shift_id: {
             **base_item, "changed_fields": ["state"],
         }}
-        result = self.cleanup.cleanup_fixture(
+        result = self.run_cleanup(
             self.ops, self.output("cleanup-subset.json"), setup, accepted,
             self.generator.digest(setup), self.generator.digest(accepted),
             "g3-clean", "runtime")
@@ -634,7 +672,7 @@ class SpR3ScriptTest(unittest.TestCase):
                 **base_item, "changed_fields": changed,
             }}
             with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "sealed rule"):
-                self.cleanup.cleanup_fixture(
+                self.run_cleanup(
                     self.ops, self.output("cleanup.json"), setup, candidate,
                     self.generator.digest(setup), self.generator.digest(candidate),
                     "g3-clean", "runtime")
@@ -703,39 +741,94 @@ class SpR3ScriptTest(unittest.TestCase):
             self.generator.digest(plan), self.generator.digest(contract), "g3-clean")
         runtime = {"schema": "sp_r3_runtime_contract_v1", "database": "g3-clean",
                    "warehouse_id": 76, "company_id": 35, "shift_id": report["records"]["shift"]["id"],
+                   "marker": plan["marker"], "date": plan["date"],
+                   "shift_code": plan["shift_code"],
                    "records": {}}
+        shift_id = report["records"]["shift"]["id"]
+        shift_rule = {"fields": ["state", "energy_kwh_per_kg"],
+                      "after": {"state": "closed"},
+                      "dynamic_fields": ["energy_kwh_per_kg"]}
+        allowed_changes = {"gf.production.shift:updated:%s" % shift_id: shift_rule}
+        for alias, item in report["records"].items():
+            if alias.startswith("haccp_check_"):
+                allowed_changes["gf.haccp.check:updated:%s" % item["id"]] = {
+                    "fields": ["result_bool"], "after": {"result_bool": True},
+                    "dynamic_fields": [],
+                }
+        self.ui_contract = {
+            "schema": "sp_r3_ui_contract_v1", "database": "g3-clean",
+            "warehouse_id": 76, "company_id": 35, "shift_id": shift_id,
+            "marker": plan["marker"], "date": plan["date"],
+            "shift_code": plan["shift_code"],
+            "allowed_changes": allowed_changes,
+            "allowed_change_rules": [{
+                "alias": "energy_end", "model": "gf.energy.reading",
+                "change": "created", "match": {"shift_id": shift_id,
+                                                   "reading_type": "end"},
+                "after": {"shift_id": shift_id, "reading_type": "end"},
+                "dynamic_fields": [],
+            }],
+        }
+        runtime["ui_contract_sha256"] = self.generator.digest(self.ui_contract)
         return report, runtime
 
     def test_cleanup_restores_params_and_is_idempotent(self):
         setup, runtime = self._prepared()
-        first = self.cleanup.cleanup_fixture(
+        first = self.run_cleanup(
             self.ops, self.output("cleanup.json"), setup, runtime,
             self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "setup-only")
         self.assertFalse(first["already_clean"])
         self.assertEqual(self.ops.params, setup["previous_params"] | {"database.is_neutralized": "true"})
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [])
         cleanup_raw = self.output("cleanup.json").read_text().lower()
         for forbidden in ("pin", "token", "api_key", "password", "secret"):
             self.assertNotIn(forbidden, cleanup_raw)
         commits = self.ops.cr.commits
         writes = len(self.ops.mutating_calls)
-        second = self.cleanup.cleanup_fixture(
+        second = self.run_cleanup(
             self.ops, self.output("cleanup2.json"), setup, runtime,
             self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "setup-only")
         self.assertTrue(second["already_clean"])
         self.assertEqual(self.ops.cr.commits, commits)
         self.assertEqual(len(self.ops.mutating_calls), writes)
 
+    def test_cleanup_rejects_runtime_rules_not_identical_to_original_ui_contract(self):
+        setup, runtime = self._prepared()
+        shift_id = setup["records"]["shift"]["id"]
+        forged_rule = {"fields": ["state", "energy_kwh_per_kg", "write_date"],
+                       "after": {"state": "closed"},
+                       "dynamic_fields": ["energy_kwh_per_kg", "write_date"]}
+        runtime["updates"] = {"gf.production.shift:%s" % shift_id: {
+            "id": shift_id, "model": "gf.production.shift", "action": "updated",
+            "changed_fields": ["state"], "shift_id": shift_id,
+            "contract_rule": forged_rule,
+            "contract_rule_sha256": self.generator.digest(forged_rule),
+        }}
+        with self.assertRaisesRegex(RuntimeError, "original UI contract"):
+            self.run_cleanup(
+                self.ops, self.output("cleanup-forged.json"), setup, runtime,
+                self.generator.digest(setup), self.generator.digest(runtime),
+                "g3-clean", "runtime")
+        runtime["ui_contract_sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuntimeError, "UI contract hash"):
+            self.run_cleanup(
+                self.ops, self.output("cleanup-ui-hash.json"), setup, runtime,
+                self.generator.digest(setup), self.generator.digest(runtime),
+                "g3-clean", "runtime")
+
     def test_cleanup_restores_params_when_fixture_rows_are_already_absent(self):
         setup, runtime = self._prepared()
         self.ops.created = {}
         self.ops.shifts = []
-        result = self.cleanup.cleanup_fixture(
+        self.ops.params.update(setup["previous_params"])
+        result = self.run_cleanup(
             self.ops, self.output("cleanup.json"), setup, runtime,
             self.generator.digest(setup), self.generator.digest(runtime),
             "g3-clean", "setup-only")
         self.assertFalse(result["already_clean"])
         self.assertEqual(self.ops.params,
                          setup["previous_params"] | {"database.is_neutralized": "true"})
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [])
 
     def test_cleanup_accepts_updates_to_each_sealed_haccp_check_only(self):
         setup, runtime = self._prepared()
@@ -754,7 +847,7 @@ class SpR3ScriptTest(unittest.TestCase):
         }
         for item in runtime["updates"].values():
             item["contract_rule_sha256"] = self.generator.digest(item["contract_rule"])
-        result = self.cleanup.cleanup_fixture(
+        result = self.run_cleanup(
             self.ops, self.output("cleanup.json"), setup, runtime,
             self.generator.digest(setup), self.generator.digest(runtime),
             "g3-clean", "runtime")
@@ -771,7 +864,7 @@ class SpR3ScriptTest(unittest.TestCase):
         runtime["updates"]["gf.haccp.check:999999"]["contract_rule_sha256"] = (
             self.generator.digest(runtime["updates"]["gf.haccp.check:999999"]["contract_rule"]))
         with self.assertRaisesRegex(RuntimeError, "setup record"):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 bad_ops, self.output("cleanup-bad.json"), setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime),
                 "g3-clean", "runtime")
@@ -782,12 +875,13 @@ class SpR3ScriptTest(unittest.TestCase):
         output_dir = self.output("cleanup-is-a-directory")
         output_dir.mkdir()
         with self.assertRaises(OSError):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 self.ops, output_dir, setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "setup-only")
         self.assertEqual(self.ops.cr.commits, initial_commits)
         self.assertEqual(self.ops.cr.rollbacks, 1)
         self.assertFalse(self.ops.is_clean(setup, runtime))
+        self.assertEqual(self.ops.employees[586]["warehouse_ids"], [76])
 
     def test_cleanup_rejects_unexpected_dependency_or_stock(self):
         for kind in ("dependency", "stock"):
@@ -799,7 +893,7 @@ class SpR3ScriptTest(unittest.TestCase):
             else:
                 ops.stock_dependencies = [{"model": "stock.move", "id": 2}]
             with self.assertRaisesRegex(RuntimeError, "STOP"):
-                self.cleanup.cleanup_fixture(
+                self.run_cleanup(
                     ops, self.output("cleanup.json"), setup, runtime,
                     self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "runtime")
             self.assertEqual(ops.cr.rollbacks, 1)
@@ -809,7 +903,7 @@ class SpR3ScriptTest(unittest.TestCase):
         shift_id = setup["records"]["shift"]["id"]
         self.ops.created["shift"][shift_id]["marker"] = "someone else's record"
         with self.assertRaisesRegex(RuntimeError, "marker mismatch"):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 self.ops, self.output("cleanup.json"), setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "setup-only")
         self.assertEqual(self.ops.cr.rollbacks, 1)
@@ -820,7 +914,7 @@ class SpR3ScriptTest(unittest.TestCase):
             "id": 1, "model": "res.users", "shift_id": setup["records"]["shift"]["id"],
         }}
         with self.assertRaisesRegex(RuntimeError, "runtime model"):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 self.ops, self.output("cleanup.json"), setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime), "g3-clean", "runtime")
         self.assertEqual(self.ops.mutating_calls[-1][0], "create_fixture")
@@ -832,7 +926,7 @@ class SpR3ScriptTest(unittest.TestCase):
             "shift_id": setup["records"]["shift"]["id"],
         }}
         with self.assertRaisesRegex(RuntimeError, "explicit"):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 self.ops, self.output("cleanup.json"), setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime),
                 "g3-clean", "runtime")
@@ -840,7 +934,8 @@ class SpR3ScriptTest(unittest.TestCase):
     def test_planner_and_cleanup_fail_closed_on_employee_scope_drift(self):
         for employee_id, field, value in ((2548, "role", "auxiliar_produccion"),
                                           (2549, "company_id", 34),
-                                          (2550, "warehouse_ids", [76])):
+                                          (2550, "warehouse_ids", [76]),
+                                          (586, "warehouse_ids", [76])):
             with self.subTest(employee_id=employee_id, field=field):
                 ops = FakeOps()
                 ops.employees[employee_id][field] = value
@@ -850,8 +945,15 @@ class SpR3ScriptTest(unittest.TestCase):
         setup, runtime = self._prepared()
         self.ops.employees[2550]["warehouse_ids"] = [76]
         with self.assertRaisesRegex(RuntimeError, "employee"):
-            self.cleanup.cleanup_fixture(
+            self.run_cleanup(
                 self.ops, self.output("cleanup.json"), setup, runtime,
+                self.generator.digest(setup), self.generator.digest(runtime),
+                "g3-clean", "setup-only")
+        self.ops.employees[2550]["warehouse_ids"] = [115]
+        self.ops.employees[586]["warehouse_ids"] = [115]
+        with self.assertRaisesRegex(RuntimeError, "employee"):
+            self.run_cleanup(
+                self.ops, self.output("cleanup-rolito-drift.json"), setup, runtime,
                 self.generator.digest(setup), self.generator.digest(runtime),
                 "g3-clean", "setup-only")
 
@@ -859,7 +961,7 @@ class SpR3ScriptTest(unittest.TestCase):
         prepare = (ROOT / "prepare_sp_r3.py").read_text()
         cleanup = (ROOT / "cleanup_sp_r3.py").read_text()
         planner = (ROOT / "plan_sp_r3_fixture.py").read_text()
-        required = ("SP_EXPECTED_DB", "database.is_neutralized", "2548", "2549", "2550",
+        required = ("SP_EXPECTED_DB", "database.is_neutralized", "586", "2548", "2549", "2550",
                     "[SP-R3 FIXTURE 2026-09-18]", "FIXTURE_SETUP", "0o600", "sha256",
                     "warehouse_id", "company_id")
         for token in required:
@@ -875,6 +977,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertIn("gf_material_settlement_id", cleanup)
         self.assertIn("move_id", cleanup)
         self.assertIn("employee identity/role/company/warehouse mismatch", cleanup)
+        self.assertIn("SP_UI_CONTRACT_SHA256", cleanup)
         self.assertIn("marker not in marker_value", cleanup)
         tree = ast.parse(planner)
         mutating_methods = {"create", "write", "unlink", "commit"}

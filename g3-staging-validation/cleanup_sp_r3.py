@@ -9,8 +9,9 @@ from pathlib import Path
 MARKER = "[SP-R3 FIXTURE 2026-09-18]"
 WAREHOUSE_ID = 76
 COMPANY_ID = 35
-EMPLOYEE_IDS = (2548, 2549, 2550)
+EMPLOYEE_IDS = (586, 2548, 2549, 2550)
 EXPECTED_EMPLOYEES = {
+    586: ("operador_rolito", COMPANY_ID, None),
     2548: ("supervisor_produccion", COMPANY_ID, 76),
     2549: ("operador_barra", COMPANY_ID, 76),
     2550: ("supervisor_produccion", COMPANY_ID, 115),
@@ -107,6 +108,12 @@ class OdooCleanupOps:
             existing.unlink()
         else:
             params.set_param(key, value)
+
+    def set_employee_warehouse(self, employee_id, warehouse_id):
+        employee = self.env["hr.employee"].sudo().browse(employee_id).exists()
+        if not employee:
+            raise RuntimeError("STOP: fixture employee is missing")
+        employee.write({"warehouse_id": warehouse_id or False})
 
     def params_restored(self, previous):
         params = self.env["ir.config_parameter"].sudo()
@@ -214,12 +221,18 @@ def _ensure_context(ops, expected_db):
     employees = info.get("employees") or {}
     for employee_id, (role, company_id, warehouse_id) in EXPECTED_EMPLOYEES.items():
         actual = employees.get(employee_id) or {}
-        if (actual.get("role"), actual.get("company_id"), actual.get("warehouse_ids")) != (
-                role, company_id, [warehouse_id]):
+        expected_warehouses = [] if warehouse_id is None else [warehouse_id]
+        warehouse_ok = (actual.get("warehouse_ids") in ([], [WAREHOUSE_ID])
+                        if employee_id == 586 else
+                        actual.get("warehouse_ids") == expected_warehouses)
+        if ((actual.get("role"), actual.get("company_id")) != (role, company_id) or
+                not warehouse_ok):
             raise RuntimeError("STOP: employee identity/role/company/warehouse mismatch")
+    return info
 
 
-def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode):
+def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode,
+                     ui_contract, ui_contract_sha256):
     if digest(setup) != setup_sha256 or digest(runtime) != runtime_sha256:
         raise RuntimeError("STOP: manifest hash mismatch")
     if setup.get("schema") != "sp_r3_fixture_setup_v1" or setup.get("marker") != MARKER:
@@ -228,6 +241,11 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         raise RuntimeError("STOP: setup employee contexts mismatch")
     if runtime.get("schema") != "sp_r3_runtime_contract_v1":
         raise RuntimeError("STOP: invalid RUNTIME_MANIFEST")
+    if (not ui_contract_sha256 or digest(ui_contract) != ui_contract_sha256 or
+            runtime.get("ui_contract_sha256") != ui_contract_sha256):
+        raise RuntimeError("STOP: original UI contract hash mismatch")
+    if ui_contract.get("schema") != "sp_r3_ui_contract_v1":
+        raise RuntimeError("STOP: invalid original UI contract")
     for manifest in (setup, runtime):
         if manifest.get("database") != expected_db:
             raise RuntimeError("STOP: manifest database mismatch")
@@ -236,6 +254,16 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
     shift_id = setup.get("records", {}).get("shift", {}).get("id")
     if runtime.get("shift_id") != shift_id:
         raise RuntimeError("STOP: runtime shift relation mismatch")
+    for key in ("database", "warehouse_id", "company_id", "shift_id"):
+        if ui_contract.get(key) != runtime.get(key):
+            raise RuntimeError("STOP: original UI contract identity mismatch")
+    for key in ("marker", "date", "shift_code"):
+        if (ui_contract.get(key) != setup.get(key) or
+                runtime.get(key) != setup.get(key)):
+            raise RuntimeError("STOP: original UI contract fixture identity mismatch")
+    if setup.get("employee_warehouse_restore") != {
+            "employee_id": 586, "warehouse_id": None}:
+        raise RuntimeError("STOP: employee warehouse restore seal mismatch")
     if mode == "setup-only" and (runtime.get("records") or runtime.get("updates")):
         raise RuntimeError("STOP: setup-only requires an empty sealed runtime manifest")
     if mode not in ("setup-only", "runtime"):
@@ -247,11 +275,15 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
             raise RuntimeError("STOP: runtime record relation/id mismatch")
         alias = item.get("contract_alias")
         rule = item.get("contract_rule") or {}
+        ui_rules = [candidate for candidate in ui_contract.get("allowed_change_rules", [])
+                    if candidate.get("alias") == alias]
         if (RUNTIME_CREATE_ALIASES.get(alias) != item.get("model") or
                 rule.get("alias") != alias or rule.get("model") != item.get("model") or
                 rule.get("change") != "created" or
+                len(ui_rules) != 1 or rule != ui_rules[0] or
                 item.get("contract_rule_sha256") != digest(rule)):
-            raise RuntimeError("STOP: runtime record lacks an explicit sealed rule")
+            raise RuntimeError(
+                "STOP: runtime record lacks explicit sealed rule or differs from original UI contract")
     setup_by_model = {}
     for alias, value in setup.get("records", {}).items():
         model = OdooCleanupOps.model_for_alias(alias)
@@ -263,23 +295,35 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         if item.get("shift_id") != shift_id or item.get("id") not in setup_by_model.get(model, set()):
             raise RuntimeError("STOP: runtime update does not target a setup record")
         rule = item.get("contract_rule") or {}
+        ui_rule = (ui_contract.get("allowed_changes") or {}).get(
+            "%s:updated:%s" % (model, item.get("id")))
         changed_fields = set(item.get("changed_fields") or [])
         sealed_fields = set(rule.get("fields") or [])
         if (not changed_fields or not changed_fields <= sealed_fields or
+                rule != ui_rule or
                 item.get("contract_rule_sha256") != digest(rule)):
-            raise RuntimeError("STOP: runtime update lacks its explicit sealed rule")
+            raise RuntimeError(
+                "STOP: runtime update lacks sealed rule or differs from original UI contract")
 
 
 def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,
-                    runtime_sha256, expected_db=None, mode="runtime"):
+                    runtime_sha256, expected_db=None, mode="runtime",
+                    ui_contract=None, ui_contract_sha256=None):
     operations = _ops(env)
     expected_db = expected_db or os.environ.get("SP_EXPECTED_DB")
-    _ensure_context(operations, expected_db)
-    _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode)
+    info = _ensure_context(operations, expected_db)
+    _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode,
+                     ui_contract or {}, ui_contract_sha256)
     previous_params = setup.get("previous_params", {})
     if set(previous_params) != set(CONFIG_KEYS):
         raise RuntimeError("STOP: previous parameter set is incomplete")
-    if operations.is_clean(setup, runtime) and operations.params_restored(previous_params):
+    clean = operations.is_clean(setup, runtime)
+    rolito_warehouses = (info.get("employees", {}).get(586) or {}).get("warehouse_ids")
+    if (clean and rolito_warehouses not in ([], [WAREHOUSE_ID])) or (
+            not clean and rolito_warehouses != [WAREHOUSE_ID]):
+        raise RuntimeError("STOP: employee warehouse loan state mismatch")
+    if (clean and rolito_warehouses == [] and
+            operations.params_restored(previous_params)):
         report = {"schema": "sp_r3_cleanup_result_v1", "database": expected_db,
                   "warehouse_id": WAREHOUSE_ID, "company_id": COMPANY_ID,
                   "already_clean": True, "writes": 0}
@@ -291,14 +335,19 @@ def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,
         if unexpected or stock:
             raise RuntimeError("STOP: unexpected dependencies or stock records")
         operations.delete_exact(setup, runtime, MARKER)
+        operations.set_employee_warehouse(586, None)
         for key in CONFIG_KEYS:
             operations.set_param(key, previous_params[key])
+        restored_rolito = (operations.environment().get("employees", {}).get(586) or {})
         if (not operations.is_clean(setup, runtime) or
+                restored_rolito.get("warehouse_ids") != [] or
                 not operations.params_restored(previous_params)):
             raise RuntimeError("STOP: cleanup postcondition failed")
         report = {"schema": "sp_r3_cleanup_result_v1", "database": expected_db,
                   "warehouse_id": WAREHOUSE_ID, "company_id": COMPANY_ID,
                   "already_clean": False, "restored_params": sorted(CONFIG_KEYS),
+                  "restored_employee_warehouse": {"employee_id": 586,
+                                                   "warehouse_id": None},
                   "removed_records": sum(len(item.get("records", {})) for item in (setup, runtime))}
         _write_private(output_path, report)
         operations.commit()
@@ -325,10 +374,14 @@ def main(env):
     setup = _load(os.environ["SP_SETUP_PATH"], os.environ["SP_SETUP_SHA256"])
     runtime = _load(os.environ["SP_RUNTIME_MANIFEST_PATH"],
                     os.environ["SP_RUNTIME_MANIFEST_SHA256"])
+    ui_contract = _load(os.environ["SP_UI_CONTRACT_PATH"],
+                        os.environ["SP_UI_CONTRACT_SHA256"])
     output = os.environ.get("SP_CLEANUP_PATH", "/tmp/sp-r3-cleanup.json")
     result = cleanup_fixture(env, output, setup, runtime, os.environ["SP_SETUP_SHA256"],
                              os.environ["SP_RUNTIME_MANIFEST_SHA256"],
-                             mode=os.environ.get("SP_CLEANUP_MODE", "runtime"))
+                             mode=os.environ.get("SP_CLEANUP_MODE", "runtime"),
+                             ui_contract=ui_contract,
+                             ui_contract_sha256=os.environ["SP_UI_CONTRACT_SHA256"])
     print(json.dumps({"output": output,
                       "sha256": hashlib.sha256(Path(output).read_bytes()).hexdigest()},
                      sort_keys=True))

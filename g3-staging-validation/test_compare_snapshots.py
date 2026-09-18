@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import importlib.util
 import json
 import subprocess
 import tempfile
@@ -295,6 +296,64 @@ class CompareSnapshotsTest(unittest.TestCase):
             ], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("created after-value mismatch", result.stdout)
+
+    def test_contract_runtime_and_compare_accept_partial_sealed_shift_close(self):
+        spec = importlib.util.spec_from_file_location(
+            "generate_sp_r3_contract", SCRIPT.with_name("generate_sp_r3_contract.py"))
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        before, after = snapshot(), snapshot()
+        fields = ["id", "state", "energy_kwh_per_kg", "energy_vs_target_pct"]
+        before["models"]["gf.production.shift"] = section([{
+            "id": 777, "state": "in_progress", "energy_kwh_per_kg": 0.0,
+            "energy_vs_target_pct": 0.0,
+        }], fields)
+        after["models"]["gf.production.shift"] = section([{
+            "id": 777, "state": "closed", "energy_kwh_per_kg": 0.0,
+            "energy_vs_target_pct": 0.0,
+        }], fields)
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
+        plan = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
+                "marker": "[SP-R3 FIXTURE 2026-09-18]", "date": "2026-09-18",
+                "shift_code": "2"}
+        rule = {"fields": ["state", "energy_kwh_per_kg", "energy_vs_target_pct"],
+                "after": {"state": "closed"},
+                "dynamic_fields": ["energy_kwh_per_kg", "energy_vs_target_pct"]}
+        ui = {"schema": "sp_r3_ui_contract_v1", "shift_id": 777, **plan,
+              "allowed_runtime_models": ["gf.production.shift"],
+              "allowed_runtime_fields": {"gf.production.shift": rule["fields"]},
+              "allowed_changes": {"gf.production.shift:updated:777": rule},
+              "allowed_change_rules": []}
+        runtime = generator.generate(
+            "runtime", plan=plan, pre_e2e=before, current=after,
+            ui_contract=ui)
+        self.assertEqual(
+            runtime["updates"]["gf.production.shift:777"]["changed_fields"],
+            ["state"])
+        with tempfile.TemporaryDirectory() as temp:
+            left, right, contract = (
+                Path(temp) / name for name in ("before.json", "after.json", "ui.json"))
+            left.write_text(json.dumps(before)); right.write_text(json.dumps(after))
+            raw = generator.canonical(ui); contract.write_bytes(raw)
+            result = subprocess.run([
+                "python3", str(SCRIPT), str(left), str(right), "--mode", "e2e",
+                "--contract", str(contract), "--contract-sha256",
+                hashlib.sha256(raw).hexdigest(),
+            ], capture_output=True, text=True, check=False)
+            bad_after = copy.deepcopy(after)
+            bad_after["models"]["gf.production.shift"]["rows"][0]["state"] = "cancelled"
+            refresh_section(bad_after["models"]["gf.production.shift"])
+            refresh_snapshot_business(bad_after)
+            right.write_text(json.dumps(bad_after))
+            rejected = subprocess.run([
+                "python3", str(SCRIPT), str(left), str(right), "--mode", "e2e",
+                "--contract", str(contract), "--contract-sha256",
+                hashlib.sha256(raw).hexdigest(),
+            ], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(rejected.returncode, 2, rejected.stdout)
+        self.assertIn("after-value mismatch", rejected.stdout)
 
     def test_bootstrap_accepts_created_target_modules(self):
         before, after = snapshot(), snapshot()

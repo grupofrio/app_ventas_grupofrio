@@ -144,7 +144,7 @@ def _ui_rules(plan, pre_e2e, shift_id):
         "gf.evaporator.cycle": (
             ["state", "freeze_end", "defrost_start", "defrost_end", "kg_dumped",
              "kg_deviation_pct", "dumped_by_employee_id", "dumped_at", "write_date"],
-            {"state": "dumped", "dumped_by_employee_id": 2548},
+            {"state": "dumped", "dumped_by_employee_id": 586},
         ),
         "gf.production.material.settlement": (
             ["state", "write_date"], {"state": "abandoned"},
@@ -286,6 +286,7 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
     identity = _identity(plan, before if mode in ("fixture", "cleanup") else pre_e2e)
     if mode == "fixture":
         config_changes, config_aliases = _config_rules(before, plan["planned_params"])
+        adjustment = plan["employee_warehouse_adjustment"]
         haccp_aliases = ["haccp_check_%s" % index
                          for index, _check in enumerate(plan["haccp_checks"], 1)]
         haccp_rules = [
@@ -298,6 +299,7 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
             "schema": "sp_r3_fixture_contract_v1", **identity,
             "write_class": "FIXTURE_SETUP",
             "fixture_photo_sha256": plan["fixture_photo_sha256"],
+            "employee_warehouse_adjustment": dict(adjustment),
             "planned_params": dict(plan["planned_params"]),
             "expected_blockers": list(plan["expected_blockers"]),
             "aliases": ["shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"] + haccp_aliases,

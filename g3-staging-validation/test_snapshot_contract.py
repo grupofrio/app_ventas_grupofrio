@@ -67,6 +67,28 @@ class SnapshotContractTest(unittest.TestCase):
             "x_rolito_closed", "x_rolito_closed_at",
         } <= set(fields))
 
+    def test_environment_seal_requires_exact_sp_r3_clean_branch(self):
+        self.assertIn('seal.get("branch") != "staging-g3-clean-170926"', SOURCE)
+        self.assertNotIn('seal.get("branch") != "staging-g3-170926"', SOURCE)
+
+    def test_module_snapshot_keeps_cleanup_schema_separate_from_business_models(self):
+        tree = ast.parse(SOURCE)
+        main = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        module_calls = [
+            call for call in ast.walk(main)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and
+            call.func.id == "_rows" and call.args and
+            isinstance(call.args[0], ast.Constant) and
+            call.args[0].value == "ir.module.module"
+        ]
+        self.assertEqual(len(module_calls), 1)
+        keyword = {item.arg: item.value for item in module_calls[0].keywords}
+        self.assertIn("include_business", keyword)
+        self.assertIs(keyword["include_business"].value, False)
+
     def test_sp_r3_models_have_exact_local_and_external_scope(self):
         expected = {
             "gf.haccp.checklist": (

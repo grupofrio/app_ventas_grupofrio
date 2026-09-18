@@ -75,6 +75,78 @@ def _assert_identity(before, after):
     return ["%s mismatch" % key for key in keys if before.get(key) != after.get(key)]
 
 
+def _section_digest(rows):
+    raw = json.dumps(rows, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _business_rows(rows):
+    return [
+        {name: value for name, value in row.items()
+         if name not in ("write_date", "write_uid")}
+        for row in rows
+    ]
+
+
+def _model_sections_errors(snapshot, label):
+    errors = []
+    models = snapshot.get("models")
+    if not isinstance(models, dict):
+        return ["models container invalid %s" % label], False
+    expected_keys = {
+        "available", "count", "fields", "ids", "rows", "sha256", "business_sha256",
+    }
+    for model_name, section in sorted(models.items()):
+        prefix = "model section %s %s" % (model_name, label)
+        if not isinstance(model_name, str) or not model_name:
+            errors.append("model section name invalid %s" % label)
+            continue
+        if not isinstance(section, dict) or set(section) != expected_keys:
+            actual = set(section) if isinstance(section, dict) else set()
+            errors.append("%s fields mismatch: %s" %
+                          (prefix, sorted(actual ^ expected_keys)))
+            continue
+        if type(section.get("available")) is not bool:
+            errors.append("%s available type mismatch" % prefix)
+        fields = section.get("fields")
+        if (not isinstance(fields, list) or
+                not all(isinstance(field, str) and field for field in fields) or
+                len(fields) != len(set(fields))):
+            errors.append("%s field schema invalid" % prefix)
+            continue
+        rows, ids = section.get("rows"), section.get("ids")
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            errors.append("%s rows invalid" % prefix)
+            continue
+        if not isinstance(ids, list):
+            errors.append("%s ids invalid" % prefix)
+            continue
+        if section.get("available") is False and (fields or rows or ids):
+            errors.append("%s unavailable payload must be empty" % prefix)
+        if section.get("available") is True and "id" not in fields:
+            errors.append("%s available schema requires id" % prefix)
+        field_set = set(fields)
+        if any(set(row) != field_set for row in rows):
+            errors.append("%s row fields mismatch" % prefix)
+        row_ids = [row.get("id") for row in rows]
+        if any(type(record_id) is not int for record_id in row_ids):
+            errors.append("%s row ids invalid" % prefix)
+            continue
+        if len(row_ids) != len(set(row_ids)):
+            errors.append("duplicate model row ids %s %s" % (model_name, label))
+        if ids != row_ids:
+            errors.append("%s ids mismatch" % prefix)
+        if row_ids != sorted(row_ids):
+            errors.append("%s ids are not ordered" % prefix)
+        if type(section.get("count")) is not int or section.get("count") != len(rows):
+            errors.append("model section count mismatch %s %s" % (model_name, label))
+        if section.get("sha256") != _section_digest(rows):
+            errors.append("%s sha256 mismatch" % prefix)
+        if section.get("business_sha256") != _section_digest(_business_rows(rows)):
+            errors.append("%s business_sha256 mismatch" % prefix)
+    return errors, not errors
+
+
 def _strip_schema_defaults(before, after):
     errors = []
     left, right = json.loads(json.dumps(before)), json.loads(json.dumps(after))
@@ -415,6 +487,16 @@ def main(before_path, after_path, mode, contract_path=None, contract_sha256=None
             except (TypeError, ValueError) as exc:
                 errors.append("%s contract is invalid JSON: %s" % (mode.upper(), exc))
                 contract = None
+    before_model_errors, before_models_valid = _model_sections_errors(before, "before")
+    after_model_errors, after_models_valid = _model_sections_errors(after, "after")
+    errors.extend(before_model_errors)
+    errors.extend(after_model_errors)
+    if not before_models_valid or not after_models_valid:
+        report = {"schema": "g3_snapshot_comparison_v2", "mode": mode,
+                  "database": before.get("database"), "changes": {},
+                  "errors": errors, "pass": False}
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        return 2
     if mode == "cleanup":
         if contract is not None:
             errors.extend(_cleanup_errors(before, after, contract))

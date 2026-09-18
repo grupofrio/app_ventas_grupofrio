@@ -153,7 +153,7 @@ def _seal():
         raise RuntimeError("STOP: environment seal hash mismatch")
     seal = json.loads(raw)
     if (seal.get("schema") != "g3_environment_seal_v1" or
-            seal.get("branch") != "staging-g3-170926" or
+            seal.get("branch") != "staging-g3-clean-170926" or
             not seal.get("forbidden_databases")):
         raise RuntimeError("STOP: invalid G3 environment seal")
     if env.cr.dbname != seal.get("database") or env.cr.dbname in seal.get("forbidden_databases", []):  # noqa: F821
@@ -187,6 +187,14 @@ def _digest(value):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _business_rows(rows):
+    return [
+        {name: value for name, value in row.items()
+         if name not in ("write_date", "write_uid")}
+        for row in rows
+    ]
+
+
 def _require_fields(model, requested_fields):
     missing = sorted(set(requested_fields) - set(model._fields))
     if missing:
@@ -198,15 +206,22 @@ def _require_fields(model, requested_fields):
     return list(requested_fields)
 
 
-def _rows(model_name, field_names, domain):
+def _rows(model_name, field_names, domain, include_business=True):
     if model_name not in env.registry:  # noqa: F821
-        return {"available": False, "count": 0, "fields": [], "rows": [], "sha256": _digest([])}
+        result = {"available": False, "count": 0, "fields": [], "ids": [], "rows": [],
+                  "sha256": _digest([])}
+        if include_business:
+            result["business_sha256"] = _digest([])
+        return result
     model = env[model_name].sudo()  # noqa: F821
     field_names = _require_fields(model, field_names)
     records = model.search(domain, order="id asc")
     rows = [{name: _value(record, name) for name in field_names} for record in records]
-    return {"available": True, "count": len(rows), "fields": field_names,
-            "ids": records.ids, "rows": rows, "sha256": _digest(rows)}
+    result = {"available": True, "count": len(rows), "fields": field_names,
+              "ids": records.ids, "rows": rows, "sha256": _digest(rows)}
+    if include_business:
+        result["business_sha256"] = _digest(_business_rows(rows))
+    return result
 
 
 def _outside_sentinel(model_name, field_names, domain):
@@ -272,7 +287,8 @@ def main():
         [("key", "in", list(CONFIG_KEYS))])
     modules = _rows("ir.module.module", ["id", "name", "state", "installed_version",
                                          "latest_version", "write_date"],
-                    [("name", "in", ["gf_production_ops", "gf_plant_energy", "gf_milling_control"])])
+                    [("name", "in", ["gf_production_ops", "gf_plant_energy", "gf_milling_control"])],
+                    include_business=False)
     sentinels = {}
     for name, (names, _domain) in MODEL_SPECS.items():
         sentinels[name + "@outside"] = _outside_sentinel(
@@ -298,7 +314,8 @@ def main():
               "warehouse_id": warehouse.id, "warehouse_code": warehouse.code,
               "company_id": warehouse.company_id.id, "modules": modules,
               "models": models, "outside_sentinels": sentinels}
-    report["business_sha256"] = _digest({name: data["sha256"] for name, data in models.items()})
+    report["business_sha256"] = _digest(
+        {name: data["business_sha256"] for name, data in models.items()})
     fd = os.open(OUTPUT, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, sort_keys=True, indent=2)

@@ -17,6 +17,38 @@ def rows_sha256(rows):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def business_rows(rows):
+    return [
+        {name: value for name, value in row.items()
+         if name not in ("write_date", "write_uid")}
+        for row in rows
+    ]
+
+
+def section(rows, fields=None, available=True):
+    if fields is None:
+        fields = list(rows[0]) if rows else ["id"]
+    return {
+        "available": available,
+        "count": len(rows),
+        "fields": list(fields),
+        "ids": [row["id"] for row in rows],
+        "rows": rows,
+        "sha256": rows_sha256(rows),
+        "business_sha256": rows_sha256(business_rows(rows)),
+    }
+
+
+def refresh_section(value):
+    rows = value["rows"]
+    value.update({
+        "count": len(rows),
+        "ids": [row["id"] for row in rows],
+        "sha256": rows_sha256(rows),
+        "business_sha256": rows_sha256(business_rows(rows)),
+    })
+
+
 def module_section(rows):
     return {
         "available": True,
@@ -38,9 +70,6 @@ def refresh_modules(value):
 
 
 def snapshot():
-    empty = {"available": True, "count": 0, "rows": [], "sha256": "empty"}
-    def section(rows):
-        return {"available": True, "count": len(rows), "rows": rows, "sha256": str(rows)}
     config = [
         {"id": 20, "key": "gf_plant_energy.rolito_base_hours", "value": "24"},
         {"id": 21, "key": "gf_plant_energy.oil_stale_shifts", "value": "2"},
@@ -62,7 +91,7 @@ def snapshot():
                  "installed_version": "18.0.1.0.15", "latest_version": "18.0.1.0.15",
                  "write_date": "stable"},
             ]), "models": {
-                "stock.quant": copy.deepcopy(empty),
+                "stock.quant": section([], ["id", "quantity"]),
                 "gf.energy.meter": section([{"id": 8, "serial": "NPL889", "warehouse_id": 89,
                                               "multiplier": 1200.0, "active": True}]),
                 "gf.energy.tariff": section([{"id": 9, "warehouse_id": 89,
@@ -114,32 +143,65 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_bootstrap_rejects_inventory_mutation(self):
         before, after = snapshot(), snapshot()
-        after["models"]["stock.quant"] = {
-            "available": True, "count": 1, "rows": [{"id": 7, "quantity": 0}], "sha256": "changed"}
+        after["models"]["stock.quant"] = section([{"id": 7, "quantity": 0}])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("outside bootstrap contract", result.stdout)
 
+    def test_bootstrap_rejects_model_section_metadata_tampering(self):
+        before, after = snapshot(), snapshot()
+        after["models"]["stock.quant"]["count"] = 999
+        result = self.run_compare(before, after, "--mode", "bootstrap")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("model section count mismatch", result.stdout)
+
+    def test_bootstrap_rejects_duplicate_model_row_ids_even_when_both_sides_match(self):
+        before, after = snapshot(), snapshot()
+        duplicate = section([
+            {"id": 7, "quantity": 0},
+            {"id": 7, "quantity": 0},
+        ])
+        before["models"]["stock.quant"] = copy.deepcopy(duplicate)
+        after["models"]["stock.quant"] = copy.deepcopy(duplicate)
+        result = self.run_compare(before, after, "--mode", "bootstrap")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("duplicate model row ids", result.stdout)
+
+    def test_bootstrap_rejects_model_section_hash_or_schema_tampering(self):
+        mutations = {
+            "sha256": lambda section: section.__setitem__("sha256", "tampered"),
+            "business_sha256": lambda section: section.__setitem__(
+                "business_sha256", "tampered"),
+            "extra": lambda section: section.__setitem__("unexpected", True),
+            "fields": lambda section: section.__setitem__("fields", ["id", "id"]),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                before, after = snapshot(), snapshot()
+                mutate(after["models"]["stock.quant"])
+                result = self.run_compare(before, after, "--mode", "bootstrap")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("model section", result.stdout)
+
     def test_bootstrap_rejects_reading_deletion(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.energy.reading"] = {
-            "available": True, "count": 1, "rows": [{"id": 3, "meter_multiplier": 0}], "sha256": "a"}
-        after["models"]["gf.energy.reading"] = {
-            "available": True, "count": 0, "rows": [], "sha256": "b"}
+        before["models"]["gf.energy.reading"] = section(
+            [{"id": 3, "meter_multiplier": 0}])
+        after["models"]["gf.energy.reading"] = section(
+            [], ["id", "meter_multiplier"])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("action=deleted", result.stdout)
 
     def test_bootstrap_accepts_only_declared_reading_fields(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.energy.reading"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 3, "meter_id": None, "meter_multiplier": 0, "multiplier_source": False}],
-            "sha256": "a"}
-        after["models"]["gf.energy.reading"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 3, "meter_id": 8, "meter_multiplier": 1200, "multiplier_source": "backfill"}],
-            "sha256": "b"}
+        before["models"]["gf.energy.reading"] = section([
+            {"id": 3, "meter_id": None, "meter_multiplier": 0, "multiplier_source": False},
+        ])
+        after["models"]["gf.energy.reading"] = section([
+            {"id": 3, "meter_id": 8, "meter_multiplier": 1200,
+             "multiplier_source": "backfill"},
+        ])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -152,14 +214,13 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_bootstrap_rejects_wrong_multiplier_value(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.energy.reading"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 3, "meter_id": None, "meter_multiplier": 0, "multiplier_source": False}],
-            "sha256": "a"}
-        after["models"]["gf.energy.reading"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 3, "meter_id": 8, "meter_multiplier": 999, "multiplier_source": "backfill"}],
-            "sha256": "b"}
+        before["models"]["gf.energy.reading"] = section([
+            {"id": 3, "meter_id": None, "meter_multiplier": 0, "multiplier_source": False},
+        ])
+        after["models"]["gf.energy.reading"] = section([
+            {"id": 3, "meter_id": 8, "meter_multiplier": 999,
+             "multiplier_source": "backfill"},
+        ])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("invalid backfill", result.stdout)
@@ -167,18 +228,18 @@ class CompareSnapshotsTest(unittest.TestCase):
     def test_bootstrap_rejects_wrong_config_value(self):
         before, after = snapshot(), snapshot()
         after["models"]["ir.config_parameter@g3"]["rows"][0]["value"] = "999"
-        after["models"]["ir.config_parameter@g3"]["sha256"] = "changed"
+        refresh_section(after["models"]["ir.config_parameter@g3"])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("config values mismatch", result.stdout)
 
     def test_e2e_created_record_must_match_sealed_after_values(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.transformation.order"] = {
-            "available": True, "count": 0, "rows": [], "sha256": "a"}
-        after["models"]["gf.transformation.order"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 77, "warehouse_id": 999, "state": "done"}], "sha256": "b"}
+        before["models"]["gf.transformation.order"] = section(
+            [], ["id", "warehouse_id", "state"])
+        after["models"]["gf.transformation.order"] = section([
+            {"id": 77, "warehouse_id": 999, "state": "done"},
+        ])
         contract = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
                     "allowed_changes": {
                         "gf.transformation.order:created:77": {
@@ -204,25 +265,25 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_bootstrap_accepts_addon_schema_defaults(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.transformation.recipe"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 40, "recipe_code": "MOL"}], "sha256": "a"}
-        after["models"]["gf.transformation.recipe"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 40, "recipe_code": "MOL", "expected_units_per_input": 0.0,
-                      "variance_threshold_pct": 0.0}], "sha256": "b"}
-        before["models"]["gf.transformation.order"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 50, "recipe_id": 40, "variance_pct": 10.0,
-                      "write_date": "2026-01-01T00:00:00"}], "sha256": "a"}
-        after["models"]["gf.transformation.order"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 50, "recipe_id": 40, "variance_pct": 10.0, "first_output_qty_units": 0.0,
-                      "recount_output_qty_units": 0.0, "recount_captured": False,
-                      "recount_delta_units": 0.0, "recount_by_employee_id": None,
-                      "recount_at": False, "variance_threshold_pct": 5.0,
-                      "exceeds_variance_threshold": True,
-                      "write_date": "2026-09-17T16:21:59"}], "sha256": "b"}
+        before["models"]["gf.transformation.recipe"] = section([
+            {"id": 40, "recipe_code": "MOL"},
+        ])
+        after["models"]["gf.transformation.recipe"] = section([
+            {"id": 40, "recipe_code": "MOL", "expected_units_per_input": 0.0,
+             "variance_threshold_pct": 0.0},
+        ])
+        before["models"]["gf.transformation.order"] = section([
+            {"id": 50, "recipe_id": 40, "variance_pct": 10.0,
+             "write_date": "2026-01-01T00:00:00"},
+        ])
+        after["models"]["gf.transformation.order"] = section([
+            {"id": 50, "recipe_id": 40, "variance_pct": 10.0,
+             "first_output_qty_units": 0.0, "recount_output_qty_units": 0.0,
+             "recount_captured": False, "recount_delta_units": 0.0,
+             "recount_by_employee_id": None, "recount_at": False,
+             "variance_threshold_pct": 5.0, "exceeds_variance_threshold": True,
+             "write_date": "2026-09-17T16:21:59"},
+        ])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -271,24 +332,23 @@ class CompareSnapshotsTest(unittest.TestCase):
 
     def test_milling_threshold_is_derived_not_self_consistent(self):
         before, after = snapshot(), snapshot()
-        before["models"]["gf.transformation.recipe"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 40, "recipe_code": "MOL"}], "sha256": "a"}
-        after["models"]["gf.transformation.recipe"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 40, "recipe_code": "MOL", "expected_units_per_input": 0.0,
-                      "variance_threshold_pct": 0.0}], "sha256": "b"}
-        before["models"]["gf.transformation.order"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 50, "recipe_id": 40, "variance_pct": 10.0}], "sha256": "a"}
-        after["models"]["gf.transformation.order"] = {
-            "available": True, "count": 1,
-            "rows": [{"id": 50, "recipe_id": 40, "variance_pct": 10.0,
-                      "first_output_qty_units": 0.0, "recount_output_qty_units": 0.0,
-                      "recount_captured": False, "recount_delta_units": 0.0,
-                      "recount_by_employee_id": None, "recount_at": False,
-                      "variance_threshold_pct": 999.0,
-                      "exceeds_variance_threshold": False}], "sha256": "b"}
+        before["models"]["gf.transformation.recipe"] = section([
+            {"id": 40, "recipe_code": "MOL"},
+        ])
+        after["models"]["gf.transformation.recipe"] = section([
+            {"id": 40, "recipe_code": "MOL", "expected_units_per_input": 0.0,
+             "variance_threshold_pct": 0.0},
+        ])
+        before["models"]["gf.transformation.order"] = section([
+            {"id": 50, "recipe_id": 40, "variance_pct": 10.0},
+        ])
+        after["models"]["gf.transformation.order"] = section([
+            {"id": 50, "recipe_id": 40, "variance_pct": 10.0,
+             "first_output_qty_units": 0.0, "recount_output_qty_units": 0.0,
+             "recount_captured": False, "recount_delta_units": 0.0,
+             "recount_by_employee_id": None, "recount_at": False,
+             "variance_threshold_pct": 999.0, "exceeds_variance_threshold": False},
+        ])
         result = self.run_compare(before, after, "--mode", "bootstrap")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("threshold value mismatch", result.stdout)
@@ -314,7 +374,7 @@ class CompareSnapshotsTest(unittest.TestCase):
         after["models"]["stock.quant"]["sha256"] = "tampered"
         result = self.run_cleanup(before, after, self.cleanup_contract())
         self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertIn("models differ", result.stdout)
+        self.assertIn("model section stock.quant after sha256 mismatch", result.stdout)
 
     def test_cleanup_requires_exact_external_sentinels(self):
         before, after = snapshot(), snapshot()

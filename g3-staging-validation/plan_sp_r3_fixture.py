@@ -1,0 +1,195 @@
+"""Planificador read-only para el fixture SP-R3.
+
+Se ejecuta con ``odoo-bin shell``. La funcion :func:`plan_fixture` es la
+unidad inyectable usada por las pruebas; nunca abre una transaccion de
+escritura ni selecciona una tupla distinta despues de sellar el plan.
+"""
+
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+MARKER = "[SP-R3 FIXTURE 2026-09-18]"
+WAREHOUSE_ID = 76
+COMPANY_ID = 35
+EMPLOYEE_IDS = (2548, 2549, 2550)
+CONFIG_KEYS = (
+    "gf_production.require_haccp_for_close",
+    "gf_production.require_energy_for_close",
+    "gf_production.handover_blocking",
+    "gf_production_ops.material_stock_enabled",
+)
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode()
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def _write_private(path, value):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(descriptor, canonical(value))
+    finally:
+        os.close(descriptor)
+    os.chmod(target, 0o600)
+
+
+class OdooReadOnlyOps:
+    """Adaptador de solo lectura; sus metodos no contienen primitivas mutantes."""
+
+    def __init__(self, env):
+        self.env = env
+        self.cr = env.cr
+
+    @property
+    def neutralized(self):
+        value = self.env["ir.config_parameter"].sudo().get_param("database.is_neutralized")
+        return str(value).strip().lower() in ("1", "true", "yes")
+
+    def environment(self):
+        warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
+        employees = self.env["hr.employee"].sudo().browse(EMPLOYEE_IDS).exists()
+        employee_data = {}
+        for employee in employees:
+            role = getattr(getattr(employee, "job_id", False), "x_job_key", False) or ""
+            warehouse = getattr(employee, "warehouse_id", False)
+            employee_data[employee.id] = {
+                "id": employee.id,
+                "company_id": employee.company_id.id,
+                "warehouse_ids": [warehouse.id] if warehouse else [],
+                "role": role,
+            }
+        params = self.env["ir.config_parameter"].sudo()
+        modules = self.env["ir.module.module"].sudo().search([
+            ("name", "in", ["gf_production_ops", "gf_plant_energy", "gf_milling_control"])
+        ])
+        return {
+            "database": self.cr.dbname,
+            "neutralized": self.neutralized,
+            "warehouse": {
+                "id": warehouse.id,
+                "company_id": warehouse.company_id.id,
+                "code": warehouse.code,
+            },
+            "employees": employee_data,
+            "backend_sha": os.environ.get("SP_BACKEND_SHA", ""),
+            "frontend_sha": os.environ.get("SP_FRONTEND_SHA", ""),
+            "module_versions": {module.name: module.installed_version for module in modules},
+            "params": {key: params.get_param(key) for key in CONFIG_KEYS},
+        }
+
+    def occupied_shifts(self):
+        shifts = self.env["gf.production.shift"].sudo().search([
+            ("plant_warehouse_id", "=", WAREHOUSE_ID),
+        ])
+        return [{
+            "id": shift.id,
+            "date": str(shift.date),
+            "shift_code": str(shift.shift_code),
+            "warehouse_id": shift.plant_warehouse_id.id,
+            "state": shift.state,
+            "has_production": bool(shift.line_ids),
+        } for shift in shifts]
+
+
+def _ops(env):
+    return env if hasattr(env, "occupied_shifts") else OdooReadOnlyOps(env)
+
+
+def _verify_environment(info, seal, expected_db):
+    if not expected_db or info.get("database") != expected_db:
+        raise RuntimeError("STOP: SP_EXPECTED_DB mismatch")
+    if not info.get("neutralized"):
+        raise RuntimeError("STOP: database.is_neutralized is not true")
+    warehouse = info.get("warehouse") or {}
+    if (warehouse.get("id"), warehouse.get("company_id")) != (WAREHOUSE_ID, COMPANY_ID):
+        raise RuntimeError("STOP: warehouse_id/company_id mismatch")
+    if seal.get("database") != expected_db or seal.get("warehouse_id") != WAREHOUSE_ID:
+        raise RuntimeError("STOP: environment seal mismatch")
+    if seal.get("schema") != "g3_environment_seal_v1" or seal.get("branch") != "staging-g3-clean-170926":
+        raise RuntimeError("STOP: environment seal branch/schema mismatch")
+    if seal.get("company_id") != COMPANY_ID:
+        raise RuntimeError("STOP: company seal mismatch")
+    if seal.get("warehouse_code") != warehouse.get("code"):
+        raise RuntimeError("STOP: warehouse code seal mismatch")
+    if seal.get("backend_sha") != info.get("backend_sha"):
+        raise RuntimeError("STOP: backend SHA mismatch")
+    if seal.get("frontend_sha") != info.get("frontend_sha"):
+        raise RuntimeError("STOP: frontend SHA mismatch")
+    if seal.get("module_versions") != info.get("module_versions"):
+        raise RuntimeError("STOP: module version seal mismatch")
+
+
+def _free_tuple(occupied, start_date):
+    taken = {(str(row.get("date")), str(row.get("shift_code"))) for row in occupied}
+    candidate = dt.date.fromisoformat(start_date)
+    for _day in range(367):
+        for shift_code in ("1", "2"):
+            if (candidate.isoformat(), shift_code) not in taken:
+                return candidate.isoformat(), shift_code
+        candidate += dt.timedelta(days=1)
+    raise RuntimeError("STOP: no free SP-R3 fixture tuple")
+
+
+def plan_fixture(env, seal, output_path, expected_db=None, today=None):
+    operations = _ops(env)
+    expected_db = expected_db or os.environ.get("SP_EXPECTED_DB")
+    info = operations.environment()
+    _verify_environment(info, seal, expected_db)
+    date_value, shift_code = _free_tuple(
+        operations.occupied_shifts(), today or dt.date.today().isoformat())
+    plan = {
+        "schema": "sp_r3_fixture_plan_v1",
+        "database": expected_db,
+        "warehouse_id": WAREHOUSE_ID,
+        "warehouse_code": info["warehouse"]["code"],
+        "company_id": COMPANY_ID,
+        "date": date_value,
+        "shift_code": shift_code,
+        "leader_employee_id": 2548,
+        "operator_employee_id": 2549,
+        "negative_employee_id": 2550,
+        "negative_employee_warehouse_id": 115,
+        "marker": MARKER,
+        "backend_sha": info["backend_sha"],
+        "frontend_sha": info["frontend_sha"],
+        "module_versions": info["module_versions"],
+        "previous_params": {key: info["params"].get(key) for key in CONFIG_KEYS},
+        "planned_params": {
+            "gf_production.require_haccp_for_close": "1",
+            "gf_production.require_energy_for_close": "1",
+            "gf_production.handover_blocking": "0",
+            "gf_production_ops.material_stock_enabled": "0",
+        },
+        "expected_blockers": sorted({
+            "haccp", "energy_end", "open_downtime", "open_cycles",
+            "operator_barra_not_closed", "operator_rolito_not_closed",
+        }),
+        "database_writes": 0,
+    }
+    _write_private(output_path, plan)
+    return plan
+
+
+def main(env):
+    output = os.environ.get("SP_PLAN_PATH", "/tmp/sp-r3-fixture-plan.json")
+    seal_path = os.environ["G3_SEAL_PATH"]
+    seal_raw = Path(seal_path).read_bytes()
+    expected = os.environ["G3_SEAL_SHA256"]
+    if hashlib.sha256(seal_raw).hexdigest() != expected:
+        raise RuntimeError("STOP: environment seal hash mismatch")
+    return plan_fixture(env, json.loads(seal_raw), output)
+
+
+if "env" in globals():  # pragma: no cover - odoo-bin shell wrapper
+    main(env)  # noqa: F821

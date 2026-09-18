@@ -241,11 +241,6 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         raise RuntimeError("STOP: setup employee contexts mismatch")
     if runtime.get("schema") != "sp_r3_runtime_contract_v1":
         raise RuntimeError("STOP: invalid RUNTIME_MANIFEST")
-    if (not ui_contract_sha256 or digest(ui_contract) != ui_contract_sha256 or
-            runtime.get("ui_contract_sha256") != ui_contract_sha256):
-        raise RuntimeError("STOP: original UI contract hash mismatch")
-    if ui_contract.get("schema") != "sp_r3_ui_contract_v1":
-        raise RuntimeError("STOP: invalid original UI contract")
     for manifest in (setup, runtime):
         if manifest.get("database") != expected_db:
             raise RuntimeError("STOP: manifest database mismatch")
@@ -254,13 +249,9 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
     shift_id = setup.get("records", {}).get("shift", {}).get("id")
     if runtime.get("shift_id") != shift_id:
         raise RuntimeError("STOP: runtime shift relation mismatch")
-    for key in ("database", "warehouse_id", "company_id", "shift_id"):
-        if ui_contract.get(key) != runtime.get(key):
-            raise RuntimeError("STOP: original UI contract identity mismatch")
     for key in ("marker", "date", "shift_code"):
-        if (ui_contract.get(key) != setup.get(key) or
-                runtime.get(key) != setup.get(key)):
-            raise RuntimeError("STOP: original UI contract fixture identity mismatch")
+        if runtime.get(key) != setup.get(key):
+            raise RuntimeError("STOP: runtime fixture identity mismatch")
     if setup.get("employee_warehouse_restore") != {
             "employee_id": 586, "warehouse_id": None}:
         raise RuntimeError("STOP: employee warehouse restore seal mismatch")
@@ -268,6 +259,16 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         raise RuntimeError("STOP: setup-only requires an empty sealed runtime manifest")
     if mode not in ("setup-only", "runtime"):
         raise RuntimeError("STOP: invalid cleanup mode")
+    if mode == "runtime":
+        if (not ui_contract_sha256 or digest(ui_contract) != ui_contract_sha256 or
+                runtime.get("ui_contract_sha256") != ui_contract_sha256):
+            raise RuntimeError("STOP: original UI contract hash mismatch")
+        if ui_contract.get("schema") != "sp_r3_ui_contract_v1":
+            raise RuntimeError("STOP: invalid original UI contract")
+        for key in ("database", "warehouse_id", "company_id", "shift_id",
+                    "marker", "date", "shift_code"):
+            if ui_contract.get(key) != runtime.get(key):
+                raise RuntimeError("STOP: original UI contract identity mismatch")
     for item in runtime.get("records", {}).values():
         if item.get("model") not in RUNTIME_CREATE_MODELS:
             raise RuntimeError("STOP: runtime model is outside cleanup whitelist")
@@ -374,14 +375,18 @@ def main(env):
     setup = _load(os.environ["SP_SETUP_PATH"], os.environ["SP_SETUP_SHA256"])
     runtime = _load(os.environ["SP_RUNTIME_MANIFEST_PATH"],
                     os.environ["SP_RUNTIME_MANIFEST_SHA256"])
-    ui_contract = _load(os.environ["SP_UI_CONTRACT_PATH"],
-                        os.environ["SP_UI_CONTRACT_SHA256"])
+    mode = os.environ.get("SP_CLEANUP_MODE", "runtime")
+    ui_contract = None
+    ui_contract_sha256 = None
+    if mode == "runtime":
+        ui_contract_sha256 = os.environ["SP_UI_CONTRACT_SHA256"]
+        ui_contract = _load(os.environ["SP_UI_CONTRACT_PATH"], ui_contract_sha256)
     output = os.environ.get("SP_CLEANUP_PATH", "/tmp/sp-r3-cleanup.json")
     result = cleanup_fixture(env, output, setup, runtime, os.environ["SP_SETUP_SHA256"],
                              os.environ["SP_RUNTIME_MANIFEST_SHA256"],
-                             mode=os.environ.get("SP_CLEANUP_MODE", "runtime"),
+                             mode=mode,
                              ui_contract=ui_contract,
-                             ui_contract_sha256=os.environ["SP_UI_CONTRACT_SHA256"])
+                             ui_contract_sha256=ui_contract_sha256)
     print(json.dumps({"output": output,
                       "sha256": hashlib.sha256(Path(output).read_bytes()).hexdigest()},
                      sort_keys=True))

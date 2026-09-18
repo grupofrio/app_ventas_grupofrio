@@ -792,6 +792,23 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(self.ops.cr.commits, commits)
         self.assertEqual(len(self.ops.mutating_calls), writes)
 
+    def test_setup_only_needs_no_ui_contract_but_runtime_does(self):
+        setup, runtime = self._prepared()
+        runtime.pop("ui_contract_sha256")
+        result = self.cleanup.cleanup_fixture(
+            self.ops, self.output("cleanup-no-ui.json"), setup, runtime,
+            self.generator.digest(setup), self.generator.digest(runtime),
+            "g3-clean", "setup-only")
+        self.assertFalse(result["already_clean"])
+
+        self.ops = FakeOps()
+        setup, runtime = self._prepared()
+        with self.assertRaisesRegex(RuntimeError, "UI contract"):
+            self.cleanup.cleanup_fixture(
+                self.ops, self.output("cleanup-runtime-no-ui.json"), setup, runtime,
+                self.generator.digest(setup), self.generator.digest(runtime),
+                "g3-clean", "runtime")
+
     def test_cleanup_rejects_runtime_rules_not_identical_to_original_ui_contract(self):
         setup, runtime = self._prepared()
         shift_id = setup["records"]["shift"]["id"]

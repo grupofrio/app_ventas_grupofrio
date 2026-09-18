@@ -10,16 +10,25 @@ MARKER = "[SP-R3 FIXTURE 2026-09-18]"
 WAREHOUSE_ID = 76
 COMPANY_ID = 35
 EMPLOYEE_IDS = (2548, 2549, 2550)
+EXPECTED_EMPLOYEES = {
+    2548: ("supervisor_produccion", COMPANY_ID, 76),
+    2549: ("operador_barra", COMPANY_ID, 76),
+    2550: ("supervisor_produccion", COMPANY_ID, 115),
+}
+EMPLOYEE_CONTEXTS = [
+    {"id": employee_id, "role": role, "company_id": company_id,
+     "warehouse_id": warehouse_id}
+    for employee_id, (role, company_id, warehouse_id) in sorted(EXPECTED_EMPLOYEES.items())
+]
 CONFIG_KEYS = (
     "gf_production.require_haccp_for_close", "gf_production.require_energy_for_close",
     "gf_production.handover_blocking", "gf_production_ops.material_stock_enabled",
 )
-RUNTIME_CREATE_MODELS = {
-    "gf.energy.reading", "gf.haccp.check", "gf.compressor.event",
-    "gf.compressor.oil.log", "gf.brine.reading.log", "gf.transformation.order",
-}
+RUNTIME_CREATE_ALIASES = {"energy_end": "gf.energy.reading"}
+RUNTIME_CREATE_MODELS = set(RUNTIME_CREATE_ALIASES.values())
 RUNTIME_UPDATE_MODELS = RUNTIME_CREATE_MODELS | {
-    "gf.production.shift", "gf.haccp.checklist", "gf.production.downtime",
+    "gf.production.shift", "gf.haccp.checklist", "gf.haccp.check",
+    "gf.production.downtime",
     "gf.evaporator.cycle", "gf.production.material.issue",
     "gf.production.material.settlement",
 }
@@ -78,9 +87,18 @@ class OdooCleanupOps:
     def environment(self):
         warehouse = self.env["stock.warehouse"].sudo().browse(WAREHOUSE_ID).exists()
         employees = self.env["hr.employee"].sudo().browse(EMPLOYEE_IDS).exists()
+        employee_data = {}
+        for employee in employees:
+            role = getattr(getattr(employee, "job_id", False), "x_job_key", False) or ""
+            employee_warehouse = getattr(employee, "warehouse_id", False)
+            employee_data[employee.id] = {
+                "id": employee.id, "company_id": employee.company_id.id,
+                "warehouse_ids": ([employee_warehouse.id] if employee_warehouse else []),
+                "role": role,
+            }
         return {"database": self.cr.dbname, "neutralized": self.neutralized,
                 "warehouse": {"id": warehouse.id, "company_id": warehouse.company_id.id},
-                "employees": sorted(employees.ids)}
+                "employees": employee_data}
 
     def set_param(self, key, value):
         params = self.env["ir.config_parameter"].sudo()
@@ -158,6 +176,13 @@ class OdooCleanupOps:
             expected_shift_id = setup["records"]["shift"]["id"]
             if not shift or shift.id != expected_shift_id:
                 raise RuntimeError("STOP: relation mismatch")
+            rule = data.get("contract_rule")
+            if rule:
+                for field, expected in (rule.get("match") or {}).items():
+                    actual = getattr(record, field, False)
+                    actual = actual.id if hasattr(actual, "id") else actual
+                    if actual != expected:
+                        raise RuntimeError("STOP: explicit runtime rule mismatch")
             marker_value = " ".join(str(getattr(record, field, "") or "")
                                     for field in ("notes", "reason", "name", "description", "result_text"))
             marker_aliases = {"shift", "haccp", "cycle", "downtime", "issue", "settlement"}
@@ -186,8 +211,12 @@ def _ensure_context(ops, expected_db):
     warehouse = info.get("warehouse") or {}
     if (warehouse.get("id"), warehouse.get("company_id")) != (WAREHOUSE_ID, COMPANY_ID):
         raise RuntimeError("STOP: warehouse_id/company_id mismatch")
-    if set(info.get("employees", [])) != set(EMPLOYEE_IDS):
-        raise RuntimeError("STOP: employees 2548/2549/2550 mismatch")
+    employees = info.get("employees") or {}
+    for employee_id, (role, company_id, warehouse_id) in EXPECTED_EMPLOYEES.items():
+        actual = employees.get(employee_id) or {}
+        if (actual.get("role"), actual.get("company_id"), actual.get("warehouse_ids")) != (
+                role, company_id, [warehouse_id]):
+            raise RuntimeError("STOP: employee identity/role/company/warehouse mismatch")
 
 
 def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, mode):
@@ -195,6 +224,8 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         raise RuntimeError("STOP: manifest hash mismatch")
     if setup.get("schema") != "sp_r3_fixture_setup_v1" or setup.get("marker") != MARKER:
         raise RuntimeError("STOP: invalid FIXTURE_SETUP manifest")
+    if setup.get("employee_contexts") != EMPLOYEE_CONTEXTS:
+        raise RuntimeError("STOP: setup employee contexts mismatch")
     if runtime.get("schema") != "sp_r3_runtime_contract_v1":
         raise RuntimeError("STOP: invalid RUNTIME_MANIFEST")
     for manifest in (setup, runtime):
@@ -214,6 +245,13 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
             raise RuntimeError("STOP: runtime model is outside cleanup whitelist")
         if item.get("shift_id") != shift_id or not isinstance(item.get("id"), int):
             raise RuntimeError("STOP: runtime record relation/id mismatch")
+        alias = item.get("contract_alias")
+        rule = item.get("contract_rule") or {}
+        if (RUNTIME_CREATE_ALIASES.get(alias) != item.get("model") or
+                rule.get("alias") != alias or rule.get("model") != item.get("model") or
+                rule.get("change") != "created" or
+                item.get("contract_rule_sha256") != digest(rule)):
+            raise RuntimeError("STOP: runtime record lacks an explicit sealed rule")
     setup_by_model = {}
     for alias, value in setup.get("records", {}).items():
         model = OdooCleanupOps.model_for_alias(alias)
@@ -224,6 +262,10 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
             raise RuntimeError("STOP: runtime model is outside update whitelist")
         if item.get("shift_id") != shift_id or item.get("id") not in setup_by_model.get(model, set()):
             raise RuntimeError("STOP: runtime update does not target a setup record")
+        rule = item.get("contract_rule") or {}
+        if (set(item.get("changed_fields") or []) != set(rule.get("fields") or []) or
+                item.get("contract_rule_sha256") != digest(rule)):
+            raise RuntimeError("STOP: runtime update lacks its explicit sealed rule")
 
 
 def cleanup_fixture(env, output_path, setup, runtime, setup_sha256,

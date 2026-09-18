@@ -1,6 +1,7 @@
 """Setup transaccional y fail-closed del fixture SP-R3."""
 
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,16 @@ EXPECTED_EMPLOYEES = {
     2549: ("operador_barra", COMPANY_ID, WAREHOUSE_ID),
     2550: ("supervisor_produccion", COMPANY_ID, 115),
 }
+EMPLOYEE_CONTEXTS = [
+    {"id": employee_id, "role": role, "company_id": company_id,
+     "warehouse_id": warehouse_id}
+    for employee_id, (role, company_id, warehouse_id) in sorted(EXPECTED_EMPLOYEES.items())
+]
+ENERGY_FIXTURE_PHOTO_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+ENERGY_FIXTURE_PHOTO_SHA256 = hashlib.sha256(
+    base64.b64decode(ENERGY_FIXTURE_PHOTO_B64, validate=True)).hexdigest()
 EXPECTED_BLOCKERS = {
     "haccp", "energy_end", "open_downtime", "open_cycles",
     "operator_barra_not_closed", "operator_rolito_not_closed",
@@ -108,7 +119,7 @@ class OdooPrepareOps:
     def _marked(self, text):
         return "%s %s" % (MARKER, text)
 
-    def create_fixture(self, plan, marker):
+    def create_fixture(self, plan, marker, photo):
         Shift = self.env["gf.production.shift"].sudo()
         lines = self.env["gf.production.line"].sudo().search([
             ("plant_warehouse_id", "=", WAREHOUSE_ID), ("active", "=", True),
@@ -126,7 +137,7 @@ class OdooPrepareOps:
         Energy = self.env["gf.energy.reading"].sudo()
         energy = Energy.create_period_reading(
             shift, "start", {"base": 0, "intermedia": 0, "punta": 0},
-            employee=employee)
+            employee=employee, photo=photo)
         template = self.env["gf.haccp.template"].sudo().browse(
             plan["haccp_template_id"]).exists()
         if not template or not template.active or template.line_type not in ("all", "rolito"):
@@ -257,6 +268,11 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
             plan.get("negative_employee_id"), plan.get("negative_employee_warehouse_id")) != (
             2548, 2549, 2550, 115):
         raise RuntimeError("STOP: fixture employee identity mismatch")
+    if plan.get("employee_contexts") != EMPLOYEE_CONTEXTS:
+        raise RuntimeError("STOP: sealed employee contexts mismatch")
+    if (plan.get("fixture_photo_sha256") != ENERGY_FIXTURE_PHOTO_SHA256 or
+            contract.get("fixture_photo_sha256") != ENERGY_FIXTURE_PHOTO_SHA256):
+        raise RuntimeError("STOP: sanitized fixture photo seal mismatch")
     checks = plan.get("haccp_checks") or []
     check_ids = [item.get("template_id") for item in checks]
     if (not isinstance(plan.get("haccp_template_id"), int) or not checks or
@@ -280,6 +296,10 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
     }
     if set(contract.get("aliases", [])) != expected_aliases:
         raise RuntimeError("STOP: FIXTURE_SETUP alias mismatch")
+    rule_aliases = [rule.get("alias") for rule in contract.get("allowed_change_rules", [])]
+    if (len(rule_aliases) != len(set(rule_aliases)) or
+            not expected_aliases <= set(rule_aliases)):
+        raise RuntimeError("STOP: every fixture record requires one explicit contract rule")
 
 
 def _tuple_is_free(ops, plan):
@@ -321,7 +341,7 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
         for key, value in PLANNED_PARAMS.items():
             if str(previous.get(key)) != str(value):
                 operations.set_param(key, value)
-        ids = operations.create_fixture(plan, MARKER)
+        ids = operations.create_fixture(plan, MARKER, ENERGY_FIXTURE_PHOTO_B64)
         blockers = set(operations.fixture_blockers(ids["shift"]))
         if blockers != EXPECTED_BLOCKERS:
             raise RuntimeError("STOP: exact blocker postcondition failed: %s" % sorted(blockers))
@@ -333,6 +353,8 @@ def prepare_fixture(env, output_path, plan, contract, plan_sha256,
             "warehouse_id": WAREHOUSE_ID, "company_id": COMPANY_ID,
             "marker": MARKER, "date": plan["date"], "shift_code": plan["shift_code"],
             "write_class": "FIXTURE_SETUP", "previous_params": previous,
+            "employee_contexts": list(EMPLOYEE_CONTEXTS),
+            "fixture_photo_sha256": ENERGY_FIXTURE_PHOTO_SHA256,
             "applied_params": dict(PLANNED_PARAMS),
             "blocker_codes": sorted(blockers), "records": states,
             "fixture_sha256": digest({"records": states, "blocker_codes": sorted(blockers)}),

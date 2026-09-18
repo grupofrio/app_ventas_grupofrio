@@ -6,6 +6,7 @@ escritura ni selecciona una tupla distinta despues de sellar el plan.
 """
 
 import datetime as dt
+import base64
 import hashlib
 import json
 import os
@@ -16,6 +17,16 @@ MARKER = "[SP-R3 FIXTURE 2026-09-18]"
 WAREHOUSE_ID = 76
 COMPANY_ID = 35
 EMPLOYEE_IDS = (2548, 2549, 2550)
+APPROVED_EMPLOYEES = {
+    2548: ("supervisor_produccion", COMPANY_ID, 76),
+    2549: ("operador_barra", COMPANY_ID, 76),
+    2550: ("supervisor_produccion", COMPANY_ID, 115),
+}
+ENERGY_FIXTURE_PHOTO_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+ENERGY_FIXTURE_PHOTO_SHA256 = hashlib.sha256(
+    base64.b64decode(ENERGY_FIXTURE_PHOTO_B64, validate=True)).hexdigest()
 CONFIG_KEYS = (
     "gf_production.require_haccp_for_close",
     "gf_production.require_energy_for_close",
@@ -139,6 +150,12 @@ def _verify_environment(info, seal, expected_db):
         raise RuntimeError("STOP: frontend SHA mismatch")
     if seal.get("module_versions") != info.get("module_versions"):
         raise RuntimeError("STOP: module version seal mismatch")
+    employees = info.get("employees") or {}
+    for employee_id, (role, company_id, warehouse_id) in APPROVED_EMPLOYEES.items():
+        actual = employees.get(employee_id) or {}
+        if (actual.get("role"), actual.get("company_id"), actual.get("warehouse_ids")) != (
+                role, company_id, [warehouse_id]):
+            raise RuntimeError("STOP: employee identity/role/company/warehouse mismatch")
 
 
 def _free_tuple(occupied, start_date):
@@ -181,6 +198,12 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
         "operator_employee_id": 2549,
         "negative_employee_id": 2550,
         "negative_employee_warehouse_id": 115,
+        "employee_contexts": [
+            {"id": employee_id, "role": role, "company_id": company_id,
+             "warehouse_id": warehouse_id}
+            for employee_id, (role, company_id, warehouse_id) in sorted(APPROVED_EMPLOYEES.items())
+        ],
+        "fixture_photo_sha256": ENERGY_FIXTURE_PHOTO_SHA256,
         "haccp_template_id": haccp["id"],
         "haccp_checks": list(haccp["checks"]),
         "marker": MARKER,

@@ -199,6 +199,10 @@ def _runtime(plan, pre_e2e, current, ui_contract):
     allowed_fields = ui_contract.get("allowed_runtime_fields") or {}
     records = {}
     updates = {}
+    used_aliases = set()
+    created_rules = [rule for rule in ui_contract.get("allowed_change_rules", [])
+                     if rule.get("change") == "created"]
+    update_rules = ui_contract.get("allowed_changes") or {}
     def related(model, row):
         relation = RUNTIME_RELATIONS.get(model)
         if model == "gf.haccp.check" and relation:
@@ -217,11 +221,23 @@ def _runtime(plan, pre_e2e, current, ui_contract):
             row = new[record_id]
             relation = RUNTIME_RELATIONS.get(model)
             related_to_shift = related(model, row)
-            if model not in allowed or not relation or not related_to_shift:
+            candidates = [rule for rule in created_rules
+                          if rule.get("model") == model and
+                          rule.get("alias") not in used_aliases and
+                          all(row.get(field) == value
+                              for field, value in (rule.get("match") or {}).items())]
+            if (model not in allowed or not relation or not related_to_shift or
+                    len(candidates) != 1):
+                raise RuntimeError("STOP: runtime record lacks one explicit sealed alias")
+            rule = candidates[0]
+            expected_after = rule.get("after") or {}
+            if any(row.get(field) != value for field, value in expected_after.items()):
                 raise RuntimeError("STOP: runtime record outside sealed UI contract")
+            used_aliases.add(rule["alias"])
             records[f"{model}:{record_id}"] = {
                 "id": record_id, "model": model, "relation": relation,
-                "shift_id": shift_id,
+                "shift_id": shift_id, "contract_alias": rule["alias"],
+                "contract_rule": rule, "contract_rule_sha256": digest(rule),
             }
         for record_id in sorted(set(new) & set(old)):
             if new[record_id] == old[record_id]:
@@ -231,12 +247,17 @@ def _runtime(plan, pre_e2e, current, ui_contract):
             relation = RUNTIME_RELATIONS.get(model)
             is_fixture_shift = model == "gf.production.shift" and record_id == shift_id
             related_to_shift = related(model, new[record_id])
-            if (model not in allowed or not (is_fixture_shift or related_to_shift) or
-                    not set(changed) <= set(allowed_fields.get(model, []))):
+            rule = update_rules.get("%s:updated:%s" % (model, record_id))
+            if (model not in allowed or not (is_fixture_shift or related_to_shift) or not rule or
+                    set(changed) != set(rule.get("fields", [])) or
+                    not set(changed) <= set(allowed_fields.get(model, [])) or
+                    any(new[record_id].get(field) != value
+                        for field, value in (rule.get("after") or {}).items())):
                 raise RuntimeError("STOP: runtime update outside sealed UI contract")
             updates[f"{model}:{record_id}"] = {
                 "id": record_id, "model": model, "action": "updated",
                 "changed_fields": changed, "shift_id": shift_id,
+                "contract_rule": rule, "contract_rule_sha256": digest(rule),
             }
     return records, updates
 
@@ -274,6 +295,7 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
         return {
             "schema": "sp_r3_fixture_contract_v1", **identity,
             "write_class": "FIXTURE_SETUP",
+            "fixture_photo_sha256": plan["fixture_photo_sha256"],
             "planned_params": dict(plan["planned_params"]),
             "expected_blockers": list(plan["expected_blockers"]),
             "aliases": ["shift", "energy_start", "haccp", "cycle", "downtime", "issue", "settlement"] + haccp_aliases,
@@ -314,7 +336,11 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
         allowed_changes, allowed_change_rules = _ui_rules(plan, pre_e2e, shift_id)
         return {
             "schema": "sp_r3_ui_contract_v1", **identity, "shift_id": shift_id,
-            "allowed_runtime_models": sorted(RUNTIME_RELATIONS),
+            "allowed_runtime_models": sorted({
+                rule["model"] for rule in allowed_change_rules
+            } | {
+                key.split(":", 1)[0] for key in allowed_changes
+            }),
             "allowed_runtime_fields": {
                 "gf.production.shift": ["state", "energy_end_id", "energy_kwh",
                                         "energy_kwh_per_kg", "energy_cost_total",

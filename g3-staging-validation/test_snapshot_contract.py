@@ -67,6 +67,16 @@ class SnapshotContractTest(unittest.TestCase):
             "x_rolito_closed", "x_rolito_closed_at",
         } <= set(fields))
 
+    def test_fixture_employee_context_is_narrow_and_contains_no_names_or_credentials(self):
+        fields, domain = self._model_spec("hr.employee")
+        self.assertEqual(fields, [
+            "id", "job_id", "company_id", "warehouse_id", "active",
+        ])
+        self.assertEqual(domain, "[('id', 'in', [586, 2548, 2549, 2550])]")
+        self.assertNotIn("name", fields)
+        self.assertNotIn("pin", fields)
+        self.assertNotIn('"hr.employee": lambda w:', SOURCE)
+
     def test_environment_seal_requires_exact_sp_r3_clean_branch(self):
         self.assertIn('seal.get("branch") != "staging-g3-clean-170926"', SOURCE)
         self.assertNotIn('seal.get("branch") != "staging-g3-170926"', SOURCE)

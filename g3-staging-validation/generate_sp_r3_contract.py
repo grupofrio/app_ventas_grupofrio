@@ -287,6 +287,11 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
     if mode == "fixture":
         config_changes, config_aliases = _config_rules(before, plan["planned_params"])
         adjustment = plan["employee_warehouse_adjustment"]
+        config_changes["hr.employee:updated:%s" % adjustment["employee_id"]] = {
+            "fields": ["warehouse_id"],
+            "after": {"warehouse_id": adjustment["after"]},
+            "dynamic_fields": [],
+        }
         haccp_aliases = ["haccp_check_%s" % index
                          for index, _check in enumerate(plan["haccp_checks"], 1)]
         haccp_rules = [

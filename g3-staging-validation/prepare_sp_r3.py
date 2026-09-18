@@ -304,6 +304,10 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
             "employee_id": 586, "before": None, "after": WAREHOUSE_ID,
             "write_class": "FIXTURE_SETUP"}:
         raise RuntimeError("STOP: employee warehouse FIXTURE_SETUP rule mismatch")
+    if contract.get("allowed_changes", {}).get("hr.employee:updated:586") != {
+            "fields": ["warehouse_id"], "after": {"warehouse_id": WAREHOUSE_ID},
+            "dynamic_fields": []}:
+        raise RuntimeError("STOP: employee warehouse snapshot rule mismatch")
     if set(contract.get("expected_blockers", [])) != EXPECTED_BLOCKERS:
         raise RuntimeError("STOP: FIXTURE_SETUP blocker mismatch")
     expected_aliases = {

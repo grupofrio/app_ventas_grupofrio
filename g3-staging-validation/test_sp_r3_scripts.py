@@ -457,6 +457,10 @@ class SpR3ScriptTest(unittest.TestCase):
         haccp_rules = [rule for rule in fixture["allowed_change_rules"]
                        if rule["model"] == "gf.haccp.check"]
         self.assertEqual(len(haccp_rules), 4)
+        self.assertEqual(fixture["allowed_changes"]["hr.employee:updated:586"], {
+            "fields": ["warehouse_id"], "after": {"warehouse_id": 76},
+            "dynamic_fields": [],
+        })
         identity = {"database": "g3-clean", "warehouse_id": 76,
                     "warehouse_code": "PIGU-PLANTA", "company_id": 35}
         rows = [{"id": 810 + index, "checklist_id": 800,

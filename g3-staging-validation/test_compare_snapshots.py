@@ -99,6 +99,16 @@ def snapshot():
                  "installed_version": "18.0.1.0.15", "latest_version": "18.0.1.0.15",
                  "write_date": "stable"},
             ]), "models": {
+                "hr.employee": section([
+                    {"id": 586, "job_id": 10, "company_id": 35,
+                     "warehouse_id": None, "active": True},
+                    {"id": 2548, "job_id": 11, "company_id": 35,
+                     "warehouse_id": 76, "active": True},
+                    {"id": 2549, "job_id": 12, "company_id": 35,
+                     "warehouse_id": 76, "active": True},
+                    {"id": 2550, "job_id": 11, "company_id": 35,
+                     "warehouse_id": 115, "active": True},
+                ], ["id", "job_id", "company_id", "warehouse_id", "active"]),
                 "stock.quant": section([], ["id", "quantity"]),
                 "gf.energy.meter": section([{"id": 8, "serial": "NPL889", "warehouse_id": 89,
                                               "multiplier": 1200.0, "active": True}]),
@@ -354,6 +364,62 @@ class CompareSnapshotsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(rejected.returncode, 2, rejected.stdout)
         self.assertIn("after-value mismatch", rejected.stdout)
+
+    def test_e2e_partial_update_still_requires_every_mandatory_after_value(self):
+        before, after = snapshot(), snapshot()
+        fields = ["id", "state", "energy_kwh_per_kg"]
+        before["models"]["gf.production.shift"] = section([
+            {"id": 777, "state": "in_progress", "energy_kwh_per_kg": 0.0},
+        ], fields)
+        after["models"]["gf.production.shift"] = section([
+            {"id": 777, "state": "in_progress", "energy_kwh_per_kg": 3.25},
+        ], fields)
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
+        contract = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
+                    "allowed_changes": {"gf.production.shift:updated:777": {
+                        "fields": ["state", "energy_kwh_per_kg"],
+                        "after": {"state": "closed"},
+                        "dynamic_fields": ["energy_kwh_per_kg"],
+                    }}, "allowed_change_rules": []}
+        with tempfile.TemporaryDirectory() as temp:
+            left, right, rule = (Path(temp) / name for name in
+                                 ("left.json", "right.json", "rule.json"))
+            left.write_text(json.dumps(before)); right.write_text(json.dumps(after))
+            raw = json.dumps(contract, sort_keys=True).encode(); rule.write_bytes(raw)
+            result = subprocess.run([
+                "python3", str(SCRIPT), str(left), str(right), "--mode", "e2e",
+                "--contract", str(rule), "--contract-sha256",
+                hashlib.sha256(raw).hexdigest(),
+            ], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("after-value mismatch", result.stdout)
+
+    def test_fixture_employee_loan_is_declared_and_cleanup_requires_restoration(self):
+        before, loaned = snapshot(), snapshot()
+        loaned["models"]["hr.employee"]["rows"][0]["warehouse_id"] = 76
+        refresh_section(loaned["models"]["hr.employee"])
+        refresh_snapshot_business(loaned)
+        contract = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
+                    "allowed_changes": {"hr.employee:updated:586": {
+                        "fields": ["warehouse_id"],
+                        "after": {"warehouse_id": 76}, "dynamic_fields": [],
+                    }}, "allowed_change_rules": []}
+        with tempfile.TemporaryDirectory() as temp:
+            left, right, rule = (Path(temp) / name for name in
+                                 ("left.json", "right.json", "rule.json"))
+            left.write_text(json.dumps(before)); right.write_text(json.dumps(loaned))
+            raw = json.dumps(contract, sort_keys=True).encode(); rule.write_bytes(raw)
+            applied = subprocess.run([
+                "python3", str(SCRIPT), str(left), str(right), "--mode", "e2e",
+                "--contract", str(rule), "--contract-sha256",
+                hashlib.sha256(raw).hexdigest(),
+            ], capture_output=True, text=True, check=False)
+        self.assertEqual(applied.returncode, 0, applied.stdout)
+        not_restored = self.run_cleanup(before, loaned, self.cleanup_contract())
+        self.assertEqual(not_restored.returncode, 2, not_restored.stdout)
+        restored = self.run_cleanup(before, copy.deepcopy(before), self.cleanup_contract())
+        self.assertEqual(restored.returncode, 0, restored.stdout)
 
     def test_bootstrap_accepts_created_target_modules(self):
         before, after = snapshot(), snapshot()

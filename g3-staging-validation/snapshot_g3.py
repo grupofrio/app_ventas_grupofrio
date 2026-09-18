@@ -26,6 +26,8 @@ ADDON_SCHEMA_FIELDS = {
                                  "variance_threshold_pct", "exceeds_variance_threshold"},
 }
 MODEL_SPECS = {
+    "hr.employee": (["id", "job_id", "company_id", "warehouse_id", "active"],
+                    lambda _w: [("id", "in", [586, 2548, 2549, 2550])]),
     "stock.warehouse": (["id", "code", "company_id", "view_location_id", "lot_stock_id",
                          "energy_cost_per_kwh", "energy_kwh_per_kg_target", "energy_tz", "write_date"],
                         lambda w: [("id", "=", w.id)]),
@@ -291,6 +293,8 @@ def main():
                     include_business=False)
     sentinels = {}
     for name, (names, _domain) in MODEL_SPECS.items():
+        if name == "hr.employee":
+            continue
         sentinels[name + "@outside"] = _outside_sentinel(
             name, [field for field in names
                    if field not in ADDON_SCHEMA_FIELDS.get(name, set())],

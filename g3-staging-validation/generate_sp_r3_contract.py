@@ -426,7 +426,10 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
                     "defrost_start": False, "defrost_end": False,
                     "kg_dumped": 0.0,
                     "kg_expected": catalog.get("kg_expected", 0.0),
-                    "kg_deviation_pct": 0.0,
+                    # The model computes a -100% deviation at creation because
+                    # the open fixture starts with 0 dumped against the sealed
+                    # expected kilograms.
+                    "kg_deviation_pct": -100.0,
                     "data_suspect": False, "data_suspect_reason": False,
                     "dumped_by_employee_id": None, "dumped_at": False,
                     "dumped_role_key": False, "dump_override_used": False,

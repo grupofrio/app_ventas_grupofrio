@@ -602,6 +602,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertNotIn("meter_multiplier", rules["energy_start"]["dynamic_fields"])
         self.assertEqual(rules["cycle"]["after"]["machine_id"], 31)
         self.assertEqual(rules["cycle"]["after"]["kg_expected"], 650.0)
+        self.assertEqual(rules["cycle"]["after"]["kg_deviation_pct"], -100.0)
         self.assertNotIn("kg_expected", rules["cycle"]["dynamic_fields"])
 
     def test_contract_modes_require_exact_inputs_and_cleanup_schema(self):
@@ -1095,6 +1096,7 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertIn("shift._get_close_readiness()", prepare)
         self.assertNotIn("_get_shift_close_readiness", prepare)
         self.assertIn("create_period_reading", prepare)
+        self.assertIn('order="id asc", limit=1', prepare)
         self.assertIn("gf_material_issue_id", cleanup)
         self.assertIn("gf_material_settlement_id", cleanup)
         self.assertIn("move_id", cleanup)

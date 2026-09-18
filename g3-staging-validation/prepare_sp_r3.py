@@ -179,7 +179,7 @@ class OdooPrepareOps:
             ("line_id.plant_warehouse_id", "=", WAREHOUSE_ID),
             ("line_id.line_type", "=", "rolito"),
             ("machine_type", "=", "evaporador"), ("active", "=", True),
-        ], limit=1)
+        ], order="id asc", limit=1)
         if not machine:
             raise RuntimeError("STOP: no active rolito evaporator available")
         cycle = self.env["gf.evaporator.cycle"].sudo().create({

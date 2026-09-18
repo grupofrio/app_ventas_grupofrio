@@ -584,6 +584,61 @@ class SpR3ScriptTest(unittest.TestCase):
         self.assertEqual(runtime["updates"]["gf.production.shift:777"]["changed_fields"], ["state"])
         self.assertEqual(len(runtime["updates"]["gf.production.shift:777"]["contract_rule_sha256"]), 64)
 
+    def test_runtime_accepts_nonempty_subset_when_optional_shift_fields_do_not_change(self):
+        plan = self.make_plan()
+        identity = {"database": "g3-clean", "warehouse_id": 76, "company_id": 35}
+        before = {**identity, "models": {"gf.production.shift": {"rows": [{
+            "id": 777, "state": "in_progress", "energy_kwh_per_kg": 0,
+            "energy_vs_target_pct": 0,
+        }]}}}
+        current = copy.deepcopy(before)
+        current["models"]["gf.production.shift"]["rows"][0]["state"] = "closed"
+        rule = {"fields": ["state", "energy_kwh_per_kg", "energy_vs_target_pct"],
+                "after": {"state": "closed"},
+                "dynamic_fields": ["energy_kwh_per_kg", "energy_vs_target_pct"]}
+        runtime = self.generator.generate(
+            "runtime", plan=plan, pre_e2e=before, current=current,
+            ui_contract={"schema": "sp_r3_ui_contract_v1", "shift_id": 777,
+                         **identity, "marker": plan["marker"], "date": plan["date"],
+                         "shift_code": plan["shift_code"],
+                         "allowed_runtime_models": ["gf.production.shift"],
+                         "allowed_runtime_fields": {"gf.production.shift": rule["fields"]},
+                         "allowed_changes": {"gf.production.shift:updated:777": rule},
+                         "allowed_change_rules": []})
+        item = runtime["updates"]["gf.production.shift:777"]
+        self.assertEqual(item["changed_fields"], ["state"])
+        self.assertEqual(item["contract_rule"], rule)
+
+    def test_cleanup_requires_nonempty_subset_of_exact_embedded_update_rule(self):
+        setup, runtime = self._prepared()
+        shift_id = setup["records"]["shift"]["id"]
+        rule = {"fields": ["state", "energy_kwh_per_kg"],
+                "after": {"state": "closed"},
+                "dynamic_fields": ["energy_kwh_per_kg"]}
+        base_item = {"id": shift_id, "model": "gf.production.shift",
+                     "action": "updated", "shift_id": shift_id,
+                     "contract_rule": rule,
+                     "contract_rule_sha256": self.generator.digest(rule)}
+        accepted = copy.deepcopy(runtime)
+        accepted["updates"] = {"gf.production.shift:%s" % shift_id: {
+            **base_item, "changed_fields": ["state"],
+        }}
+        result = self.cleanup.cleanup_fixture(
+            self.ops, self.output("cleanup-subset.json"), setup, accepted,
+            self.generator.digest(setup), self.generator.digest(accepted),
+            "g3-clean", "runtime")
+        self.assertFalse(result["already_clean"])
+        for changed in ([], ["state", "unsealed"]):
+            candidate = copy.deepcopy(runtime)
+            candidate["updates"] = {"gf.production.shift:%s" % shift_id: {
+                **base_item, "changed_fields": changed,
+            }}
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "sealed rule"):
+                self.cleanup.cleanup_fixture(
+                    self.ops, self.output("cleanup.json"), setup, candidate,
+                    self.generator.digest(setup), self.generator.digest(candidate),
+                    "g3-clean", "runtime")
+
     def test_runtime_requires_an_explicit_unique_created_alias_even_for_allowed_models(self):
         plan = self.make_plan()
         identity = {"database": "g3-clean", "warehouse_id": 76, "company_id": 35}

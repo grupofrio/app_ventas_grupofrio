@@ -263,7 +263,9 @@ def _verify_manifest(setup, runtime, setup_sha256, runtime_sha256, expected_db, 
         if item.get("shift_id") != shift_id or item.get("id") not in setup_by_model.get(model, set()):
             raise RuntimeError("STOP: runtime update does not target a setup record")
         rule = item.get("contract_rule") or {}
-        if (set(item.get("changed_fields") or []) != set(rule.get("fields") or []) or
+        changed_fields = set(item.get("changed_fields") or [])
+        sealed_fields = set(rule.get("fields") or [])
+        if (not changed_fields or not changed_fields <= sealed_fields or
                 item.get("contract_rule_sha256") != digest(rule)):
             raise RuntimeError("STOP: runtime update lacks its explicit sealed rule")
 

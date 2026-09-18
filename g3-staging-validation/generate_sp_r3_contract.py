@@ -248,10 +248,12 @@ def _runtime(plan, pre_e2e, current, ui_contract):
             is_fixture_shift = model == "gf.production.shift" and record_id == shift_id
             related_to_shift = related(model, new[record_id])
             rule = update_rules.get("%s:updated:%s" % (model, record_id))
+            changed_fields = set(changed)
+            sealed_fields = set((rule or {}).get("fields", []))
             if (model not in allowed or not (is_fixture_shift or related_to_shift) or not rule or
-                    set(changed) != set(rule.get("fields", [])) or
-                    not set(changed) <= set(allowed_fields.get(model, [])) or
-                    any(new[record_id].get(field) != value
+                    not changed_fields or not changed_fields <= sealed_fields or
+                    not changed_fields <= set(allowed_fields.get(model, [])) or
+                    any(field in changed_fields and new[record_id].get(field) != value
                         for field, value in (rule.get("after") or {}).items())):
                 raise RuntimeError("STOP: runtime update outside sealed UI contract")
             updates[f"{model}:{record_id}"] = {

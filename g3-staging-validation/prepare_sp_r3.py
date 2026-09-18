@@ -206,11 +206,11 @@ class OdooPrepareOps:
         issue = self.env["gf.production.material.issue"].sudo().create({
             "shift_id": shift.id, "line_id": machine.line_id.id, "material_id": material.id,
             "qty_issued": 1, "issued_by": 2548, "received_by": 2549,
-            "state": "draft", "notes": self._marked("material"),
+            "state": "draft", "notes": plan["fixture_notes"]["issue"],
         })
         settlement = self.env["gf.production.material.settlement"].sudo().create({
             "shift_id": shift.id, "line_id": machine.line_id.id, "material_id": material.id,
-            "state": "draft", "notes": self._marked("conciliacion"),
+            "state": "draft", "notes": plan["fixture_notes"]["settlement"],
         })
         return {"shift": shift.id, "energy_start": energy.id, "haccp": haccp.id,
                 "cycle": cycle.id, "downtime": downtime.id, "issue": issue.id,
@@ -296,6 +296,13 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
         raise RuntimeError("STOP: invalid sealed HACCP catalog")
     if plan.get("planned_params") != PLANNED_PARAMS:
         raise RuntimeError("STOP: planned configuration mismatch")
+    if plan.get("fixture_notes") != {
+            "issue": "%s material" % MARKER,
+            "settlement": "%s conciliacion" % MARKER}:
+        raise RuntimeError("STOP: fixture note contract mismatch")
+    if plan.get("energy_end_values") != {
+            "base": 110.0, "intermedia": 55.0, "punta": 30.0}:
+        raise RuntimeError("STOP: energy end contract mismatch")
     if set(plan.get("expected_blockers", [])) != EXPECTED_BLOCKERS:
         raise RuntimeError("STOP: expected blocker contract mismatch")
     if contract.get("planned_params") != PLANNED_PARAMS:
@@ -321,6 +328,11 @@ def _verify_seals(plan, contract, plan_sha256, contract_sha256):
     if (len(rule_aliases) != len(set(rule_aliases)) or
             not expected_aliases <= set(rule_aliases)):
         raise RuntimeError("STOP: every fixture record requires one explicit contract rule")
+    rules = {rule.get("alias"): rule for rule in contract.get("allowed_change_rules", [])}
+    if (rules["issue"].get("after", {}).get("notes") != plan["fixture_notes"]["issue"] or
+            rules["settlement"].get("after", {}).get("notes") !=
+            plan["fixture_notes"]["settlement"]):
+        raise RuntimeError("STOP: fixture note rule mismatch")
 
 
 def _tuple_is_free(ops, plan):

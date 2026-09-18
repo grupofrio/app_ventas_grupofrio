@@ -96,7 +96,7 @@ MODEL_SPECS = {
                                       "notes", "write_date"],
                                      lambda w: [("shift_id.plant_warehouse_id", "=", w.id)]),
     "gf.production.material.settlement": (["id", "shift_id", "line_id", "product_id", "state",
-                                           "write_date"],
+                                           "notes", "write_date"],
                                           lambda w: [("shift_id.plant_warehouse_id", "=", w.id)]),
     "gf.transformation.recipe": (["id", "active", "recipe_code", "role_scope", "warehouse_ids",
                                   "input_product_id", "output_product_id", "ideal_output_weight_kg",

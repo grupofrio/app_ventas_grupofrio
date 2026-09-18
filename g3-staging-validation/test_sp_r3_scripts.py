@@ -139,6 +139,9 @@ class FakeOps:
             self.created.setdefault(alias, {})[self.next_id] = {
                 "id": self.next_id, "shift_id": ids.get("shift"), "marker": marker,
             }
+        self.created["issue"][ids["issue"]]["notes"] = plan["fixture_notes"]["issue"]
+        self.created["settlement"][ids["settlement"]]["notes"] = (
+            plan["fixture_notes"]["settlement"])
         for index, check in enumerate(plan["haccp_checks"], 1):
             alias = f"haccp_check_{index}"
             self.next_id += 1
@@ -315,6 +318,14 @@ class SpR3ScriptTest(unittest.TestCase):
                 self.ops, self.output("setup.json"), plan, missing_rule,
                 self.generator.digest(plan), self.generator.digest(missing_rule), "g3-clean")
         self.assertEqual(self.ops.mutating_calls, [])
+        wrong_note = self.contract(plan)
+        next(rule for rule in wrong_note["allowed_change_rules"]
+             if rule["alias"] == "issue")["after"]["notes"] = plan["marker"]
+        with self.assertRaisesRegex(RuntimeError, "fixture note rule"):
+            self.prepare.prepare_fixture(
+                self.ops, self.output("setup.json"), plan, wrong_note,
+                self.generator.digest(plan), self.generator.digest(wrong_note), "g3-clean")
+        self.assertEqual(self.ops.mutating_calls, [])
 
     def test_prepare_rejects_configuration_drift_before_writes(self):
         plan = self.make_plan()
@@ -361,6 +372,12 @@ class SpR3ScriptTest(unittest.TestCase):
             "employee_id": 586, "warehouse_id": None,
         })
         self.assertEqual(self.ops.employees[586]["warehouse_ids"], [76])
+        self.assertEqual(
+            self.ops.created["issue"][report["records"]["issue"]["id"]]["notes"],
+            plan["fixture_notes"]["issue"])
+        self.assertEqual(
+            self.ops.created["settlement"][report["records"]["settlement"]["id"]]["notes"],
+            plan["fixture_notes"]["settlement"])
         self.assertEqual(self.ops.cr.commits, 1)
         self.assertEqual(stat.S_IMODE(self.output("setup.json").stat().st_mode), 0o600)
         raw = self.output("setup.json").read_text().lower()
@@ -450,6 +467,11 @@ class SpR3ScriptTest(unittest.TestCase):
     def test_fixture_and_ui_contract_seal_all_four_haccp_checks(self):
         plan = self.make_plan()
         fixture = self.contract(plan)
+        fixture_rules = {rule["alias"]: rule for rule in fixture["allowed_change_rules"]}
+        self.assertEqual(fixture_rules["issue"]["after"]["notes"],
+                         plan["fixture_notes"]["issue"])
+        self.assertEqual(fixture_rules["settlement"]["after"]["notes"],
+                         plan["fixture_notes"]["settlement"])
         self.assertEqual(
             [alias for alias in fixture["aliases"] if alias.startswith("haccp_check_")],
             ["haccp_check_1", "haccp_check_2", "haccp_check_3", "haccp_check_4"],
@@ -502,6 +524,85 @@ class SpR3ScriptTest(unittest.TestCase):
         tampered["models"]["gf.haccp.check"]["rows"][0]["result_text"] = "wrong"
         with self.assertRaisesRegex(RuntimeError, "HACCP check catalog mismatch"):
             self.generator.generate("ui", plan=plan, pre_e2e=tampered)
+
+    def test_created_rules_require_explicit_static_or_dynamic_field_policy(self):
+        snapshot = {"models": {"x.model": {
+            "fields": ["id", "business_value", "write_date"], "rows": []}}}
+        with self.assertRaisesRegex(RuntimeError, "unclassified created fields"):
+            self.generator._created_rule(
+                snapshot, "x.model", "x", {"business_value": 1})
+        rule = self.generator._created_rule(
+            snapshot, "x.model", "x", {"business_value": 1},
+            dynamic_fields=["write_date"])
+        self.assertEqual(rule["after"], {"business_value": 1})
+        self.assertEqual(rule["dynamic_fields"], ["write_date"])
+
+    def test_ui_energy_end_seals_business_values_and_only_technical_dynamics(self):
+        plan = self.make_plan()
+        identity = {"database": "g3-clean", "warehouse_id": 76,
+                    "warehouse_code": "PIGU-PLANTA", "company_id": 35}
+        energy_fields = [
+            "id", "shift_id", "reading_type", "timestamp", "kwh_value",
+            "employee_id", "meter_id", "meter_multiplier", "multiplier_source",
+            "data_suspect", "data_suspect_reason", "kwh_base", "kwh_intermedia",
+            "kwh_punta", "capture_mode", "write_date",
+        ]
+        pre_e2e = {**identity, "models": {
+            "gf.production.shift": {
+                "fields": ["id", "date", "shift_code", "plant_warehouse_id", "state"],
+                "rows": [{"id": 777, "date": plan["date"],
+                          "shift_code": plan["shift_code"],
+                          "plant_warehouse_id": 76, "state": "in_progress"}]},
+            "gf.energy.reading": {"fields": energy_fields, "rows": [{
+                "id": 778, "shift_id": 777, "reading_type": "start",
+                "timestamp": "2026-09-18 08:00:00", "kwh_value": 0.0,
+                "employee_id": 2548, "meter_id": 88, "meter_multiplier": 1200.0,
+                "multiplier_source": "capture", "data_suspect": False,
+                "data_suspect_reason": False, "kwh_base": 0.0,
+                "kwh_intermedia": 0.0, "kwh_punta": 0.0,
+                "capture_mode": "periods", "write_date": "2026-09-18 08:00:00",
+            }]},
+        }}
+        ui = self.generator.generate("ui", plan=plan, pre_e2e=pre_e2e)
+        rule = next(rule for rule in ui["allowed_change_rules"]
+                    if rule["alias"] == "energy_end")
+        self.assertEqual(rule["dynamic_fields"], ["timestamp", "write_date"])
+        self.assertEqual(rule["after"], {
+            "shift_id": 777, "reading_type": "end", "kwh_value": 195.0,
+            "employee_id": 2548, "meter_id": 88, "meter_multiplier": 1200.0,
+            "multiplier_source": "capture", "data_suspect": False,
+            "data_suspect_reason": False, "kwh_base": 110.0,
+            "kwh_intermedia": 55.0, "kwh_punta": 30.0,
+            "capture_mode": "periods",
+        })
+
+    def test_fixture_contract_seals_catalog_business_values_explicitly(self):
+        plan = self.make_plan()
+        before = {"schema": "g3_business_snapshot_v2", "database": "g3-clean",
+                  "warehouse_id": 76, "warehouse_code": "PIGU-PLANTA",
+                  "company_id": 35, "modules": {"rows": []}, "models": {
+            "gf.energy.meter": {
+                "fields": ["id", "warehouse_id", "multiplier", "active", "write_date"],
+                "rows": [{"id": 88, "warehouse_id": 76, "multiplier": 1200.0,
+                          "active": True, "write_date": "2026-09-18 07:00:00"}]},
+            "gf.production.line": {
+                "fields": ["id", "active", "line_type", "plant_warehouse_id"],
+                "rows": [{"id": 21, "active": True, "line_type": "rolito",
+                          "plant_warehouse_id": 76}]},
+            "gf.production.machine": {
+                "fields": ["id", "active", "line_id", "machine_type",
+                           "expected_kg_per_cycle"],
+                "rows": [{"id": 31, "active": True, "line_id": 21,
+                          "machine_type": "evaporador", "expected_kg_per_cycle": 650.0}]},
+        }}
+        contract = self.generator.generate("fixture", plan=plan, before=before)
+        rules = {rule["alias"]: rule for rule in contract["allowed_change_rules"]}
+        self.assertEqual(rules["energy_start"]["after"]["meter_id"], 88)
+        self.assertEqual(rules["energy_start"]["after"]["meter_multiplier"], 1200.0)
+        self.assertNotIn("meter_multiplier", rules["energy_start"]["dynamic_fields"])
+        self.assertEqual(rules["cycle"]["after"]["machine_id"], 31)
+        self.assertEqual(rules["cycle"]["after"]["kg_expected"], 650.0)
+        self.assertNotIn("kg_expected", rules["cycle"]["dynamic_fields"])
 
     def test_contract_modes_require_exact_inputs_and_cleanup_schema(self):
         plan = self.make_plan()

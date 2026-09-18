@@ -395,6 +395,46 @@ class CompareSnapshotsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("after-value mismatch", result.stdout)
 
+    def test_e2e_created_energy_rejects_wrong_static_capture_value(self):
+        before, after = snapshot(), snapshot()
+        fields = ["id", "shift_id", "reading_type", "timestamp", "kwh_value",
+                  "employee_id", "meter_id", "meter_multiplier", "multiplier_source",
+                  "data_suspect", "data_suspect_reason", "kwh_base",
+                  "kwh_intermedia", "kwh_punta", "capture_mode", "write_date"]
+        before["models"]["gf.energy.reading"] = section([], fields)
+        expected = {"shift_id": 777, "reading_type": "end", "kwh_value": 195.0,
+                    "employee_id": 2548, "meter_id": 88,
+                    "meter_multiplier": 1200.0, "multiplier_source": "capture",
+                    "data_suspect": False, "data_suspect_reason": False,
+                    "kwh_base": 110.0, "kwh_intermedia": 55.0,
+                    "kwh_punta": 30.0, "capture_mode": "periods"}
+        wrong = {"id": 99, **expected, "kwh_punta": 29.0,
+                 "timestamp": "2026-09-18 10:00:00",
+                 "write_date": "2026-09-18 10:00:01"}
+        after["models"]["gf.energy.reading"] = section([wrong], fields)
+        refresh_snapshot_business(before)
+        refresh_snapshot_business(after)
+        contract = {"database": "g3-copy", "warehouse_id": 89, "company_id": 34,
+                    "allowed_changes": {}, "allowed_change_rules": [{
+                        "alias": "energy_end", "model": "gf.energy.reading",
+                        "change": "created",
+                        "match": {"shift_id": 777, "reading_type": "end"},
+                        "after": expected,
+                        "dynamic_fields": ["timestamp", "write_date"],
+                    }]}
+        with tempfile.TemporaryDirectory() as temp:
+            left, right, rule = (Path(temp) / name for name in
+                                 ("left.json", "right.json", "rule.json"))
+            left.write_text(json.dumps(before)); right.write_text(json.dumps(after))
+            raw = json.dumps(contract, sort_keys=True).encode(); rule.write_bytes(raw)
+            result = subprocess.run([
+                "python3", str(SCRIPT), str(left), str(right), "--mode", "e2e",
+                "--contract", str(rule), "--contract-sha256",
+                hashlib.sha256(raw).hexdigest(),
+            ], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("created after-value mismatch", result.stdout)
+
     def test_fixture_employee_loan_is_declared_and_cleanup_requires_restoration(self):
         before, loaned = snapshot(), snapshot()
         loaned["models"]["hr.employee"]["rows"][0]["warehouse_id"] = 76

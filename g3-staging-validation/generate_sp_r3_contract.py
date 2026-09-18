@@ -73,10 +73,25 @@ def _fields(snapshot, model):
     return set(((snapshot or {}).get("models", {}).get(model, {}).get("fields", [])))
 
 
-def _created_rule(snapshot, model, alias, after, match=None):
+def _created_rule(snapshot, model, alias, after, match=None, dynamic_fields=()):
+    """Build a created-row rule with an explicit field policy.
+
+    Business values belong in ``after``. Only generated record IDs and server
+    timestamps may be listed in ``dynamic_fields``. Never
+    infer dynamics from whatever happens to be absent from ``after``.
+    """
+    available = _fields(snapshot, model)
     known = {key: value for key, value in after.items()
-             if not _fields(snapshot, model) or key in _fields(snapshot, model)}
-    dynamic = sorted(_fields(snapshot, model) - {"id"} - set(known))
+             if not available or key in available}
+    dynamic = sorted(field for field in set(dynamic_fields)
+                     if not available or field in available)
+    if set(known) & set(dynamic):
+        raise RuntimeError("STOP: static/dynamic created fields overlap")
+    unclassified = available - {"id"} - set(known) - set(dynamic)
+    if unclassified:
+        raise RuntimeError(
+            "STOP: unclassified created fields for %s: %s" %
+            (alias, ", ".join(sorted(unclassified))))
     return {"alias": alias, "model": model, "change": "created",
             "match": match or known, "after": known, "dynamic_fields": dynamic}
 
@@ -96,7 +111,8 @@ def _config_rules(before, planned_params):
         else:
             aliases.append(_created_rule(
                 before, "ir.config_parameter@g3", "config:%s" % key,
-                {"key": key, "value": value}, {"key": key}))
+                {"key": key, "value": value}, {"key": key},
+                dynamic_fields=["write_date"]))
     return allowed, aliases
 
 
@@ -117,6 +133,68 @@ def _single_related(snapshot, model, field, value):
 
 def _haccp_marker(plan, check):
     return "%s HACCP:%s" % (plan["marker"], check["template_id"])
+
+
+def _haccp_fixture_after(plan, check):
+    result = {
+        "passed": False, "result_bool": False, "result_numeric": 0.0,
+        "result_text": _haccp_marker(plan, check),
+    }
+    if check["check_type"] == "numeric":
+        result["result_numeric"] = (check["min_value"] - 1
+                                    if check["min_value"]
+                                    else check["max_value"] + 1)
+    return result
+
+
+def _energy_end_after(plan, pre_e2e, shift_id):
+    starts = [row for row in _rows(pre_e2e, "gf.energy.reading")
+              if row.get("shift_id") == shift_id and row.get("reading_type") == "start"]
+    available = _fields(pre_e2e, "gf.energy.reading")
+    if available and len(starts) != 1:
+        raise RuntimeError("STOP: PRE_E2E requires exactly one start energy reading")
+    start = starts[0] if starts else {}
+    values = plan["energy_end_values"]
+    return {
+        "shift_id": shift_id, "reading_type": "end",
+        "kwh_value": float(values["base"] + values["intermedia"] + values["punta"]),
+        "employee_id": plan["leader_employee_id"],
+        "meter_id": start.get("meter_id"),
+        "meter_multiplier": start.get("meter_multiplier", 0.0),
+        "multiplier_source": start.get("multiplier_source", "none"),
+        "data_suspect": False, "data_suspect_reason": False,
+        "kwh_base": float(values["base"]),
+        "kwh_intermedia": float(values["intermedia"]),
+        "kwh_punta": float(values["punta"]), "capture_mode": "periods",
+    }
+
+
+def _fixture_catalog_values(before, plan):
+    """Seal catalog business values; leave only generated IDs/times dynamic."""
+    result = {}
+    if _fields(before, "gf.energy.meter"):
+        meters = [row for row in _rows(before, "gf.energy.meter")
+                  if row.get("warehouse_id") == plan["warehouse_id"] and row.get("active")]
+        if len(meters) != 1:
+            raise RuntimeError("STOP: fixture requires exactly one active energy meter")
+        meter = meters[0]
+        multiplier = float(meter.get("multiplier") or 0.0)
+        result.update({"meter_id": meter["id"], "meter_multiplier": multiplier,
+                       "multiplier_source": "capture" if multiplier else "none"})
+    if (_fields(before, "gf.production.line") and
+            _fields(before, "gf.production.machine")):
+        rolito_lines = {row["id"] for row in _rows(before, "gf.production.line")
+                        if row.get("active") and row.get("line_type") == "rolito"}
+        machines = sorted(
+            (row for row in _rows(before, "gf.production.machine")
+             if row.get("active") and row.get("machine_type") == "evaporador" and
+             row.get("line_id") in rolito_lines), key=lambda row: row["id"])
+        if not machines:
+            raise RuntimeError("STOP: fixture requires an active rolito evaporator")
+        machine = machines[0]
+        result.update({"machine_id": machine["id"], "line_id": machine["line_id"],
+                       "kg_expected": float(machine.get("expected_kg_per_cycle") or 0.0)})
+    return result
 
 
 def _ui_rules(plan, pre_e2e, shift_id):
@@ -156,9 +234,11 @@ def _ui_rules(plan, pre_e2e, shift_id):
             allowed["%s:updated:%s" % (model, row["id"])] = _updated_rule(
                 pre_e2e, model, row["id"], fields, after)
     aliases = [
-        _created_rule(pre_e2e, "gf.energy.reading", "energy_end", {
-            "shift_id": shift_id, "reading_type": "end", "employee_id": 2548,
-        }, {"shift_id": shift_id, "reading_type": "end"}),
+        _created_rule(
+            pre_e2e, "gf.energy.reading", "energy_end",
+            _energy_end_after(plan, pre_e2e, shift_id),
+            {"shift_id": shift_id, "reading_type": "end"},
+            dynamic_fields=["timestamp", "write_date"]),
     ]
     checklist = _single_related(pre_e2e, "gf.haccp.checklist", "shift_id", shift_id)
     if checklist:
@@ -286,6 +366,7 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
     identity = _identity(plan, before if mode in ("fixture", "cleanup") else pre_e2e)
     if mode == "fixture":
         config_changes, config_aliases = _config_rules(before, plan["planned_params"])
+        catalog = _fixture_catalog_values(before, plan)
         adjustment = plan["employee_warehouse_adjustment"]
         config_changes["hr.employee:updated:%s" % adjustment["employee_id"]] = {
             "fields": ["warehouse_id"],
@@ -296,8 +377,9 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
                          for index, _check in enumerate(plan["haccp_checks"], 1)]
         haccp_rules = [
             _created_rule(before, "gf.haccp.check", "haccp_check_%s" % index, {
-                "result_text": _haccp_marker(plan, check),
-            }, {"result_text": _haccp_marker(plan, check)})
+                **_haccp_fixture_after(plan, check),
+            }, {"result_text": _haccp_marker(plan, check)},
+                dynamic_fields=["checklist_id", "write_date"])
             for index, check in enumerate(plan["haccp_checks"], 1)
         ]
         return {
@@ -314,24 +396,62 @@ def generate(mode, *, plan=None, before=None, pre_e2e=None, current=None,
                     "date": plan["date"], "shift_code": plan["shift_code"],
                     "state": "in_progress", "plant_warehouse_id": plan["warehouse_id"],
                     "leader_employee_id": plan["leader_employee_id"],
+                    "total_kg_produced": 0.0, "energy_end_id": None,
+                    "energy_kwh": 0.0, "energy_kwh_per_kg": 0.0,
+                    "energy_cost_total": 0.0, "energy_cost_per_kg": 0.0,
+                    "energy_vs_target_pct": 0.0, "closed_by_employee_id": None,
+                    "closed_at": False, "end_time": False,
+                    "x_barra_closed": False, "x_barra_closed_at": False,
+                    "x_rolito_closed": False, "x_rolito_closed_at": False,
                 }, {"date": plan["date"], "shift_code": plan["shift_code"],
-                    "plant_warehouse_id": plan["warehouse_id"]}),
+                    "plant_warehouse_id": plan["warehouse_id"]},
+                    dynamic_fields=["line_ids", "energy_start_id", "write_date"]),
                 _created_rule(before, "gf.energy.reading", "energy_start", {
                     "reading_type": "start", "employee_id": plan["leader_employee_id"],
                     "kwh_value": 0, "kwh_base": 0, "kwh_intermedia": 0, "kwh_punta": 0,
-                }, {"reading_type": "start", "employee_id": plan["leader_employee_id"]}),
-                _created_rule(before, "gf.haccp.checklist", "haccp", {"state": "pending"}),
-                _created_rule(before, "gf.evaporator.cycle", "cycle", {"state": "freezing"}),
+                    "meter_id": catalog.get("meter_id"),
+                    "meter_multiplier": catalog.get("meter_multiplier", 0.0),
+                    "multiplier_source": catalog.get("multiplier_source", "none"),
+                    "data_suspect": False,
+                    "data_suspect_reason": False, "capture_mode": "periods",
+                }, {"reading_type": "start", "employee_id": plan["leader_employee_id"]},
+                    dynamic_fields=["shift_id", "timestamp", "write_date"]),
+                _created_rule(before, "gf.haccp.checklist", "haccp", {
+                    "state": "pending", "all_passed": False,
+                    "completed_by_id": None, "completed_at": False,
+                }, dynamic_fields=["shift_id", "write_date"]),
+                _created_rule(before, "gf.evaporator.cycle", "cycle", {
+                    "machine_id": catalog.get("machine_id"),
+                    "cycle_number": 1, "state": "freezing", "freeze_end": False,
+                    "defrost_start": False, "defrost_end": False,
+                    "kg_dumped": 0.0,
+                    "kg_expected": catalog.get("kg_expected", 0.0),
+                    "kg_deviation_pct": 0.0,
+                    "data_suspect": False, "data_suspect_reason": False,
+                    "dumped_by_employee_id": None, "dumped_at": False,
+                    "dumped_role_key": False, "dump_override_used": False,
+                    "dump_override_reason": False,
+                    "dump_override_supervisor_employee_id": None,
+                    "dump_company_id": None, "dump_warehouse_id": None,
+                    "dump_line_id": None, "dump_machine_id": None,
+                }, dynamic_fields=["shift_id", "freeze_start", "write_date"]),
                 _created_rule(before, "gf.production.downtime", "downtime", {
                     "state": "open", "company_id": plan["company_id"],
-                    "warehouse_id": plan["warehouse_id"],
-                }),
+                    "warehouse_id": plan["warehouse_id"], "cycle_id": None,
+                    "line_id": catalog.get("line_id"),
+                    "machine_id": catalog.get("machine_id"),
+                    "end_time": False, "minutes": 0.0,
+                    "reason": "%s paro abierto" % plan["marker"],
+                    "operator_id": None, "ended_by_employee_id": None,
+                }, dynamic_fields=["shift_id", "category_id", "start_time", "write_date"]),
                 _created_rule(before, "gf.production.material.issue", "issue", {
-                    "state": "draft", "notes": plan["marker"],
-                }),
+                    "line_id": catalog.get("line_id"), "state": "draft",
+                    "notes": plan["fixture_notes"]["issue"],
+                }, dynamic_fields=["shift_id", "product_id", "write_date"]),
                 _created_rule(before, "gf.production.material.settlement", "settlement", {
-                    "state": "draft", "notes": plan["marker"],
-                }),
+                    "line_id": catalog.get("line_id"), "state": "draft",
+                    "notes": plan["fixture_notes"]["settlement"],
+                }, dynamic_fields=["shift_id", "product_id", "write_date"]),
             ] + haccp_rules + config_aliases,
         }
     if mode == "ui":

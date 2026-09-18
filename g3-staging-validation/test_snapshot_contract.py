@@ -116,7 +116,7 @@ class SnapshotContractTest(unittest.TestCase):
                 "shift_id.plant_warehouse_id",
             ),
             "gf.production.material.settlement": (
-                ["id", "shift_id", "line_id", "product_id", "state", "write_date"],
+                ["id", "shift_id", "line_id", "product_id", "state", "notes", "write_date"],
                 "shift_id.plant_warehouse_id",
             ),
         }

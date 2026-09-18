@@ -211,6 +211,13 @@ def plan_fixture(env, seal, output_path, expected_db=None, today=None):
             "write_class": "FIXTURE_SETUP",
         },
         "fixture_photo_sha256": ENERGY_FIXTURE_PHOTO_SHA256,
+        "fixture_notes": {
+            "issue": "%s material" % MARKER,
+            "settlement": "%s conciliacion" % MARKER,
+        },
+        "energy_end_values": {
+            "base": 110.0, "intermedia": 55.0, "punta": 30.0,
+        },
         "haccp_template_id": haccp["id"],
         "haccp_checks": list(haccp["checks"]),
         "marker": MARKER,

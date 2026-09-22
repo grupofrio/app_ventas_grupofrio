@@ -17,6 +17,8 @@ import { colors, spacing, radii } from '../../theme/tokens';
 import { fonts } from '../../theme/typography';
 import { useRoutePreparationStore } from '../../stores/useRoutePreparationStore';
 import { useRouteStore } from '../../stores/useRouteStore';
+import { useEmployeeDayBundleStore } from '../../stores/useEmployeeDayBundleStore';
+import { useProductStore } from '../../stores/useProductStore';
 import { useSyncStore } from '../../stores/useSyncStore';
 import {
   describePreparationFailure,
@@ -44,7 +46,6 @@ export function RoutePreparationCard({
   const preparedPlanId = useRoutePreparationStore((s) => s.preparedPlanId);
   const failures = useRoutePreparationStore((s) => s.failures);
   const lastError = useRoutePreparationStore((s) => s.lastError);
-  const bundleExpired = useRoutePreparationStore((s) => s.bundleExpired);
   const receiptPersistWarning = useRoutePreparationStore((s) => s.receiptPersistWarning);
   const prepareRouteData = useRoutePreparationStore((s) => s.prepareRouteData);
   const retryFailures = useRoutePreparationStore((s) => s.retryFailures);
@@ -53,6 +54,11 @@ export function RoutePreparationCard({
   const routeStops = useRouteStore((s) => s.stops);
   const isOnline = useSyncStore((s) => s.isOnline);
 
+  const bundleAccess = useEmployeeDayBundleStore((s) => s.access);
+  const bundleError = useEmployeeDayBundleStore((s) => s.error);
+  const productCount = useProductStore((s) => s.productCount);
+  const needsRecovery = bundleAccess?.canStartRoute !== true
+    || routeStops.length === 0 || productCount === 0;
   const isFresh = isPreparationFreshForPlan(preparedPlanId, planId);
 
   // ── State A — preparing ────────────────────────────────────────────────
@@ -79,19 +85,19 @@ export function RoutePreparationCard({
   if (isFresh && preparedAt) {
     const hasFailures = failures.length > 0;
     const freshness = describeDataFreshness({ preparedAtMs: preparedAt, nowMs: Date.now() });
-    if (bundleExpired) {
+    if (needsRecovery) {
       return (
         <View style={[styles.card, styles.cardWarning]}>
           <View style={styles.headerRow}>
             <Text style={styles.icon}>⏳</Text>
-            <Text style={styles.title}>Datos del día vencidos</Text>
+            <Text style={styles.title}>{bundleAccess?.mode === 'stale' ? 'Datos del día vencidos' : 'Datos del día por recuperar'}</Text>
           </View>
           <Text style={styles.body}>
-            La ruta estaba preparada, pero los datos del día ya no permiten operar.
-            Renueva los datos con conexión antes de continuar.
+            La preparación está guardada, pero faltan datos disponibles o válidos para continuar.
+            Renueva los datos con conexión; no necesitas repetir el checklist ni aceptar la carga.
           </Text>
-          {lastError ? (
-            <Text style={styles.errorMsg} numberOfLines={3}>{lastError}</Text>
+          {(bundleError || lastError) ? (
+            <Text style={styles.errorMsg} numberOfLines={3}>{bundleError || lastError}</Text>
           ) : null}
           {!locked ? (
             <TouchableOpacity

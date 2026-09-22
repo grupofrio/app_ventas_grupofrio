@@ -66,6 +66,7 @@ export default function HomeScreen() {
   const loadProducts = useProductStore((s) => s.loadProducts);
   const loadProductsAuthoritative = useProductStore((s) => s.loadProductsAuthoritative);
   const routeStartReadiness = useRouteStartStore((s) => s.readiness);
+  const routeStartedPlanId = useRouteStartStore((s) => s.routeStartedPlanId);
 
   // Reload on auth identity changes so a previous employee's in-memory state is not reused.
   useEffect(() => {
@@ -172,9 +173,10 @@ export default function HomeScreen() {
   // F1.11: CTA "Iniciar operación" con 4 estados para no confundir:
   //  - todas las paradas cerradas → "Cerrar visitas" (liquidación del día)
   //  - ruta ya en marcha (alguna parada en curso/hecha) → "Ver ruta"
-  //  - operación lista (checklist+KM+carga) pero sin arrancar → "Continuar a ruta"
+  //  - operación lista (checklist+KM+carga) pero sin arrancar → continuar preparación
   //  - falta algo → "Iniciar operación"
-  const routeUnderway = stops.some((s) => s.state === 'in_progress' || s.state === 'done');
+  const routeUnderway = routeStartedPlanId === plan?.plan_id
+    || stops.some((s) => s.state === 'in_progress' || s.state === 'done');
   const allStopsDone = stopsTotal > 0 && stopsCompleted >= stopsTotal;
   const opReady = routeStartReadiness.readyToStart;
   const routeStartCta = allStopsDone
@@ -182,7 +184,7 @@ export default function HomeScreen() {
     : routeUnderway
       ? { title: 'Ver ruta', sub: 'Tu recorrido del día', icon: '🗺️', target: '/(tabs)/route' as const }
       : opReady
-        ? { title: 'Continuar a ruta', sub: 'Operación lista · revisa tus paradas', icon: '✅', target: '/(tabs)/route' as const }
+        ? { title: 'Continuar preparación', sub: 'Descarga los datos y confirma Iniciar ruta', icon: '📥', target: '/route-start' as const }
         : { title: 'Iniciar operación', sub: 'Checklist · KM inicial · Aceptar carga', icon: '🚚', target: '/route-start' as const };
 
   return (

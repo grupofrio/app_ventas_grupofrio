@@ -27,6 +27,8 @@ interface RouteStartState {
   checklistComplete: boolean;
   kmInitial: number | null;
   loadAccepted: boolean;
+  /** Plan whose explicit "Iniciar ruta" action completed on this device. */
+  routeStartedPlanId: number | null;
 
   readiness: RouteStartReadiness;
 
@@ -36,6 +38,7 @@ interface RouteStartState {
   setKmInitial: (km: number | null) => void;
   setKmInitialForPlan: (planId: number, km: number | null) => void;
   setLoadAccepted: (accepted: boolean) => void;
+  markRouteStartedForPlan: (planId: number) => Promise<boolean>;
   syncFromPlan: (plan: GFPlan) => void;
   reset: () => void;
   hydrate: () => Promise<void>;
@@ -58,15 +61,21 @@ const INITIAL = {
   checklistComplete: false,
   kmInitial: null as number | null,
   loadAccepted: false,
+  routeStartedPlanId: null as number | null,
 };
 
-function persist(state: RouteStartState): void {
-  storeSave(STORAGE_KEYS.ROUTE_START, {
+function persistedSnapshot(state: RouteStartState) {
+  return {
     planId: state.planId,
     checklistComplete: state.checklistComplete,
     kmInitial: state.kmInitial,
     loadAccepted: state.loadAccepted,
-  }).catch(() => {});
+    routeStartedPlanId: state.routeStartedPlanId,
+  };
+}
+
+function persist(state: RouteStartState): void {
+  storeSave(STORAGE_KEYS.ROUTE_START, persistedSnapshot(state)).catch(() => {});
 }
 
 export const useRouteStartStore = create<RouteStartState>((set, get) => ({
@@ -128,11 +137,27 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
     persist(get());
   },
 
+  markRouteStartedForPlan: async (planId) => {
+    const current = get();
+    if (current.planId !== planId) return false;
+    const next = { ...current, routeStartedPlanId: planId };
+    await storeSave(STORAGE_KEYS.ROUTE_START, persistedSnapshot(next));
+    if (get().planId !== planId) return false;
+    set({ routeStartedPlanId: planId });
+    return true;
+  },
+
   syncFromPlan: (plan) => {
     const snapshot = deriveRouteStartPlanSnapshot(plan);
     const current = get();
     const next = mergeRouteStartPlanSnapshot(current, snapshot);
-    set({ ...next, readiness: recompute(next) });
+    set({
+      ...next,
+      routeStartedPlanId: current.planId === snapshot.planId
+        ? current.routeStartedPlanId
+        : null,
+      readiness: recompute(next),
+    });
     persist(get());
     logInfo('general', 'route_start_sync_plan', {
       planId: snapshot.planId,
@@ -152,6 +177,7 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
         checklistComplete: boolean;
         kmInitial: number | null;
         loadAccepted: boolean;
+        routeStartedPlanId?: number | null;
       }>(STORAGE_KEYS.ROUTE_START);
       if (saved) {
         const next = {
@@ -159,6 +185,11 @@ export const useRouteStartStore = create<RouteStartState>((set, get) => ({
           checklistComplete: !!saved.checklistComplete,
           kmInitial: typeof saved.kmInitial === 'number' ? saved.kmInitial : null,
           loadAccepted: !!saved.loadAccepted,
+          routeStartedPlanId:
+            typeof saved.routeStartedPlanId === 'number'
+            && saved.routeStartedPlanId === saved.planId
+              ? saved.routeStartedPlanId
+              : null,
         };
         set({ ...next, readiness: recompute(next) });
       }

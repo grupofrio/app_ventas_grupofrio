@@ -179,7 +179,7 @@ function CheckoutScreenInner() {
     } catch (error) {
       const bundleAlert = error instanceof DayBundleActionBlockedError
         ? describeDayBundleActionBlock(error)
-        : { title: 'Bundle no disponible', message: error instanceof Error ? error.message : 'Renueva el bundle del día antes de cerrar la visita.' };
+        : { title: 'Datos del día no disponibles', message: error instanceof Error ? error.message : 'Actualiza los datos del día antes de cerrar la visita.' };
       Alert.alert(
         bundleAlert.title,
         bundleAlert.message,
@@ -189,7 +189,7 @@ function CheckoutScreenInner() {
             text: 'Renovar ahora',
             onPress: () => {
               void useEmployeeDayBundleStore.getState().prepare().catch((refreshError) => {
-                Alert.alert('No se pudo renovar el bundle', refreshError instanceof Error ? refreshError.message : 'Verifica tu conexión e intenta de nuevo.');
+                Alert.alert('No se pudieron actualizar los datos', refreshError instanceof Error ? refreshError.message : 'Verifica tu conexión e intenta de nuevo.');
               });
             },
           },

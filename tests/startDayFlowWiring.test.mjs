@@ -12,12 +12,41 @@ function main() {
   const logistics = read('src/services/gfLogistics.ts');
   const prepCard = read('src/components/domain/RoutePreparationCard.tsx');
   const refill = read('app/refill-accept.tsx');
+  const routeScreen = read('app/(tabs)/route.tsx');
+  const home = read('app/(tabs)/index.tsx');
+  const routeStartStore = read('src/stores/useRouteStartStore.ts');
+  const routePreparationStore = read('src/stores/useRoutePreparationStore.ts');
 
   assert.match(routeStart, /1 · Checklist de unidad/);
   assert.match(routeStart, /2 · Carga/);
   assert.match(routeStart, /3 · Preparar plan del día/);
   assert.match(routeStart, /4 · Iniciar ruta/);
   assert.doesNotMatch(routeStart, /3 · KM inicial/, 'KM must not be a numbered blocking step');
+
+  assert.match(routeStartStore, /routeStartedPlanId:\s*number \| null/);
+  assert.match(routeStartStore, /markRouteStartedForPlan/);
+  assert.match(routeStart, /markRouteStartedForPlan\(capturedPlanId\)/);
+  assert.match(
+    routeScreen,
+    /<OperationGate title="Ruta">/,
+    'la pestaña Ruta debe aplicar el mismo gate del inicio del día',
+  );
+  assert.doesNotMatch(
+    home,
+    /opReady[\s\S]{0,220}target:\s*'\/\(tabs\)\/route'/,
+    'checklist+KM+carga no deben saltar la preparación ni el botón Iniciar ruta',
+  );
+  assert.match(
+    routeStart,
+    /useRoutePreparationStore\.getState\(\)\.prepareRouteData\(\)/,
+    'aceptar la carga inicial debe disparar automáticamente la preparación',
+  );
+  assert.match(
+    routeStart,
+    /No encontramos la carga inicial de esta ruta/,
+    'la carga ausente debe mostrarse como problema bloqueante de asignación',
+  );
+  assert.match(routeStart, /Actualizar carga/, 'la carga ausente debe ofrecer una actualización explícita');
 
   assert.match(routeStart, /computeStartDayStepGates\(/);
   assert.match(routeStart, /START_DAY_COPY\.checklistSyncPending/);
@@ -37,6 +66,21 @@ function main() {
   assert.match(prepCard, /describePreparationFailure/, 'la tarjeta debe resolver nombres de pendientes desde la ruta local');
   assert.match(prepCard, /failures\.slice\(0, 8\)\.map/, 'la tarjeta debe mostrar una lista acotada de pendientes');
   assert.match(prepCard, /Pendientes de precio/, 'la lista debe explicar qué clientes requieren reintento');
+  assert.doesNotMatch(
+    prepCard,
+    /<Text style=\{styles\.title\}>Bundle vencido<\/Text>/,
+    'la interfaz del vendedor no debe mostrar el nombre técnico bundle',
+  );
+  const noProductsStart = routePreparationStore.indexOf('if (products.length === 0)');
+  const noProductsEnd = routePreparationStore.indexOf('// ── Step 3:', noProductsStart);
+  const noProductsBranch = routePreparationStore.slice(noProductsStart, noProductsEnd);
+  assert.match(noProductsBranch, /preparedAt:\s*null/);
+  assert.match(noProductsBranch, /preparedPlanId:\s*null/);
+  assert.doesNotMatch(
+    noProductsBranch,
+    /preparedAt:\s*Date\.now\(\)/,
+    'si faltan productos, la app no debe presentar una ruta parcial como preparada',
+  );
 
   assert.match(checklist, /Guardar y completar checklist/);
   assert.doesNotMatch(checklist, /label=\{check\.answered \? 'Actualizar' : 'Guardar'\}/);

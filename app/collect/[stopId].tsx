@@ -64,7 +64,7 @@ export default function CollectScreen() {
         loadCurrentEmployeeDayBundle(),
         createCurrentInvoiceCollectionPersistence(),
       ]);
-      if (!loaded || !loaded.access.canRead) throw new Error('No hay un bundle de día disponible para esta visita.');
+      if (!loaded || !loaded.access.canRead) throw new Error('No están disponibles los datos del día para esta visita.');
       const storedIntents = await persistence.list();
       if (lifecycle.canPublishLoad(requestGeneration)) {
         setCollection(buildVisitCollectionState(loaded.record.bundle, numericStopId, storedIntents));
@@ -155,7 +155,7 @@ export default function CollectScreen() {
         setRequiresFreshBundle(true);
         setSelectedInvoiceId(null);
         Alert.alert('Confirmado', `${notice.message} Operación: ${outcome.operationId}.`, [
-          { text: 'Actualizar bundle', onPress: () => void loadVisit(true) },
+          { text: 'Actualizar datos', onPress: () => void loadVisit(true) },
           { text: 'Volver', onPress: () => router.back() },
         ]);
         return;
@@ -227,8 +227,8 @@ export default function CollectScreen() {
         {mustRefreshBundle ? (
           <Card style={styles.notice}>
             <Text style={typography.body}>El cobro aplicado invalidó este snapshot.</Text>
-            <Text style={typography.dim}>Actualiza el bundle antes de intentar otro cobro en esta parada.</Text>
-            <Button label="Actualizar bundle" onPress={() => void loadVisit(true)} loading={refreshing} variant="secondary" />
+            <Text style={typography.dim}>Actualiza los datos del día antes de intentar otro cobro en esta parada.</Text>
+            <Button label="Actualizar datos" onPress={() => void loadVisit(true)} loading={refreshing} variant="secondary" />
           </Card>
         ) : null}
 
@@ -268,7 +268,7 @@ export default function CollectScreen() {
                     : entry.collection_state === 'reauth_required'
                     ? 'Inicia sesión de nuevo · no se generará otro envío.'
                     : entry.collection_state === 'requires_refresh'
-                    ? 'Confirmado · actualiza el bundle antes de volver a cobrar.'
+                    ? 'Confirmado · actualiza los datos antes de volver a cobrar.'
                     : 'Revisión requerida · no se generará otro envío.'
                 }</Text> : null}
               </View>

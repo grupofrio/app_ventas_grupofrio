@@ -13,6 +13,7 @@ import {
   type StoredDayBundle,
 } from './employeeDayBundleLogic.ts';
 import type { EncryptedSessionIdentity } from './encryptedStore.ts';
+import { DEFAULT_OPERATION_TIME_ZONE, formatLocalISODate } from '../utils/localDate.ts';
 
 // TEMP DIAGNOSTIC LOG (fix/daily-bundle-validation) — remove after investigation.
 // Uses console directly (not src/utils/logger.ts) because logger.ts has a
@@ -164,10 +165,7 @@ export async function refreshEmployeeDayBundle(
 export { DAY_BUNDLE_RECORD_KEY };
 
 export function localOperationalDate(now = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return formatLocalISODate(now, DEFAULT_OPERATION_TIME_ZONE);
 }
 
 function currentContext(session: EncryptedSessionIdentity, nowMs: number): DayBundleContext {
@@ -196,7 +194,7 @@ export async function prepareCurrentEmployeeDayBundle(
   if (!session) {
     // TEMP DIAGNOSTIC LOG (fix/daily-bundle-validation) — remove after investigation
     diagWarn('prepare_error', { reason: 'no_encrypted_session' });
-    throw new Error('La sesión cifrada del bundle no está disponible.');
+    throw new Error('La sesión segura de los datos del día no está disponible.');
   }
   const bearerToken = await api.getEmployeeBearerToken();
   if (!bearerToken) {

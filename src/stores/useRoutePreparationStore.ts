@@ -206,14 +206,14 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
     try {
       // The versioned bundle is the critical offline snapshot. Do not fall
       // through to legacy route/catalog fetches if it is stale or unavailable.
-      set({ currentStep: 'Validando bundle del día' });
+      set({ currentStep: 'Validando datos del día' });
       await useEmployeeDayBundleStore.getState().prepare();
       const dayBundle = useEmployeeDayBundleStore.getState().access;
       if (!dayBundle?.canStartRoute) {
         set({
           isPreparing: false,
           currentStep: null,
-          lastError: 'El bundle del día está vencido. Solo puedes consultar datos hasta renovarlo con conexión.',
+          lastError: 'Los datos del día están vencidos. Solo puedes consultarlos hasta actualizarlos con conexión.',
         });
         return;
       }
@@ -253,13 +253,13 @@ export const useRoutePreparationStore = create<RoutePreparationState>((set, get)
       const products = useProductStore.getState().products;
 
       if (products.length === 0) {
-        // Continue anyway — without products we can't preload prices, but
-        // the plan/stops are already cached for the offline read path.
+        // A partial download is not a prepared route. Keep the receipt absent
+        // so every entry point stays blocked until products are available.
         set({
           isPreparing: false,
           currentStep: null,
-          preparedAt: Date.now(),
-          preparedPlanId: plan.plan_id ?? null,
+          preparedAt: null,
+          preparedPlanId: null,
           lastError: 'Productos no disponibles. Pide carga al CEDIS y reintenta.',
         });
         logWarn('general', 'route_prep_no_products', { plan_id: plan.plan_id });

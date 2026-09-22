@@ -23,6 +23,8 @@ import { AlertBanner } from './ui/AlertBanner';
 import { colors, spacing } from '../theme/tokens';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useRouteStartStore } from '../stores/useRouteStartStore';
+import { useRoutePreparationStore } from '../stores/useRoutePreparationStore';
+import { useProductStore } from '../stores/useProductStore';
 import { deriveOperationReadiness } from '../services/operationReadiness';
 
 export function OperationGate({
@@ -36,7 +38,20 @@ export function OperationGate({
 }) {
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
   const routeStart = useRouteStartStore();
+  const preparedPlanId = useRoutePreparationStore((s) => s.preparedPlanId);
+  const preparedAt = useRoutePreparationStore((s) => s.preparedAt);
+  const productCount = useProductStore((s) => s.productCount);
+  const currentPlanId = plan?.plan_id ?? null;
+  const routeAlreadyUnderway = stops.some(
+    (stop) => stop.state === 'in_progress' || stop.state === 'done',
+  );
+  const dataPrepared = currentPlanId !== null
+    && preparedPlanId === currentPlanId
+    && preparedAt !== null
+    && stops.length > 0
+    && productCount > 0;
 
   const result = deriveOperationReadiness({
     planState: plan?.state ?? null,
@@ -44,6 +59,9 @@ export function OperationGate({
     checklistDone: routeStart.readiness.checklistDone,
     kmCaptured: routeStart.readiness.kmCaptured,
     loadAccepted: routeStart.readiness.loadAccepted,
+    routeStartConfirmed: routeStart.routeStartedPlanId === currentPlanId,
+    dataPrepared,
+    routeAlreadyUnderway,
     mode,
   });
   const isTerminalPlan = plan?.state === 'closed'

@@ -42,6 +42,7 @@ import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { summarizePendingOrders, describePendingOrdersBanner, buildStopOrderStatusMap } from '../../src/services/pendingOrders';
+import { OperationGate } from '../../src/components/OperationGate';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -355,6 +356,7 @@ export default function RouteScreen() {
   );
 
   return (
+    <OperationGate title="Ruta">
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar
         title={plan?.route || plan?.name || 'Sin ruta'}
@@ -541,6 +543,7 @@ export default function RouteScreen() {
         onShowList={() => setViewMode('list')}
       />
     </SafeAreaView>
+    </OperationGate>
   );
 }
 

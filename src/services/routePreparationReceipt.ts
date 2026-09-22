@@ -184,7 +184,7 @@ export function assessRoutePreparationReceipt(
     return {
       status: 'prepared_bundle_expired',
       receipt,
-      message: 'El bundle del día está vencido. Solo puedes consultar datos hasta renovarlo con conexión.',
+      message: 'Los datos del día están vencidos. Solo puedes consultarlos hasta actualizarlos con conexión.',
     };
   }
   return { status: 'prepared', receipt, bundleExpired: false };

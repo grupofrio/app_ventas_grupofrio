@@ -84,10 +84,10 @@ export function RoutePreparationCard({
         <View style={[styles.card, styles.cardWarning]}>
           <View style={styles.headerRow}>
             <Text style={styles.icon}>⏳</Text>
-            <Text style={styles.title}>Bundle vencido</Text>
+            <Text style={styles.title}>Datos del día vencidos</Text>
           </View>
           <Text style={styles.body}>
-            La ruta estaba preparada, pero el bundle del día ya no permite operar.
+            La ruta estaba preparada, pero los datos del día ya no permiten operar.
             Renueva los datos con conexión antes de continuar.
           </Text>
           {lastError ? (
@@ -98,9 +98,9 @@ export function RoutePreparationCard({
               style={styles.btn}
               onPress={() => { void prepareRouteData(); }}
               accessibilityRole="button"
-              accessibilityLabel="Renovar bundle del día"
+              accessibilityLabel="Renovar datos del día"
             >
-              <Text style={styles.btnText}>Renovar bundle</Text>
+              <Text style={styles.btnText}>Renovar datos</Text>
             </TouchableOpacity>
           ) : (
             <Text style={styles.lockMsg}>{lockMessage || 'Completa los pasos anteriores primero.'}</Text>

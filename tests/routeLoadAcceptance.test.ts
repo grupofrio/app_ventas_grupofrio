@@ -60,8 +60,13 @@ function testBuildsInitialLoadAcceptanceState(m: RouteLoadAcceptanceModule) {
   });
   assert.equal(withoutInitial.initialLoads.length, 0);
   assert.equal(withoutInitial.pendingInitialLoads.length, 0);
-  assert.equal(withoutInitial.initialLoadAccepted, true);
+  assert.equal(
+    withoutInitial.initialLoadAccepted,
+    false,
+    'missing initial load must not be interpreted as accepted',
+  );
   assert.equal(withoutInitial.nextPendingInitialLoad, null);
+  assert.equal(m.canStartSaleWithRouteLoad({ load_pickings: [], pending_loads: [] }), false);
 
   const withPendingRefill = m.buildInitialLoadAcceptanceState({
     load_picking_id: 80,

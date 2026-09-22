@@ -78,7 +78,7 @@ export interface DayBundleAccess {
 }
 
 function invalid(message: string): Error {
-  return new Error(`Day bundle inválido: ${message}`);
+  return new Error(`Datos del día inválidos: ${message}`);
 }
 
 function object(value: unknown, field: string): Record<string, unknown> {

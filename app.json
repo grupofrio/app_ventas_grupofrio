@@ -31,7 +31,7 @@
     },
     "android": {
       "package": "mx.grupofrio.koldfield",
-      "versionCode": 6,
+      "versionCode": 7,
       "allowBackup": false,
       "config": {
         "googleMaps": {

@@ -46,14 +46,15 @@ async function loadLogic(): Promise<DayBundleLogic> {
 
 test('day-bundle contract artifact pins the mobile schema and backend-compatible invoice DTO', () => {
   const schema = readFileSync(resolve(CONTRACT_ROOT, 'day_bundle.v1.schema.json'));
+  const canonicalSchema = schema.toString('utf8').replace(/\r\n/g, '\n');
   const fixture = JSON.parse(readFileSync(resolve(CONTRACT_ROOT, 'day_bundle.v1.json'), 'utf8')) as Record<string, unknown>;
-  const schemaDocument = JSON.parse(schema.toString('utf8')) as {
+  const schemaDocument = JSON.parse(canonicalSchema) as {
     required: string[];
     properties: Record<string, { maxItems?: number }>;
     $defs: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
   };
 
-  assert.equal(createHash('sha256').update(schema).digest('hex'), EXPECTED_SCHEMA_SHA256);
+  assert.equal(createHash('sha256').update(canonicalSchema).digest('hex'), EXPECTED_SCHEMA_SHA256);
   assert.equal(fixture.schema_version, 'day_bundle.v1');
   assert.equal(schemaDocument.required.includes('invoice_snapshots'), false);
   assert.equal(schemaDocument.properties.invoice_snapshots.maxItems, 1000);

@@ -51,8 +51,7 @@ Capturas principales:
 ## Verificación automatizada
 
 - `node --experimental-strip-types --test tests/visitPersistence.test.ts tests/visitState.test.ts tests/legacySaleRecoveryRoundTrip.test.ts`: **4/4 aprobadas**.
-- Suite ampliada de visita, recuperación, rehidratación, cola y UX offline: **35/36 aprobadas**.
-- El único fallo ampliado es de portabilidad del test `rehydrateSaleOrdering.test.mjs`: su expresión regular exige finales de línea `LF`, mientras el archivo inspeccionado usa `CRLF` en Windows. La comprobación funcional del mismo archivo, que exige recuperar el estado antes de despertar la cola, sí aprobó.
+- `npm test`: **275 archivos de prueba aprobados**. El ejecutor y las verificaciones de archivos generados aceptan tanto `LF` como `CRLF`, y los tests que invocan Expo usan directamente su CLI de Node para funcionar en Windows y Linux.
 - `npm run typecheck`: **aprobado**, salida 0.
 
 Salidas:

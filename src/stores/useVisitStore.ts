@@ -14,6 +14,7 @@ import {
   buildStartedVisitState,
   createInitialVisitState,
   restoreSaleRecoveryState,
+  restoreVisitSaleLines,
 } from '../services/visitState';
 import { appendVisitPhotoUri } from '../services/visitPhotos';
 import {
@@ -265,6 +266,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       checkInLat: snapshot.checkInLat,
       checkInLon: snapshot.checkInLon,
       elapsedSeconds: snapshot.elapsedSeconds,
+      saleLines: restoreVisitSaleLines(snapshot),
       // P0-2: restore sale confirmation + idempotency key (back-compat: old
       // snapshots without these fields default to not-confirmed).
       ...saleRecoveryState,

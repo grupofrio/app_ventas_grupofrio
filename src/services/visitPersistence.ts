@@ -5,6 +5,16 @@ import {
   type SaleRecoveryIntentV1,
 } from './saleRecoveryIntent.ts';
 
+export interface PersistedVisitSaleLine {
+  productId: number;
+  productName: string;
+  price: number;
+  priceConfirmation?: 'authorized' | 'pending_confirmation';
+  qty: number;
+  stock: number;
+  weight: number;
+}
+
 export interface PersistedVisitSnapshot {
   phase: VisitPhase;
   currentStopId: number;
@@ -14,6 +24,7 @@ export interface PersistedVisitSnapshot {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
+  saleLines: PersistedVisitSaleLine[];
   // P0-2 (hardening): persist sale confirmation + idempotency key so a crash
   // after confirming a sale does NOT let the vendor re-confirm and create a
   // duplicate sale with a new operation_id on restart.
@@ -33,11 +44,74 @@ export interface BuildVisitSnapshotInput {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
+  saleLines?: unknown;
   saleConfirmed?: boolean;
   saleOperationId?: string | null;
   saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
   saleRecoveryIntent?: unknown;
+}
+
+function normalizePersistedSaleLines(value: unknown): PersistedVisitSaleLine[] | null {
+  if (!Array.isArray(value)) return null;
+  const lines: PersistedVisitSaleLine[] = [];
+  for (const candidate of value) {
+    if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) return null;
+    const line = candidate as Record<string, unknown>;
+    if (
+      typeof line.productId !== 'number'
+      || !Number.isInteger(line.productId)
+      || line.productId <= 0
+      || typeof line.productName !== 'string'
+      || typeof line.price !== 'number'
+      || !Number.isFinite(line.price)
+      || line.price < 0
+      || typeof line.qty !== 'number'
+      || !Number.isFinite(line.qty)
+      || line.qty <= 0
+      || typeof line.stock !== 'number'
+      || !Number.isFinite(line.stock)
+      || line.stock < 0
+      || typeof line.weight !== 'number'
+      || !Number.isFinite(line.weight)
+      || line.weight < 0
+      || (line.priceConfirmation !== undefined
+        && line.priceConfirmation !== 'authorized'
+        && line.priceConfirmation !== 'pending_confirmation')
+    ) return null;
+    lines.push({
+      productId: line.productId,
+      productName: line.productName,
+      price: line.price,
+      ...(line.priceConfirmation ? { priceConfirmation: line.priceConfirmation } : {}),
+      qty: line.qty,
+      stock: line.stock,
+      weight: line.weight,
+    });
+  }
+  return lines;
+}
+
+export function restorePersistedSaleLines(
+  value: unknown,
+  recoveryIntentValue?: unknown,
+): PersistedVisitSaleLine[] {
+  const direct = normalizePersistedSaleLines(value);
+  if (direct !== null) return direct;
+
+  const recoveryIntent = restoreSaleRecoveryIntent(recoveryIntentValue);
+  if (!recoveryIntent) return [];
+  return recoveryIntent.ticketSnapshot.lines.map((line) => ({
+    productId: line.productId,
+    productName: line.productName,
+    price: line.unitPrice,
+    ...(line.priceConfirmation ? { priceConfirmation: line.priceConfirmation } : {}),
+    qty: line.qty,
+    // Legacy snapshots did not preserve the reference stock. A confirmed
+    // sale only needs a non-negative reference while checkout uses qty/price.
+    stock: line.qty,
+    weight: line.weight,
+  }));
 }
 
 export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVisitSnapshot | null {
@@ -50,6 +124,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     checkInLat,
     checkInLon,
     elapsedSeconds,
+    saleLines,
     saleConfirmed = false,
     saleOperationId = null,
     saleReadyToContinue = false,
@@ -83,6 +158,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     checkInLat,
     checkInLon,
     elapsedSeconds,
+    saleLines: restorePersistedSaleLines(saleLines, restoredIntent),
     saleConfirmed: persistConfirmed,
     saleOperationId: persistConfirmed ? saleOperationId : null,
     saleReadyToContinue: hasTerminalSale,

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const repoRoot = process.cwd();
-const expectedVersionCode = 7;
+const expectedVersionCode = 8;
 const expectedVersionName = '1.4.2';
 const expectedEasOwner = 'grupofrio';
 const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
@@ -46,8 +46,8 @@ assert.equal(
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
 assert.match(
   verifierSource,
-  /versionCode:\s*'7'/,
-  'release verification must require Android versionCode 7',
+  /versionCode:\s*'8'/,
+  'release verification must require Android versionCode 8',
 );
 assert.match(
   verifierSource,
@@ -75,8 +75,8 @@ if (existsSync(nativeBuildGradle)) {
   const nativeSource = readFileSync(nativeBuildGradle, 'utf8');
   assert.match(
     nativeSource,
-    /defaultConfig\s*\{[\s\S]*?versionCode\s+7\b/,
-    'the generated native Android project must use versionCode 7 when present',
+    /defaultConfig\s*\{[\s\S]*?versionCode\s+8\b/,
+    'the generated native Android project must use versionCode 8 when present',
   );
 }
 

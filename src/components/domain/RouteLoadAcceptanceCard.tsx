@@ -50,9 +50,22 @@ export function RouteLoadAcceptanceCard({
   const acceptingLoad = acceptingPickingId != null;
 
   const handleAcceptRouteLoad = useCallback(async () => {
-    if (!plan?.plan_id || !pendingLoad?.picking_id || acceptingPickingId != null) return;
-    // Capture exact picking identity before any await (multi-refill safe).
-    const pickingId = requirePositivePickingId(pendingLoad.picking_id);
+    if (acceptingPickingId != null) return;
+    if (!plan?.plan_id || !pendingLoad?.picking_id) {
+      Alert.alert('No se puede aceptar', 'Actualiza la ruta para recuperar la carga pendiente.');
+      return;
+    }
+    let pickingId: number;
+    try {
+      // Capture exact picking identity before any await (multi-refill safe).
+      pickingId = requirePositivePickingId(pendingLoad.picking_id);
+    } catch (error) {
+      Alert.alert(
+        'No se puede aceptar',
+        error instanceof Error ? error.message : 'El picking de la carga no es válido.',
+      );
+      return;
+    }
     const planId = plan.plan_id;
     const isRefill = pendingLoad.isRefill;
     const pickingName = pendingLoad.name;
@@ -169,9 +182,9 @@ export function RouteLoadAcceptanceCard({
               ) : null}
             </View>
             <TouchableOpacity
-              style={[styles.button, (!isOnline || acceptingLoad) && styles.buttonDisabled]}
+              style={[styles.button, acceptingLoad && styles.buttonDisabled]}
               onPress={handleAcceptRouteLoad}
-              disabled={!isOnline || acceptingLoad}
+              disabled={acceptingLoad}
               activeOpacity={0.85}
             >
               {acceptingLoad ? (

@@ -7,7 +7,7 @@
  *
  * R1B-B: uses runRouteLoadAcceptAndRefresh + exact picking_id.
  *   buildRouteLoadAcceptanceState(plan)  → load cards from the plan object
- *   acceptRouteLoad(planId, pickingId)   → route_plan/seal_load (backend #92 replay-safe)
+ *   acceptRouteLoad(planId, pickingId)   → /pwa-ruta/accept-load (backend #92 replay-safe)
  *
  * Acceptance is BINARY (seals the picking as-is). Online-only; no local +qty.
  * The current contract does not support per-line physical-vs-planned differences.
@@ -73,9 +73,22 @@ export default function RefillAcceptScreen() {
   }, [isOnline, loadPlan]);
 
   async function handleAccept() {
-    if (!planId || accepting || !pending?.picking_id) return;
-    // Capture exact picking identity before dialog / network (multi-refill safe).
-    const pickingId = requirePositivePickingId(pending.picking_id);
+    if (accepting) return;
+    if (!planId || !pending?.picking_id) {
+      Alert.alert('No se puede aceptar', 'Actualiza la ruta para recuperar la carga pendiente.');
+      return;
+    }
+    let pickingId: number;
+    try {
+      // Capture exact picking identity before dialog / network (multi-refill safe).
+      pickingId = requirePositivePickingId(pending.picking_id);
+    } catch (err) {
+      Alert.alert(
+        'No se puede aceptar',
+        err instanceof Error ? err.message : 'El picking de la carga no es válido.',
+      );
+      return;
+    }
     const isRefill = pending.isRefill;
     const pickingName = pending.name;
     if (!isOnline) {
@@ -225,7 +238,7 @@ export default function RefillAcceptScreen() {
               variant="success"
               onPress={handleAccept}
               fullWidth
-              disabled={!isOnline || accepting}
+              disabled={accepting}
               loading={accepting}
               style={{ marginTop: 8 }}
             />

@@ -163,7 +163,16 @@ export default function RouteStartScreen() {
 
   // Refresh checklist status from backend when the hub is focused.
   const refresh = useCallback(async () => {
-    await hydrateDayBundle();
+    // The day bundle is an optimization for offline operation. A failed
+    // preload must never prevent the load card and its accept action from
+    // becoming usable.
+    try {
+      await hydrateDayBundle();
+    } catch (err) {
+      logWarn('general', 'route_start_day_bundle_preload_failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (!planId) {
       setLoading(false);
       return;
@@ -225,12 +234,31 @@ export default function RouteStartScreen() {
   }, [planId, isOnline, loadPlan, setForPlan, setChecklistCompleteForPlan, hydrateDayBundle]);
 
   async function handleAcceptLoad() {
-    if (!planId || acceptingLoad) return;
+    if (acceptingLoad) return;
+    if (!planId) {
+      Alert.alert('No se puede aceptar', 'No hay un plan activo. Actualiza la ruta e intenta de nuevo.');
+      return;
+    }
     const capturedPlanId = planId;
     const pending = initialLoadState.nextPendingInitialLoad;
-    if (!pending?.picking_id) return;
-    // Capture exact picking before any await / confirmation dialog.
-    const pickingId = requirePositivePickingId(pending.picking_id);
+    if (!pending?.picking_id) {
+      Alert.alert(
+        'No se puede aceptar',
+        'La carga mostrada no tiene un picking pendiente válido. Actualiza la carga e intenta de nuevo.',
+      );
+      return;
+    }
+    let pickingId: number;
+    try {
+      // Capture exact picking before any await / confirmation dialog.
+      pickingId = requirePositivePickingId(pending.picking_id);
+    } catch (err) {
+      Alert.alert(
+        'No se puede aceptar',
+        err instanceof Error ? err.message : 'El picking de la carga no es válido.',
+      );
+      return;
+    }
     const pickingName = pending.name;
     if (!isOnline) {
       Alert.alert('Sin conexión', 'Conéctate al WiFi del CEDIS para aceptar la carga.');
@@ -776,7 +804,7 @@ export default function RouteStartScreen() {
                   label={acceptingLoad ? 'Aceptando…' : 'Aceptar carga'}
                   variant="primary"
                   onPress={handleAcceptLoad}
-                  disabled={!isOnline || acceptingLoad || rejectingLoad}
+                  disabled={acceptingLoad || rejectingLoad}
                   loading={acceptingLoad}
                   small
                 />

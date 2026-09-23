@@ -1,4 +1,15 @@
-const PENDING_LOAD_STATES = new Set(['confirmed', 'assigned', 'waiting', 'partially_available', 'draft']);
+// `stock.picking.state === done` means the warehouse transfer was completed;
+// it does NOT mean the driver accepted the load. Driver acceptance is tracked
+// separately by `accepted` / `gf_route_load_accepted`, so a done picking must
+// remain actionable until that flag is true.
+const PENDING_LOAD_STATES = new Set([
+  'confirmed',
+  'assigned',
+  'waiting',
+  'partially_available',
+  'draft',
+  'done',
+]);
 
 export const ROUTE_LOAD_REJECTION_REASON_CODES = [
   'physical_difference',

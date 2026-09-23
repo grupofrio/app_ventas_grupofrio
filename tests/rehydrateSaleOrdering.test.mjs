@@ -7,7 +7,7 @@ const root = process.cwd();
 
 test('queue rehydration never starts processing before visit crash recovery', () => {
   const syncStore = readFileSync(resolve(root, 'src/stores/useSyncStore.ts'), 'utf8');
-  const block = syncStore.match(/rehydrateQueue:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?\n  \},\n\n  \/\/ ═══ V2/)?.[0] ?? '';
+  const block = syncStore.match(/rehydrateQueue:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?\r?\n  \},\r?\n\r?\n  \/\/ ═══ V2/)?.[0] ?? '';
 
   assert.notEqual(block, '');
   assert.doesNotMatch(block, /scheduleWake\s*\(/);

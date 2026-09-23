@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { getCheckoutResultStatus } from '../src/services/checkoutResult.ts';
 
 interface VisitStateModule {
   buildStartedVisitState: (
@@ -56,6 +57,18 @@ interface VisitStateModule {
     saleRecoveryPersistenceFailed: boolean;
     saleRecoveryIntent: unknown;
   };
+  restoreVisitSaleLines?: (snapshot: {
+    saleLines?: unknown;
+    saleRecoveryIntent?: unknown;
+  }) => Array<{
+    productId: number;
+    productName: string;
+    price: number;
+    priceConfirmation?: 'authorized' | 'pending_confirmation';
+    qty: number;
+    stock: number;
+    weight: number;
+  }>;
 }
 
 function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateModule) {
@@ -193,6 +206,73 @@ function testRestoresSaleRecoveryStateWithBackcompat(module: VisitStateModule) {
   });
 }
 
+function testRestoresConfirmedOfflineSaleLinesForCheckout(module: VisitStateModule) {
+  assert.equal(
+    typeof module.restoreVisitSaleLines,
+    'function',
+    'visit rehydration must restore the confirmed sale lines',
+  );
+  if (!module.restoreVisitSaleLines) return;
+
+  const persistedLines = [{
+    productId: 2996,
+    productName: '[QA-GDL-KF] PRODUCTO PRUEBA KOLD FIELD',
+    price: 11.5,
+    qty: 1,
+    stock: 14,
+    weight: 1,
+  }];
+  const restored = module.restoreVisitSaleLines({ saleLines: persistedLines });
+  assert.deepEqual(restored, persistedLines);
+  assert.equal(
+    getCheckoutResultStatus({
+      saleTotal: restored.reduce((sum, line) => sum + line.price * line.qty, 0),
+      noSaleReasonId: null,
+    }),
+    'sale',
+  );
+
+  const legacyIntent = {
+    version: 1,
+    operationId: 'sale-op-legacy-lines',
+    queuePayload: {
+      _operationId: 'sale-op-legacy-lines',
+      _clientCustomerName: 'Cliente',
+      _clientTotal: 23,
+    },
+    stopId: 44,
+    photoUris: [],
+    ticketSnapshot: {
+      saleId: 'sale-op-legacy-lines',
+      odooFolio: null,
+      customerName: 'Cliente',
+      sellerName: 'Vendedor',
+      paymentMethod: 'cash',
+      paymentLabel: 'Efectivo',
+      createdAt: '2026-09-23T10:00:00.000Z',
+      lines: [{
+        productId: 2996,
+        productName: '[QA-GDL-KF] PRODUCTO PRUEBA KOLD FIELD',
+        qty: 2,
+        unitPrice: 11.5,
+        lineTotal: 23,
+        weight: 1,
+      }],
+      subtotal: 23,
+      total: 23,
+      totalKg: 2,
+    },
+  };
+  assert.deepEqual(module.restoreVisitSaleLines({ saleRecoveryIntent: legacyIntent }), [{
+    productId: 2996,
+    productName: '[QA-GDL-KF] PRODUCTO PRUEBA KOLD FIELD',
+    price: 11.5,
+    qty: 2,
+    stock: 2,
+    weight: 1,
+  }]);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -202,6 +282,7 @@ async function main() {
 
   testStartedVisitBeginsFromCleanTransactionalState(module);
   testRestoresSaleRecoveryStateWithBackcompat(module);
+  testRestoresConfirmedOfflineSaleLinesForCheckout(module);
   console.log('visit state tests: ok');
 }
 

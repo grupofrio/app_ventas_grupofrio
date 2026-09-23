@@ -15,8 +15,9 @@ test('production Android bundle resolves sale diagnostics without node:crypto', 
 
   try {
     const result = spawnSync(
-      resolve(repoRoot, 'node_modules/.bin/expo'),
+      process.execPath,
       [
+        resolve(repoRoot, 'node_modules/expo/bin/cli'),
         'export:embed',
         '--platform',
         'android',

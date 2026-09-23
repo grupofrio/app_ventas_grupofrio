@@ -3,6 +3,10 @@ import {
   restoreSaleRecoveryIntent,
   type SaleRecoveryIntentV1,
 } from './saleRecoveryIntent.ts';
+import {
+  restorePersistedSaleLines,
+  type PersistedVisitSaleLine,
+} from './visitPersistence.ts';
 
 export interface VisitDataState {
   phase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
@@ -13,7 +17,7 @@ export interface VisitDataState {
   checkInLat: number | null;
   checkInLon: number | null;
   elapsedSeconds: number;
-  saleLines: never[];
+  saleLines: PersistedVisitSaleLine[];
   analyticPlazaId: number | null;
   analyticUnId: number | null;
   salePhotoTaken: boolean;
@@ -39,6 +43,13 @@ export interface PersistedSaleRecoveryState {
   saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
   saleRecoveryIntent?: unknown;
+}
+
+export function restoreVisitSaleLines(snapshot: {
+  saleLines?: unknown;
+  saleRecoveryIntent?: unknown;
+}): PersistedVisitSaleLine[] {
+  return restorePersistedSaleLines(snapshot.saleLines, snapshot.saleRecoveryIntent);
 }
 
 export function restoreSaleReadyToContinue(

@@ -48,7 +48,7 @@ assert.match(
 );
 assert.match(
   screen,
-  /enqueue\(\s*'checkout',[\s\S]{0,400}\{ operationId \}/,
+  /enqueue\(\s*'checkout',[\s\S]{0,500}\{[\s\S]{0,100}operationId[\s\S]{0,160}\}/,
   'normal-route no-sale checkout must use the frozen operation UUID as the queue identity',
 );
 assert.match(

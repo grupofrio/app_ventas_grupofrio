@@ -6,11 +6,11 @@ import test from 'node:test';
 const screenSource = readFileSync(
   resolve(process.cwd(), 'src/components/domain/TicketOutputScreen.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 const saleScreenSource = readFileSync(
   resolve(process.cwd(), 'app/print/[orderId].tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 test('button composes the real MP210 service without asking permission on mount', () => {
   assert.match(screenSource, /import\s+ThermalPrinterModule\s+from\s+['"]\.\.\/\.\.\/\.\.\/modules\/thermal-printer/);

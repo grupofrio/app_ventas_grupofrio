@@ -116,8 +116,9 @@ test('includes the real long-sale flow only in an Android development bundle', {
   const productionBundlePath = resolve(outputRoot, 'index.production.android.bundle');
   const developmentBundlePath = resolve(outputRoot, 'index.development.android.bundle');
   const buildBundle = (dev, minify, bundlePath, assetsDirectory) => spawnSync(
-    resolve(repoRoot, 'node_modules/.bin/expo'),
+    process.execPath,
     [
+      resolve(repoRoot, 'node_modules/expo/bin/cli'),
       'export:embed',
       '--platform',
       'android',

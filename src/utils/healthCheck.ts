@@ -13,6 +13,10 @@ import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { getLogBuffer, getErrorLog, getPersistedErrorCount } from './logger';
 import { getGpsMode } from '../services/gps';
+import { useRouteStore } from '../stores/useRouteStore';
+import { useRouteStartStore } from '../stores/useRouteStartStore';
+import { useRoutePreparationStore } from '../stores/useRoutePreparationStore';
+import { useEmployeeDayBundleStore } from '../stores/useEmployeeDayBundleStore';
 
 export type HealthLevel = 'healthy' | 'degraded' | 'critical';
 
@@ -164,6 +168,10 @@ export function getDiagnosticsExport(): Record<string, unknown> {
   const health = getHealthStatus();
   const logBuffer = getLogBuffer();
   const apiLogs = logBuffer.filter((entry) => entry.category === 'api');
+  const route = useRouteStore.getState();
+  const routeStart = useRouteStartStore.getState();
+  const preparation = useRoutePreparationStore.getState();
+  const dayBundle = useEmployeeDayBundleStore.getState();
 
   return {
     exportedAt: new Date().toISOString(),
@@ -221,6 +229,20 @@ export function getDiagnosticsExport(): Record<string, unknown> {
     gps: {
       mode: getGpsMode(),
       queueSize: sync.queue.filter((i) => i.type === 'gps' && i.status === 'pending').length,
+    },
+    routeRecovery: {
+      planId: route.plan?.plan_id ?? null,
+      planState: route.plan?.state ?? null,
+      stopsCount: route.stops.length,
+      routeStartedPlanId: routeStart.routeStartedPlanId,
+      preparedPlanId: preparation.preparedPlanId,
+      preparedAt: preparation.preparedAt,
+      productCount: products.productCount,
+      bundlePresent: dayBundle.record !== null,
+      bundleMode: dayBundle.access?.mode ?? null,
+      bundleCanStartRoute: dayBundle.access?.canStartRoute ?? false,
+      bundleExpiresAt: dayBundle.record?.bundle.expires_at ?? null,
+      bundleError: dayBundle.error,
     },
     logs: {
       recentCount: logBuffer.length,

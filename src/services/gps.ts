@@ -8,9 +8,9 @@
  *   - Visit mode captures GPS ONLY at check-in and check-out
  *   - Mode transitions managed via setGpsMode()
  *
- * RULE: GPS NEVER blocks check-in, checkout, or sales.
- *       Check-in uses getCurrentPosition() which is independent of the
- *       tracking mode. GPS points are P3 telemetry — fire-and-forget.
+ * Visit mutations use getCurrentPosition() independently of the tracking
+ * mode and publish that point before Odoo validates check-in/check-out.
+ * Periodic GPS telemetry remains queued and non-blocking.
  */
 
 import * as Location from 'expo-location';
@@ -19,10 +19,23 @@ import { useSyncStore } from '../stores/useSyncStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { shouldAdmitGpsPoint } from '../utils/gpsBuffer';
 import { logInfo, logWarn } from '../utils/logger';
+import { postRest } from './api';
+import { normalizeGpsTimestamp } from '../utils/gpsPayload';
 
 // ═══ GPS Modes ═══
 
 export type GpsMode = 'in_transit' | 'in_visit' | 'stopped';
+
+export interface GpsPosition {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+}
+
+export type ForegroundLocationPermissionResult =
+  | { status: 'granted'; canAskAgain: boolean }
+  | { status: 'denied'; canAskAgain: boolean }
+  | { status: 'unavailable'; canAskAgain: false };
 
 interface GpsModeConfig {
   interval_ms: number | null;  // null = no periodic tracking
@@ -60,6 +73,38 @@ const GPS_INIT_TIMEOUT_MS = 5000;
 /** Get current GPS mode. */
 export function getGpsMode(): GpsMode {
   return _currentMode;
+}
+
+/**
+ * Ask for foreground location at the moment a field action needs it.
+ * This covers the first-login case, where root initialization already ran
+ * before an authenticated employee existed and therefore never showed the
+ * native Android permission dialog.
+ */
+export async function ensureForegroundLocationPermission(): Promise<ForegroundLocationPermissionResult> {
+  const store = useLocationStore.getState();
+  try {
+    const enabled = await Location.hasServicesEnabledAsync();
+    if (!enabled) {
+      store.setStatus('unavailable', 'Activa la ubicación del teléfono');
+      return { status: 'unavailable', canAskAgain: false };
+    }
+
+    let permission = await Location.getForegroundPermissionsAsync();
+    if (permission.status !== 'granted' && permission.canAskAgain) {
+      permission = await Location.requestForegroundPermissionsAsync();
+    }
+
+    if (permission.status !== 'granted') {
+      store.setStatus('denied', 'Permiso de ubicación denegado');
+      return { status: 'denied', canAskAgain: permission.canAskAgain };
+    }
+
+    return { status: 'granted', canAskAgain: permission.canAskAgain };
+  } catch (error) {
+    store.setStatus('error', error instanceof Error ? error.message : 'No se pudo solicitar ubicación');
+    return { status: 'denied', canAskAgain: false };
+  }
 }
 
 /**
@@ -101,26 +146,50 @@ export async function captureAndEnqueueGpsPoint(source: string): Promise<void> {
   try {
     const position = await getCurrentPosition();
     if (!position) return;
-
-    const employeeId = useAuthStore.getState().employeeId;
-    if (!employeeId) return;
-
-    // For visit events, bypass the rate-limit buffer — these are
-    // business-relevant GPS points, not telemetry.
-    useSyncStore.getState().enqueue('gps', {
-      employee_id: employeeId,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
-      timestamp: Date.now(),
-      source,
-      mode: _currentMode,
-    });
-
-    logInfo('gps', 'visit_point_captured', { source, lat: position.latitude, lon: position.longitude });
+    enqueueGpsPoint(position, source);
   } catch (error) {
     logWarn('gps', 'visit_point_failed', { source, error: String(error) });
   }
+}
+
+/** Queue one business-relevant GPS point and return its dependency id. */
+export function enqueueGpsPoint(position: GpsPosition, source: string): string | null {
+  const employeeId = useAuthStore.getState().employeeId;
+  if (!employeeId || !Number.isFinite(position.latitude) || !Number.isFinite(position.longitude)) {
+    return null;
+  }
+  if (position.latitude === 0 && position.longitude === 0) return null;
+
+  const id = useSyncStore.getState().enqueue('gps', {
+    employee_id: employeeId,
+    latitude: position.latitude,
+    longitude: position.longitude,
+    accuracy: position.accuracy,
+    timestamp: Date.now(),
+    source,
+    mode: _currentMode,
+  });
+  logInfo('gps', 'visit_point_captured', { source, lat: position.latitude, lon: position.longitude });
+  return id;
+}
+
+/**
+ * Publish the same GPS envelope used by normal sync before check-in/out.
+ * Odoo validates a recent driver GPS row, so this write must finish first.
+ */
+export async function publishGpsPointNow(position: GpsPosition): Promise<void> {
+  await postRest('/pwa-ruta/gps-batch', {
+    records: [{
+      latitude: position.latitude,
+      longitude: position.longitude,
+      accuracy: position.accuracy,
+      timestamp: normalizeGpsTimestamp(Date.now()),
+    }],
+  });
+  logInfo('gps', 'visit_point_published', {
+    lat: position.latitude,
+    lon: position.longitude,
+  });
 }
 
 // ═══ Periodic tracking ═══
@@ -276,11 +345,7 @@ export function stopLocationWatch(): void {
  * Get current position once (for check-in/check-out).
  * NEVER blocked by GPS mode — always works if permission is granted.
  */
-export async function getCurrentPosition(): Promise<{
-  latitude: number;
-  longitude: number;
-  accuracy: number;
-} | null> {
+export async function getCurrentPosition(): Promise<GpsPosition | null> {
   try {
     const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') return null;

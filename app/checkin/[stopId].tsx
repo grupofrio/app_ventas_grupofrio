@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -21,7 +21,15 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
 import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
-import { getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import {
+  enqueueGpsPoint,
+  ensureForegroundLocationPermission,
+  getCurrentPosition,
+  publishGpsPointNow,
+  setGpsMode,
+  startLocationWatch,
+  type GpsPosition,
+} from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { openStopNavigation } from '../../src/services/stopNavigationAction';
 import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
@@ -72,6 +80,7 @@ export default function CheckinScreen() {
   }, [isOrphanedInProgress, stop?.id]);
 
   const [gpsLoading, setGpsLoading] = useState(true);
+  const [permissionCanAskAgain, setPermissionCanAskAgain] = useState(true);
   const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
   const handledFlashMessageRef = useRef<string | null>(null);
@@ -97,29 +106,39 @@ export default function CheckinScreen() {
     }
   }, [activeVisitForStop]);
 
-  // Get GPS and set target on mount
+  async function refreshCurrentLocation(): Promise<GpsPosition | null> {
+    setGpsLoading(true);
+    try {
+      const permission = await ensureForegroundLocationPermission();
+      setPermissionCanAskAgain(permission.canAskAgain);
+      if (permission.status !== 'granted') return null;
+
+      void startLocationWatch();
+      const pos = await getCurrentPosition();
+      if (pos) {
+        setLocation(pos.latitude, pos.longitude, pos.accuracy || 0);
+        return pos;
+      }
+      setStatus('error', 'No se pudo obtener ubicación');
+      return null;
+    } catch {
+      setStatus('error', 'Error obteniendo GPS');
+      return null;
+    } finally {
+      setGpsLoading(false);
+    }
+  }
+
+  // Get GPS and set target on mount. This screen is the first contextual place
+  // that always needs location, so it also shows Android's native permission
+  // prompt when the employee logged in for the first time in this app session.
   useEffect(() => {
     if (!stop) return;
 
     // Set geofence target
     setTarget(stop.customer_latitude, stop.customer_longitude);
 
-    // Request GPS. Do not run the full GPS initialization here; check-in must
-    // never hang on a fresh high-accuracy location request.
-    (async () => {
-      setGpsLoading(true);
-      try {
-        const pos = await getCurrentPosition();
-        if (pos) {
-          setLocation(pos.latitude, pos.longitude, pos.accuracy || 0);
-        } else {
-          setStatus('error', 'No se pudo obtener ubicacion');
-        }
-      } catch {
-        setStatus('error', 'Error obteniendo GPS');
-      }
-      setGpsLoading(false);
-    })();
+    void refreshCurrentLocation();
   }, [stop?.id]);
 
   // Check-in handler — only if geofence OK
@@ -165,21 +184,33 @@ export default function CheckinScreen() {
 
     setCheckingIn(true); // Lock immediately
 
-    const lat = latitude || 0;
-    const lon = longitude || 0;
+    const freshPosition = await getCurrentPosition();
+    const position: GpsPosition | null = freshPosition ?? (
+      latitude != null && longitude != null && !(latitude === 0 && longitude === 0)
+        ? { latitude, longitude, accuracy: useLocationStore.getState().accuracy ?? 0 }
+        : null
+    );
+    if (!position) {
+      Alert.alert('Ubicación no disponible', 'No pudimos obtener tu GPS. Pulsa “Actualizar ubicación” e intenta nuevamente.');
+      setCheckingIn(false);
+      return;
+    }
+
+    const lat = position.latitude;
+    const lon = position.longitude;
     const startLocalVisit = (queueForSync: boolean) => {
       useNavigationStore.getState().stopNavigation();
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
       setGpsMode('in_visit');
-      captureAndEnqueueGpsPoint('checkin').catch(() => {});
       if (queueForSync) {
+        const gpsQueueId = enqueueGpsPoint(position, 'checkin');
         enqueue('checkin', {
           stop_id: stop.id,
           latitude: lat,
           longitude: lon,
           timestamp: Date.now(),
-        });
+        }, gpsQueueId ? { dependsOn: [gpsQueueId] } : undefined);
       }
     };
 
@@ -189,6 +220,7 @@ export default function CheckinScreen() {
     }
 
     try {
+      await publishGpsPointNow(position);
       await checkIn(stop.id, lat, lon);
       startLocalVisit(false);
     } catch (error) {
@@ -299,9 +331,12 @@ export default function CheckinScreen() {
   // Determine if customer has coordinates
   const hasCustomerCoords = !!(stop.customer_latitude && stop.customer_longitude);
   const canSkipGeofence = allowOffDistanceVisits && hasCustomerCoords;
-  // Can check-in: GPS ready + within fence, no coords, or explicit employee bypass.
+  const hasValidFix = latitude != null && longitude != null && !(latitude === 0 && longitude === 0);
+  // Odoo validates every visit against a recent driver GPS point. The employee
+  // permission bypasses only the customer geofence, never the GPS requirement.
   const canCheckIn = visitGuard.canStartVisit
     && !gpsLoading
+    && hasValidFix
     && (isWithinFence || !hasCustomerCoords || canSkipGeofence);
 
   // GPS status display
@@ -397,11 +432,13 @@ export default function CheckinScreen() {
                   ? visitGuard.primaryActionLabel
                   : gpsLoading
                   ? 'Obteniendo GPS...'
-                  : canCheckIn
-                    ? canSkipGeofence && !isWithinFence
-                      ? '🟠 Hacer Check-in (permiso especial)'
-                      : '📍 Hacer Check-in'
-                    : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`
+                  : !hasValidFix
+                    ? '📍 Ubicación requerida'
+                    : canCheckIn
+                      ? canSkipGeofence && !isWithinFence
+                        ? '🟠 Hacer Check-in (permiso especial)'
+                        : '📍 Hacer Check-in'
+                      : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`
               }
               onPress={handleCheckIn}
               disabled={!canCheckIn || checkingIn}
@@ -417,19 +454,24 @@ export default function CheckinScreen() {
           </View>
 
           {/* Retry GPS button */}
-          {!gpsLoading && !isWithinFence && hasCustomerCoords && (
+          {!gpsLoading && (!hasValidFix || (!isWithinFence && hasCustomerCoords)) && (
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={async () => {
-                setGpsLoading(true);
-                try {
-                  const pos = await getCurrentPosition();
-                  if (pos) setLocation(pos.latitude, pos.longitude, pos.accuracy || 0);
-                } catch { /* ignore */ }
-                setGpsLoading(false);
+                if (locStatus === 'denied' && !permissionCanAskAgain) {
+                  await Linking.openSettings();
+                  return;
+                }
+                await refreshCurrentLocation();
               }}
             >
-              <Text style={[typography.bodySmall, styles.retryText]}>🔄 Actualizar ubicación</Text>
+              <Text style={[typography.bodySmall, styles.retryText]}>
+                {locStatus === 'denied' && !permissionCanAskAgain
+                  ? '⚙️ Abrir ajustes de ubicación'
+                  : locStatus === 'denied'
+                    ? '📍 Permitir ubicación'
+                    : '🔄 Actualizar ubicación'}
+              </Text>
             </TouchableOpacity>
           )}
 

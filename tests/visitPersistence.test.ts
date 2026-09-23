@@ -16,6 +16,15 @@ interface VisitPersistenceModule {
     checkInLat: number | null;
     checkInLon: number | null;
     elapsedSeconds: number;
+    saleLines?: Array<{
+      productId: number;
+      productName: string;
+      price: number;
+      priceConfirmation?: 'authorized' | 'pending_confirmation';
+      qty: number;
+      stock: number;
+      weight: number;
+    }>;
     saleConfirmed?: boolean;
     saleOperationId?: string | null;
     saleReadyToContinue?: boolean;
@@ -30,6 +39,15 @@ interface VisitPersistenceModule {
     checkInLat: number | null;
     checkInLon: number | null;
     elapsedSeconds: number;
+    saleLines: Array<{
+      productId: number;
+      productName: string;
+      price: number;
+      priceConfirmation?: 'authorized' | 'pending_confirmation';
+      qty: number;
+      stock: number;
+      weight: number;
+    }>;
     saleConfirmed: boolean;
     saleOperationId: string | null;
     saleReadyToContinue: boolean;
@@ -62,6 +80,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     checkInLat: 19.4,
     checkInLon: -99.1,
     elapsedSeconds: 90,
+    saleLines: [],
   });
 
   assert.deepEqual(snapshot, {
@@ -79,6 +98,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     checkInLat: 19.4,
     checkInLon: -99.1,
     elapsedSeconds: 90,
+    saleLines: [],
     // P0-2: defaults when not provided.
     saleConfirmed: false,
     saleOperationId: null,
@@ -137,6 +157,14 @@ function testPendingConfirmationNeverPersistsWithoutMatchingIntent(module: Visit
 
 // P0-2: snapshot must carry sale confirmation + idempotency key.
 function testSnapshotCarriesSaleConfirmation(module: VisitPersistenceModule) {
+  const saleLines = [{
+    productId: 2996,
+    productName: '[QA-GDL-KF] PRODUCTO PRUEBA KOLD FIELD',
+    price: 11.5,
+    qty: 1,
+    stock: 14,
+    weight: 1,
+  }];
   const snapshot = module.buildVisitSnapshot({
     phase: 'selling',
     currentStopId: 15,
@@ -152,6 +180,7 @@ function testSnapshotCarriesSaleConfirmation(module: VisitPersistenceModule) {
     checkInLat: null,
     checkInLon: null,
     elapsedSeconds: 5,
+    saleLines,
     saleConfirmed: true,
     saleOperationId: 'sale_123_abc',
     saleReadyToContinue: true,
@@ -162,6 +191,7 @@ function testSnapshotCarriesSaleConfirmation(module: VisitPersistenceModule) {
   assert.equal(snapshot!.saleOperationId, 'sale_123_abc');
   assert.equal(snapshot!.saleReadyToContinue, true);
   assert.equal(snapshot!.saleRecoveryPersistenceFailed, true);
+  assert.deepEqual(snapshot!.saleLines, saleLines);
 }
 
 function testIdleVisitDoesNotPersist(module: VisitPersistenceModule) {

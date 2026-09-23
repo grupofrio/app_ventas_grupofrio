@@ -655,7 +655,7 @@ export async function acceptRouteLoad(
   const planId = requirePositivePlanId(routePlanId);
   const exactPickingId = requirePositivePickingId(pickingId);
   const result = await postRest<Record<string, unknown>>(
-    `${GF_BASE}/route_plan/seal_load`,
+    `/pwa-ruta/accept-load`,
     buildRouteLoadAcceptPayload(planId, exactPickingId),
   );
   const parsed = parseRouteLoadAcceptResponse(result, {

@@ -17,7 +17,11 @@ import {
   requirePositivePickingId,
   runRouteLoadAcceptAndRefresh,
 } from '../src/services/routeLoadAcceptFlow.ts';
-import { buildRouteLoadAcceptPayload, buildRouteLoadAcceptanceState } from '../src/services/routeLoadAcceptance.ts';
+import {
+  buildInitialLoadAcceptanceState,
+  buildRouteLoadAcceptPayload,
+  buildRouteLoadAcceptanceState,
+} from '../src/services/routeLoadAcceptance.ts';
 import {
   applySaleStockViaLedger,
 } from '../src/services/inventoryLedgerAdapters.ts';
@@ -434,6 +438,63 @@ describe('R1B-B multiple refills keep exact picking identity', () => {
   });
 });
 
+describe('initial load already transferred but pending driver acceptance', () => {
+  it('keeps a done picking actionable and completes the accept/refresh UI transition', async () => {
+    const plan = {
+      plan_id: 7160,
+      // The number of route stops must not affect load acceptance.
+      stops: [
+        { id: 1, customer_id: 101 },
+        { id: 2, customer_id: 102 },
+        { id: 3, customer_id: 103 },
+      ],
+      load_picking_id: 30576,
+      load_pickings: [{
+        picking_id: 30576,
+        name: 'CCDMX/INT/00007',
+        load_kind: 'initial',
+        state: 'done',
+        accepted: false,
+      }],
+      pending_loads: [{
+        picking_id: 30576,
+        name: 'CCDMX/INT/00007',
+        load_kind: 'initial',
+        state: 'done',
+        accepted: false,
+      }],
+    };
+
+    const before = buildInitialLoadAcceptanceState(plan);
+    assert.equal(before.initialLoadAccepted, false);
+    assert.equal(before.nextPendingInitialLoad?.picking_id, 30576);
+
+    const sent: Array<{ planId: number; pickingId: number }> = [];
+    const outcome = await runRouteLoadAcceptAndRefresh({
+      planId: 7160,
+      pickingId: before.nextPendingInitialLoad!.picking_id,
+      isOnline: true,
+      accept: async (planId, pickingId) => {
+        sent.push({ planId, pickingId });
+        plan.load_pickings[0].accepted = true;
+        plan.pending_loads = [];
+        return okAccept(planId, pickingId);
+      },
+      refreshPlan: okPlan,
+      refreshInventory: okInventory,
+    });
+
+    assert.deepEqual(sent, [{ planId: 7160, pickingId: 30576 }]);
+    assert.equal(outcome.accept.ok, true);
+    assert.equal(outcome.planRefreshOk, true);
+    assert.equal(outcome.inventoryRefreshOk, true);
+
+    const after = buildInitialLoadAcceptanceState(plan);
+    assert.equal(after.initialLoadAccepted, true);
+    assert.equal(after.nextPendingInitialLoad, null);
+  });
+});
+
 describe('R1B-B inventory authority: truck_stock baseline, no local +qty load/refill', () => {
   it('G: refill +20 via snapshot → 70; pending sale -5 → 65; never 90', async () => {
     const ports = createMemoryLedgerPorts(
@@ -505,6 +566,11 @@ describe('R1B-B wiring contracts', () => {
         /acceptRouteLoad\([^,]+\)\s*;/,
         `${name} must not call acceptRouteLoad with plan_id only`,
       );
+      assert.match(
+        src,
+        /No se puede aceptar/,
+        `${name} must surface a visible error when the load cannot be sent`,
+      );
     }
 
     // Card must not treat void loadProducts as refresh success evidence.
@@ -512,6 +578,7 @@ describe('R1B-B wiring contracts', () => {
     assert.match(card, /loadProductsAuthoritative/);
 
     const logistics = readFileSync(resolve(root, 'src/services/gfLogistics.ts'), 'utf8');
+    assert.match(logistics, /`\/pwa-ruta\/accept-load`/);
     assert.match(logistics, /buildRouteLoadAcceptPayload\(planId, exactPickingId\)/);
     assert.match(logistics, /parseRouteLoadAcceptResponse/);
     assert.match(logistics, /idempotent_replay/);

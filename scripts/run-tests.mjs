@@ -35,6 +35,36 @@ if (files.length === 0) {
 
 console.log(`Running ${files.length} test files…`);
 
-const args = ['--test', '--experimental-strip-types', ...files];
-const child = spawn(process.execPath, args, { stdio: 'inherit', cwd: REPO_ROOT });
-child.on('exit', (code) => process.exit(code ?? 1));
+// Windows limits the total command-line length passed to CreateProcess. Keep
+// the regular single-process run elsewhere, but split the file list on Windows
+// so a growing suite cannot fail before Node's test runner even starts.
+const batchSize = process.platform === 'win32' ? 20 : files.length;
+const batches = Array.from(
+  { length: Math.ceil(files.length / batchSize) },
+  (_, index) => files.slice(index * batchSize, (index + 1) * batchSize),
+);
+
+function runBatch(index) {
+  if (index >= batches.length) {
+    process.exit(0);
+  }
+
+  if (batches.length > 1) {
+    console.log(`Running batch ${index + 1}/${batches.length}…`);
+  }
+
+  const args = ['--test', '--experimental-strip-types', ...batches[index]];
+  const child = spawn(process.execPath, args, { stdio: 'inherit', cwd: REPO_ROOT });
+  child.on('error', (error) => {
+    console.error(error);
+    process.exit(1);
+  });
+  child.on('exit', (code) => {
+    if (code !== 0) {
+      process.exit(code ?? 1);
+    }
+    runBatch(index + 1);
+  });
+}
+
+runBatch(0);

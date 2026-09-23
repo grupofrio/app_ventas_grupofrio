@@ -19,7 +19,13 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { useLocationStore } from '../../src/stores/useLocationStore';
-import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import {
+  enqueueGpsPoint,
+  getCurrentPosition,
+  publishGpsPointNow,
+  setGpsMode,
+  type GpsPosition,
+} from '../../src/services/gps';
 import { checkOut } from '../../src/services/gfLogistics';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
@@ -59,6 +65,7 @@ function CheckoutScreenInner() {
 
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
+  const accuracy = useLocationStore((s) => s.accuracy);
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
@@ -152,7 +159,6 @@ function CheckoutScreenInner() {
   const totalKg = saleTotalKg();
 
   function finalizeCheckout(shouldNavigateToNextStop: boolean) {
-    captureAndEnqueueGpsPoint('checkout').catch(() => {});
     setGpsMode('in_transit');
     updateStopState(stop!.id, 'done');
     resetVisit();
@@ -243,8 +249,20 @@ function CheckoutScreenInner() {
       return;
     }
 
-    const lat = latitude || 0;
-    const lon = longitude || 0;
+    const freshPosition = await getCurrentPosition();
+    const position: GpsPosition | null = freshPosition ?? (
+      latitude != null && longitude != null && !(latitude === 0 && longitude === 0)
+        ? { latitude, longitude, accuracy: accuracy ?? 0 }
+        : null
+    );
+    if (!position) {
+      Alert.alert('Ubicación no disponible', 'No pudimos actualizar tu GPS para cerrar la visita. Reintenta en un momento.');
+      setCheckingOut(false);
+      return;
+    }
+
+    const lat = position.latitude;
+    const lon = position.longitude;
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
       latitude: lat,
@@ -262,11 +280,15 @@ function CheckoutScreenInner() {
     const checkoutOperationId = getCheckoutOperationId();
 
     const enqueueCheckout = () => {
+      const gpsQueueId = enqueueGpsPoint(position, 'checkout');
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
         timestamp: Date.now(),
-      }, { operationId: checkoutOperationId });
+      }, {
+        operationId: checkoutOperationId,
+        ...(gpsQueueId ? { dependsOn: [gpsQueueId] } : {}),
+      });
     };
 
     if (!isOnline) {
@@ -284,6 +306,7 @@ function CheckoutScreenInner() {
     }
 
     try {
+      await publishGpsPointNow(position);
       await checkOut(
         checkoutPayload.stop_id,
         checkoutPayload.latitude,

@@ -22,7 +22,13 @@ import { takePhoto } from '../../src/services/camera';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { checkOut, closeOffrouteVisit } from '../../src/services/gfLogistics';
-import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import {
+  enqueueGpsPoint,
+  getCurrentPosition,
+  publishGpsPointNow,
+  setGpsMode,
+  type GpsPosition,
+} from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 import {
@@ -65,6 +71,7 @@ export default function NoSaleScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
+  const accuracy = useLocationStore((s) => s.accuracy);
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [typedCompetitor, setTypedCompetitor] = useState('');
@@ -150,7 +157,6 @@ export default function NoSaleScreen() {
   const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
-    captureAndEnqueueGpsPoint('checkout').catch(() => {});
     setGpsMode('in_transit');
     if (stop!._isOffroute) {
       removeStop(stop!.id);
@@ -230,6 +236,17 @@ export default function NoSaleScreen() {
     setSubmitting(true);
 
     try {
+      const freshPosition = await getCurrentPosition();
+      const position: GpsPosition | null = freshPosition ?? (
+        latitude != null && longitude != null && !(latitude === 0 && longitude === 0)
+          ? { latitude, longitude, accuracy: accuracy ?? 0 }
+          : null
+      );
+      if (!position) {
+        Alert.alert('Ubicación no disponible', 'No pudimos actualizar tu GPS para cerrar la visita. Reintenta en un momento.');
+        return;
+      }
+
       // Durable operation identity BEFORE any mutating network/queue write.
       const intent = await persistOpenNoSaleIntent({
         stopId: stop.id,
@@ -240,8 +257,8 @@ export default function NoSaleScreen() {
         notes,
         competitor: effectiveCompetitor,
         photoUris: noSalePhotoUris,
-        latitude,
-        longitude,
+        latitude: position.latitude,
+        longitude: position.longitude,
         operationId: rehydratedOpId ?? undefined,
       });
       const operationId = intent.operation_id;
@@ -333,6 +350,7 @@ export default function NoSaleScreen() {
       });
 
       const enqueueCheckoutAndPhotos = () => {
+        const gpsQueueId = enqueueGpsPoint(position, 'checkout');
         const checkoutId = enqueue(
           'checkout',
           {
@@ -340,7 +358,10 @@ export default function NoSaleScreen() {
             operation_id: operationId,
             timestamp: Date.now(),
           },
-          { operationId },
+          {
+            operationId,
+            ...(gpsQueueId ? { dependsOn: [gpsQueueId] } : {}),
+          },
         );
         enqueueVisitPhotos({
           stopId: stop.id,
@@ -359,6 +380,7 @@ export default function NoSaleScreen() {
       }
 
       try {
+        await publishGpsPointNow(position);
         await checkOut(
           checkoutPayload.stop_id,
           checkoutPayload.latitude,

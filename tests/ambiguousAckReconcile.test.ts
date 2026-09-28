@@ -170,6 +170,62 @@ describe('INV-1B reconcileAmbiguousLedgerOperations (ACK intents)', () => {
     assert.equal(result.intents[0]!.acknowledged_at_ms, 5_000);
   });
 
+  it('exchange replay committed → ACK intent with the same operation id', async () => {
+    const exchangeOp = '00000000-0000-4000-8000-0000000000e1';
+    let replayedPayload: Record<string, unknown> | null = null;
+    const ports: AmbiguousAckReconcilePorts = {
+      nowMs: () => 5_500,
+      checkSaleDuplicate: async () => ({ duplicate: false }),
+      replayGift: async () => undefined,
+      classifyGiftError: () => 'ambiguous',
+      replayExchange: async (payload) => {
+        replayedPayload = payload;
+      },
+      classifyExchangeError: () => 'ambiguous',
+      classifySaleCheckError: () => 'ambiguous',
+    };
+    const payload = {
+      stop_id: 12,
+      _operationId: exchangeOp,
+      _ledgerApplied: true,
+    };
+    const result = await reconcileAmbiguousLedgerOperations(
+      [{ id: exchangeOp, type: 'exchange', status: 'error', payload }],
+      ports,
+    );
+
+    assert.equal(replayedPayload, payload);
+    assert.deepEqual(result.acknowledgedIds, [exchangeOp]);
+    assert.equal(result.intents[0]!.operation_id, exchangeOp);
+    assert.equal(result.intents[0]!.acknowledged_at_ms, 5_500);
+  });
+
+  for (const type of ['gift', 'exchange'] as const) {
+    it(`${type} rejection or busy replay never becomes a false ACK`, async () => {
+      for (const classification of ['definitive_failure', 'ambiguous'] as const) {
+        const ports: AmbiguousAckReconcilePorts = {
+          nowMs: () => 6_000,
+          checkSaleDuplicate: async () => ({ duplicate: false }),
+          replayGift: async () => { throw new Error('not confirmed'); },
+          classifyGiftError: () => classification,
+          replayExchange: async () => { throw new Error('not confirmed'); },
+          classifyExchangeError: () => classification,
+          classifySaleCheckError: () => 'ambiguous',
+        };
+        const result = await reconcileAmbiguousLedgerOperations(
+          [{
+            id: `operation-${type}`,
+            type,
+            status: 'error',
+            payload: { _operationId: `operation-${type}`, _ledgerApplied: true },
+          }],
+          ports,
+        );
+        assert.deepEqual(result.intents, []);
+      }
+    });
+  }
+
   it('consignment_* exact replay committed → ACK intent (same UUID)', async () => {
     const op = '00000000-0000-4000-8000-0000000000c9';
     const replayed: string[] = [];

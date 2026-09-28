@@ -31,6 +31,7 @@ test('buildExchangeTicketSnapshot preserves the idempotency snapshot and visible
   assert.equal(snapshot.deliveryLines[0].qty, 2);
   assert.equal(snapshot.mermaLines[0].qty, 1);
   assert.equal(snapshot.notes, 'Envases dañados');
+  assert.equal(snapshot.operationStatus, 'confirmed');
 });
 
 test('buildExchangeTicketSnapshot prefers exchangeName, then exchangeId, then the snapshot fallback folio', () => {
@@ -154,6 +155,36 @@ test('buildExchangeTicketHtml omits empty delivery, merma, and notes sections', 
   assert.doesNotMatch(html, /PRODUCTO ENTREGADO/);
   assert.doesNotMatch(html, /PRODUCTO RECOGIDO \/ MERMA/);
   assert.doesNotMatch(html, /Notas:/);
+});
+
+test('exchange ticket labels pending and confirmed outcomes without presenting pending as success', () => {
+  const pending = buildExchangeTicketSnapshot({
+    snapshotId: 'pending-operation',
+    exchangeName: 'PENDIENTE/pending-',
+    exchangeId: null,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [{ productId: 10, qty: 1 }],
+    mermaLines: [],
+    operationStatus: 'pending',
+  });
+  const confirmed = buildExchangeTicketSnapshot({
+    snapshotId: 'confirmed-operation',
+    exchangeName: 'EX/0001',
+    exchangeId: 1,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [{ productId: 10, qty: 1 }],
+    mermaLines: [],
+    operationStatus: 'confirmed',
+  });
+
+  assert.equal(pending.operationStatus, 'pending');
+  assert.match(buildExchangeTicketHtml(pending), /PENDIENTE DE SINCRONIZACIÓN/);
+  assert.doesNotMatch(buildExchangeTicketHtml(pending), /registrado correctamente/);
+  assert.equal(confirmed.operationStatus, 'confirmed');
+  assert.match(buildExchangeTicketHtml(confirmed), /CONFIRMADO POR ODOO/);
+  assert.match(buildExchangeTicketHtml(confirmed), /registrado correctamente/);
 });
 
 test('getExchangeTicketStorageKey namespaces exchange tickets by snapshot id', () => {

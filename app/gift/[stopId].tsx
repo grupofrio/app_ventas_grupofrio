@@ -34,10 +34,10 @@ import { buildLocalStockDelta } from '../../src/services/stockRollback';
 import { applyGiftStockViaLedger, buildGiftLedgerMovements, commitQueuedOperationWithLedger } from '../../src/services/inventoryLedgerAdapters';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { findFreshStockIssues } from '../../src/services/saleStockValidation';
-import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { decideGiftFailureAction } from '../../src/services/giftSubmit';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import { classifySalesOpsMutationError } from '../../src/services/salesOpsMutationOutcome';
 
 interface EditableGiftLine extends GiftDraftLine {
   productName: string;
@@ -297,9 +297,10 @@ export default function GiftScreen() {
       navigateAfter(result.userMessage);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo registrar el regalo.';
+      const outcome = classifySalesOpsMutationError(error);
       const action = decideGiftFailureAction({
         isSessionExpired: isSessionExpiredError(error),
-        isRetryable: isRetryableSyncErrorMessage(message),
+        isRetryable: outcome.kind !== 'definitive_rejection',
       });
       if (action === 'session_relogin') {
         // No encolar: sin sesión válida no es seguro. Pedir re-login.

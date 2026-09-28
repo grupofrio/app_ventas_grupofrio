@@ -45,7 +45,8 @@ export function isSyncItemType(value: unknown): value is SyncItemType {
  * V2 status machine:
  *   pending -> syncing -> done
  *                      -> error -> pending (retry < MAX)
- *                               -> dead   (retry >= MAX, rollback triggered)
+ *                               -> dead   (proven terminal failure, rollback)
+ *                               -> error  (ambiguous gift/exchange held at MAX)
  */
 export type SyncItemStatus = 'pending' | 'syncing' | 'done' | 'error' | 'dead';
 

@@ -5,7 +5,8 @@
  * - Priority-based processing: P1 (business) > P2 (media) > P3 (telemetry)
  * - GPS batch processing with concurrent-5 fallback
  * - Backoff with jitter: 2s / 8s / 30s (±20%)
- * - 'dead' status after MAX_RETRIES with rollback
+ * - 'dead' status after MAX_RETRIES with rollback for proven failures;
+ *   ambiguous gift/exchange outcomes stay held for reconciliation
  * - Rollback GENÉRICO por `_localStockDelta` (independiente del type)
  * - Migración/guard de eventos legacy refill/unload (retirados del producto):
  *   nunca se reenvían; se revierte el stock local y se descartan de la cola.
@@ -124,6 +125,7 @@ import {
 } from '../services/saleDefinitiveFailure';
 import { promoteStoredSaleTicketServerResult } from '../services/saleTicketStorage';
 import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
+import { resolveSalesOpsQueueFailure } from '../services/salesOpsMutationOutcome';
 
 // ═══ Constants ═══
 
@@ -1178,6 +1180,9 @@ async function processOneItemUnheld(
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
     const shouldRetry = shouldRetrySyncItemError(item.type, error);
+    const salesOpsDisposition = item.type === 'gift' || item.type === 'exchange'
+      ? resolveSalesOpsQueueFailure(item.type, error, newRetries, MAX_RETRIES)
+      : null;
 
     if (!shouldRetry) {
       const definitiveGate = await gateSaleDefinitiveFailure({
@@ -1203,7 +1208,21 @@ async function processOneItemUnheld(
       }
     }
 
-    if (!shouldRetry || newRetries >= MAX_RETRIES) {
+    if (salesOpsDisposition === 'hold') {
+      // HTTP 200 malformado, timeout o LOCK_BUSY no prueban que Odoo haya
+      // rechazado la mutación. Conservamos el MISMO item/idempotency key y su
+      // ledger para la conciliación; agotamiento de retries no es una reversión.
+      get().markError(
+        item.id,
+        `Resultado pendiente de conciliación: ${msg}`,
+      );
+      logWarn('sync', 'salesops_item_held_for_reconciliation', {
+        id: item.id,
+        type: item.type,
+        retries: newRetries,
+        error: msg,
+      });
+    } else if (!shouldRetry || newRetries >= MAX_RETRIES) {
       get().markDead(item.id, msg, newRetries);
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {

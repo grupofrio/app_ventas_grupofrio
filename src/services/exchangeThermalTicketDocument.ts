@@ -16,7 +16,9 @@ export function buildExchangeThermalTicketDocument(
       logoVersion: SALE_TICKET_BRANDING.version,
       legalName: SALE_TICKET_BRANDING.legalName,
       rfcLabel: SALE_TICKET_BRANDING.rfcLabel,
-      title: EXCHANGE_TICKET_TITLE,
+      title: snapshot.operationStatus === 'pending'
+        ? `${EXCHANGE_TICKET_TITLE} - PENDIENTE`
+        : `${EXCHANGE_TICKET_TITLE} - CONFIRMADO`,
       footer: SALE_TICKET_BRANDING.footer,
     },
     folio: snapshot.folio,

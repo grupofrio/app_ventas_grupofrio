@@ -36,7 +36,7 @@ test('buildExchangeThermalTicketDocument builds a schemaVersion 1 exchange paylo
     logoVersion: SALE_TICKET_BRANDING.version,
     legalName: SALE_TICKET_BRANDING.legalName,
     rfcLabel: SALE_TICKET_BRANDING.rfcLabel,
-    title: 'TICKET DE CAMBIO',
+    title: 'TICKET DE CAMBIO - CONFIRMADO',
     footer: SALE_TICKET_BRANDING.footer,
   });
   assert.equal(document.folio, snapshot.folio);
@@ -48,6 +48,22 @@ test('buildExchangeThermalTicketDocument builds a schemaVersion 1 exchange paylo
   assert.equal(document.totalKg, '—');
   assert.equal(document.total, 'No aplica');
   assert.equal(document.exchangeNotes, snapshot.notes);
+});
+
+test('buildExchangeThermalTicketDocument labels a pending exchange explicitly', () => {
+  const snapshot = buildExchangeTicketSnapshot({
+    snapshotId: 'pending-exchange-123',
+    exchangeName: 'PENDIENTE/pending-',
+    exchangeId: null,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [{ productId: 10, qty: 1 }],
+    mermaLines: [],
+    operationStatus: 'pending',
+  });
+
+  const document = buildExchangeThermalTicketDocument(snapshot);
+  assert.equal(document.branding.title, 'TICKET DE CAMBIO - PENDIENTE');
 });
 
 test('buildExchangeThermalTicketDocument keeps delivery and merma lines distinct and formats quantities per section', () => {

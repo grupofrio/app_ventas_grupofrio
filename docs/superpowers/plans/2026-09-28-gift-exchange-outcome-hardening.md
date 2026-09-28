@@ -23,4 +23,6 @@ Production contract evidence:
 7. Review the diff, commit, push, and open a draft PR with contract evidence,
    validation, the separate exchange-stock gap, and build/deployment limits.
 
-E2E remains pending because staging build `38698037` lacks backend PR #268.
+E2E remains pending because none of the three current Stagings has backend PR
+#268 plus authorized fixtures. A Development environment with synthetic
+fixtures is under evaluation, but its creation and build are not authorized.

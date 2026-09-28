@@ -161,8 +161,12 @@ export function requireSalesOpsIdempotencyKey(value: unknown): string {
   const nested = nonEmptyString(recordOf(record?.meta)?.idempotency_key);
   const key = direct || nested;
   if (key) return key;
+  return rejectSalesOpsClientPayload('La operación no tiene una llave idempotente válida.');
+}
+
+export function rejectSalesOpsClientPayload(message: string): never {
   throw makeOutcomeError({
-    message: 'La operación no tiene una llave idempotente válida.',
+    message,
     code: 'INVALID_CLIENT_PAYLOAD',
     kind: 'definitive_rejection',
   });

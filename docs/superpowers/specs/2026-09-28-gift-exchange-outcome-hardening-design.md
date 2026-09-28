@@ -88,10 +88,11 @@ Open frontend PR #110 only changes guarded fixture tooling. Draft PR #109 target
 the staging branch and shares `gfLogistics.ts` for lead/off-route work, but it does
 not modify the exchange function or either sales-ops outcome contract.
 
-The previously reviewed staging build `38698037` does not contain backend PR
-#268 and cannot support an end-to-end accreditation of these flows. E2E remains
-pending until an allowlisted QA environment with the deployed contract is
-identified. Production mutations are prohibited.
+None of the three current Staging environments contains backend PR #268 plus
+authorized fixtures, so none can support end-to-end accreditation of these
+flows. E2E remains pending while a Development environment with synthetic
+fixtures is evaluated. Creating that environment or generating its build is not
+authorized yet. Production mutations are prohibited.
 
 ## Validation evidence
 

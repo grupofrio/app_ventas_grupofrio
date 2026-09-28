@@ -1,4 +1,7 @@
-import { requireSalesOpsIdempotencyKey } from './salesOpsMutationOutcome.ts';
+import {
+  rejectSalesOpsClientPayload,
+  requireSalesOpsIdempotencyKey,
+} from './salesOpsMutationOutcome.ts';
 
 export interface GiftDraftLine {
   key: string;
@@ -37,7 +40,7 @@ interface NormalizeGiftErrorInput {
 export interface GiftCreateContractPayload extends Record<string, unknown> {
   meta: { idempotency_key: string };
   data: {
-    partner_id: number | null;
+    partner_id: number;
     visit_line_id?: number;
     lines: Array<{ product_id: number; qty: number }>;
     notes?: string;
@@ -75,6 +78,12 @@ export function buildGiftCreateContractPayload(
   const partnerId = asPositiveNumber(dataSource.partner_id);
   const visitLineId = asPositiveNumber(dataSource.visit_line_id);
   const notes = typeof dataSource.notes === 'string' ? dataSource.notes.trim() : '';
+  if (!partnerId) {
+    return rejectSalesOpsClientPayload('El regalo no tiene un cliente válido.');
+  }
+  if (lines.length === 0) {
+    return rejectSalesOpsClientPayload('El regalo no tiene líneas válidas.');
+  }
 
   return {
     meta: { idempotency_key: idempotencyKey },

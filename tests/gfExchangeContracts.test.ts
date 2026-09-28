@@ -121,6 +121,28 @@ function testExchangeCannotDisableServerValidation(module: ExchangeContractsModu
   );
 }
 
+function testExchangeRequiresStopAndAtLeastOneList(module: ExchangeContractsModule) {
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-missing-stop',
+      delivery_lines: [{ product_id: 987, qty: 1 }],
+      merma_lines: [],
+      validate: true,
+    }),
+    /parada válida/,
+  );
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-empty-lines',
+      stop_id: 1042,
+      delivery_lines: [],
+      merma_lines: [],
+      validate: true,
+    }),
+    /líneas válidas/,
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -133,6 +155,7 @@ async function main() {
   testExchangePayloadRequiresStableIdempotencyKey(module);
   testQueuedExchangeRetryUsesTheExactOriginalContract(module);
   testExchangeCannotDisableServerValidation(module);
+  testExchangeRequiresStopAndAtLeastOneList(module);
   console.log('gf exchange contracts tests: ok');
 }
 

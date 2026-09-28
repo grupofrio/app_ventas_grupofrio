@@ -85,6 +85,24 @@ function testBuildGiftPayloadRequiresStableIdempotencyKey(module: GiftPayloadMod
   );
 }
 
+function testBuildGiftPayloadRequiresPartnerAndLines(module: GiftPayloadModule) {
+  const base = {
+    analyticAccountId: 820,
+    idempotencyKey: 'gift-valid-key',
+    mobileLocationId: 441,
+    partnerId: 51090,
+    lines: [{ productId: 760, qty: 1 }],
+  };
+  assert.throws(
+    () => module.buildGiftPayload({ ...base, partnerId: 0 }),
+    /cliente válido/,
+  );
+  assert.throws(
+    () => module.buildGiftPayload({ ...base, lines: [] }),
+    /líneas válidas/,
+  );
+}
+
 function testSubmitIssuesBlockMissingPartnerAndDuplicates(module: GiftPayloadModule) {
   const issues = module.getGiftSubmitIssues({
     partnerId: null,
@@ -146,6 +164,7 @@ async function main() {
 
   testBuildGiftPayloadAllowsNullVisitLine(module);
   testBuildGiftPayloadRequiresStableIdempotencyKey(module);
+  testBuildGiftPayloadRequiresPartnerAndLines(module);
   testQueuedGiftRetryUsesTheExactOriginalContract(module);
   testSubmitIssuesBlockMissingPartnerAndDuplicates(module);
   testSubmitIssuesRequireAtLeastOneValidLine(module);

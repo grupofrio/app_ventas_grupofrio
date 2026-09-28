@@ -42,6 +42,7 @@ import { parseTruckStockResponse, type TruckStockResponse } from './truckStockRe
 import { buildTruckStockPlanRequest } from './truckStockPlanContext';
 import {
   parseExchangeCreateResponse,
+  requireSalesOpsIdempotencyKey,
   type ExchangeCreateResultData,
 } from './salesOpsMutationOutcome';
 
@@ -700,13 +701,20 @@ export async function createExchange(
   meta?: ClientEventMeta | null,
 ): Promise<GFExchangeResponse> {
   const contractPayload = buildExchangeCreatePayload(payload);
+  requireSalesOpsIdempotencyKey(contractPayload);
+  const contractData = contractPayload.data as Record<string, unknown>;
+  const deliveryLines = contractData.delivery_lines as unknown[];
+  const mermaLines = contractData.merma_lines as unknown[];
   const body = attachClientMetaToRestPayload(contractPayload, meta ?? null);
   // NOTE: este endpoint vive en gf/salesops, NOT en gf/logistics/api/employee.
   const result = await postRest<any>(
     'gf/salesops/exchange/create',
     body,
   );
-  return parseExchangeCreateResponse(result);
+  return parseExchangeCreateResponse(result, {
+    requireDeliveryPicking: deliveryLines.length > 0,
+    requireMermaPicking: mermaLines.length > 0,
+  });
 }
 
 export async function fetchSalesSummary(

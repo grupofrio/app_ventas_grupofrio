@@ -1,3 +1,5 @@
+import { requireSalesOpsIdempotencyKey } from './salesOpsMutationOutcome.ts';
+
 export interface GiftDraftLine {
   key: string;
   productId: number | null;
@@ -32,6 +34,60 @@ interface NormalizeGiftErrorInput {
   userMessage?: string | null;
 }
 
+export interface GiftCreateContractPayload extends Record<string, unknown> {
+  meta: { idempotency_key: string };
+  data: {
+    partner_id: number | null;
+    visit_line_id?: number;
+    lines: Array<{ product_id: number; qty: number }>;
+    notes?: string;
+    validate: true;
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function asPositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+export function buildGiftCreateContractPayload(
+  payload: Record<string, unknown>,
+): GiftCreateContractPayload {
+  const metaSource = asRecord(payload.meta);
+  const dataSource = asRecord(payload.data);
+  const idempotencyKey = requireSalesOpsIdempotencyKey(metaSource.idempotency_key);
+
+  const lines = Array.isArray(dataSource.lines)
+    ? dataSource.lines.flatMap((candidate) => {
+        const line = asRecord(candidate);
+        const productId = asPositiveNumber(line.product_id);
+        const qty = asPositiveNumber(line.qty);
+        return productId && qty ? [{ product_id: productId, qty }] : [];
+      })
+    : [];
+  const partnerId = asPositiveNumber(dataSource.partner_id);
+  const visitLineId = asPositiveNumber(dataSource.visit_line_id);
+  const notes = typeof dataSource.notes === 'string' ? dataSource.notes.trim() : '';
+
+  return {
+    meta: { idempotency_key: idempotencyKey },
+    data: {
+      partner_id: partnerId,
+      ...(visitLineId ? { visit_line_id: visitLineId } : {}),
+      lines,
+      ...(notes ? { notes } : {}),
+      validate: true,
+    },
+  };
+}
+
 function toPositiveNumber(value: string): number | null {
   const normalized = value.trim().replace(',', '.');
   if (!normalized) return null;
@@ -58,13 +114,11 @@ export function buildGiftPayload({
   lines,
   notes,
 }: BuildGiftPayloadInput) {
-  return {
+  return buildGiftCreateContractPayload({
     meta: {
-      analytic_account_id: analyticAccountId,
       idempotency_key: idempotencyKey,
     },
     data: {
-      mobile_location_id: mobileLocationId,
       partner_id: partnerId,
       visit_line_id: visitLineId,
       lines: lines.map((line) => ({
@@ -74,7 +128,7 @@ export function buildGiftPayload({
       notes: notes?.trim() || '',
       validate: true,
     },
-  };
+  });
 }
 
 export function getGiftSubmitIssues({

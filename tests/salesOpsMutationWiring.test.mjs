@@ -9,9 +9,10 @@ test('gift and exchange use their exact deployed routes and strict response vali
   const logistics = read('src/services/gfLogistics.ts');
 
   assert.match(giftService, /postRest<unknown>\('\/gf\/salesops\/gift\/create'/);
+  assert.match(giftService, /buildGiftCreateContractPayload\(payload\)/);
   assert.match(giftService, /parseGiftCreateResponse\(result\)/);
   assert.match(logistics, /'gf\/salesops\/exchange\/create'/);
-  assert.match(logistics, /parseExchangeCreateResponse\(result\)/);
+  assert.match(logistics, /parseExchangeCreateResponse\(result,\s*\{/);
   assert.doesNotMatch(logistics, /export async function createGift\(/);
 });
 

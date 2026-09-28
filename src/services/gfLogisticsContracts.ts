@@ -1,3 +1,5 @@
+import { requireSalesOpsIdempotencyKey } from './salesOpsMutationOutcome.ts';
+
 function asPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -151,12 +153,20 @@ export function buildPaymentsCreatePayload(payload: Record<string, unknown>): Re
 }
 
 export function buildExchangeCreatePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const idempotencyKey =
+  const idempotencyKey = requireSalesOpsIdempotencyKey(
     asNonEmptyString(payload.idempotency_key) ??
-    pickOperationId(payload);
+    pickOperationId(payload),
+  );
+  if (payload.validate === false) {
+    throw Object.assign(new Error('El cambio debe enviarse con validate=true.'), {
+      code: 'VALIDATION_ERROR',
+      responseReceived: true,
+      outcomeKind: 'definitive_rejection',
+    });
+  }
   const stopId = asPositiveNumber(payload.stop_id);
   const notes = asNonEmptyString(payload.notes);
-  const validate = payload.validate === false ? false : true;
+  const validate = true;
   const deliveryLines = Array.isArray(payload.delivery_lines)
     ? payload.delivery_lines
         .map((line) => (line && typeof line === 'object'

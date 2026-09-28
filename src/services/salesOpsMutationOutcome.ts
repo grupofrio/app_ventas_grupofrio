@@ -35,6 +35,11 @@ export interface ExchangeCreateResult {
   data: ExchangeCreateResultData;
 }
 
+export interface ExchangeCreatePickingRequirements {
+  requireDeliveryPicking: boolean;
+  requireMermaPicking: boolean;
+}
+
 interface SalesOpsMutationError extends Error {
   code: string;
   responseReceived: true;
@@ -45,7 +50,6 @@ interface SalesOpsMutationError extends Error {
 
 const DEFINITIVE_CODES = new Set([
   'ACCESS_DENIED',
-  'API_REJECTION',
   'FORBIDDEN',
   'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
   'INSUFFICIENT_STOCK',
@@ -109,9 +113,9 @@ function makeOutcomeError(input: {
 function kindFromBackendError(code: string, httpStatus?: number): SalesOpsMutationOutcomeKind {
   const normalized = code.trim().toUpperCase();
   if (BUSY_CODES.has(normalized)) return 'busy';
-  if (httpStatus !== undefined && httpStatus >= 500) return 'ambiguous_result';
   if (DEFINITIVE_CODES.has(normalized)) return 'definitive_rejection';
   if (AMBIGUOUS_CODES.has(normalized)) return 'ambiguous_result';
+  if (httpStatus !== undefined && httpStatus >= 500) return 'ambiguous_result';
   if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500) {
     return 'definitive_rejection';
   }
@@ -151,6 +155,19 @@ function invalidResponse(operation: 'regalo' | 'cambio'): never {
   });
 }
 
+export function requireSalesOpsIdempotencyKey(value: unknown): string {
+  const direct = nonEmptyString(value);
+  const record = recordOf(value);
+  const nested = nonEmptyString(recordOf(record?.meta)?.idempotency_key);
+  const key = direct || nested;
+  if (key) return key;
+  throw makeOutcomeError({
+    message: 'La operación no tiene una llave idempotente válida.',
+    code: 'INVALID_CLIENT_PAYLOAD',
+    kind: 'definitive_rejection',
+  });
+}
+
 export function parseGiftCreateResponse(value: unknown): GiftCreateResult {
   const record = recordOf(value);
   if (!record) return invalidResponse('regalo');
@@ -162,28 +179,40 @@ export function parseGiftCreateResponse(value: unknown): GiftCreateResult {
   const saleOrderId = positiveNumber(data.sale_order_id);
   const giftId = positiveNumber(data.gift_id);
   const saleOrderName = nonEmptyString(data.sale_order_name);
-  const giftName = nonEmptyString(data.gift_name) || saleOrderName;
-  const state = nonEmptyString(data.state);
+  const giftName = nonEmptyString(data.gift_name);
+  const pickingId = positiveNumber(data.picking_id);
+  const state = nonEmptyString(data.state).toLowerCase();
+  const userMessage = nonEmptyString(record.user_message);
 
-  if ((!saleOrderId && !giftId) || !giftName || !state) {
+  if (
+    !userMessage
+    || !saleOrderId
+    || !saleOrderName
+    || !giftName
+    || !pickingId
+    || (state !== 'sale' && state !== 'done')
+  ) {
     return invalidResponse('regalo');
   }
 
   return {
-    userMessage: nonEmptyString(record.user_message) || 'Regalo registrado',
+    userMessage,
     code: nonEmptyString(record.code) || null,
     data: {
       sale_order_id: saleOrderId,
       sale_order_name: saleOrderName,
       gift_id: giftId,
       gift_name: giftName,
-      picking_id: positiveNumber(data.picking_id),
+      picking_id: pickingId,
       state,
     },
   };
 }
 
-export function parseExchangeCreateResponse(value: unknown): ExchangeCreateResult {
+export function parseExchangeCreateResponse(
+  value: unknown,
+  requirements: ExchangeCreatePickingRequirements,
+): ExchangeCreateResult {
   const record = recordOf(value);
   if (!record) return invalidResponse('cambio');
   rejectBackendEnvelope(record);
@@ -193,18 +222,28 @@ export function parseExchangeCreateResponse(value: unknown): ExchangeCreateResul
 
   const exchangeId = positiveNumber(data.exchange_id);
   const exchangeName = nonEmptyString(data.exchange_name);
-  const state = nonEmptyString(data.state);
-  if (!exchangeId || !exchangeName || !state) {
+  const deliveryPickingId = positiveNumber(data.picking_delivery_id);
+  const mermaPickingId = positiveNumber(data.picking_merma_id);
+  const state = nonEmptyString(data.state).toLowerCase();
+  const userMessage = nonEmptyString(record.user_message);
+  if (
+    !userMessage
+    || !exchangeId
+    || !exchangeName
+    || state !== 'done'
+    || (requirements.requireDeliveryPicking && !deliveryPickingId)
+    || (requirements.requireMermaPicking && !mermaPickingId)
+  ) {
     return invalidResponse('cambio');
   }
 
   return {
-    user_message: nonEmptyString(record.user_message) || 'Cambio procesado',
+    user_message: userMessage,
     data: {
       exchange_id: exchangeId,
       exchange_name: exchangeName,
-      picking_delivery_id: positiveNumber(data.picking_delivery_id),
-      picking_merma_id: positiveNumber(data.picking_merma_id),
+      picking_delivery_id: deliveryPickingId,
+      picking_merma_id: mermaPickingId,
       state,
     },
   };
@@ -227,11 +266,11 @@ export function classifySalesOpsMutationError(error: unknown): {
   const code = metadata.code?.trim().toUpperCase() || '';
   if (BUSY_CODES.has(code)) return { kind: 'busy' };
   if (metadata.responseReceived === false) return { kind: 'ambiguous_result' };
+  if (DEFINITIVE_CODES.has(code)) return { kind: 'definitive_rejection' };
+  if (AMBIGUOUS_CODES.has(code)) return { kind: 'ambiguous_result' };
   if (metadata.httpStatus !== undefined && metadata.httpStatus >= 500) {
     return { kind: 'ambiguous_result' };
   }
-  if (DEFINITIVE_CODES.has(code)) return { kind: 'definitive_rejection' };
-  if (AMBIGUOUS_CODES.has(code)) return { kind: 'ambiguous_result' };
   if (
     metadata.httpStatus !== undefined
     && metadata.httpStatus >= 400

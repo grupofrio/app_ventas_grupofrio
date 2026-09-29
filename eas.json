@@ -4,6 +4,18 @@
     "appVersionSource": "local"
   },
   "build": {
+    "qa-kold114": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "KF_LOCAL_DEV": "1",
+        "EXPO_PUBLIC_BUILD_PROFILE": "qa-kold114",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081.dev.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081"
+      }
+    },
     "development": {
       "developmentClient": true,
       "distribution": "internal",

@@ -8,9 +8,9 @@ const EXPECTED = {
   apkPath: process.env.APK_PATH
     ? path.resolve(process.env.APK_PATH)
     : path.resolve('android/app/build/outputs/apk/release/app-release.apk'),
-  applicationId: 'mx.grupofrio.koldfield',
-  versionCode: '8',
-  versionName: '1.4.2',
+  applicationId: process.env.EXPECTED_APPLICATION_ID || 'mx.grupofrio.koldfield',
+  versionCode: '9',
+  versionName: '1.4.3',
   certSha256: 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c',
 };
 

@@ -8,6 +8,7 @@ const expectedVersionName = '1.4.3';
 const expectedEasOwner = 'grupofrio';
 const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
 const expectedCorporateCertificateSha256 = 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c';
+const expectedQaCertificateSha256 = '3b536a000d4dc09b77fd7704a535df506cdc33443dc7e80a7c4428b1f1369e54';
 
 const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
 assert.equal(
@@ -44,6 +45,10 @@ assert.equal(
 );
 
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
+const releaseExpectationsSource = readFileSync(
+  resolve(repoRoot, 'scripts/android-release-expectations.mjs'),
+  'utf8',
+);
 assert.match(
   verifierSource,
   /versionCode:\s*'9'/,
@@ -55,9 +60,19 @@ assert.match(
   'release verification must require Android versionName 1.4.3',
 );
 assert.match(
-  verifierSource,
+  releaseExpectationsSource,
   new RegExp(expectedCorporateCertificateSha256),
   'release verification must require the Grupo Frio corporate certificate',
+);
+assert.match(
+  releaseExpectationsSource,
+  new RegExp(expectedQaCertificateSha256),
+  'release verification must pin the isolated QA certificate for the .dev package',
+);
+assert.match(
+  releaseExpectationsSource,
+  /mx\.grupofrio\.koldfield\.dev/,
+  'release verification must bind the QA certificate to the isolated .dev package',
 );
 assert.match(
   verifierSource,

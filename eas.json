@@ -5,6 +5,8 @@
   },
   "build": {
     "qa-kold114": {
+      "environment": "preview",
+      "credentialsSource": "remote",
       "distribution": "internal",
       "android": {
         "buildType": "apk"

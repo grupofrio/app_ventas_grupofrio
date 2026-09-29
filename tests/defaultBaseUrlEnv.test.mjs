@@ -28,6 +28,23 @@ assert.deepEqual(qaKold114.env, {
 });
 
 const source = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
+const babelConfig = readFileSync(new URL('../babel.config.js', import.meta.url), 'utf8');
+
+assert.match(
+  babelConfig,
+  /inlineKoldPublicEnvironment/,
+  'Metro must inline the allowlisted public KOLD variables even though legacy readers use computed access',
+);
+assert.match(
+  babelConfig,
+  /EXPO_PUBLIC_KF_DEFAULT_BASE_URL/,
+  'the Babel allowlist must include the KOLD backend hostname',
+);
+assert.match(
+  babelConfig,
+  /EXPO_PUBLIC_KF_ODOO_DB/,
+  'the Babel allowlist must include the KOLD Odoo database',
+);
 
 assert.match(
   source,

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { expectedAndroidCertificate } from './android-release-expectations.mjs';
 
 const EXPECTED = {
   apkPath: process.env.APK_PATH
@@ -11,7 +12,6 @@ const EXPECTED = {
   applicationId: process.env.EXPECTED_APPLICATION_ID || 'mx.grupofrio.koldfield',
   versionCode: '9',
   versionName: '1.4.3',
-  certSha256: 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c',
 };
 
 function findAndroidTool(toolName) {
@@ -96,11 +96,12 @@ const packageInfo = parseBadging(badging);
 const signerOutput = runAndroidTool(apksigner, ['verify', '--print-certs', EXPECTED.apkPath]);
 const certSha256 = parseSigner(signerOutput);
 const apkSha256 = sha256File(EXPECTED.apkPath);
+const expectedCertSha256 = expectedAndroidCertificate(EXPECTED.applicationId);
 
 assertEqual(packageInfo.applicationId, EXPECTED.applicationId, 'applicationId');
 assertEqual(packageInfo.versionCode, EXPECTED.versionCode, 'versionCode');
 assertEqual(packageInfo.versionName, EXPECTED.versionName, 'versionName');
-assertEqual(certSha256, EXPECTED.certSha256, 'certificate SHA-256');
+assertEqual(certSha256, expectedCertSha256, 'certificate SHA-256');
 
 console.log(JSON.stringify({
   apk: EXPECTED.apkPath,

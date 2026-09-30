@@ -3,11 +3,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const repoRoot = process.cwd();
-const expectedVersionCode = 8;
-const expectedVersionName = '1.4.2';
+const expectedVersionCode = 9;
+const expectedVersionName = '1.4.3';
 const expectedEasOwner = 'grupofrio';
 const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
 const expectedCorporateCertificateSha256 = 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c';
+const expectedQaCertificateSha256 = '3b536a000d4dc09b77fd7704a535df506cdc33443dc7e80a7c4428b1f1369e54';
 
 const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
 assert.equal(
@@ -44,20 +45,34 @@ assert.equal(
 );
 
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
-assert.match(
-  verifierSource,
-  /versionCode:\s*'8'/,
-  'release verification must require Android versionCode 8',
+const releaseExpectationsSource = readFileSync(
+  resolve(repoRoot, 'scripts/android-release-expectations.mjs'),
+  'utf8',
 );
 assert.match(
   verifierSource,
-  /versionName:\s*'1\.4\.2'/,
-  'release verification must require Android versionName 1.4.2',
+  /versionCode:\s*'9'/,
+  'release verification must require Android versionCode 9',
 );
 assert.match(
   verifierSource,
+  /versionName:\s*'1\.4\.3'/,
+  'release verification must require Android versionName 1.4.3',
+);
+assert.match(
+  releaseExpectationsSource,
   new RegExp(expectedCorporateCertificateSha256),
   'release verification must require the Grupo Frio corporate certificate',
+);
+assert.match(
+  releaseExpectationsSource,
+  new RegExp(expectedQaCertificateSha256),
+  'release verification must pin the isolated QA certificate for the .dev package',
+);
+assert.match(
+  releaseExpectationsSource,
+  /mx\.grupofrio\.koldfield\.dev/,
+  'release verification must bind the QA certificate to the isolated .dev package',
 );
 assert.match(
   verifierSource,
@@ -75,8 +90,8 @@ if (existsSync(nativeBuildGradle)) {
   const nativeSource = readFileSync(nativeBuildGradle, 'utf8');
   assert.match(
     nativeSource,
-    /defaultConfig\s*\{[\s\S]*?versionCode\s+8\b/,
-    'the generated native Android project must use versionCode 8 when present',
+    /defaultConfig\s*\{[\s\S]*?versionCode\s+9\b/,
+    'the generated native Android project must use versionCode 9 when present',
   );
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "kold-field",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -12,6 +12,8 @@
     "build:dev:android": "eas build -p android --profile development",
     "build:preview:android": "eas build -p android --profile preview",
     "build:prod:android": "eas build -p android --profile production",
+    "verify:qa-build-config": "node scripts/verify-qa-build-config.mjs --profile qa-kold114",
+    "eas-build-post-install": "node scripts/verify-qa-build-config.mjs",
     "verify:field-update:android": "node scripts/verify-android-release.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs"

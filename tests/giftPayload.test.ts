@@ -10,6 +10,7 @@ interface GiftPayloadModule {
     lines: Array<{ productId: number; qty: number }>;
     notes?: string;
   }) => Record<string, unknown>;
+  buildGiftCreateContractPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
   getGiftSubmitIssues: (input: {
     lines: Array<{ key: string; productId: number | null; qtyText: string }>;
     partnerId: number | null;
@@ -36,18 +37,70 @@ function testBuildGiftPayloadAllowsNullVisitLine(module: GiftPayloadModule) {
 
   assert.deepEqual(payload, {
     meta: {
-      analytic_account_id: 820,
       idempotency_key: 'gift-123',
     },
     data: {
-      mobile_location_id: 441,
       partner_id: 51090,
-      visit_line_id: null,
       lines: [{ product_id: 760, qty: 1.5 }],
       notes: 'Entrega de muestra',
       validate: true,
     },
   });
+}
+
+function testQueuedGiftRetryUsesTheExactOriginalContract(module: GiftPayloadModule) {
+  const original = module.buildGiftPayload({
+    analyticAccountId: 820,
+    idempotencyKey: 'gift-stable-123',
+    mobileLocationId: 441,
+    partnerId: 51090,
+    visitLineId: 77,
+    lines: [{ productId: 760, qty: 1 }],
+    notes: 'Muestra',
+  });
+  const queued = {
+    ...original,
+    _ledgerApplied: true,
+    _operationId: 'gift-stable-123',
+    _localStockDelta: { 760: -1 },
+  };
+
+  assert.deepEqual(
+    module.buildGiftCreateContractPayload(queued),
+    module.buildGiftCreateContractPayload(original),
+    'el retry debe remover metadatos locales y repetir exactamente llave+payload',
+  );
+}
+
+function testBuildGiftPayloadRequiresStableIdempotencyKey(module: GiftPayloadModule) {
+  assert.throws(
+    () => module.buildGiftPayload({
+      analyticAccountId: 820,
+      idempotencyKey: '   ',
+      mobileLocationId: 441,
+      partnerId: 51090,
+      lines: [{ productId: 760, qty: 1 }],
+    }),
+    /idempotent/i,
+  );
+}
+
+function testBuildGiftPayloadRequiresPartnerAndLines(module: GiftPayloadModule) {
+  const base = {
+    analyticAccountId: 820,
+    idempotencyKey: 'gift-valid-key',
+    mobileLocationId: 441,
+    partnerId: 51090,
+    lines: [{ productId: 760, qty: 1 }],
+  };
+  assert.throws(
+    () => module.buildGiftPayload({ ...base, partnerId: 0 }),
+    /cliente válido/,
+  );
+  assert.throws(
+    () => module.buildGiftPayload({ ...base, lines: [] }),
+    /líneas válidas/,
+  );
 }
 
 function testSubmitIssuesBlockMissingPartnerAndDuplicates(module: GiftPayloadModule) {
@@ -110,6 +163,9 @@ async function main() {
   ) as GiftPayloadModule;
 
   testBuildGiftPayloadAllowsNullVisitLine(module);
+  testBuildGiftPayloadRequiresStableIdempotencyKey(module);
+  testBuildGiftPayloadRequiresPartnerAndLines(module);
+  testQueuedGiftRetryUsesTheExactOriginalContract(module);
   testSubmitIssuesBlockMissingPartnerAndDuplicates(module);
   testSubmitIssuesRequireAtLeastOneValidLine(module);
   testSubmitIssuesRequireOperationalIds(module);

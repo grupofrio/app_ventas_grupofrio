@@ -74,6 +74,75 @@ function testExchangePayloadOmitsEmptyOptionals(module: ExchangeContractsModule)
   });
 }
 
+function testExchangePayloadRequiresStableIdempotencyKey(module: ExchangeContractsModule) {
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      stop_id: 1043,
+      delivery_lines: [{ product_id: 654, qty: 1 }],
+      merma_lines: [],
+      validate: true,
+    }),
+    /idempotent/i,
+  );
+}
+
+function testQueuedExchangeRetryUsesTheExactOriginalContract(module: ExchangeContractsModule) {
+  const original = {
+    idempotency_key: 'exchange-stable-123',
+    stop_id: 1042,
+    delivery_lines: [{ product_id: 987, qty: 2 }],
+    merma_lines: [{ product_id: 333, qty: 1 }],
+    notes: 'Cambio físico',
+    validate: true,
+  };
+  const queued = {
+    ...original,
+    _operationId: 'exchange-stable-123',
+    _ledgerApplied: true,
+  };
+
+  assert.deepEqual(
+    module.buildExchangeCreatePayload(queued),
+    module.buildExchangeCreatePayload(original),
+    'el retry debe remover metadatos locales y repetir exactamente llave+payload',
+  );
+}
+
+function testExchangeCannotDisableServerValidation(module: ExchangeContractsModule) {
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-invalid-validate',
+      stop_id: 1042,
+      delivery_lines: [{ product_id: 987, qty: 1 }],
+      merma_lines: [],
+      validate: false,
+    }),
+    /validate=true/,
+  );
+}
+
+function testExchangeRequiresStopAndAtLeastOneList(module: ExchangeContractsModule) {
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-missing-stop',
+      delivery_lines: [{ product_id: 987, qty: 1 }],
+      merma_lines: [],
+      validate: true,
+    }),
+    /parada válida/,
+  );
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-empty-lines',
+      stop_id: 1042,
+      delivery_lines: [],
+      merma_lines: [],
+      validate: true,
+    }),
+    /líneas válidas/,
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -83,6 +152,10 @@ async function main() {
 
   testExchangePayloadMatchesContract(module);
   testExchangePayloadOmitsEmptyOptionals(module);
+  testExchangePayloadRequiresStableIdempotencyKey(module);
+  testQueuedExchangeRetryUsesTheExactOriginalContract(module);
+  testExchangeCannotDisableServerValidation(module);
+  testExchangeRequiresStopAndAtLeastOneList(module);
   console.log('gf exchange contracts tests: ok');
 }
 

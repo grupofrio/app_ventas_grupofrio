@@ -23,6 +23,7 @@ import { checkSaleDuplicate, createExchange } from './gfLogistics.ts';
 import { createGift } from './gfSalesOps.ts';
 import { readSaleSubmissionErrorMetadata } from './saleSubmissionOutcome.ts';
 import { classifySaleSubmissionError } from './saleSubmissionOutcome.ts';
+import { classifySalesOpsMutationError } from './salesOpsMutationOutcome.ts';
 import type { ConsignmentCountLine, CreateConsignmentLine } from '../types/consignment.ts';
 
 function classifySaleCheckError(error: unknown): AmbiguousAckStatus {
@@ -37,20 +38,15 @@ function classifySaleCheckError(error: unknown): AmbiguousAckStatus {
 }
 
 function classifyGiftError(error: unknown): AmbiguousAckStatus {
-  const message = error instanceof Error ? error.message : String(error);
-  // Known definitive validation codes from gift create.
-  if (/UNAUTHORIZED|FORBIDDEN|VALIDATION_ERROR|missing_/i.test(message)) {
-    return 'definitive_failure';
-  }
-  return 'ambiguous';
+  return classifySalesOpsMutationError(error).kind === 'definitive_rejection'
+    ? 'definitive_failure'
+    : 'ambiguous';
 }
 
 function classifyExchangeError(error: unknown): AmbiguousAckStatus {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/UNAUTHORIZED|FORBIDDEN|VALIDATION_ERROR|SERVER_MISCONFIG|missing_/i.test(message)) {
-    return 'definitive_failure';
-  }
-  return 'ambiguous';
+  return classifySalesOpsMutationError(error).kind === 'definitive_rejection'
+    ? 'definitive_failure'
+    : 'ambiguous';
 }
 
 function classifyConsignmentError(error: unknown): AmbiguousAckStatus {

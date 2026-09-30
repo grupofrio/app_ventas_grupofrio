@@ -45,6 +45,30 @@ const cases = [
     expected: false,
   },
   {
+    name: 'retries a gift while the backend lock is busy',
+    type: 'gift' as const,
+    error: withMeta({ code: 'LOCK_BUSY', responseReceived: true }),
+    expected: true,
+  },
+  {
+    name: 'retries an exchange with a malformed HTTP 200 result',
+    type: 'exchange' as const,
+    error: withMeta({ code: 'invalid_response', responseReceived: true }),
+    expected: true,
+  },
+  {
+    name: 'does not retry a gift rejected by validation',
+    type: 'gift' as const,
+    error: withMeta({ code: 'VALIDATION_ERROR', responseReceived: true }),
+    expected: false,
+  },
+  {
+    name: 'does not retry an exchange rejected for stock',
+    type: 'exchange' as const,
+    error: withMeta({ code: 'INSUFFICIENT_STOCK', httpStatus: 409, responseReceived: true }),
+    expected: false,
+  },
+  {
     name: 'retries a photo after a network failure',
     type: 'photo' as const,
     error: new Error('Network request failed'),

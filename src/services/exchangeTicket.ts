@@ -22,6 +22,7 @@ export interface BuildExchangeTicketSnapshotInput {
   deliveryLines: ExchangeTicketSourceLine[];
   mermaLines: ExchangeTicketSourceLine[];
   notes?: string | null;
+  operationStatus?: 'pending' | 'confirmed';
 }
 
 export interface ExchangeTicketSnapshot {
@@ -34,6 +35,7 @@ export interface ExchangeTicketSnapshot {
   deliveryLines: ExchangeTicketLine[];
   mermaLines: ExchangeTicketLine[];
   notes: string;
+  operationStatus: 'pending' | 'confirmed';
 }
 
 const EXCHANGE_TICKET_TITLE = 'TICKET DE CAMBIO';
@@ -60,6 +62,8 @@ export function buildExchangeTicketSnapshot(
     deliveryLines: normalizeLines(input.deliveryLines),
     mermaLines: normalizeLines(input.mermaLines),
     notes: normalizeNotes(input.notes),
+    operationStatus: input.operationStatus
+      ?? (exchangeName.toUpperCase().startsWith('PENDIENTE/') ? 'pending' : 'confirmed'),
   };
 }
 
@@ -69,6 +73,12 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
   const notesSection = snapshot.notes
     ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(snapshot.notes)}</div>`
     : '';
+  const statusLabel = snapshot.operationStatus === 'pending'
+    ? 'PENDIENTE DE SINCRONIZACIÓN'
+    : 'CONFIRMADO POR ODOO';
+  const footerMessage = snapshot.operationStatus === 'pending'
+    ? 'Cambio pendiente; no repetir la operación'
+    : 'Cambio registrado correctamente';
 
   return `<!doctype html>
 <html>
@@ -160,6 +170,7 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
   <div class="divider"></div>
   <div class="row"><span>Folio</span><span>${escapeHtml(snapshot.folio)}</span></div>
   <div class="row"><span>Fecha</span><span>${escapeHtml(formatTicketDate(snapshot.createdAt))}</span></div>
+  <div class="row"><span>Estado</span><span>${escapeHtml(statusLabel)}</span></div>
   <div>Cliente:</div>
   <div><strong>${escapeHtml(snapshot.customerName)}</strong></div>
   <div class="divider"></div>
@@ -167,7 +178,7 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
   ${mermaSection}
   ${notesSection}
   <div class="divider"></div>
-  <div class="success">Cambio registrado correctamente</div>
+  <div class="success">${escapeHtml(footerMessage)}</div>
 </body>
 </html>`;
 }

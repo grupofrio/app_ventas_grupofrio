@@ -37,8 +37,8 @@ import {
   commitQueuedOperationWithLedger,
 } from '../../src/services/inventoryLedgerAdapters';
 import { decideExchangeFailureAction } from '../../src/services/exchangeSubmit';
-import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { isSessionExpiredError } from '../../src/services/sessionError';
+import { classifySalesOpsMutationError } from '../../src/services/salesOpsMutationOutcome';
 
 type ExchangeSection = 'delivery' | 'merma';
 
@@ -302,6 +302,7 @@ export default function CambioProductoScreen() {
       exchangeId: number | null;
       registeredMessage: string;
       clearIdempotency: boolean;
+      operationStatus: 'pending' | 'confirmed';
     }) => {
       if (args.clearIdempotency) {
         idempotencyKeyRef.current = null; // siguiente cambio = nueva key
@@ -325,6 +326,7 @@ export default function CambioProductoScreen() {
         deliveryLines: deliverySnapshotLines,
         mermaLines: mermaSnapshotLines,
         notes,
+        operationStatus: args.operationStatus,
       });
       try {
         await saveExchangeTicketSnapshot(snapshot);
@@ -361,6 +363,7 @@ export default function CambioProductoScreen() {
           exchangeId: null,
           registeredMessage: 'Cambio guardado para sincronizar',
           clearIdempotency: true,
+          operationStatus: 'pending',
         });
         return;
       }
@@ -373,9 +376,10 @@ export default function CambioProductoScreen() {
       } catch (error) {
         const code = (error as { code?: string }).code;
         const message = error instanceof Error ? error.message : 'No se pudo registrar el cambio.';
+        const outcome = classifySalesOpsMutationError(error);
         const action = decideExchangeFailureAction({
           isSessionExpired: isSessionExpiredError(error),
-          isRetryable: isRetryableSyncErrorMessage(message) || code === 'LOCK_BUSY',
+          isRetryable: outcome.kind !== 'definitive_rejection',
         });
         if (action === 'session_relogin') {
           Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar el cambio.');
@@ -393,6 +397,7 @@ export default function CambioProductoScreen() {
             exchangeId: null,
             registeredMessage: 'Cambio guardado para sincronizar',
             clearIdempotency: true,
+            operationStatus: 'pending',
           });
           return;
         }
@@ -440,6 +445,7 @@ export default function CambioProductoScreen() {
         exchangeId: response.data.exchange_id,
         registeredMessage,
         clearIdempotency: true,
+        operationStatus: 'confirmed',
       });
     } finally {
       setSaving(false);

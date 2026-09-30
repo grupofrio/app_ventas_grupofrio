@@ -2,6 +2,7 @@ import type { SyncItemType } from '../types/sync.ts';
 import { classifySaleSubmissionError } from './saleSubmissionOutcome.ts';
 import type { SyncQueueItem } from '../types/sync.ts';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure.ts';
+import { classifySalesOpsMutationError } from './salesOpsMutationOutcome.ts';
 
 export const AUTOMATIC_SYNC_RETRY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 export const MANUAL_RECONCILIATION_REQUIRED_MESSAGE =
@@ -61,6 +62,9 @@ export function transitionAgedItemsToManualReconciliation(
 export function shouldRetrySyncItemError(type: SyncItemType, error: unknown): boolean {
   if (type === 'sale_order') {
     return classifySaleSubmissionError(error).kind === 'ambiguous_result';
+  }
+  if (type === 'gift' || type === 'exchange') {
+    return classifySalesOpsMutationError(error).kind !== 'definitive_rejection';
   }
   const message = error instanceof Error ? error.message : 'Sync error';
   return isRetryableSyncErrorMessage(message);

@@ -15,7 +15,36 @@ assert.deepEqual(productionApk.env, {
   EXPO_PUBLIC_KF_ODOO_DB: 'grupofrio-gf-main-34980678',
 });
 
+const qaKold114 = easConfig.build['qa-kold114'];
+assert.ok(qaKold114, 'qa-kold114 profile must exist for the isolated PR #114 E2E');
+assert.equal(qaKold114.distribution, 'internal');
+assert.equal(qaKold114.android?.buildType, 'apk');
+assert.deepEqual(qaKold114.env, {
+  KF_LOCAL_DEV: '1',
+  EXPO_PUBLIC_BUILD_PROFILE: 'qa-kold114',
+  EXPO_PUBLIC_KF_DEFAULT_BASE_URL:
+    'https://grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081.dev.odoo.com',
+  EXPO_PUBLIC_KF_ODOO_DB: 'grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081',
+});
+
 const source = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
+const babelConfig = readFileSync(new URL('../babel.config.js', import.meta.url), 'utf8');
+
+assert.match(
+  babelConfig,
+  /inlineKoldPublicEnvironment/,
+  'Metro must inline the allowlisted public KOLD variables even though legacy readers use computed access',
+);
+assert.match(
+  babelConfig,
+  /EXPO_PUBLIC_KF_DEFAULT_BASE_URL/,
+  'the Babel allowlist must include the KOLD backend hostname',
+);
+assert.match(
+  babelConfig,
+  /EXPO_PUBLIC_KF_ODOO_DB/,
+  'the Babel allowlist must include the KOLD Odoo database',
+);
 
 assert.match(
   source,

@@ -1,3 +1,8 @@
+import {
+  rejectSalesOpsClientPayload,
+  requireSalesOpsIdempotencyKey,
+} from './salesOpsMutationOutcome.ts';
+
 function asPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -151,12 +156,16 @@ export function buildPaymentsCreatePayload(payload: Record<string, unknown>): Re
 }
 
 export function buildExchangeCreatePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const idempotencyKey =
+  const idempotencyKey = requireSalesOpsIdempotencyKey(
     asNonEmptyString(payload.idempotency_key) ??
-    pickOperationId(payload);
+    pickOperationId(payload),
+  );
+  if (payload.validate === false) {
+    return rejectSalesOpsClientPayload('El cambio debe enviarse con validate=true.');
+  }
   const stopId = asPositiveNumber(payload.stop_id);
   const notes = asNonEmptyString(payload.notes);
-  const validate = payload.validate === false ? false : true;
+  const validate = true;
   const deliveryLines = Array.isArray(payload.delivery_lines)
     ? payload.delivery_lines
         .map((line) => (line && typeof line === 'object'
@@ -171,6 +180,12 @@ export function buildExchangeCreatePayload(payload: Record<string, unknown>): Re
           : null))
         .filter((line): line is Record<string, unknown> => line !== null)
     : [];
+  if (!stopId) {
+    return rejectSalesOpsClientPayload('El cambio no tiene una parada válida.');
+  }
+  if (deliveryLines.length === 0 && mermaLines.length === 0) {
+    return rejectSalesOpsClientPayload('El cambio no tiene líneas válidas.');
+  }
 
   const meta: Record<string, unknown> = {
     idempotency_key: idempotencyKey,

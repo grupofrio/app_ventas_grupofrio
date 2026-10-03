@@ -63,7 +63,7 @@ function main() {
     isOnline: false,
     query: '',
   });
-  const bolsa = priced.lines.find((line) => line.id === 501) as { list_price?: number };
+  const bolsa = priced.lines.find((line) => line.id === 501) as SellerCatalogLine & { list_price?: number };
   assert.equal(bolsa.list_price, 41, 'el precio sigue siendo el de la última sincronización');
   assert.equal(bolsa.qty_display, 18, 'la cantidad es la del último snapshot positivo, no un inventario inventado');
 
@@ -122,15 +122,20 @@ function main() {
   assert.equal(stillStocked.mode, 'current');
   assert.equal(stillStocked.lines[0].id, 501);
 
-  const previous = [{ id: 501, qty_available: 18 }];
+  const previous: SellerCatalogLine[] = [
+    { id: 501, name: 'BOLSA DE HIELO 10 KG', qty_display: 18, qty_available: 18 },
+  ];
   assert.equal(
     retainPositiveAssortment(previous, barras),
     previous,
     'una carga posterior toda en cero no borra el surtido de la unidad',
   );
+  const replacement: SellerCatalogLine[] = [
+    { id: 900, name: 'NUEVO', qty_display: 2, qty_available: 2 },
+  ];
   assert.deepEqual(
-    retainPositiveAssortment(previous, [{ id: 900, qty_available: 2 }]),
-    [{ id: 900, qty_available: 2 }],
+    retainPositiveAssortment(previous, replacement),
+    replacement,
   );
   assert.equal(retainPositiveAssortment(null, barras), null);
 

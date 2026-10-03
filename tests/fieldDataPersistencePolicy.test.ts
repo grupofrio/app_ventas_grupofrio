@@ -24,6 +24,7 @@ test('route, visit, catalog, price, directory, and queue records require the enc
     'route:preparation',
     'visit:active',
     'cache:products:catalog',
+    'cache:products:van-assortment',
     'cache:prices',
     'cache:consignments',
     'sync:queue',

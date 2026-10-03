@@ -26,6 +26,11 @@ import {
 import { todayLocalISO } from '../utils/localDate';
 import { schedulePersistPriceCache } from '../services/offlineCache';
 import type { InventoryLoadResult } from '../services/legacyRefreshRunner';
+import {
+  buildVanAssortmentContextKey,
+  retainPositiveAssortment,
+  VAN_ASSORTMENT_TTL_MS,
+} from '../services/sellerCatalogView';
 
 export type InventorySource = 'truck_stock';
 
@@ -60,6 +65,13 @@ interface ProductState {
    * null cuando no se ha hecho carga aún.
    */
   hasStockData: boolean | null;
+  /**
+   * Last truck_stock lines that had quantity on this unit. Survives an
+   * all-zero payload and the next calendar day. Display-only; not stock
+   * authority. Null until a positive load has been stored for this warehouse.
+   */
+  positiveAssortment: TruckProduct[] | null;
+  positiveAssortmentWarehouseId: number | null;
 
   // Perf Fase 2B: metadata de caché persistente (para debug/UI mínima en 2C).
   // fromCache = los productos actuales provienen del caché de jornada (no de la
@@ -97,6 +109,12 @@ interface ProductState {
    * NO hace red; la carga online sigue siendo `loadProducts`.
    */
   hydrateFromCache: (warehouseId: number | null) => Promise<number>;
+  /**
+   * Restores the last positive van assortment for the signed-in unit.
+   * A same-day catalog of zeros does not replace it. A same-day catalog
+   * that still has quantity does.
+   */
+  hydrateVanAssortment: () => Promise<number>;
   reset: () => void;
 }
 
@@ -155,6 +173,27 @@ function persistCatalogToDisk(
   void storeSave(STORAGE_KEYS.PRODUCTS_CATALOG, envelope);
 }
 
+interface VanAssortmentPayload {
+  warehouseId: number;
+  products: TruckProduct[];
+}
+
+function persistVanAssortment(products: TruckProduct[], warehouseId: number): void {
+  const auth = useAuthStore.getState();
+  const contextKey = buildVanAssortmentContextKey({
+    employeeId: auth.employeeId,
+    companyId: auth.companyId,
+    warehouseId,
+  });
+  if (!contextKey || products.length === 0) return;
+  const envelope = buildCacheEnvelope(
+    { warehouseId, products } satisfies VanAssortmentPayload,
+    contextKey,
+    Date.now(),
+  );
+  void storeSave(STORAGE_KEYS.VAN_ASSORTMENT, envelope);
+}
+
 export const useProductStore = create<ProductState>((set, get) => ({
   products: [],
   isLoading: false,
@@ -165,6 +204,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   loadedPlanId: null,
   inventoryContext: 'ready',
   hasStockData: null,
+  positiveAssortment: null,
+  positiveAssortmentWarehouseId: null,
   fromCache: false,
   cachedAtMs: null,
   totalStockKg: 0,
@@ -304,6 +345,23 @@ export const useProductStore = create<ProductState>((set, get) => ({
       void storeRemove(STORAGE_KEYS.PRODUCTS);
       persistCatalogToDisk(products, source, hasStockData, planId);
       schedulePersistPriceCache();
+
+      // Remember the unit's last positive slice after the ledger rebase so
+      // pending local sales are already reflected. An all-zero payload keeps
+      // the previous slice; it must not become the only offline default.
+      const loaded = get().products;
+      const remembered = retainPositiveAssortment(get().positiveAssortment, loaded);
+      const incomingPositive = loaded.some((product) => product.qty_available > 0);
+      const assortmentWarehouseId = incomingPositive
+        ? scoped.warehouseId
+        : get().positiveAssortmentWarehouseId;
+      set({
+        positiveAssortment: remembered,
+        positiveAssortmentWarehouseId: remembered ? assortmentWarehouseId ?? null : null,
+      });
+      if (incomingPositive && remembered && remembered.length > 0) {
+        persistVanAssortment(remembered, scoped.warehouseId);
+      }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error cargando productos';
       set({ error: msg, isLoading: false });
@@ -447,11 +505,70 @@ export const useProductStore = create<ProductState>((set, get) => ({
     }
   },
 
+  hydrateVanAssortment: async () => {
+    const auth = useAuthStore.getState();
+    const contextKey = buildVanAssortmentContextKey({
+      employeeId: auth.employeeId,
+      companyId: auth.companyId,
+      warehouseId: auth.warehouseId,
+    });
+    if (!contextKey || !auth.warehouseId) return 0;
+    try {
+      const raw = await storeLoad<unknown>(STORAGE_KEYS.VAN_ASSORTMENT);
+      if (raw === null) {
+        const seeded = retainPositiveAssortment(null, get().products);
+        if (seeded) {
+          set({
+            positiveAssortment: seeded,
+            positiveAssortmentWarehouseId: auth.warehouseId,
+          });
+          persistVanAssortment(seeded, auth.warehouseId);
+          return seeded.length;
+        }
+        return 0;
+      }
+      const result = readCacheEnvelope<VanAssortmentPayload>(
+        raw,
+        contextKey,
+        VAN_ASSORTMENT_TTL_MS,
+        Date.now(),
+      );
+      const payload = result.payload;
+      const diskProducts = result.status === 'ok'
+        && payload
+        && payload.warehouseId === auth.warehouseId
+        && Array.isArray(payload.products)
+        ? payload.products
+        : null;
+      if (result.status !== 'ok') {
+        await storeRemove(STORAGE_KEYS.VAN_ASSORTMENT);
+      }
+      const remembered = retainPositiveAssortment(diskProducts, get().products);
+      const currentHasStock = get().products.some((product) => product.qty_available > 0);
+      set({
+        positiveAssortment: remembered,
+        positiveAssortmentWarehouseId: remembered ? auth.warehouseId : null,
+      });
+      if (currentHasStock && remembered) {
+        persistVanAssortment(remembered, auth.warehouseId);
+      }
+      logInfo('inventory', 'van_assortment_hydrated', {
+        count: remembered?.length ?? 0,
+        fromDisk: Boolean(diskProducts),
+      });
+      return remembered?.length ?? 0;
+    } catch (error) {
+      logWarn('inventory', 'van_assortment_hydrate_failed', { error: String(error) });
+      return 0;
+    }
+  },
+
   reset: () => set({
     products: [], isLoading: false, error: null,
     lastSync: null, totalStockKg: 0, productCount: 0,
     inventorySource: null, loadedWarehouseId: null, loadedPlanId: null,
     hasStockData: null, inventoryContext: 'ready',
+    positiveAssortment: null, positiveAssortmentWarehouseId: null,
     fromCache: false, cachedAtMs: null,
   }),
 }));

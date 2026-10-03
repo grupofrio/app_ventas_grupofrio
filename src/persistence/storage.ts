@@ -190,6 +190,10 @@ export const STORAGE_KEYS = {
   // dump del caché de precios por cliente. Solo LECTURA offline; la venta
   // sigue online-first y el backend valida stock/precio al confirmar.
   PRODUCTS_CATALOG: 'cache:products:catalog',
+  // Last truck_stock slice that had quantity on this unit. Not day-scoped:
+  // the jornada catalog drops yesterday's van stock, and an all-zero payload
+  // must not become the offline default list.
+  VAN_ASSORTMENT: 'cache:products:van-assortment',
   PRICES_CACHE: 'cache:prices',
   // Perf Fase 2D-1: consignaciones activas cacheadas SOLO para lectura offline.
   // create/visit/close siguen online-first; backend = fuente de verdad.

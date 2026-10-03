@@ -33,6 +33,10 @@ import { CacheStatusBadge } from '../ui/CacheStatusBadge';
 import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { resolveSaleLinePrice } from '../../services/salePriceConfirmation';
 import { describeCatalogTrustBanner } from '../../services/trustSignals';
+import {
+  describeMissingVanAssortment,
+  selectSellerCatalogView,
+} from '../../services/sellerCatalogView';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
@@ -92,14 +96,6 @@ function categorizeProduct(name: string): CategoryKey {
   return 'otros';
 }
 
-function fuzzyMatch(text: string, query: string): boolean {
-  const t = text.toLowerCase();
-  const q = query.toLowerCase().trim();
-  if (!q) return true;
-  const words = q.split(/\s+/);
-  return words.every((w) => t.includes(w));
-}
-
 /** Format visible pricelist price exactly as backend returned it. */
 function displayPrice(basePrice: number | null): string {
   return typeof basePrice === 'number' ? formatCurrency(getVisiblePricelistPrice(basePrice)) : '—';
@@ -113,6 +109,27 @@ type EnrichedProduct = TruckProduct & {
   hasCustomPrice: boolean; // true when price comes from customer pricelist
 };
 
+function enrichCatalogProduct(
+  product: TruckProduct,
+  ctx: {
+    recommendations: Set<number>;
+    existingProductIds: number[];
+    priceMap: Map<number, number>;
+    partnerId?: number;
+    hasAuthorizedPrices: boolean;
+  },
+): EnrichedProduct {
+  const custom = ctx.priceMap.get(product.id);
+  return {
+    ...product,
+    category: categorizeProduct(product.name),
+    isRecommended: ctx.recommendations.has(product.id),
+    isAlreadyAdded: ctx.existingProductIds.includes(product.id),
+    customerPrice: !ctx.partnerId || ctx.hasAuthorizedPrices ? custom ?? product.list_price : null,
+    hasCustomPrice: custom !== undefined,
+  };
+}
+
 // ═══ Component ═══
 
 export function ProductPicker({ visible, onClose, existingProductIds, partnerId, pricelistId, allowPendingPrice = false, onAddLine }: ProductPickerProps) {
@@ -121,6 +138,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
   // dd78489). Reemplaza la heurística client-side anterior.
   const hasStockData = useProductStore((s) => s.hasStockData);
+  const positiveAssortment = useProductStore((s) => s.positiveAssortment);
+  const positiveAssortmentWarehouseId = useProductStore((s) => s.positiveAssortmentWarehouseId);
   const loadProducts = useProductStore((s) => s.loadProducts);
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
@@ -256,61 +275,55 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   }, [partnerId, forecasts]);
 
   // Enrich products with customer price
-  const enrichedProducts = useMemo(() => {
-    return products.map((p) => {
-      const custom = priceMap.get(p.id);
-      return {
-        ...p,
-        category: categorizeProduct(p.name),
-        isRecommended: recommendations.has(p.id),
-        isAlreadyAdded: existingProductIds.includes(p.id),
-        customerPrice: !partnerId || hasAuthorizedPrices ? custom ?? p.list_price : null,
-        hasCustomPrice: custom !== undefined,
-      };
-    });
-  }, [products, recommendations, existingProductIds, priceMap, partnerId, hasAuthorizedPrices]);
+  const enrichCtx = useMemo(() => ({
+    recommendations,
+    existingProductIds,
+    priceMap,
+    partnerId,
+    hasAuthorizedPrices,
+  }), [recommendations, existingProductIds, priceMap, partnerId, hasAuthorizedPrices]);
 
-  // BLD-20260424-STOCKMETA: usamos el flag explícito hasStockData del
-  // backend (commit dd78489 de Sebastián) en vez de la heurística
-  // anterior "todos los qty están en 0". El backend lo calcula sobre el
-  // qty_map COMPLETO del warehouse, antes de filtrar/ordenar la lista
-  // que envía al cliente — así representa el stock real del almacén.
-  //
-  // Convención:
-  //   - hasStockData === true   → modo normal: ocultar productos agotados.
-  //   - hasStockData === false  → modo referencia: mostrar todos como "Agotado".
-  //   - hasStockData === null   → fuente NO es truck_stock (stock_quant
-  //                                o global_legacy): mostrar todos.
-  const showOutOfStockAsReference = hasStockData === false || hasStockData === null;
+  const enrichedProducts = useMemo(
+    () => products.map((product) => enrichCatalogProduct(product, enrichCtx)),
+    [products, enrichCtx],
+  );
 
-  // Filter + sort
+  // Snapshot is per unit warehouse. Company 34 is shared by Guadalajara and
+  // Iguala, so a mismatched warehouse must not supply the default list.
+  const assortmentForUnit = positiveAssortment
+    && positiveAssortmentWarehouseId
+    && warehouseId
+    && positiveAssortmentWarehouseId === warehouseId
+    ? positiveAssortment
+    : null;
+  const enrichedSnapshot = useMemo(
+    () => (assortmentForUnit ?? []).map((product) => enrichCatalogProduct(product, enrichCtx)),
+    [assortmentForUnit, enrichCtx],
+  );
+
+  // Offline + every current qty at 0 used to sort the full catalog by name,
+  // so shared [BARRA-*] lines occupied the top. The default list then keeps
+  // this unit's last positive snapshot. Zeros stay available through search.
+  const catalogView = useMemo(() => selectSellerCatalogView({
+    products: enrichedProducts,
+    positiveAssortment: enrichedSnapshot.length > 0 ? enrichedSnapshot : null,
+    isOnline,
+    query: debouncedSearch,
+  }), [enrichedProducts, enrichedSnapshot, isOnline, debouncedSearch]);
+
   const filtered = useMemo(() => {
-    return enrichedProducts.filter((p) => {
-      if (activeCategory !== 'all' && p.category !== activeCategory) return false;
-      if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), debouncedSearch)) return false;
-      // Ocultar agotados solo en modo normal (truck_stock con stock real).
-      // En modo referencia o fallback global, dejamos pasar para no dejar
-      // al vendedor con pantalla en blanco.
-      // Stock referencial: los agotados se MUESTRAN (etiquetados y al final
-      // por el sort) y se pueden vender; el backend valida el stock real.
-      return true;
-    }).sort((a, b) => {
-      if (a.isRecommended && !b.isRecommended) return -1;
-      if (!a.isRecommended && b.isRecommended) return 1;
-      if (a.qty_display > 0 && b.qty_display <= 0) return -1;
-      if (a.qty_display <= 0 && b.qty_display > 0) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [enrichedProducts, activeCategory, debouncedSearch, showOutOfStockAsReference]);
+    return catalogView.lines.filter((product) => (
+      activeCategory === 'all' || product.category === activeCategory
+    ));
+  }, [catalogView, activeCategory, debouncedSearch]);
 
-  // Category counts
   const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: enrichedProducts.length };
-    enrichedProducts.forEach((p) => {
-      counts[p.category] = (counts[p.category] || 0) + 1;
+    const counts: Record<string, number> = { all: catalogView.lines.length };
+    catalogView.lines.forEach((product) => {
+      counts[product.category] = (counts[product.category] || 0) + 1;
     });
     return counts;
-  }, [enrichedProducts]);
+  }, [catalogView]);
 
   // Stock referencial: el stepper ya no topa contra el stock cacheado (puede
   // estar obsoleto); tope sano anti-error de dedo. Backend valida el real.
@@ -626,7 +639,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             initialNumToRender={15}
             maxToRenderPerBatch={10}
             windowSize={5}
-            ListEmptyComponent={<EmptyState search={search} activeCategory={activeCategory} />}
+            ListEmptyComponent={(
+              <EmptyState
+                search={search}
+                activeCategory={activeCategory}
+                mode={catalogView.mode}
+                hasReferentialCatalog={enrichedProducts.length > 0}
+              />
+            )}
           />
         ) : (
           <FlatList
@@ -640,7 +660,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
             initialNumToRender={10}
             maxToRenderPerBatch={8}
             windowSize={5}
-            ListEmptyComponent={<EmptyState search={search} activeCategory={activeCategory} />}
+            ListEmptyComponent={(
+              <EmptyState
+                search={search}
+                activeCategory={activeCategory}
+                mode={catalogView.mode}
+                hasReferentialCatalog={enrichedProducts.length > 0}
+              />
+            )}
           />
         )}
       </SafeAreaView>
@@ -650,17 +677,28 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
 
 // ═══ Empty State ═══
 
-function EmptyState({ search, activeCategory }: { search: string; activeCategory: string }) {
+function EmptyState({
+  search,
+  activeCategory,
+  mode,
+  hasReferentialCatalog,
+}: {
+  search: string;
+  activeCategory: string;
+  mode: string;
+  hasReferentialCatalog: boolean;
+}) {
+  const message = search
+    ? `Sin resultados para "${search}"`
+    : mode === 'empty'
+      ? describeMissingVanAssortment(hasReferentialCatalog)
+      : activeCategory !== 'all'
+        ? 'Sin productos en esta categoria'
+        : 'No hay productos disponibles';
   return (
     <View style={styles.emptyCard}>
       <Text style={{ fontSize: 32, marginBottom: 8 }}>📦</Text>
-      <Text style={typography.dim}>
-        {search
-          ? `Sin resultados para "${search}"`
-          : activeCategory !== 'all'
-            ? 'Sin productos en esta categoria'
-            : 'No hay productos disponibles'}
-      </Text>
+      <Text style={typography.dim}>{message}</Text>
     </View>
   );
 }

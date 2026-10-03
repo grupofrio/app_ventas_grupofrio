@@ -143,6 +143,7 @@ export async function rehydrateAppState(): Promise<{
     await storeRemove(STORAGE_KEYS.PRODUCTS);
     const planId = useRouteStore.getState().plan?.plan_id ?? null;
     productCount = await useProductStore.getState().hydrateFromCache(planId);
+    await useProductStore.getState().hydrateVanAssortment();
     const restoredPrices = await hydratePriceCacheFromDisk();
 
     // 3b. Day bundle + route preparation receipt (after plan/products/prices).

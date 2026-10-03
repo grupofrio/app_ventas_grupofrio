@@ -11,6 +11,7 @@ export const ENCRYPTED_FIELD_DATA_KEYS = [
   'visit:active',
   'entities:products',
   'cache:products:catalog',
+  'cache:products:van-assortment',
   'cache:prices',
   'cache:consignments',
   'sync:queue',

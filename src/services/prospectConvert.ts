@@ -83,7 +83,9 @@ export function applyLeadConvertToStop(
 
   return {
     ...stop,
-    _entityType: 'lead',
+    // A confirmed partner is a customer. The sale screen then uses the same
+    // customer path as a planned stop.
+    _entityType: partnerId ? 'customer' : 'lead',
     _leadId: leadId,
     _partnerId: partnerId,
     partner_id: partnerId ?? stop.partner_id ?? null,

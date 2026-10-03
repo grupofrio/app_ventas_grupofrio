@@ -104,6 +104,8 @@ export interface GFStop {
   phone?: string;
   mobile?: string;
   email?: string;
+  /** RFC capturado en campo, si el negocio lo tiene. */
+  vat?: string | null;
   customer_latitude?: number;
   customer_longitude?: number;
   google_maps_url?: string;
@@ -132,6 +134,11 @@ export interface GFStop {
   _leadId?: number | null;
   _partnerId?: number | null;
   _offrouteVisitId?: number | null;
+  /**
+   * Alta de prospecto todavía en cola. La visita de hoy ya existe; al
+   * sincronizar se liga el crm.lead sin que el vendedor lo busque de nuevo.
+   */
+  _pendingLeadOperationId?: string | null;
   _pricelistId?: number | null;
   _pricelistName?: string | null;
   // Milliseconds since epoch. Stamped by addVirtualStop() so a plan

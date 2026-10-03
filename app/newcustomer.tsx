@@ -119,6 +119,7 @@ export default function NewCustomerScreen() {
     setSaving(true);
     let queueId: string | null = null;
     let confirmedOnServer = false;
+    let visitOpened = false;
 
     try {
       const placedPin = pin;
@@ -206,7 +207,12 @@ export default function NewCustomerScreen() {
         visitStore.setOffrouteVisitId(offrouteVisitId);
       }
 
+      // The visit already exists. Opening it here matters: the alert can be
+      // dismissed without onPress, and Guardar would otherwise create a second
+      // prospect and abandon this visit.
       const openVisit = () => router.replace(`/checkin/${virtualStopId}` as never);
+      openVisit();
+      visitOpened = true;
       if (!confirmedOnServer) {
         Alert.alert(
           'Prospecto guardado. Pendiente de sincronizar.',
@@ -227,7 +233,7 @@ export default function NewCustomerScreen() {
           void useSyncStore.getState().processQueue();
         }
       }
-      setSaving(false);
+      if (!visitOpened) setSaving(false);
     }
   }
 

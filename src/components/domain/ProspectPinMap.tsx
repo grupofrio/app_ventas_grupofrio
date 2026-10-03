@@ -41,15 +41,22 @@ export function ProspectPinMap({
   focusToken = 0,
 }: ProspectPinMapProps) {
   const mapRef = useRef<MapView | null>(null);
+  const centerRef = useRef(center);
+  centerRef.current = center;
   const target = pin ?? center;
 
   useEffect(() => {
-    if (!center || focusToken === 0) return;
+    // `center` is a new object whenever the parent renders. Depending on it
+    // pulls the camera back to GPS on each keystroke or location tick after
+    // the seller has asked to focus, including while they drag the pin.
+    if (focusToken === 0) return;
+    const point = centerRef.current;
+    if (!point) return;
     const map = mapRef.current as (MapView & {
       animateToRegion?: (region: Region, duration: number) => void;
     }) | null;
-    map?.animateToRegion?.(regionFor(center), 250);
-  }, [center, focusToken]);
+    map?.animateToRegion?.(regionFor(point), 250);
+  }, [focusToken]);
 
   if (!target) {
     return (

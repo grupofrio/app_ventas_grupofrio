@@ -6,12 +6,23 @@ const saleScreen = readFileSync(resolve('app/sale/[stopId].tsx'), 'utf8');
 const newProspectScreen = readFileSync(resolve('app/newcustomer.tsx'), 'utf8');
 const postvisitScreen = readFileSync(resolve('app/postvisit/[stopId].tsx'), 'utf8');
 const offrouteScreen = readFileSync(resolve('app/offroute.tsx'), 'utf8');
+const pinMap = readFileSync(resolve('src/components/domain/ProspectPinMap.tsx'), 'utf8');
 
 function testScreensKeepTheSellerBoundaries() {
   assert.match(saleScreen, /Prospecto no vendible/);
   assert.match(newProspectScreen, /ProspectPinMap/);
   assert.match(newProspectScreen, /Guardar y abrir visita/);
   assert.match(newProspectScreen, /\/checkin\/\$\{virtualStopId\}/);
+  assert.match(
+    newProspectScreen,
+    /const openVisit = \(\) => router\.replace\(`\/checkin\/\$\{virtualStopId\}` as never\);\s*openVisit\(\);/,
+    'saving a prospect must open the visit even if the alert is dismissed',
+  );
+  assert.match(
+    newProspectScreen,
+    /if \(!visitOpened\) setSaving\(false\);/,
+    'Guardar must stay disabled after the visit opens so it cannot create a second prospect',
+  );
   assert.doesNotMatch(
     newProspectScreen,
     /buildProspectionPayload\(form, \{ latitude, longitude \}\)/,
@@ -21,6 +32,12 @@ function testScreensKeepTheSellerBoundaries() {
   assert.match(postvisitScreen, /Convertir a cliente/);
   assert.match(offrouteScreen, /Nuevo prospecto/);
   assert.match(offrouteScreen, /tienda nueva no se registra aquí/i);
+  assert.match(pinMap, /\}, \[focusToken\]\);/);
+  assert.doesNotMatch(
+    pinMap,
+    /\}, \[center, focusToken\]\);/,
+    'the camera must not recenter on every parent render after the pin is placed',
+  );
 }
 
 async function main() {

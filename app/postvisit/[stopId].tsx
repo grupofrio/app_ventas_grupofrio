@@ -33,6 +33,17 @@ import { createConvertLeadIntentController } from '../../src/services/convertLea
 import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import { getCurrentPosition } from '../../src/services/gps';
+import { ProspectPinMap } from '../../src/components/domain/ProspectPinMap';
+import {
+  convertBlockers,
+  convertBlockMessage,
+  customerSaleRoute,
+  isUsableCoordinate,
+  pinFromRecord,
+  prospectPhoneOrNull,
+  type SellerPin,
+} from '../../src/services/sellerProspectVisit';
 
 const INTEREST_OPTIONS = [
   { value: 'high', label: 'Alto' },
@@ -65,9 +76,15 @@ export default function ProspeccionScreen() {
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
-  const [contactName, setContactName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+  const [contactName, setContactName] = useState(stop?.contact_name || '');
+  const [phone, setPhone] = useState(stop?.phone || stop?.mobile || '');
+  const [address, setAddress] = useState(stop?.street || stop?.address || '');
+  const [rfc, setRfc] = useState(typeof stop?.vat === 'string' ? stop.vat : '');
+  const [email, setEmail] = useState(stop?.email || '');
+  const recordPin = stop ? pinFromRecord(stop.customer_latitude, stop.customer_longitude) : null;
+  const [pin, setPin] = useState<SellerPin | null>(recordPin);
+  const [pinPlaced, setPinPlaced] = useState(recordPin != null);
+  const [focusToken, setFocusToken] = useState(0);
   const [competitor, setCompetitor] = useState('');
   const [freezer, setFreezer] = useState<'yes' | 'no'>('no');
   const [interestLevel, setInterestLevel] = useState<'high' | 'medium' | 'low'>('medium');
@@ -87,6 +104,11 @@ export default function ProspeccionScreen() {
     return selectedStageId != null;
   }, [selectedStageId]);
 
+
+  useEffect(() => {
+    if (!stop || stop._entityType !== 'lead' || hasPersistedLeadLocation(stop)) return;
+    void getCurrentPosition();
+  }, [stop?.id, stop?._entityType, stop?.customer_latitude, stop?.customer_longitude]);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,8 +232,50 @@ export default function ProspeccionScreen() {
     }
   }
 
+  function leadRecordPatch(): Partial<typeof currentStop> {
+    const typedPhone = phone.trim();
+    return {
+      phone: typedPhone || currentStop.phone,
+      mobile: typedPhone || currentStop.mobile,
+      street: address.trim() || currentStop.street,
+      vat: rfc.trim() || currentStop.vat || null,
+      ...(pinPlaced && pin
+        ? { customer_latitude: pin.latitude, customer_longitude: pin.longitude }
+        : {}),
+    };
+  }
+
+  function openSale() {
+    router.replace(customerSaleRoute(currentStop.id) as never);
+  }
+
   async function handleConvert() {
-    if (!readyToConvert || saving) return;
+    if (saving) return;
+
+    const placedPin = pin ?? pinFromRecord(currentStop.customer_latitude, currentStop.customer_longitude);
+    const blocks = convertBlockers({
+      phone,
+      pinPlaced: pinPlaced || placedPin != null,
+      leadId: currentStop._leadId ?? null,
+      pendingLeadOperationId: currentStop._pendingLeadOperationId,
+      stopId: currentStop.id,
+    });
+    if (blocks[0] || !placedPin) {
+      Alert.alert('No se puede convertir', convertBlockMessage(blocks[0] ?? 'pin'));
+      return;
+    }
+
+    const phoneValue = prospectPhoneOrNull(phone) as string;
+    const withCapture = {
+      ...currentStop,
+      ...leadRecordPatch(),
+      phone: phoneValue,
+      mobile: phoneValue,
+      customer_latitude: placedPin.latitude,
+      customer_longitude: placedPin.longitude,
+    };
+    // The pin and phone stay on the visit even if conversion cannot finish.
+    patchStopLocal(withCapture);
 
     if (!isOnline) {
       Alert.alert(
@@ -223,12 +287,12 @@ export default function ProspeccionScreen() {
     }
 
     // Crash/restart v1: if stop already has partner, treat as converted — no new mutation.
-    if (getLeadPartnerId(currentStop) != null) {
+    if (getLeadPartnerId(currentStop) != null || currentStop._entityType === 'customer') {
       convertIntentRef.current.finalize('already_converted');
       Alert.alert(
         'Prospecto ya convertido',
         'Este prospecto ya tiene cliente ligado. La venta está habilitada.',
-        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+        [{ text: 'Abrir venta', onPress: openSale }],
       );
       return;
     }
@@ -242,10 +306,33 @@ export default function ProspeccionScreen() {
 
     setSaving(true);
     try {
+      if (selectedStageId != null && currentStop.id > 0) {
+        await upsertLeadData(buildPostvisitPayload({
+          stop: withCapture,
+          form: {
+            contactName,
+            phone: phoneValue,
+            email,
+            competitor,
+            freezer,
+            interestLevel,
+            notes,
+          },
+          stageId: selectedStageId,
+          pin: placedPin,
+          street: address,
+          vat: rfc,
+        }));
+      }
       const convertResult = await convertLeadData({
         operation_id: operationId,
-        stop_id: currentStop.id,
-        lead_id: currentStop._leadId ?? null,
+        stop_id: withCapture.id,
+        lead_id: withCapture._leadId ?? null,
+        phone: phoneValue,
+        street: address,
+        vat: rfc,
+        latitude: placedPin.latitude,
+        longitude: placedPin.longitude,
       });
       if (!convertResult) {
         convertIntentRef.current.markAmbiguous();
@@ -262,17 +349,15 @@ export default function ProspeccionScreen() {
 
       const status = typeof convertResult.status === 'string' ? convertResult.status : '';
       const nextStop = applyLeadConvertToStop(
-        currentStop,
+        withCapture,
         convertResult as unknown as ProspectConvertResult,
       );
-      if (getLeadPartnerId(nextStop) != null) {
+      const linkedPartnerId = nextStop._partnerId ?? null;
+      if (linkedPartnerId != null) {
         patchStopLocal(nextStop);
       }
 
-      const converted =
-        status === 'converted'
-        || status === 'already_converted'
-        || getLeadPartnerId(nextStop) != null;
+      const converted = linkedPartnerId != null;
 
       if (!converted) {
         convertIntentRef.current.finalize('rejected');
@@ -292,10 +377,11 @@ export default function ProspeccionScreen() {
           ? 'Prospecto ya convertido'
           : 'Prospecto convertido a cliente',
         status === 'already_converted'
-          ? 'Este prospecto ya tenía cliente en el servidor. La venta quedó habilitada.'
-          : 'El servidor confirmó el cliente. La venta se habilitó en esta misma visita.',
-        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+          ? 'Este prospecto ya tenía cliente en el servidor. Se abre la venta.'
+          : 'El servidor confirmó el cliente. Se abre la misma venta de una parada del plan.',
+        [{ text: 'Abrir venta', onPress: openSale }],
       );
+      openSale();
     } catch (error) {
       if (isReviewRequiredDuplicateError(error)) {
         convertIntentRef.current.finalize('review_required_duplicate');
@@ -333,8 +419,11 @@ export default function ProspeccionScreen() {
     }
     if (saving) return;
 
+    const withPin = { ...currentStop, ...leadRecordPatch() };
+    patchStopLocal(withPin);
+
     const payload = buildPostvisitPayload({
-      stop: currentStop,
+      stop: withPin,
       form: {
         contactName,
         phone,
@@ -345,6 +434,9 @@ export default function ProspeccionScreen() {
         notes,
       },
       stageId: selectedStageId as number,
+      pin: pinPlaced ? pin : null,
+      street: address,
+      vat: rfc,
     });
 
     if (!isOnline) {
@@ -365,7 +457,7 @@ export default function ProspeccionScreen() {
       const lead = await upsertLeadData(payload);
       if (lead) {
         // Upsert must not create customers; only refresh lead fields / existing partner.
-        const nextStop = applyLeadUpsertToStop(currentStop, lead as any);
+        const nextStop = applyLeadUpsertToStop(withPin, lead as any);
         patchStopLocal(nextStop);
       }
 
@@ -407,20 +499,74 @@ export default function ProspeccionScreen() {
 
         {isLead && !alreadyCustomer && (
           <>
+            <Text style={typography.inputLabel}>PIN DE LA PUERTA</Text>
+            <ProspectPinMap
+              center={
+                isUsableCoordinate(latitude, longitude)
+                  ? { latitude: latitude as number, longitude: longitude as number }
+                  : pin
+              }
+              pin={pinPlaced ? pin : null}
+              focusToken={focusToken}
+              onPinMoved={(next) => {
+                setPin(next);
+                setPinPlaced(true);
+              }}
+            />
+            <Text style={[typography.dim, styles.pinHint]}>
+              {pinPlaced
+                ? 'Este pin queda en el prospecto. Arrástralo si la puerta está más adelante.'
+                : 'El mapa se centra en tu GPS, pero no se guarda hasta que dejes o arrastres el pin.'}
+            </Text>
+            {!pinPlaced ? (
+              <Button
+                label="Dejar el pin aquí"
+                variant="secondary"
+                onPress={() => {
+                  const here = pinFromRecord(latitude, longitude);
+                  if (!here) {
+                    Alert.alert('Sin ubicación', 'Activa el GPS para dejar el pin donde estás, o arrástralo en el mapa.');
+                    return;
+                  }
+                  setPin(here);
+                  setPinPlaced(true);
+                  setFocusToken((value) => value + 1);
+                }}
+                fullWidth
+                style={{ marginTop: 8 }}
+              />
+            ) : null}
             <Text style={typography.inputLabel}>PARA CONVERTIR A CLIENTE</Text>
             <Card>
               <View style={styles.reqRow}>
                 <Text style={typography.bodySmall}>Teléfono</Text>
-                <Text style={[typography.dim, styles.reqStatus, hasPhoneReq ? styles.reqOk : styles.reqPending]}>
-                  {hasPhoneReq ? '✓ Completo' : '▢ Falta'}
+                <Text style={[typography.dim, styles.reqStatus, (hasPhoneReq || prospectPhoneOrNull(phone)) ? styles.reqOk : styles.reqPending]}>
+                  {(hasPhoneReq || prospectPhoneOrNull(phone)) ? '✓ Completo' : '▢ Falta'}
                 </Text>
               </View>
               <View style={styles.reqRow}>
-                <Text style={typography.bodySmall}>Ubicación GPS</Text>
-                <Text style={[typography.dim, styles.reqStatus, hasLocationReq ? styles.reqOk : styles.reqPending]}>
-                  {hasLocationReq ? '✓ Completa' : '▢ Falta'}
+                <Text style={typography.bodySmall}>Pin en la puerta</Text>
+                <Text style={[typography.dim, styles.reqStatus, (pinPlaced || hasLocationReq) ? styles.reqOk : styles.reqPending]}>
+                  {(pinPlaced || hasLocationReq) ? '✓ Colocado' : '▢ Falta'}
                 </Text>
               </View>
+              <View style={styles.reqRow}>
+                <Text style={typography.bodySmall}>Dirección</Text>
+                <Text style={[typography.dim, styles.reqStatus, address.trim() ? styles.reqOk : styles.reqPending]}>
+                  {address.trim() ? '✓ Capturada' : 'Si la tienes'}
+                </Text>
+              </View>
+              <View style={styles.reqRow}>
+                <Text style={typography.bodySmall}>RFC</Text>
+                <Text style={[typography.dim, styles.reqStatus, rfc.trim() ? styles.reqOk : styles.reqPending]}>
+                  {rfc.trim() ? '✓ Capturado' : 'Si lo tiene'}
+                </Text>
+              </View>
+              {readyToConvert ? (
+                <Text style={[typography.dim, styles.pinHint]}>
+                  Teléfono y pin ya están guardados en el registro.
+                </Text>
+              ) : null}
               <View style={styles.reqRow}>
                 <Text style={typography.bodySmall}>Etapa seleccionada</Text>
                 <Text style={[typography.dim, styles.reqStatus, selectedStageId != null ? styles.reqOk : styles.reqPending]}>
@@ -466,13 +612,35 @@ export default function ProspeccionScreen() {
 
         <View style={styles.fieldGroup}>
           <Input
-            label="TELÉFONO"
-            placeholder="Teléfono"
+            label={isLead && !alreadyCustomer ? 'TELÉFONO *' : 'TELÉFONO'}
+            placeholder="10 dígitos"
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
           />
         </View>
+
+        {isLead && !alreadyCustomer ? (
+          <>
+            <View style={styles.fieldGroup}>
+              <Input
+                label="DIRECCIÓN"
+                placeholder="Calle, número, colonia"
+                value={address}
+                onChangeText={setAddress}
+              />
+            </View>
+            <View style={styles.fieldGroup}>
+              <Input
+                label="RFC (SI LO TIENE)"
+                placeholder="Opcional"
+                autoCapitalize="characters"
+                value={rfc}
+                onChangeText={setRfc}
+              />
+            </View>
+          </>
+        ) : null}
 
         <View style={styles.fieldGroup}>
           <Input
@@ -530,12 +698,12 @@ export default function ProspeccionScreen() {
           />
         </View>
 
-        {readyToConvert ? (
+        {isLead && !alreadyCustomer ? (
           <Button
             label="Convertir a cliente"
             onPress={() => { void handleConvert(); }}
             fullWidth
-            disabled={saving || loadingStages}
+            disabled={saving}
             loading={saving}
             style={{ marginTop: 16 }}
           />
@@ -546,9 +714,9 @@ export default function ProspeccionScreen() {
           onPress={() => { void handleSave(); }}
           fullWidth
           disabled={!canSave || saving || loadingStages}
-          loading={saving && !readyToConvert}
-          variant={readyToConvert ? 'secondary' : 'primary'}
-          style={{ marginTop: readyToConvert ? 8 : 16 }}
+          loading={saving && !(isLead && !alreadyCustomer)}
+          variant={isLead && !alreadyCustomer ? 'secondary' : 'primary'}
+          style={{ marginTop: isLead && !alreadyCustomer ? 8 : 16 }}
         />
 
         {currentStop._isOffroute ? (
@@ -590,6 +758,7 @@ const styles = StyleSheet.create({
   loadingStageText: {
     color: colors.textDim,
   },
+  pinHint: { marginTop: 8, marginBottom: 8 },
   chipRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   errorText: {
     marginTop: 8,

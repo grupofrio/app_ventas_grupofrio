@@ -25,6 +25,7 @@ async function main() {
   assert.equal(converted._partnerId, 9001);
   assert.equal(converted.customer_id, 9001);
   assert.equal(converted.customer_name, 'Tienda X SA');
+  assert.equal(converted._entityType, 'customer');
 
   const already = m.applyLeadConvertToStop(stop, {
     status: 'already_converted',

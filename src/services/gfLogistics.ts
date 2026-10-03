@@ -1109,22 +1109,43 @@ export async function createFieldLeadData(
 /**
  * Secure online-only prospect → customer conversion.
  * Must NOT be used offline; must NOT go through lead/upsert.
- * Payload is intentionally minimal: operation_id + stop_id (+ optional lead_id).
+ * Sends operation_id plus the real route stop and/or lead, and the phone,
+ * address, RFC and seller pin captured on this visit.
  */
 export async function convertLeadData(
   payload: {
     operation_id: string;
-    stop_id: number;
+    stop_id?: number | null;
     lead_id?: number | null;
+    phone?: string | null;
+    street?: string | null;
+    vat?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
   },
   meta?: ClientEventMeta | null,
 ): Promise<Record<string, unknown> | null> {
   const body: Record<string, unknown> = {
     operation_id: payload.operation_id,
-    stop_id: payload.stop_id,
   };
+  // A virtual visit has a negative local id. Only a real route stop is sent.
+  if (typeof payload.stop_id === 'number' && payload.stop_id > 0) {
+    body.stop_id = payload.stop_id;
+  }
   if (typeof payload.lead_id === 'number' && payload.lead_id > 0) {
     body.lead_id = payload.lead_id;
+  }
+  if (typeof payload.phone === 'string' && payload.phone.trim()) body.phone = payload.phone.trim();
+  if (typeof payload.street === 'string' && payload.street.trim()) body.street = payload.street.trim();
+  if (typeof payload.vat === 'string' && payload.vat.trim()) body.vat = payload.vat.trim();
+  if (typeof payload.latitude === 'number' && Number.isFinite(payload.latitude)) {
+    body.latitude = payload.latitude;
+  }
+  if (typeof payload.longitude === 'number' && Number.isFinite(payload.longitude)) {
+    body.longitude = payload.longitude;
+  }
+  if (body.stop_id == null && body.lead_id == null) {
+    throw new Error('La conversión necesita la parada de ruta o el prospecto registrado.');
   }
   const result = await postRest<any>(
     `${GF_BASE}/lead/convert`,

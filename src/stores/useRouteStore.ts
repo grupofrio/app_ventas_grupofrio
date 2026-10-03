@@ -81,6 +81,10 @@ interface RouteState {
       googleMapsUrl?: string | null;
       street?: string | null;
       city?: string | null;
+      phone?: string | null;
+      mobile?: string | null;
+      vat?: string | null;
+      pendingLeadOperationId?: string | null;
     },
   ) => number;
   patchStop: (stopId: number, patch: Partial<GFStop>) => void;
@@ -349,6 +353,10 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       googleMapsUrl: opts?.googleMapsUrl,
       street: opts?.street,
       city: opts?.city,
+      phone: opts?.phone,
+      mobile: opts?.mobile,
+      vat: opts?.vat,
+      pendingLeadOperationId: opts?.pendingLeadOperationId,
     });
     const virtualId = virtualStop.id;
     const stops = [...get().stops, virtualStop];

@@ -37,6 +37,11 @@ export interface CreateVirtualStopInput {
   /** Dirección textual disponible (p.ej. de la búsqueda off-route). */
   street?: string | null;
   city?: string | null;
+  phone?: string | null;
+  mobile?: string | null;
+  vat?: string | null;
+  /** Cola de alta cuando el crm.lead todavía no tiene id. */
+  pendingLeadOperationId?: string | null;
   /** Only overridden by tests — production always uses Date.now(). */
   now?: number;
 }
@@ -67,6 +72,15 @@ export function createVirtualStop(input: CreateVirtualStopInput): GFStop {
     // (antes se perdía aquí). Solo se setean si vienen no vacías.
     street: input.street ?? undefined,
     city: input.city ?? undefined,
+    phone: nonEmpty(input.phone),
+    mobile: nonEmpty(input.mobile) ?? nonEmpty(input.phone),
+    vat: nonEmpty(input.vat),
+    _pendingLeadOperationId: nonEmpty(input.pendingLeadOperationId) ?? null,
     _virtualCreatedAt: now,
   };
+}
+
+function nonEmpty(value: string | null | undefined): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed.length > 0 ? trimmed : undefined;
 }

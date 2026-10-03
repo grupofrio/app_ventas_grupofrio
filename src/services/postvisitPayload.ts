@@ -17,6 +17,10 @@ interface BuildPostvisitPayloadInput {
   stop: Pick<GFStop, 'id' | 'customer_name' | '_entityType' | '_leadId' | '_partnerId' | 'partner_id'>;
   form: PostvisitFormValues;
   stageId: number;
+  /** Pin the seller placed. Omitted when they have not confirmed one. */
+  pin?: { latitude: number; longitude: number } | null;
+  street?: string | null;
+  vat?: string | null;
 }
 
 function mapInterestToPriority(level: InterestLevel): '1' | '2' | '3' {
@@ -49,8 +53,15 @@ function extractLeadPartnerId(
   return null;
 }
 
-export function buildPostvisitPayload({ stop, form, stageId }: BuildPostvisitPayloadInput) {
-  return {
+export function buildPostvisitPayload({
+  stop,
+  form,
+  stageId,
+  pin,
+  street,
+  vat,
+}: BuildPostvisitPayloadInput) {
+  const payload: Record<string, unknown> = {
     stop_id: stop.id,
     lead_id: stop._entityType === 'lead' ? stop._leadId || null : null,
     partner_id: extractLeadPartnerId(stop),
@@ -66,4 +77,20 @@ export function buildPostvisitPayload({ stop, form, stageId }: BuildPostvisitPay
     notes: form.notes || undefined,
     description: buildDescription(form),
   };
+  if (
+    pin
+    && typeof pin.latitude === 'number'
+    && Number.isFinite(pin.latitude)
+    && typeof pin.longitude === 'number'
+    && Number.isFinite(pin.longitude)
+    && !(pin.latitude === 0 && pin.longitude === 0)
+  ) {
+    payload.latitude = pin.latitude;
+    payload.longitude = pin.longitude;
+  }
+  const streetValue = typeof street === 'string' ? street.trim() : '';
+  if (streetValue) payload.street = streetValue;
+  const vatValue = typeof vat === 'string' ? vat.trim() : '';
+  if (vatValue) payload.vat = vatValue;
+  return payload;
 }

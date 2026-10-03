@@ -6,7 +6,8 @@
  * 1. Driver searches by name / phone / RFC / email
  * 2. Selects a customer or lead from results
  * 3. Virtual stop is created in route store
- * 4. Customers choose location or sale; leads route to prospection
+ * 4. Customers choose location or sale; existing leads open the visit.
+ *    A brand-new store is not created here — that is Nuevo prospecto.
  *
  * Uses the bounded employee directory search contract.
  */
@@ -313,8 +314,14 @@ export default function OffRouteScreen() {
 
         {/* Info */}
         <Text style={styles.infoText}>
-          Busca clientes o prospectos fuera de tu ruta. Cliente permite ubicacion o venta; prospecto abre prospección.
+          Busca un cliente o prospecto que ya existe. Una tienda nueva no se registra aquí: usa Nuevo prospecto para crear el pin y la visita de hoy.
         </Text>
+        <TouchableOpacity
+          onPress={() => router.push('/newcustomer' as never)}
+          style={styles.newProspectLink}
+        >
+          <Text style={styles.newProspectLinkText}>📍 Nuevo prospecto</Text>
+        </TouchableOpacity>
         {employeeAnalyticPlazaName ? (
           <Text style={styles.scopeText}>
             Filtro activo: {employeeAnalyticPlazaName}
@@ -348,8 +355,14 @@ export default function OffRouteScreen() {
                     Sin resultados para "{search}"
                   </Text>
                   <Text style={[typography.dimSmall, { marginTop: 4 }]}>
-                    Verifica el nombre o prueba con telefono, RFC o correo
+                    Si la tienda no existe, regístrala con Nuevo prospecto. No se crea desde esta búsqueda.
                   </Text>
+                  <TouchableOpacity
+                    onPress={() => router.push('/newcustomer' as never)}
+                    style={styles.newProspectLink}
+                  >
+                    <Text style={styles.newProspectLinkText}>📍 Nuevo prospecto</Text>
+                  </TouchableOpacity>
                 </View>
               ) : null
             }
@@ -379,8 +392,15 @@ const styles = StyleSheet.create({
   },
   searchBtnText: { ...typography.button },
   infoText: {
-    ...typography.dimSmall, marginBottom: 12,
+    ...typography.dimSmall, marginBottom: 4,
     lineHeight: 16,
+  },
+  newProspectLink: { alignSelf: 'flex-start', marginBottom: 8, paddingVertical: 4 },
+  newProspectLinkText: {
+    ...typography.bodySmall,
+    color: colors.primary,
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
   },
   scopeText: {
     ...typography.dimSmall,

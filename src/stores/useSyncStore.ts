@@ -1568,7 +1568,16 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
     case 'prospection':
       if (payload._source === 'nuevo_lead_ruta') {
-        await createFieldLeadData(payload as Record<string, unknown>, meta);
+        const lead = await createFieldLeadData(payload as Record<string, unknown>, meta);
+        const { readCreatedLeadId } = await import('../services/sellerProspectVisit');
+        const leadId = readCreatedLeadId(lead);
+        const operationId = typeof payload._operationId === 'string' ? payload._operationId : '';
+        if (leadId && operationId) {
+          const { bindCreatedFieldLeadVisit } = await import('../services/sellerProspectVisitRuntime');
+          await bindCreatedFieldLeadVisit(operationId, leadId, {
+            online: useSyncStore.getState().isOnline,
+          });
+        }
       } else {
         await upsertLeadData(payload as Record<string, unknown>, meta);
       }

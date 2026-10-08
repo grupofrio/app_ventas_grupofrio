@@ -772,6 +772,11 @@ function SaleScreenInner() {
         photoUris: salePhotoUris,
         enqueue,
         imageType: 'sale',
+        capture: {
+          latitude,
+          longitude,
+          capturedAt: new Date().toISOString(),
+        },
       });
       await saveSaleTicketSnapshot(confirmedTicketSnapshot);
       setLastSaleTicketId(operationId);

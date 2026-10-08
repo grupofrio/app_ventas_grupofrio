@@ -101,6 +101,18 @@ function testCascadeDeadToDependents(m: SyncDependenciesModule) {
   assert.equal(m.cascadeDeadToDependents(queue, ''), queue);
 }
 
+function testDeadPhotoDoesNotKillCheckout(m: SyncDependenciesModule) {
+  const queue: SyncDependencyItem[] = [
+    { id: 'photo-1', type: 'photo', status: 'dead', error_message: 'parada cerrada' },
+    { id: 'checkout-1', type: 'checkout', status: 'pending', dependsOn: ['photo-1'], next_retry_at: 50 },
+    { id: 'close-1', type: 'offroute_visit_close', status: 'error', dependsOn: ['photo-1'] },
+  ];
+  const out = m.cascadeDeadToDependents(queue, 'photo-1');
+  assert.equal(out.find((item) => item.id === 'checkout-1')!.status, 'pending');
+  assert.equal(out.find((item) => item.id === 'close-1')!.status, 'error');
+  assert.equal(out.find((item) => item.id === 'checkout-1')!.next_retry_at, 50);
+}
+
 function testMessages(m: SyncDependenciesModule) {
   assert.match(m.dependencyBlockedMessage('photo'), /Foto/i);
   assert.match(m.dependencyBlockedMessage('payment'), /depende/i);
@@ -116,6 +128,7 @@ const module = await import(
 testDependencyGate(module);
 testFindLiveDependents(module);
 testCascadeDeadToDependents(module);
+testDeadPhotoDoesNotKillCheckout(module);
 testMessages(module);
 
 console.log('sync dependencies tests: ok');

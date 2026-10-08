@@ -21,7 +21,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { takePhoto } from '../../src/services/camera';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
-import { checkOut, closeOffrouteVisit } from '../../src/services/gfLogistics';
+import { buildCloseDependsOn } from '../../src/services/evidencePhotoSync';
 import {
   enqueueGpsPoint,
   getCurrentPosition,
@@ -280,55 +280,31 @@ export default function NoSaleScreen() {
         }
         const closePayload = {
           visit_id: offrouteVisitId,
+          stop_id: stop.id,
           result_status: 'no_sale' as const,
           latitude: capturedLatitude,
           longitude: capturedLongitude,
           notes: `No venta: ${capturedReasonCode || ''} ${capturedNotes || ''}`.trim(),
         };
-
-        if (!isOnline) {
-          let closeSyncId: string | null = null;
-          closeSyncId = enqueue('offroute_visit_close', {
-            ...closePayload,
-            operation_id: operationId,
-            timestamp: Date.now(),
-          }, { operationId });
-          enqueueVisitPhotos({
-            stopId: stop.id,
-            photoUris: capturedPhotoUris,
-            enqueue,
-            dependsOn: [closeSyncId],
-          });
-          await persistQueue();
-          await retireNoSaleIntent(intentParts, 'completed');
-          finalizeNoSaleLocally();
-          return;
-        }
-
-        let closeSyncId: string | null = null;
-        try {
-          await closeOffrouteVisit({ ...closePayload, operation_id: operationId });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
-          if (isRetryableSyncErrorMessage(message)) {
-            closeSyncId = enqueue('offroute_visit_close', {
-              ...closePayload,
-              operation_id: operationId,
-              timestamp: Date.now(),
-            }, { operationId });
-          } else {
-            await preserveForReview(
-              'El servidor rechazó el cierre de la visita especial. Conservamos la no-venta para conciliación; no se cerró localmente.',
-            );
-            return;
-          }
-        }
-
-        enqueueVisitPhotos({
+        const photoIds = enqueueVisitPhotos({
           stopId: stop.id,
           photoUris: capturedPhotoUris,
           enqueue,
-          dependsOn: closeSyncId ? [closeSyncId] : undefined,
+          imageType: 'visit',
+          capture: {
+            latitude: capturedLatitude,
+            longitude: capturedLongitude,
+            capturedAt: new Date().toISOString(),
+          },
+        });
+        const dependsOn = buildCloseDependsOn(photoIds);
+        enqueue('offroute_visit_close', {
+          ...closePayload,
+          operation_id: operationId,
+          timestamp: Date.now(),
+        }, {
+          operationId,
+          ...(dependsOn.length > 0 ? { dependsOn } : {}),
         });
         await persistQueue();
         await retireNoSaleIntent(intentParts, 'completed');
@@ -349,75 +325,49 @@ export default function NoSaleScreen() {
         noSaleCompetitor: capturedCompetitor,
       });
 
-      const enqueueCheckoutAndPhotos = () => {
-        const gpsQueueId = enqueueGpsPoint(position, 'checkout');
-        const checkoutId = enqueue(
-          'checkout',
-          {
-            ...checkoutPayload,
-            operation_id: operationId,
-            timestamp: Date.now(),
-          },
-          {
-            operationId,
-            ...(gpsQueueId ? { dependsOn: [gpsQueueId] } : {}),
-          },
-        );
-        enqueueVisitPhotos({
-          stopId: stop.id,
-          photoUris: capturedPhotoUris,
-          enqueue,
-          dependsOn: [checkoutId],
-        });
-      };
-
-      if (!isOnline) {
-        enqueueCheckoutAndPhotos();
-        await persistQueue();
-        await retireNoSaleIntent(intentParts, 'completed');
-        finalizeNoSaleLocally();
-        return;
-      }
-
-      try {
-        await publishGpsPointNow(position);
-        await checkOut(
-          checkoutPayload.stop_id,
-          checkoutPayload.latitude,
-          checkoutPayload.longitude,
-          checkoutPayload.result_status,
-          {
-            no_sale_reason_code: checkoutPayload.no_sale_reason_code,
-            no_sale_notes: checkoutPayload.no_sale_notes,
-            no_sale_competitor: checkoutPayload.no_sale_competitor,
-          },
-          undefined,
-          operationId,
-        );
-        enqueueVisitPhotos({
-          stopId: stop.id,
-          photoUris: capturedPhotoUris,
-          enqueue,
-        });
-        await persistQueue();
-        await retireNoSaleIntent(intentParts, 'completed');
-        finalizeNoSaleLocally();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
-        if (isRetryableSyncErrorMessage(message)) {
-          enqueueCheckoutAndPhotos();
-          Alert.alert(
-            'Sincronización pendiente',
-            'No se pudo confirmar la no-venta con el servidor. La visita quedó pendiente de sincronización.',
-          );
-          await persistQueue();
-          await retireNoSaleIntent(intentParts, 'completed');
-          finalizeNoSaleLocally();
-          return;
+      let gpsQueueId: string | null = null;
+      if (isOnline) {
+        try {
+          await publishGpsPointNow(position);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'No se pudo publicar el GPS.';
+          if (!isRetryableSyncErrorMessage(message)) {
+            Alert.alert('Ubicación no disponible', message);
+            return;
+          }
+          gpsQueueId = enqueueGpsPoint(position, 'checkout');
         }
-
-        Alert.alert('Check-out rechazado', message);
+      } else {
+        gpsQueueId = enqueueGpsPoint(position, 'checkout');
       }
+
+      const photoIds = enqueueVisitPhotos({
+        stopId: stop.id,
+        photoUris: capturedPhotoUris,
+        enqueue,
+        imageType: 'visit',
+        capture: {
+          latitude: capturedLatitude,
+          longitude: capturedLongitude,
+          capturedAt: new Date().toISOString(),
+        },
+      });
+      const dependsOn = buildCloseDependsOn(photoIds, [gpsQueueId]);
+      enqueue(
+        'checkout',
+        {
+          ...checkoutPayload,
+          operation_id: operationId,
+          timestamp: Date.now(),
+        },
+        {
+          operationId,
+          ...(dependsOn.length > 0 ? { dependsOn } : {}),
+        },
+      );
+      await persistQueue();
+      await retireNoSaleIntent(intentParts, 'completed');
+      finalizeNoSaleLocally();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo guardar la no-venta.';
       Alert.alert('No-venta', message);

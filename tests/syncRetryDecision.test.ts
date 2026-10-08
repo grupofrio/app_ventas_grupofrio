@@ -80,6 +80,33 @@ const cases = [
     error: new Error('unknown'),
     expected: false,
   },
+  {
+    name: 'retries a photo rejected because the stop is already closed',
+    type: 'photo' as const,
+    error: withMeta({
+      httpStatus: 400,
+      message: 'No puedes modificar evidencias de una parada cerrada.',
+    }),
+    expected: true,
+  },
+  {
+    name: 'retries a photo after HTTP 502 even when the body is not an HTTP label',
+    type: 'photo' as const,
+    error: withMeta({ httpStatus: 502, message: 'Error interno del servidor' }),
+    expected: true,
+  },
+  {
+    name: 'does not retry a photo rejected as invalid',
+    type: 'photo' as const,
+    error: withMeta({ httpStatus: 422, message: 'La imagen no es válida' }),
+    expected: false,
+  },
+  {
+    name: 'does not retry a photo whose local file is gone',
+    type: 'photo' as const,
+    error: new Error('Photo file not found'),
+    expected: false,
+  },
 ];
 
 for (const testCase of cases) {

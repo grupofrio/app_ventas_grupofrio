@@ -103,6 +103,7 @@ async function testPersistsCompleteHeldBatchBeforeReleasing(
         stop_id: 44,
         localUri: 'file://sale-1.jpg',
         image_type: 'sale',
+        evidence_type: 'delivery',
       },
       opts: {
         dependsOn: ['sale-op-1'],
@@ -115,6 +116,7 @@ async function testPersistsCompleteHeldBatchBeforeReleasing(
         stop_id: 44,
         localUri: 'file://sale-2.jpg',
         image_type: 'sale',
+        evidence_type: 'delivery',
       },
       opts: {
         dependsOn: ['sale-op-1'],

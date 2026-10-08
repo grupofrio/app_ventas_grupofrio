@@ -58,6 +58,15 @@ function testEligibility(m: Mod) {
   assert.equal(isEligibleNow(item('syncing'), NOW, MAX), false);
   assert.equal(isEligibleNow(item('done'), NOW, MAX), false);
   assert.equal(isEligibleNow(item('dead'), NOW, MAX), false);
+  // Una foto retryable sigue elegible después del tope genérico de 3 intentos.
+  assert.equal(
+    isEligibleNow({ ...item('error', 4, NOW - 1), type: 'photo' }, NOW, MAX),
+    true,
+  );
+  assert.equal(
+    isEligibleNow({ ...item('error', 12, NOW - 1), type: 'photo' }, NOW, MAX),
+    false,
+  );
 
   // hasEligibleWorkNow agrega sobre la cola
   assert.equal(hasEligibleWorkNow([], NOW, MAX), false);

@@ -43,12 +43,12 @@ assert.match(
 );
 assert.match(
   screen,
-  /enqueue\('offroute_visit_close',[\s\S]{0,400}\{ operationId \}/,
+  /enqueue\('offroute_visit_close',[\s\S]{0,500}operationId,/,
   'offline off-route replay must use the frozen operation UUID as the queue identity',
 );
 assert.match(
   screen,
-  /enqueue\(\s*'checkout',[\s\S]{0,500}\{[\s\S]{0,100}operationId[\s\S]{0,160}\}/,
+  /enqueue\(\s*\n\s*'checkout',[\s\S]{0,500}operationId,/,
   'normal-route no-sale checkout must use the frozen operation UUID as the queue identity',
 );
 assert.match(

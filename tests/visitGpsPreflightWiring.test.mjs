@@ -57,9 +57,11 @@ assert.ok(
 
 const noSaleHandler = noSale.match(/async function handleSave\(\)[\s\S]*?\n  const notesLabel/)?.[0] ?? '';
 assert.match(noSaleHandler, /await publishGpsPointNow\(/);
-assert.ok(
-  noSaleHandler.indexOf('await publishGpsPointNow(') < noSaleHandler.indexOf('await checkOut('),
-  'no-sale checkout must publish a fresh GPS point before asking Odoo to validate check-out',
+assert.doesNotMatch(noSaleHandler, /await checkOut\(/);
+assert.match(
+  noSaleHandler,
+  /await publishGpsPointNow\([\s\S]*buildCloseDependsOn\(/,
+  'no-sale must publish a fresh GPS point before queueing the checkout that waits for evidence photos',
 );
 
 console.log('visit GPS preflight wiring tests: ok');

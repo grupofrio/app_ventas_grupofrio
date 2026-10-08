@@ -14,6 +14,11 @@ interface VisitPhotosModule {
     dependsOn?: string[];
     holdProcessing?: boolean;
     imageType?: string;
+    capture?: {
+      latitude?: number | null;
+      longitude?: number | null;
+      capturedAt?: string | null;
+    };
   }) => string[];
 }
 
@@ -64,6 +69,7 @@ function testEnqueueCreatesOneUploadPerPhoto(module: VisitPhotosModule) {
     assert.equal(call.type, 'photo');
     assert.equal(call.payload.stop_id, 44);
     assert.equal(call.payload.image_type, 'visit');
+    assert.equal(call.payload.evidence_type, 'facade');
     assert.deepEqual(call.opts, {
       dependsOn: ['sale-op-1'],
       holdProcessing: true,
@@ -95,6 +101,7 @@ function testEnqueueAllowsSaleEvidenceImageType(module: VisitPhotosModule) {
 
   assert.deepEqual(ids, ['sale-photo-1', 'sale-photo-2']);
   assert.deepEqual(calls.map((call) => call.payload.image_type), ['sale', 'sale']);
+  assert.deepEqual(calls.map((call) => call.payload.evidence_type), ['delivery', 'delivery']);
   assert.deepEqual(calls.map((call) => call.payload.localUri), [
     'file://sale-photo-1.jpg',
     'file://sale-photo-2.jpg',
@@ -134,8 +141,9 @@ function testEnqueueCreatesIndependentExchangeEvidenceItems(module: VisitPhotosM
     'file://exchange-photo-2.jpg',
   ]);
   assert.deepEqual(calls.map((call) => call.payload.image_type), ['exchange', 'exchange']);
+  assert.deepEqual(calls.map((call) => call.payload.evidence_type), ['other', 'other']);
   for (const call of calls) {
-    assert.deepEqual(Object.keys(call.payload), ['stop_id', 'localUri', 'image_type']);
+    assert.deepEqual(Object.keys(call.payload), ['stop_id', 'localUri', 'image_type', 'evidence_type']);
     assert.equal(
       Object.prototype.hasOwnProperty.call(call.payload, 'image_base64'),
       false,
@@ -194,6 +202,41 @@ function testEnqueueIsolatesPhotoOptionsFromMutatingConsumers(module: VisitPhoto
   assert.deepEqual(dependsOn, ['sale-op-1']);
 }
 
+function testEnqueueStoresCaptureWhenAvailable(module: VisitPhotosModule) {
+  const calls: Array<Record<string, unknown>> = [];
+  module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://point.jpg'],
+    imageType: 'visit',
+    capture: {
+      latitude: 19.4,
+      longitude: -99.1,
+      capturedAt: '2026-10-07T18:00:00.000Z',
+    },
+    enqueue: (_type, payload) => {
+      calls.push(payload);
+      return 'photo-1';
+    },
+  });
+  assert.equal(calls[0].evidence_type, 'facade');
+  assert.equal(calls[0].capture_latitude, 19.4);
+  assert.equal(calls[0].capture_longitude, -99.1);
+  assert.equal(calls[0].captured_at, '2026-10-07T18:00:00.000Z');
+
+  const omitted: Array<Record<string, unknown>> = [];
+  module.enqueueVisitPhotos({
+    stopId: 44,
+    photoUris: ['file://point.jpg'],
+    capture: { latitude: 0, longitude: 0, capturedAt: '   ' },
+    enqueue: (_type, payload) => {
+      omitted.push(payload);
+      return 'photo-2';
+    },
+  });
+  assert.equal('capture_latitude' in omitted[0], false);
+  assert.equal('captured_at' in omitted[0], false);
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -207,6 +250,7 @@ async function main() {
   testEnqueueCreatesIndependentExchangeEvidenceItems(module);
   testEnqueueKeepsDependsOnOnlyOptionsExact(module);
   testEnqueueIsolatesPhotoOptionsFromMutatingConsumers(module);
+  testEnqueueStoresCaptureWhenAvailable(module);
   console.log('visit photos tests: ok');
 }
 

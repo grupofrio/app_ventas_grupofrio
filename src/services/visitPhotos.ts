@@ -1,4 +1,9 @@
 import type { SyncEnqueueOptions, SyncItemType } from '../types/sync';
+import {
+  evidenceTypeForImageType,
+  usableCoordinates,
+  type EvidencePhotoCapture,
+} from './evidencePhotoSync.ts';
 
 type EnqueuePhoto = (
   type: Extract<SyncItemType, 'photo'>,
@@ -17,6 +22,7 @@ export function enqueueVisitPhotos({
   dependsOn,
   holdProcessing,
   imageType = 'visit',
+  capture,
 }: {
   stopId: number;
   photoUris: string[];
@@ -24,6 +30,7 @@ export function enqueueVisitPhotos({
   dependsOn?: string[];
   holdProcessing?: boolean;
   imageType?: string;
+  capture?: EvidencePhotoCapture;
 }): string[] {
   return photoUris.map((localUri) => {
     const opts: SyncEnqueueOptions | undefined = dependsOn?.length || holdProcessing
@@ -33,14 +40,21 @@ export function enqueueVisitPhotos({
         }
       : undefined;
 
-    return enqueue(
-      'photo',
-      {
-        stop_id: stopId,
-        localUri,
-        image_type: imageType,
-      },
-      opts,
-    );
+    const payload: Record<string, unknown> = {
+      stop_id: stopId,
+      localUri,
+      image_type: imageType,
+      evidence_type: evidenceTypeForImageType(imageType),
+    };
+    const coords = usableCoordinates(capture?.latitude, capture?.longitude);
+    if (coords) {
+      payload.capture_latitude = coords.latitude;
+      payload.capture_longitude = coords.longitude;
+    }
+    if (typeof capture?.capturedAt === 'string' && capture.capturedAt.trim()) {
+      payload.captured_at = capture.capturedAt.trim();
+    }
+
+    return enqueue('photo', payload, opts);
   });
 }

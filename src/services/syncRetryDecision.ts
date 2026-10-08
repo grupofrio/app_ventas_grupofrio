@@ -2,6 +2,7 @@ import type { SyncItemType } from '../types/sync.ts';
 import { classifySaleSubmissionError } from './saleSubmissionOutcome.ts';
 import type { SyncQueueItem } from '../types/sync.ts';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure.ts';
+import { shouldRetryLeadNoteError } from './leadNote.ts';
 import { classifySalesOpsMutationError } from './salesOpsMutationOutcome.ts';
 import { shouldRetryPhotoUploadError } from './evidencePhotoSync.ts';
 
@@ -61,6 +62,7 @@ export function transitionAgedItemsToManualReconciliation(
 }
 
 export function shouldRetrySyncItemError(type: SyncItemType, error: unknown): boolean {
+  if (type === 'lead_note') return shouldRetryLeadNoteError(error);
   if (type === 'sale_order') {
     return classifySaleSubmissionError(error).kind === 'ambiguous_result';
   }

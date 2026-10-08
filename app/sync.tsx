@@ -49,8 +49,12 @@ export default function SyncScreen() {
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
-  const physicalReview = dead.filter(isProtectedPhysicalReviewItem);
-  const purgeableDead = dead.filter((item) => !isProtectedPhysicalReviewItem(item));
+  const backgroundLeadNotes = queue.filter((i) => i.type === 'lead_note' && i.status !== 'done');
+  const visiblePending = pending.filter((i) => i.type !== 'lead_note');
+  const visibleErrors = errors.filter((i) => i.type !== 'lead_note');
+  const visibleDead = dead.filter((i) => i.type !== 'lead_note');
+  const physicalReview = visibleDead.filter(isProtectedPhysicalReviewItem);
+  const purgeableDead = visibleDead.filter((item) => !isProtectedPhysicalReviewItem(item));
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
@@ -162,21 +166,33 @@ export default function SyncScreen() {
           <View style={{ marginBottom: 6 }} />
         )}
 
-        {/* Pending */}
-        {pending.length > 0 && (
+        {backgroundLeadNotes.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>PENDIENTES ({pending.length})</Text>
-            {pending.map((item) => (
+            <Text style={styles.sectionTitle}>NOTAS AL PROSPECTO ({backgroundLeadNotes.length})</Text>
+            <Text style={styles.deadHint}>
+              Se reintentan solas en segundo plano. No bloquean el cierre de ruta ni el corte.
+            </Text>
+            {backgroundLeadNotes.map((item) => (
+              <LeadNoteInfoItem key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {/* Pending */}
+        {visiblePending.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>PENDIENTES ({visiblePending.length})</Text>
+            {visiblePending.map((item) => (
               <SyncItem key={item.id} item={item} />
             ))}
           </>
         )}
 
         {/* Errors (con reintentos pendientes) */}
-        {errors.length > 0 && (
+        {visibleErrors.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>CON ERROR ({errors.length})</Text>
-            {errors.map((item) => (
+            <Text style={styles.sectionTitle}>CON ERROR ({visibleErrors.length})</Text>
+            {visibleErrors.map((item) => (
               <SyncItem key={item.id} item={item} />
             ))}
           </>
@@ -376,3 +392,24 @@ const styles = StyleSheet.create({
     padding: 30, alignItems: 'center', marginTop: 20,
   },
 });
+
+function LeadNoteInfoItem({ item }: { item: SyncQueueItem }) {
+  const time = new Date(item.created_at).toLocaleTimeString('es-MX', {
+    hour: '2-digit', minute: '2-digit',
+  });
+
+  return (
+    <View style={styles.syncItem}>
+      <View style={[styles.syncIcon, styles.iconPending]}>
+        <Text style={{ fontSize: 16 }}>📝</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.syncLabel}>Nota al prospecto</Text>
+        <Text style={styles.syncTime}>
+          {time} · Informativa. Se reintenta en segundo plano.
+        </Text>
+      </View>
+      <Badge label="Informativa" variant="dim" />
+    </View>
+  );
+}

@@ -89,10 +89,11 @@ export function buildProspectionPayload(
   const canal = giroOpt?.canal ?? null;
   const normalizedPhone = normalizeMxPhoneSoft(form.telefono) || undefined;
 
+  const sellerNote = form.notas.trim();
   const descParts = [
     giroOpt ? `Giro: ${giroOpt.label}` : '',
     giroOpt ? (canal ? `Canal: ${canal}` : 'Canal: requiere revisión') : '',
-    form.notas.trim(),
+    sellerNote,
   ].filter(Boolean);
 
   return {
@@ -107,6 +108,11 @@ export function buildProspectionPayload(
     x_canal: canal || undefined,
     x_source_channel: 'xvan',
     x_prospect_source: 'vendedor_campo',
+    // Comentario del vendedor, aparte de la description (giro + canal + nota).
+    // gf lee `notes` en lead/create. `note` se conserva por si un servidor viejo
+    // lo usa. La description sigue llevando el texto si ambos se ignoran.
+    notes: sellerNote || undefined,
+    note: sellerNote || undefined,
     description: descParts.join('\n') || undefined,
     latitude: gps.latitude ?? undefined,
     longitude: gps.longitude ?? undefined,

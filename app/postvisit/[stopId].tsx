@@ -21,6 +21,7 @@ import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
+import { queueLeadVisitNote } from '../../src/services/leadNoteQueue';
 import { closeOffrouteVisit, convertLeadData, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
 import { applyLeadUpsertToStop, getLeadPartnerId, LeadStageOption } from '../../src/services/leadVisit';
 import {
@@ -276,6 +277,13 @@ export default function ProspeccionScreen() {
     };
     // The pin and phone stay on the visit even if conversion cannot finish.
     patchStopLocal(withCapture);
+    queueLeadVisitNote({
+      stopId: withCapture.id,
+      note: notes,
+      entityType: withCapture._entityType ?? null,
+      leadId: withCapture._leadId ?? null,
+      pendingLeadOperationId: withCapture._pendingLeadOperationId ?? null,
+    });
 
     if (!isOnline) {
       Alert.alert(
@@ -421,6 +429,13 @@ export default function ProspeccionScreen() {
 
     const withPin = { ...currentStop, ...leadRecordPatch() };
     patchStopLocal(withPin);
+    queueLeadVisitNote({
+      stopId: withPin.id,
+      note: notes,
+      entityType: withPin._entityType ?? null,
+      leadId: withPin._leadId ?? null,
+      pendingLeadOperationId: withPin._pendingLeadOperationId ?? null,
+    });
 
     const payload = buildPostvisitPayload({
       stop: withPin,

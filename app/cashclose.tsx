@@ -41,9 +41,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
@@ -53,6 +53,7 @@ import { useRouteStore } from '../src/stores/useRouteStore';
 import {
   confirmRouteLiquidation,
   fetchRouteReconciliation,
+  fetchRouteReturnStatus,
   fetchLiquidationSummary,
   getLiquidationExpectedCashTotal,
   GFRouteReconciliation,
@@ -60,11 +61,19 @@ import {
   saveRouteCorteAdjustments,
   validateRouteCorte,
 } from '../src/services/gfLogistics';
+import { hasSavedArrivalKm } from '../src/services/routeStartLogic';
+import {
+  routeReturnCloseGuidance,
+  type RouteLeftoverReceipt,
+} from '../src/services/routeReturnStatus';
+import { RouteReturnCloseBanner, RouteReturnStatusCard } from '../src/components/RouteReturnStatusCard';
+import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { formatCurrency } from '../src/utils/time';
 import {
   canConfirmLiquidation,
   describeBlockingReason,
   describeLiquidationButtonBlock,
+  ARRIVAL_KM_LIQUIDATION_BLOCK,
 } from '../src/services/cashcloseGuard';
 import { describeCashDifference } from '../src/services/trustSignals';
 import { createUuidV4 } from '../src/utils/clientEvent';
@@ -122,6 +131,7 @@ function colorForDiff(diff: number): string {
 }
 
 export default function CashCloseScreen() {
+  const router = useRouter();
   const [cashInHand, setCashInHand] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -177,6 +187,9 @@ export default function CashCloseScreen() {
   const [liquidationConfirmedAt, setLiquidationConfirmedAt] = useState<string | null>(null);
   const [corteAdjustments, setCorteAdjustments] = useState<Record<number, CorteAdjustmentInput>>({});
   const [adjustmentsBusy, setAdjustmentsBusy] = useState(false);
+  const [returnReceipt, setReturnReceipt] = useState<RouteLeftoverReceipt | null>(null);
+  const [returnWarning, setReturnWarning] = useState<string | null>(null);
+  const [returnRefreshing, setReturnRefreshing] = useState(false);
 
   const loadLiquidation = useCallback(async () => {
     setLiquidationLoading(true);
@@ -214,16 +227,52 @@ export default function CashCloseScreen() {
     }
   }, [planId]);
 
+  const refreshReturnStatus = useCallback(async () => {
+    if (!planId || !isOnline) return;
+    const requestedPlanId = planId;
+    setReturnRefreshing(true);
+    try {
+      const next = await fetchRouteReturnStatus(requestedPlanId);
+      if (next && useRouteStore.getState().plan?.plan_id === requestedPlanId) {
+        setReturnReceipt(next);
+      }
+    } finally {
+      setReturnRefreshing(false);
+    }
+  }, [isOnline, planId]);
+
+  const refreshCashClose = useCallback(async () => {
+    await Promise.all([
+      loadTodaySales(),
+      loadLiquidation(),
+      loadReconciliation(),
+      loadInvoiceCollectionSummary(),
+      loadPlan({ force: true }),
+      refreshReturnStatus(),
+    ]);
+  }, [
+    loadInvoiceCollectionSummary,
+    loadLiquidation,
+    loadPlan,
+    loadReconciliation,
+    loadTodaySales,
+    refreshReturnStatus,
+  ]);
+
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshCashClose);
+
+  useEffect(() => {
+    setReturnReceipt(null);
+    setReturnWarning(null);
+  }, [planId]);
+
   // Refrescar ambas fuentes al enfocar la pantalla
   useFocusEffect(
     useCallback(() => {
-      void loadTodaySales();
-      void loadLiquidation();
-      void loadReconciliation();
-      void loadInvoiceCollectionSummary();
+      void refreshCashClose();
       setCorteConfirmed(Boolean(plan?.corte_validated));
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
-    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at]),
+    }, [plan?.corte_validated, plan?.liquidacion_done_at, refreshCashClose]),
   );
 
   useEffect(() => {
@@ -382,6 +431,8 @@ export default function CashCloseScreen() {
 
   const corteAlreadyConfirmed = corteConfirmed || Boolean(plan?.corte_validated);
   const liquidationAlreadyConfirmed = Boolean(liquidationConfirmedAt || plan?.liquidacion_done_at);
+  const arrivalKmSaved = hasSavedArrivalKm(plan?.arrival_km, plan?.departure_km);
+  const blindReceiptOn = returnReceipt?.blind_receipt_enabled === true;
   const invoiceCollectionBlockingCount = invoiceCollectionSummary?.blockingCount ?? 0;
   const invoiceCollectionSummaryReady = invoiceCollectionSummary !== null;
   const canValidateCorte = !corteBusy
@@ -396,7 +447,8 @@ export default function CashCloseScreen() {
   const canConfirmFinalLiquidation = canConfirm
     && !liquidationBusy
     && !liquidationAlreadyConfirmed
-    && corteAlreadyConfirmed;
+    && corteAlreadyConfirmed
+    && arrivalKmSaved;
   // Por qué el botón "Confirmar liquidación" está deshabilitado (o null si OK).
   // El reporte de campo "no funciona" era un disable silencioso: ahora siempre
   // se explica el motivo y el siguiente paso.
@@ -411,6 +463,7 @@ export default function CashCloseScreen() {
     invoiceCollectionPendingCount: invoiceCollectionSummary?.pendingCount ?? 0,
     invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
     invoiceCollectionSummaryReady,
+    arrivalKmSaved,
   });
   const canSaveCorteAdjustments = !adjustmentsBusy
     && !corteAlreadyConfirmed
@@ -478,6 +531,7 @@ export default function CashCloseScreen() {
         notes,
       });
       await loadReconciliation();
+      if (result.leftover_receipt) setReturnReceipt(result.leftover_receipt);
       if (result.ok && result.success) {
         setCorteConfirmed(true);
         await loadPlan();
@@ -517,9 +571,22 @@ export default function CashCloseScreen() {
       if (result.ok) {
         const confirmedAt = result.data?.liquidacion_done_at ?? new Date().toISOString();
         setLiquidationConfirmedAt(confirmedAt);
+        if (result.data?.leftover_receipt) setReturnReceipt(result.data.leftover_receipt);
         await loadLiquidation();
         await loadPlan();
         const routeWarning = result.data?.route_close_warning;
+        const returnBlock = routeReturnCloseGuidance(routeWarning);
+        if (returnBlock) {
+          // Liquidation succeeded. The route stays open until Almacén or the
+          // supervisor finishes the return — that is a status, not an error.
+          setReturnWarning(returnBlock.warning);
+          Alert.alert(
+            'Liquidacion confirmada',
+            `El efectivo quedo confirmado en Odoo.\n\n${returnBlock.action}`,
+          );
+          return;
+        }
+        setReturnWarning(null);
         Alert.alert(
           'Liquidacion confirmada',
           routeWarning
@@ -560,6 +627,10 @@ export default function CashCloseScreen() {
 
   const handleConfirmLiquidation = useCallback(async () => {
     if (!canConfirmFinalLiquidation) return;
+    if (!arrivalKmSaved) {
+      Alert.alert('Falta KM final', ARRIVAL_KM_LIQUIDATION_BLOCK);
+      return;
+    }
     if (!hasInput) {
       Alert.alert('Captura efectivo', 'Cuenta el efectivo fisico antes de confirmar la liquidacion.');
       return;
@@ -570,7 +641,7 @@ export default function CashCloseScreen() {
       return;
     }
     await submitLiquidation(false);
-  }, [canConfirmFinalLiquidation, hasInput, cashCaptured, submitLiquidation]);
+  }, [arrivalKmSaved, canConfirmFinalLiquidation, hasInput, cashCaptured, submitLiquidation]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -579,7 +650,17 @@ export default function CashCloseScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        )}
+      >
 
         {/* Banner honesto */}
         <View style={styles.infoBanner}>
@@ -701,6 +782,12 @@ export default function CashCloseScreen() {
                 </Text>
               </View>
 
+              {blindReceiptOn && (
+                <Text style={styles.returnExplain}>
+                  Almacén cuenta el sobrante con un conteo ciego. No captures devolución ni merma: el corte ya no mueve ese stock.
+                </Text>
+              )}
+
               <Text style={styles.subsectionTitle}>Desglose por producto</Text>
               {reconciliation.lines.length === 0 ? (
                 <Text style={styles.statusText}>Sin lineas de conciliacion</Text>
@@ -711,34 +798,36 @@ export default function CashCloseScreen() {
                     <Text style={styles.productMeta}>
                       Cargado {line.qty_loaded.toFixed(1)} · Entregado {line.qty_delivered.toFixed(1)} · Devuelto {line.qty_returned.toFixed(1)} · Merma {line.qty_scrap.toFixed(1)}
                     </Text>
-                    <View style={styles.adjustmentGrid}>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Regresa a stock</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.returnQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'returnQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Regresa a stock ${line.product_name}`}
-                        />
+                    {!blindReceiptOn && (
+                      <View style={styles.adjustmentGrid}>
+                        <View style={styles.adjustmentField}>
+                          <Text style={styles.adjustmentLabel}>Regresa a stock</Text>
+                          <TextInput
+                            style={styles.adjustmentInput}
+                            placeholder="0"
+                            placeholderTextColor={colors.textDim}
+                            keyboardType="decimal-pad"
+                            value={corteAdjustments[line.product_id]?.returnQty ?? ''}
+                            onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'returnQty', value)}
+                            editable={!corteAlreadyConfirmed}
+                            accessibilityLabel={`Regresa a stock ${line.product_name}`}
+                          />
+                        </View>
+                        <View style={styles.adjustmentField}>
+                          <Text style={styles.adjustmentLabel}>Merma</Text>
+                          <TextInput
+                            style={styles.adjustmentInput}
+                            placeholder="0"
+                            placeholderTextColor={colors.textDim}
+                            keyboardType="decimal-pad"
+                            value={corteAdjustments[line.product_id]?.scrapQty ?? ''}
+                            onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'scrapQty', value)}
+                            editable={!corteAlreadyConfirmed}
+                            accessibilityLabel={`Merma ${line.product_name}`}
+                          />
+                        </View>
                       </View>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Merma</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.scrapQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'scrapQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Merma ${line.product_name}`}
-                        />
-                      </View>
-                    </View>
+                    )}
                     <Text style={[styles.productDiff, { color: colorForDiff(line.qty_difference) }]}>
                       Dif. {line.qty_difference.toFixed(1)}
                     </Text>
@@ -752,22 +841,24 @@ export default function CashCloseScreen() {
                 </View>
               ) : (
                 <>
-                  <TouchableOpacity
-                    style={[
-                      styles.secondaryAction,
-                      !canSaveCorteAdjustments && styles.actionDisabled,
-                    ]}
-                    onPress={handleSaveCorteAdjustments}
-                    disabled={!canSaveCorteAdjustments}
-                    accessibilityRole="button"
-                    accessibilityLabel="Guardar devolución y merma"
-                  >
-                    {adjustmentsBusy ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Text style={styles.secondaryActionText}>Guardar devolución / merma</Text>
-                    )}
-                  </TouchableOpacity>
+                  {blindReceiptOn ? null : (
+                    <TouchableOpacity
+                      style={[
+                        styles.secondaryAction,
+                        !canSaveCorteAdjustments && styles.actionDisabled,
+                      ]}
+                      onPress={handleSaveCorteAdjustments}
+                      disabled={!canSaveCorteAdjustments}
+                      accessibilityRole="button"
+                      accessibilityLabel="Guardar devolución y merma"
+                    >
+                      {adjustmentsBusy ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Text style={styles.secondaryActionText}>Guardar devolución / merma</Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity
                     style={[
                       styles.primaryAction,
@@ -791,6 +882,14 @@ export default function CashCloseScreen() {
             <Text style={styles.statusText}>Sin datos de corte disponibles</Text>
           )}
         </View>
+
+        <RouteReturnStatusCard
+          receipt={returnReceipt}
+          refreshing={returnRefreshing || refreshing}
+          onRefresh={() => { void refreshReturnStatus(); }}
+          refreshDisabled={!isOnline}
+        />
+        <RouteReturnCloseBanner warning={returnWarning} receipt={returnReceipt} />
 
         {/* Estados de carga / error de Sales */}
         {isSalesLoading && (
@@ -968,6 +1067,16 @@ export default function CashCloseScreen() {
             {/* Por qué está deshabilitado (fix del "botón no funciona"). */}
             {!canConfirmFinalLiquidation && !liquidationBusy && liquidationButtonReason && (
               <Text style={styles.blockReasonText}>{liquidationButtonReason}</Text>
+            )}
+            {!canConfirmFinalLiquidation && !liquidationBusy && liquidationButtonReason === ARRIVAL_KM_LIQUIDATION_BLOCK && (
+              <TouchableOpacity
+                style={styles.secondaryAction}
+                onPress={() => router.push('/route-close' as never)}
+                accessibilityRole="button"
+                accessibilityLabel="Ir a KM final"
+              >
+                <Text style={styles.secondaryActionText}>Ir a KM final</Text>
+              </TouchableOpacity>
             )}
           </>
         )}
@@ -1173,6 +1282,12 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontFamily: fonts.bodyBold,
     fontWeight: '700',
+  },
+  returnExplain: {
+    ...typography.bodySmall,
+    color: colors.text,
+    lineHeight: 18,
+    marginTop: spacing.md,
   },
   primaryAction: {
     backgroundColor: colors.primary,

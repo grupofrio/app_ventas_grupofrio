@@ -88,6 +88,9 @@ export function describeBlockingReason(input: CashCloseGuardInput): string | nul
  *
  * Orden de prioridad pensado para guiar al vendedor al siguiente paso.
  */
+export const ARRIVAL_KM_LIQUIDATION_BLOCK =
+  'Guarda el KM final en Cerrar ruta antes de confirmar la liquidación. Al confirmar, la ruta puede cerrarse y ya no podrás capturar el kilometraje.';
+
 export interface LiquidationButtonState {
   alreadyConfirmed: boolean;
   corteConfirmed: boolean;
@@ -99,6 +102,11 @@ export interface LiquidationButtonState {
   invoiceCollectionPendingCount?: number;
   invoiceCollectionReviewCount?: number;
   invoiceCollectionSummaryReady?: boolean;
+  /**
+   * When false, liquidation stays disabled until KM final is saved and
+   * strictly greater than KM inicial. Omitted keeps older callers unchanged.
+   */
+  arrivalKmSaved?: boolean;
 }
 
 export function describeLiquidationButtonBlock(s: LiquidationButtonState): string | null {
@@ -123,6 +131,7 @@ export function describeLiquidationButtonBlock(s: LiquidationButtonState): strin
     return `Hay ${s.invoiceCollectionReviewCount} cobro(s) por factura que requieren revisión.`;
   }
   if (s.isSyncing) return 'Sincronizando…';
+  if (s.arrivalKmSaved === false) return ARRIVAL_KM_LIQUIDATION_BLOCK;
   if (!s.corteConfirmed) {
     return 'Primero confirma el corte de unidades (botón "Confirmar corte" arriba).';
   }

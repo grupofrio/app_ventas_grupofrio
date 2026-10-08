@@ -13,10 +13,10 @@
  * NOT faked.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -33,14 +33,20 @@ import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
+import { fetchRouteReturnStatus } from '../src/services/gfLogistics';
 import {
   chooseAuthoritativeKm,
   isValidKm,
+  hasSavedArrivalKm,
+  isArrivalKmGreaterThanDeparture,
   calculateKmDriven,
   formatKm,
   isAbsurdKmDriven,
   isAbsurdOdometer,
 } from '../src/services/routeStartLogic';
+import { routeReturnCloseGuidance, type RouteLeftoverReceipt } from '../src/services/routeReturnStatus';
+import { RouteReturnCloseBanner, RouteReturnStatusCard } from '../src/components/RouteReturnStatusCard';
+import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import {
   canCloseRoute, describeCloseSyncBlock, shouldCleanupJornadaCache,
 } from '../src/services/routeCloseGuard';
@@ -95,6 +101,9 @@ function RouteCloseScreenInner() {
   const [savingKm, setSavingKm] = useState(false);
   const [closing, setClosing] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [returnReceipt, setReturnReceipt] = useState<RouteLeftoverReceipt | null>(null);
+  const [returnWarning, setReturnWarning] = useState<string | null>(null);
+  const [returnRefreshing, setReturnRefreshing] = useState(false);
 
   // KM inicial source of truth: Odoo plan first, then the backend echo from
   // km-update. The persisted phone store is not authoritative.
@@ -105,6 +114,56 @@ function RouteCloseScreenInner() {
     localKm: kmInitialStore,
   });
 
+  const paintArrivalKm = useCallback((
+    arrival: number | null | undefined,
+    departure: number | null | undefined,
+  ) => {
+    if (hasSavedArrivalKm(arrival, departure) && typeof arrival === 'number') {
+      setKmFinal(arrival);
+      return;
+    }
+    // A stored KM that is not strictly greater than the start is not saved:
+    // the server rejects it and liquidation would hide this card.
+    if (typeof arrival === 'number' && arrival > 0) {
+      setKmFinal(null);
+      setKmFinalInput((prev) => (prev.trim().length > 0 ? prev : String(Math.round(arrival))));
+    }
+  }, []);
+
+  const refreshReturnStatus = useCallback(async () => {
+    if (!planId || !isOnline) return;
+    const requestedPlanId = planId;
+    setReturnRefreshing(true);
+    try {
+      const next = await fetchRouteReturnStatus(requestedPlanId);
+      if (next && useRouteStore.getState().plan?.plan_id === requestedPlanId) {
+        setReturnReceipt(next);
+      }
+    } finally {
+      setReturnRefreshing(false);
+    }
+  }, [isOnline, planId]);
+
+  const refreshHub = useCallback(async () => {
+    await Promise.all([
+      refreshReturnStatus(),
+      (async () => {
+        if (!isOnline) return;
+        await loadPlan({ force: true });
+        const freshPlan = useRouteStore.getState().plan;
+        setKmInitialBackend(typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null);
+        paintArrivalKm(freshPlan?.arrival_km, freshPlan?.departure_km);
+      })(),
+    ]);
+  }, [isOnline, loadPlan, paintArrivalKm, refreshReturnStatus]);
+
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshHub);
+
+  useEffect(() => {
+    setReturnReceipt(null);
+    setReturnWarning(null);
+  }, [planId]);
+
   // Rehydrate KM final from the plan if the backend already stored arrival_km,
   // so re-opening the hub doesn't make a saved KM look lost (Sprint C.1).
   useFocusEffect(
@@ -113,26 +172,12 @@ function RouteCloseScreenInner() {
       void readCurrentInvoiceCollectionSummary()
         .then(setInvoiceCollectionSummary)
         .catch(() => {});
-      if (isOnline) {
-        void loadPlan({ force: true }).then(() => {
-          const freshPlan = useRouteStore.getState().plan;
-          setKmInitialBackend(typeof freshPlan?.departure_km === 'number' ? freshPlan.departure_km : null);
-          const freshArrival = typeof freshPlan?.arrival_km === 'number' && freshPlan.arrival_km > 0
-            ? freshPlan.arrival_km
-            : null;
-          if (freshArrival != null) setKmFinal(freshArrival);
-        });
-      }
+      void refreshHub();
       if (planState === 'closed' || planState === 'reconciled' || planState === 'done') {
         setClosed(true);
       }
-      const planArrival = typeof plan?.arrival_km === 'number' && plan.arrival_km > 0
-        ? plan.arrival_km
-        : null;
-      if (planArrival != null) {
-        setKmFinal((prev) => (prev == null ? planArrival : prev));
-      }
-    }, [isOnline, loadPlan, planState, plan?.arrival_km]),
+      paintArrivalKm(plan?.arrival_km, plan?.departure_km);
+    }, [paintArrivalKm, plan?.arrival_km, plan?.departure_km, planState, refreshHub]),
   );
 
   const kmDriven = calculateKmDriven(kmInitial, kmFinal);
@@ -146,8 +191,15 @@ function RouteCloseScreenInner() {
       return;
     }
     const km = Math.round(parseFloat(kmFinalInput));
-    if (kmInitial != null && km < kmInitial) {
-      Alert.alert('KM final menor al inicial', `El KM final (${km}) no puede ser menor al inicial (${kmInitial}).`);
+    if (kmInitial != null && !isArrivalKmGreaterThanDeparture(km, kmInitial)) {
+      if (km === kmInitial) {
+        Alert.alert(
+          'KM final igual al inicial',
+          `El KM final (${km}) debe ser mayor que el inicial (${kmInitial}).`,
+        );
+      } else {
+        Alert.alert('KM final menor al inicial', `El KM final (${km}) no puede ser menor al inicial (${kmInitial}).`);
+      }
       return;
     }
     if (!isOnline) {
@@ -184,13 +236,17 @@ function RouteCloseScreenInner() {
           setSavingKm(true);
           try {
             const res = await updateKm(planId, 'arrival', km);
-            setKmFinal(res.arrival_km ?? km);
+            const storedArrival = res.arrival_km ?? km;
+            const storedDeparture = res.departure_km ?? kmInitial;
+            if (hasSavedArrivalKm(storedArrival, storedDeparture)) {
+              setKmFinal(storedArrival);
+            }
             // Backfill KM inicial from the backend echo if the store lost it.
             setKmInitialBackend(res.departure_km ?? null);
             await loadPlan({ force: true });
             setKmFinalInput('');
           } catch (err) {
-            // Backend validates arrival >= departure; show its message.
+            // Backend validates arrival_km > departure_km; show its message.
             Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
           } finally {
             setSavingKm(false);
@@ -249,10 +305,19 @@ function RouteCloseScreenInner() {
                 { text: 'OK', onPress: () => router.replace('/(tabs)' as never) },
               ]);
             } catch (err) {
+              const message = err instanceof Error ? err.message : '';
+              const returnBlock = routeReturnCloseGuidance(message);
+              if (returnBlock) {
+                // Expected while Almacén or the supervisor still has the return.
+                // Not a failure of the close request itself.
+                setReturnWarning(returnBlock.warning);
+                Alert.alert('Cierre pendiente', `${returnBlock.action}\n\n${returnBlock.warning}`);
+                return;
+              }
               // Backend rejects if corte/liquidación incompletos — message claro.
               Alert.alert(
                 'No se pudo cerrar la ruta',
-                err instanceof Error ? err.message : 'Revisa corte y liquidación, luego intenta de nuevo.',
+                message || 'Revisa corte y liquidación, luego intenta de nuevo.',
               );
             } finally {
               setClosing(false);
@@ -295,7 +360,17 @@ function RouteCloseScreenInner() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Cerrar ruta" showBack />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        )}
+      >
         {!isOnline && (
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineText}>📶 Sin conexión. El cierre requiere WiFi de la sucursal.</Text>
@@ -356,7 +431,7 @@ function RouteCloseScreenInner() {
             <>
               <Text style={styles.stepBody}>
                 Captura el kilometraje de llegada de la unidad.
-                {kmInitial != null ? ` Debe ser ≥ ${kmInitial} (KM inicial).` : ''}
+                {kmInitial != null ? ` Debe ser mayor que ${kmInitial} (KM inicial).` : ''}
               </Text>
               <View style={styles.kmRow}>
                 <TextInput
@@ -397,6 +472,13 @@ function RouteCloseScreenInner() {
           />
         </Card>
 
+        <RouteReturnStatusCard
+          receipt={returnReceipt}
+          refreshing={returnRefreshing || refreshing}
+          onRefresh={() => { void refreshReturnStatus(); }}
+          refreshDisabled={!isOnline}
+        />
+
         {/* Step 4: cerrar ruta */}
         <View style={styles.closeCard}>
           <Text style={styles.closeTitle}>4 · Cerrar ruta</Text>
@@ -404,6 +486,7 @@ function RouteCloseScreenInner() {
             El servidor valida que el corte y la liquidación estén completos. Si
             falta algo, te dirá exactamente qué.
           </Text>
+          <RouteReturnCloseBanner warning={returnWarning} receipt={returnReceipt} />
           {/* Perf Fase 2E: bloqueo por operaciones sin sincronizar. */}
           {!closeAllowedBySync && (
             <View style={styles.syncBlock}>

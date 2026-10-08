@@ -33,6 +33,10 @@ import {
   type RouteLoadAcceptServerResult,
 } from './routeLoadAcceptFlow';
 import { isAlreadyConfirmedResponse } from './idempotentResponse';
+import {
+  parseLeftoverReceipt,
+  type RouteLeftoverReceipt,
+} from './routeReturnStatus';
 import { normalizePlanStopPayload, extractPlanStopsArray } from './planStopPayload';
 import { todayLocalISO } from '../utils/localDate';
 import { fetchMyPlan } from './routePlanRefresh';
@@ -178,6 +182,7 @@ export interface GFRouteCorteResult {
   code?: string;
   message: string;
   data?: Record<string, unknown> | null;
+  leftover_receipt?: RouteLeftoverReceipt | null;
 }
 
 export interface GFRouteCorteAdjustmentLine {
@@ -206,6 +211,7 @@ export interface GFRouteLiquidationConfirmResult {
     difference?: number;
     force?: boolean;
     route_close_warning?: string | null;
+    leftover_receipt?: RouteLeftoverReceipt | null;
   } | null;
 }
 
@@ -941,14 +947,16 @@ export async function validateRouteCorte(
   try {
     const result = await postRest<unknown>('pwa-ruta/validate-corte', body);
     const data = resultFromUnknown(result);
+    const rawData = data.data && typeof data.data === 'object'
+      ? data.data as Record<string, unknown>
+      : null;
     return {
       ok: data.ok !== false,
       success: data.success !== false,
       code: typeof data.code === 'string' ? data.code : undefined,
       message: typeof data.message === 'string' ? data.message : 'Corte validado',
-      data: data.data && typeof data.data === 'object'
-        ? data.data as Record<string, unknown>
-        : null,
+      data: rawData,
+      leftover_receipt: parseLeftoverReceipt(rawData?.leftover_receipt),
     };
   } catch (error) {
     const err = errorResult(error);
@@ -1052,6 +1060,7 @@ export async function confirmRouteLiquidation(
         route_close_warning: typeof rawData.route_close_warning === 'string'
           ? rawData.route_close_warning
           : null,
+        leftover_receipt: parseLeftoverReceipt(rawData.leftover_receipt),
       },
     };
   } catch (error) {
@@ -1073,6 +1082,37 @@ export async function confirmRouteLiquidation(
       message: err.message,
       data: null,
     };
+  }
+}
+
+/**
+ * Seller status for the blind leftover receipt.
+ * POST /gf/logistics/api/employee/route-return/status { plan_id }
+ *
+ * Returns null when the endpoint is missing (gf#315 is not deployed yet) or
+ * the call fails. Callers then keep today's close screens.
+ */
+export async function fetchRouteReturnStatus(
+  planId: number,
+): Promise<RouteLeftoverReceipt | null> {
+  if (!Number.isInteger(planId) || planId <= 0) return null;
+  try {
+    const result = await postRest<unknown>(`${GF_BASE}/route-return/status`, {
+      plan_id: planId,
+    });
+    const data = resultFromUnknown(result);
+    const raw = data.data && typeof data.data === 'object' ? data.data : data;
+    const receipt = parseLeftoverReceipt(raw);
+    if (!receipt) {
+      logInfo('general', 'route_return_status_unparsed', { planId });
+    }
+    return receipt;
+  } catch (error) {
+    logInfo('general', 'route_return_status_unavailable', {
+      planId,
+      message: error instanceof Error ? error.message : 'unknown',
+    });
+    return null;
   }
 }
 

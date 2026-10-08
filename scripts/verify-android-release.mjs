@@ -10,8 +10,8 @@ const EXPECTED = {
     ? path.resolve(process.env.APK_PATH)
     : path.resolve('android/app/build/outputs/apk/release/app-release.apk'),
   applicationId: process.env.EXPECTED_APPLICATION_ID || 'mx.grupofrio.koldfield',
-  versionCode: '9',
-  versionName: '1.4.3',
+  versionCode: '10',
+  versionName: '1.4.4',
 };
 
 function findAndroidTool(toolName) {

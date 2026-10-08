@@ -131,8 +131,9 @@ import {
   assignCreatedLeadToNoteItems,
   buildLeadNoteRequest,
   capLeadNoteRetries,
-  isLeadNoteEndpointMissing,
+  decideLeadNoteFailure,
 } from '../services/leadNote';
+import { shouldExposeCloseSyncing } from '../services/closeSyncBlockers';
 import { planCheckoutLeadNote } from '../services/leadNoteCheckout';
 import { postLeadNote } from '../services/leadNoteApi';
 
@@ -346,7 +347,11 @@ export function hasUserVisibleSyncing(queue: SyncQueueItem[]): boolean {
 }
 
 function computeCounts(queue: SyncQueueItem[]) {
-  const visibleQueue = queue.filter(isUserVisibleSyncItem);
+  // GPS is telemetry. Lead notes retry quietly and must not inflate the
+  // pending/error/dead totals that block route close and cash close.
+  const visibleQueue = queue
+    .filter(isUserVisibleSyncItem)
+    .filter((item) => item.type !== 'lead_note');
   return {
     pendingCount: visibleQueue.filter((i) => i.status === 'pending').length,
     errorCount: visibleQueue.filter((i) => i.status === 'error').length,
@@ -749,7 +754,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return;
     }
 
-    set({ isSyncing: true });
+    if (shouldExposeCloseSyncing(candidates)) {
+      set({ isSyncing: true });
+    }
     const cycleStart = Date.now();
     const cycleTally = createSyncCycleMetrics();
     let gpsDispatched = 0;
@@ -1241,16 +1248,16 @@ async function processOneItemUnheld(
       }
     }
 
-    if (item.type === 'lead_note' && isLeadNoteEndpointMissing(error)) {
-      // lead/note 404: the gf endpoint may not be deployed yet. Hold the same
-      // item under the retry ceiling. Checkout already finished on its own.
+    if (item.type === 'lead_note' && decideLeadNoteFailure(error, newRetries, MAX_RETRIES) === 'keep_retrying') {
+      // 404 or any other failure stays on this same item. It is not dead, and
+      // computeCounts leaves it out of the close blockers.
       get().markError(item.id, msg);
       const heldQueue = capLeadNoteRetries(get().queue, item.id, MAX_RETRIES);
       if (heldQueue !== get().queue) {
         set({ queue: heldQueue, ...computeCounts(heldQueue) });
         schedulePersist();
       }
-      logWarn('sync', 'lead_note_endpoint_missing', {
+      logInfo('sync', 'lead_note_retry', {
         id: item.id,
         error: msg,
       });

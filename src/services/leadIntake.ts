@@ -109,7 +109,9 @@ export function buildProspectionPayload(
     x_source_channel: 'xvan',
     x_prospect_source: 'vendedor_campo',
     // Comentario del vendedor, aparte de la description (giro + canal + nota).
-    // La description se conserva: un backend que aún no lee `note` no pierde el texto.
+    // gf lee `notes` en lead/create. `note` se conserva por si un servidor viejo
+    // lo usa. La description sigue llevando el texto si ambos se ignoran.
+    notes: sellerNote || undefined,
     note: sellerNote || undefined,
     description: descParts.join('\n') || undefined,
     latitude: gps.latitude ?? undefined,

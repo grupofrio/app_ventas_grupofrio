@@ -105,18 +105,15 @@ test('a created lead id is copied onto the waiting note', () => {
   });
 });
 
-test('HTTP 404 stays retryable past the normal ceiling and other errors do not', () => {
+test('a lead note keeps retrying after 404 and after any other failure', () => {
   const missing = Object.assign(new Error('HTTP 404'), { httpStatus: 404 });
   const network = new Error('Network request failed');
   const rejected = Object.assign(new Error('HTTP 422'), { httpStatus: 422 });
 
-  assert.equal(decideLeadNoteFailure(missing, 1, 3), 'hold_missing_endpoint');
-  assert.equal(decideLeadNoteFailure(missing, 3, 3), 'hold_missing_endpoint');
-  assert.equal(decideLeadNoteFailure(missing, 99, 3), 'hold_missing_endpoint');
-  assert.equal(decideLeadNoteFailure(new Error('HTTP 404'), 4, 3), 'hold_missing_endpoint');
-  assert.equal(decideLeadNoteFailure(network, 1, 3), 'retry');
-  assert.equal(decideLeadNoteFailure(network, 3, 3), 'dead');
-  assert.equal(decideLeadNoteFailure(rejected, 1, 3), 'dead');
+  assert.equal(decideLeadNoteFailure(missing, 1, 3), 'keep_retrying');
+  assert.equal(decideLeadNoteFailure(missing, 99, 3), 'keep_retrying');
+  assert.equal(decideLeadNoteFailure(network, 3, 3), 'keep_retrying');
+  assert.equal(decideLeadNoteFailure(rejected, 1, 3), 'keep_retrying');
 
   const held = capLeadNoteRetries([
     { id: 'lead-note:checkout-op-1', retries: 3 },
@@ -131,7 +128,7 @@ test('checkout capture and the sync queue keep a missing lead note retryable', (
   const checkout = readFileSync(resolve(REPO_ROOT, 'src/services/gfLogistics.ts'), 'utf8');
   const catchStart = syncStore.indexOf("const msg = error instanceof Error ? error.message : 'Sync error';");
   const deadBranch = syncStore.indexOf('get().markDead(item.id, msg, newRetries);', catchStart);
-  const hold = syncStore.indexOf('isLeadNoteEndpointMissing(error)', catchStart);
+  const hold = syncStore.indexOf("decideLeadNoteFailure(error, newRetries, MAX_RETRIES) === 'keep_retrying'", catchStart);
 
   assert.ok(hold > catchStart && hold < deadBranch);
   assert.match(syncStore, /case 'lead_note':/);

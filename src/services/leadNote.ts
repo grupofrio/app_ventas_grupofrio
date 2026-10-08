@@ -33,7 +33,7 @@ export interface PlannedLeadNote {
   dependsOn?: string[];
 }
 
-export type LeadNoteFailureAction = 'hold_missing_endpoint' | 'retry' | 'dead';
+export type LeadNoteFailureAction = 'keep_retrying';
 
 function positiveId(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -109,17 +109,17 @@ export function shouldRetryLeadNoteError(error: unknown): boolean {
 }
 
 /**
- * 404 means the gf endpoint is not deployed yet. The same item stays eligible
- * after the normal retry ceiling; the 90-day reconciliation cutoff still applies.
+ * A lead note never becomes a terminal sync failure. 404 (endpoint not
+ * deployed yet) and any other error stay under the retry ceiling. Route close
+ * and cash close do not count the item. The 90-day reconciliation cutoff
+ * still applies, like every other queue item.
  */
 export function decideLeadNoteFailure(
-  error: unknown,
-  retriesAfterAttempt: number,
-  maxRetries: number,
+  _error: unknown,
+  _retriesAfterAttempt: number,
+  _maxRetries: number,
 ): LeadNoteFailureAction {
-  if (isLeadNoteEndpointMissing(error)) return 'hold_missing_endpoint';
-  if (!shouldRetryLeadNoteError(error) || retriesAfterAttempt >= maxRetries) return 'dead';
-  return 'retry';
+  return 'keep_retrying';
 }
 
 export function capLeadNoteRetries<T extends { id: string; retries: number }>(

@@ -22,9 +22,11 @@ test('field lead create payload keeps the seller note beside description', () =>
     _operationId: 'lead-operation-123',
     customer_name: 'Abarrotes Lupita',
     description: 'Giro: Abarrotes / Miscelánea\nfrente a la plaza',
+    notes: 'frente a la plaza',
     note: 'frente a la plaza',
   });
 
+  assert.equal(body.notes, 'frente a la plaza');
   assert.equal(body.note, 'frente a la plaza');
   assert.match(String(body.description), /frente a la plaza/);
   assert.equal(body.operation_id, 'lead-operation-123');

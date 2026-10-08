@@ -46,6 +46,9 @@ interface SalesOpsMutationError extends Error {
   httpStatus?: number;
   outcomeKind: SalesOpsMutationOutcomeKind;
   data?: unknown;
+  user_message?: string;
+  reason?: string;
+  detail_code?: string;
 }
 
 const DEFINITIVE_CODES = new Set([
@@ -99,6 +102,9 @@ function makeOutcomeError(input: {
   kind: SalesOpsMutationOutcomeKind;
   httpStatus?: number;
   data?: unknown;
+  userMessage?: string;
+  reason?: string;
+  detailCode?: string;
 }): SalesOpsMutationError {
   const error = new Error(input.message) as SalesOpsMutationError;
   error.name = 'SalesOpsMutationError';
@@ -107,6 +113,9 @@ function makeOutcomeError(input: {
   error.outcomeKind = input.kind;
   if (input.httpStatus !== undefined) error.httpStatus = input.httpStatus;
   if (input.data !== undefined) error.data = input.data;
+  if (input.userMessage) error.user_message = input.userMessage;
+  if (input.reason) error.reason = input.reason;
+  if (input.detailCode) error.detail_code = input.detailCode;
   return error;
 }
 
@@ -131,8 +140,12 @@ function rejectBackendEnvelope(record: Record<string, unknown>): void {
 
   const code = nonEmptyString(record.code) || (envelopeStatus === 'busy' ? 'LOCK_BUSY' : 'API_REJECTION');
   const httpStatus = numericHttpStatus(record.status);
+  const data = recordOf(record.data);
+  const userMessage = nonEmptyString(record.user_message) || nonEmptyString(data?.user_message);
+  const reason = nonEmptyString(record.reason) || nonEmptyString(data?.reason);
+  const detailCode = nonEmptyString(record.detail_code) || nonEmptyString(data?.detail_code);
   const message = nonEmptyString(record.message)
-    || nonEmptyString(record.user_message)
+    || userMessage
     || 'El servidor rechazó la operación.';
   const kind = envelopeStatus === 'busy'
     ? 'busy'
@@ -144,6 +157,9 @@ function rejectBackendEnvelope(record: Record<string, unknown>): void {
     kind,
     httpStatus,
     data: record.data,
+    userMessage,
+    reason,
+    detailCode,
   });
 }
 

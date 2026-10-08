@@ -1,3 +1,10 @@
+function attachRejectionDetail(error: Error, key: 'user_message' | 'reason' | 'detail_code', value: unknown): void {
+  if (typeof value !== 'string') return;
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  (error as Error & Partial<Record<typeof key, string>>)[key] = trimmed;
+}
+
 export function unwrapRestResult(parsed: unknown, status: number): unknown {
   // Quick win (hardening): mensaje claro para sesión expirada. No hace logout
   // automático (eso sería refactor mayor de auth); solo da un error legible y
@@ -15,15 +22,18 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
 
   const result = payload as Record<string, unknown> | null;
   if (result && typeof result === 'object' && result.ok === false) {
-    const message = typeof result.message === 'string' && result.message.trim().length > 0
-      ? result.message
-      : `HTTP ${status}`;
+    const directMessage = typeof result.message === 'string' ? result.message.trim() : '';
+    const userMessage = typeof result.user_message === 'string' ? result.user_message.trim() : '';
+    const message = directMessage || userMessage || `HTTP ${status}`;
     const err = new Error(message);
     // Attach the backend error code so callers can branch on it without
     // parsing the human-readable message string.
     if (typeof result.code === 'string' && result.code.length > 0) {
       (err as Error & { code: string }).code = result.code;
     }
+    attachRejectionDetail(err, 'user_message', userMessage);
+    attachRejectionDetail(err, 'reason', result.reason);
+    attachRejectionDetail(err, 'detail_code', result.detail_code);
     // Algunas rutas type=json devuelven HTTP 200 con un estado de negocio
     // determinista dentro del sobre. Preservarlo permite que postRest exponga
     // conflictos idempotentes sin confundirlos con un éxito de transporte.
@@ -39,11 +49,20 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
     // Adjuntamos el `data` del backend al error para que el caller pueda mostrar
     // detalle por línea (available_qty real). Aditivo: no rompe a nadie.
     if (result.data && typeof result.data === 'object') {
+      const data = result.data as Record<string, unknown>;
       (err as Error & { data?: unknown }).data = result.data;
-      const dataCode = (result.data as Record<string, unknown>).error_code;
+      const dataCode = data.error_code;
       if (!(err as Error & { code?: string }).code && typeof dataCode === 'string' && dataCode) {
         (err as Error & { code: string }).code = dataCode;
       }
+      const detailed = err as Error & {
+        user_message?: string;
+        reason?: string;
+        detail_code?: string;
+      };
+      if (!detailed.user_message) attachRejectionDetail(err, 'user_message', data.user_message);
+      if (!detailed.reason) attachRejectionDetail(err, 'reason', data.reason);
+      if (!detailed.detail_code) attachRejectionDetail(err, 'detail_code', data.detail_code);
     }
     throw err;
   }

@@ -3,6 +3,9 @@ export interface ApiRequestError extends Error {
   responseReceived?: boolean;
   code?: string;
   data?: unknown;
+  user_message?: string;
+  reason?: string;
+  detail_code?: string;
   __alreadyLogged?: boolean;
 }
 
@@ -76,6 +79,13 @@ function copyError(cause: unknown, fallbackMessage: string): ApiRequestError {
     const data = readRecordValue(source, 'data');
     if (data.found) {
       error.data = data.value;
+    }
+
+    for (const key of ['user_message', 'reason', 'detail_code'] as const) {
+      const detail = readRecordValue(source, key);
+      if (detail.found && typeof detail.value === 'string' && detail.value.length > 0) {
+        error[key] = detail.value;
+      }
     }
   }
 

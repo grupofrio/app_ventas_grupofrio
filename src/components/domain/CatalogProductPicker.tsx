@@ -18,6 +18,9 @@ interface CatalogProductPickerProps {
   visible: boolean;
   title?: string;
   excludedProductIds?: number[];
+  /** When set, the picker lists these products instead of the full store. */
+  products?: TruckProduct[];
+  emptyLabel?: string;
   onClose: () => void;
   onSelect: (product: TruckProduct) => void;
 }
@@ -33,10 +36,13 @@ export function CatalogProductPicker({
   visible,
   title = 'Seleccionar producto',
   excludedProductIds = [],
+  products: productsOverride,
+  emptyLabel,
   onClose,
   onSelect,
 }: CatalogProductPickerProps) {
-  const products = useProductStore((s) => s.products);
+  const storeProducts = useProductStore((s) => s.products);
+  const products = productsOverride ?? storeProducts;
   const [search, setSearch] = useState('');
 
   useEffect(() => {
@@ -92,7 +98,11 @@ export function CatalogProductPicker({
             )}
             ListEmptyComponent={(
               <View style={styles.emptyState}>
-                <Text style={typography.dim}>No hay productos que coincidan.</Text>
+                <Text style={typography.dim}>
+                  {search.trim()
+                    ? 'No hay productos que coincidan.'
+                    : (emptyLabel || 'No hay productos que coincidan.')}
+                </Text>
               </View>
             )}
           />

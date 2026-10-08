@@ -18,7 +18,7 @@ interface GuardModule {
     alreadyConfirmed: boolean; corteConfirmed: boolean; liquidationAvailable: boolean;
     pendingCount: number; errorCount?: number; deadCount?: number; isSyncing: boolean;
     invoiceCollectionPendingCount?: number; invoiceCollectionReviewCount?: number;
-    invoiceCollectionSummaryReady?: boolean;
+    invoiceCollectionSummaryReady?: boolean; arrivalKmSaved?: boolean;
   }) => string | null;
 }
 
@@ -74,6 +74,17 @@ function run(m: GuardModule) {
   assert.match(
     m.describeLiquidationButtonBlock({ ...ready, corteConfirmed: false, pendingCount: 3 }) ?? '',
     /pendientes/i,
+  );
+  // KM final guardado y mayor al inicial antes de liquidar. Si se omite, no cambia el comportamiento previo.
+  assert.equal(m.describeLiquidationButtonBlock({ ...ready, arrivalKmSaved: true }), null);
+  assert.match(m.describeLiquidationButtonBlock({ ...ready, arrivalKmSaved: false }) ?? '', /KM final/);
+  assert.match(
+    m.describeLiquidationButtonBlock({ ...ready, arrivalKmSaved: false, pendingCount: 2 }) ?? '',
+    /pendientes/i,
+  );
+  assert.match(
+    m.describeLiquidationButtonBlock({ ...ready, arrivalKmSaved: false, corteConfirmed: false }) ?? '',
+    /KM final/,
   );
 
   console.log('cashclose guard tests: ok');

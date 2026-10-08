@@ -148,6 +148,33 @@ export function isValidKm(km: unknown): boolean {
   return Number.isFinite(n) && n > 0;
 }
 
+/**
+ * Server rejects arrival_km <= departure_km
+ * ("arrival_km debe ser mayor que departure_km.").
+ * When departure is unknown, only the km > 0 rule applies here.
+ */
+export function isArrivalKmGreaterThanDeparture(
+  arrivalKm: number,
+  departureKm: number | null | undefined,
+): boolean {
+  if (!Number.isFinite(arrivalKm) || arrivalKm <= 0) return false;
+  if (typeof departureKm !== 'number' || !Number.isFinite(departureKm)) return true;
+  return arrivalKm > departureKm;
+}
+
+/**
+ * True only when a KM final is already stored and the server would accept it.
+ * Equal to the starting KM does not count: confirming liquidation can close
+ * the route and hide the KM card.
+ */
+export function hasSavedArrivalKm(
+  arrivalKm: number | null | undefined,
+  departureKm: number | null | undefined,
+): boolean {
+  if (typeof arrivalKm !== 'number' || !Number.isFinite(arrivalKm) || arrivalKm <= 0) return false;
+  return isArrivalKmGreaterThanDeparture(arrivalKm, departureKm);
+}
+
 function kmOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const n = typeof value === 'number' ? value : parseFloat(String(value));
@@ -180,7 +207,9 @@ export function calculateKmDriven(
  *    molestar en operación real.
  *  - Recorrido en un día (final - inicial) > 1,500 km: una ruta de ventas no
  *    recorre esa distancia en un día → probable typo en el KM final.
- * Las reglas duras existentes (km > 0, final >= inicial) NO cambian.
+ * Las reglas duras de captura (km > 0, final > inicial) viven aparte:
+ * isArrivalKmGreaterThanDeparture. calculateKmDriven sigue aceptando
+ * final === inicial como 0 para no romper un valor ya guardado.
  */
 export const MAX_REASONABLE_ODOMETER_KM = 2_000_000;
 export const MAX_REASONABLE_KM_PER_DAY = 1_500;

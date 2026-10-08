@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const repoRoot = process.cwd();
-const expectedVersionCode = 9;
-const expectedVersionName = '1.4.3';
+const expectedVersionCode = 10;
+const expectedVersionName = '1.4.4';
 const expectedEasOwner = 'grupofrio';
 const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
 const expectedCorporateCertificateSha256 = 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c';
@@ -51,13 +51,13 @@ const releaseExpectationsSource = readFileSync(
 );
 assert.match(
   verifierSource,
-  /versionCode:\s*'9'/,
-  'release verification must require Android versionCode 9',
+  /versionCode:\s*'10'/,
+  'release verification must require Android versionCode 10',
 );
 assert.match(
   verifierSource,
-  /versionName:\s*'1\.4\.3'/,
-  'release verification must require Android versionName 1.4.3',
+  /versionName:\s*'1\.4\.4'/,
+  'release verification must require Android versionName 1.4.4',
 );
 assert.match(
   releaseExpectationsSource,
@@ -90,8 +90,8 @@ if (existsSync(nativeBuildGradle)) {
   const nativeSource = readFileSync(nativeBuildGradle, 'utf8');
   assert.match(
     nativeSource,
-    /defaultConfig\s*\{[\s\S]*?versionCode\s+9\b/,
-    'the generated native Android project must use versionCode 9 when present',
+    /defaultConfig\s*\{[\s\S]*?versionCode\s+10\b/,
+    'the generated native Android project must use versionCode 10 when present',
   );
 }
 

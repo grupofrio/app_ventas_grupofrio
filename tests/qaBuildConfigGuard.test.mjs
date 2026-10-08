@@ -25,8 +25,8 @@ assert.deepEqual(resolved, {
   publicBaseUrl: 'https://grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081.dev.odoo.com',
   publicOdooDb: 'grupofrio-gf-codex-dev-pr291-kold114-79983ae-38842081',
   applicationId: 'mx.grupofrio.koldfield.dev',
-  version: '1.4.3',
-  versionCode: 9,
+  version: '1.4.4',
+  versionCode: 10,
   certificateSha256: '3b536a000d4dc09b77fd7704a535df506cdc33443dc7e80a7c4428b1f1369e54',
   remoteCredentials: true,
 });

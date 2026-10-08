@@ -39,6 +39,15 @@ import {
 import { decideExchangeFailureAction } from '../../src/services/exchangeSubmit';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { classifySalesOpsMutationError } from '../../src/services/salesOpsMutationOutcome';
+import { describeExchangeRejection } from '../../src/services/exchangeRejectionMessage';
+import {
+  availableReplacementQty,
+  clampReplacementQtyText,
+  findReplacementQtyOverages,
+  formatStockQty,
+  initialReplacementQtyText,
+  selectExchangeReplacementCatalog,
+} from '../../src/services/exchangeReplacementStock';
 
 type ExchangeSection = 'delivery' | 'merma';
 
@@ -103,6 +112,10 @@ export default function CambioProductoScreen() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  const hasStockData = useProductStore((s) => s.hasStockData);
+  const fromCache = useProductStore((s) => s.fromCache);
+  const inventoryContext = useProductStore((s) => s.inventoryContext);
+  const lastSync = useProductStore((s) => s.lastSync);
   const enqueue = useSyncStore((s) => s.enqueue);
   const persistQueue = useSyncStore((s) => s.persistQueue);
   const isOnline = useSyncStore((s) => s.isOnline);
@@ -139,6 +152,16 @@ export default function CambioProductoScreen() {
   const productMap = useMemo(
     () => new Map(products.map((product) => [product.id, product])),
     [products],
+  );
+  const replacementCatalog = useMemo(
+    () => selectExchangeReplacementCatalog(products, {
+      isOnline,
+      fromCache,
+      hasStockData,
+      inventoryContext,
+      lastSync,
+    }),
+    [products, isOnline, fromCache, hasStockData, inventoryContext, lastSync],
   );
 
   const partnerId = stop ? (getLeadPartnerId(stop) ?? stop.customer_id) : null;
@@ -177,9 +200,21 @@ export default function CambioProductoScreen() {
 
   function updateLine(section: ExchangeSection, lineId: string, patch: Partial<DraftLine>) {
     const setter = section === 'delivery' ? setDeliveryLines : setMermaLines;
-    setter((prev) => prev.map((line) => (
-      line.id === lineId ? { ...line, ...patch } : line
-    )));
+    setter((prev) => prev.map((line) => {
+      if (line.id !== lineId) return line;
+      const next = { ...line, ...patch };
+      if (
+        section === 'delivery'
+        && replacementCatalog.mode === 'van_stock'
+        && patch.qtyText != null
+      ) {
+        const available = availableReplacementQty(
+          next.productId != null ? productMap.get(next.productId) : undefined,
+        );
+        next.qtyText = clampReplacementQtyText(next.qtyText, available);
+      }
+      return next;
+    }));
   }
 
   function removeLine(section: ExchangeSection, lineId: string) {
@@ -193,9 +228,17 @@ export default function CambioProductoScreen() {
 
   function handleSelectProduct(productId: number) {
     if (!pickerState) return;
+    const existingQty = currentSectionLines.find((line) => line.id === pickerState.lineId)?.qtyText;
+    const capDelivery = pickerState.section === 'delivery' && replacementCatalog.mode === 'van_stock';
+    const available = capDelivery ? availableReplacementQty(productMap.get(productId)) : null;
+    const qtyText = capDelivery
+      ? (existingQty
+        ? clampReplacementQtyText(existingQty, available)
+        : initialReplacementQtyText(available))
+      : (existingQty || '1');
     updateLine(pickerState.section, pickerState.lineId, {
       productId,
-      qtyText: currentSectionLines.find((line) => line.id === pickerState.lineId)?.qtyText || '1',
+      qtyText,
     });
     setPickerState(null);
   }
@@ -236,6 +279,20 @@ export default function CambioProductoScreen() {
     if (!hasAtLeastOneLine) {
       Alert.alert('Sin movimientos', 'Agrega al menos una línea con cantidad mayor a 0.');
       return;
+    }
+    if (replacementCatalog.mode === 'van_stock') {
+      const overages = findReplacementQtyOverages(
+        deliveryPayloadLines.map((line) => ({
+          productId: line.product_id,
+          qty: line.qty,
+          productName: productMap.get(line.product_id)?.name,
+        })),
+        products,
+      );
+      if (overages.length > 0) {
+        Alert.alert('Sin stock en la van', overages.map((line) => line.message).join('\n'));
+        return;
+      }
     }
 
     setSaving(true);
@@ -374,8 +431,6 @@ export default function CambioProductoScreen() {
         response = await createExchange(exchangeCapturePayload);
         registeredMessage = response.user_message || registeredMessage;
       } catch (error) {
-        const code = (error as { code?: string }).code;
-        const message = error instanceof Error ? error.message : 'No se pudo registrar el cambio.';
         const outcome = classifySalesOpsMutationError(error);
         const action = decideExchangeFailureAction({
           isSessionExpired: isSessionExpiredError(error),
@@ -401,24 +456,7 @@ export default function CambioProductoScreen() {
           });
           return;
         }
-        let friendly = message;
-        switch (code) {
-          case 'LOCK_BUSY':
-            friendly = 'El sistema está ocupado. Reintenta en unos segundos.';
-            break;
-          case 'SERVER_MISCONFIG':
-            friendly = 'Falta configuración en Odoo. Avisa al administrador.';
-            break;
-          case 'FORBIDDEN':
-            friendly = 'La van no pertenece a la sucursal activa. Verifica tu asignación.';
-            break;
-          case 'VALIDATION_ERROR':
-            friendly = message;
-            break;
-          default:
-            break;
-        }
-        Alert.alert('Cambio no registrado', friendly);
+        Alert.alert('Cambio no registrado', describeExchangeRejection(error));
         return;
       }
 
@@ -473,6 +511,10 @@ export default function CambioProductoScreen() {
           />
         </View>
 
+        {section === 'delivery' && replacementCatalog.warning ? (
+          <Text style={styles.stockWarning}>{replacementCatalog.warning}</Text>
+        ) : null}
+
         {lines.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={typography.dim}>Sin líneas en esta sección.</Text>
@@ -494,7 +536,10 @@ export default function CambioProductoScreen() {
                     </Text>
                     {product ? (
                       <Text style={styles.selectorMeta}>
-                        {product.default_code || 'Sin código'} · {product.qty_display} disp.
+                        {product.default_code || 'Sin código'}
+                        {section === 'delivery' && replacementCatalog.mode === 'van_stock'
+                          ? ` · Disponible en van: ${formatStockQty(availableReplacementQty(product) ?? 0)}`
+                          : ` · ${product.qty_display} disp.`}
                       </Text>
                     ) : null}
                   </View>
@@ -645,7 +690,13 @@ export default function CambioProductoScreen() {
 
       <CatalogProductPicker
         visible={pickerState != null}
-        title="Seleccionar producto"
+        title={pickerState?.section === 'merma' ? 'Producto dañado' : 'Producto con stock en la van'}
+        products={pickerState?.section === 'merma' ? products : replacementCatalog.products}
+        emptyLabel={
+          pickerState?.section !== 'merma' && replacementCatalog.mode === 'van_stock'
+            ? 'No hay productos con stock en la van.'
+            : undefined
+        }
         excludedProductIds={excludedProductIds}
         onClose={() => setPickerState(null)}
         onSelect={(product) => handleSelectProduct(product.id)}
@@ -694,6 +745,14 @@ const styles = StyleSheet.create({
   sectionSubtitle: {
     ...typography.dim,
     marginTop: 3,
+  },
+  stockWarning: {
+    ...typography.dim,
+    color: colors.warning,
+    backgroundColor: colors.warningAlpha12,
+    borderRadius: radii.button,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   emptyState: {
     backgroundColor: colors.surface,

@@ -602,6 +602,12 @@ export default function CheckinScreen() {
           </TouchableOpacity>
         </View>
 
+        {showCollect ? (
+          <Text style={styles.exchangeBeforeCheckout}>
+            Registra los cambios antes del check-out. Si cierras la parada, el servidor ya no acepta el cambio.
+          </Text>
+        ) : null}
+
         <Button
           label="📍 Abrir ubicación"
           variant="secondary"
@@ -728,6 +734,15 @@ const styles = StyleSheet.create({
   },
   actionPrimary: { backgroundColor: colors.primary },
   actionLabel: { fontFamily: fonts.bodyBold, fontWeight: '700', color: colors.text },
+  exchangeBeforeCheckout: {
+    ...typography.dim,
+    color: colors.warning,
+    backgroundColor: colors.warningAlpha12,
+    borderRadius: radii.button,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
   metricRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 7, borderBottomWidth: 1,

@@ -18,6 +18,8 @@ import { describeProspectionSyncLabel } from '../src/services/prospectConvert';
 import { describeRetryBlock } from '../src/services/trustSignals';
 import { formatCurrency } from '../src/utils/time';
 import { isProtectedPhysicalReviewItem } from '../src/services/consignmentPhysicalReview';
+import { describeEvidencePhotoWarning } from '../src/services/evidencePhotoSync';
+import { AlertBanner } from '../src/components/ui/AlertBanner';
 
 const typeIcons: Record<string, string> = {
   sale_order: '🧾', checkin: '📍', checkout: '📍', photo: '📸',
@@ -41,7 +43,7 @@ const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' |
 export default function SyncScreen() {
   const {
     queue, isOnline, isSyncing, pendingCount, errorCount, deadCount,
-    processQueue, clearDone, clearDead,
+    processQueue, clearDone, clearDead, retryDeadPhoto, removeDeadQueueItems,
   } = useSyncStore();
 
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
@@ -53,6 +55,7 @@ export default function SyncScreen() {
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
   const syncCopy = describeSyncQueueState({ pendingCount, errorCount, deadCount, isSyncing, isOnline });
+  const photoWarning = describeEvidencePhotoWarning(queue);
   const toneColor: Record<string, string> = {
     ok: '#22C55E', syncing: '#2563EB', pending: '#F59E0B', error: '#EF4444',
   };
@@ -95,6 +98,14 @@ export default function SyncScreen() {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Status */}
+        {photoWarning ? (
+          <AlertBanner
+            variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
+            icon="📸"
+            message={photoWarning.message}
+          />
+        ) : null}
+
         <View style={[styles.statusBar, isOnline ? styles.online : styles.offline]}>
           <Text style={styles.statusText}>
             {isOnline ? '🟢 En linea' : '🟡 Sin conexion'}
@@ -191,10 +202,31 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({purgeableDead.length})</Text>
             <Text style={styles.deadHint}>
-              No se completarán: agotaron sus reintentos o dependían de una venta que falló. Reintenta la venta desde su visita, o usa "Limpiar Historial" arriba para borrarlas (padre y dependientes juntos) y quitar la alerta roja.
+              No se completarán solas: agotaron sus reintentos o dependían de una venta que falló. En una foto fallida puedes pulsar Reintentar. También puedes reintentar la venta desde su visita, o usar "Limpiar Historial" arriba.
             </Text>
             {purgeableDead.map((item) => (
-              <SyncItem key={item.id} item={item} />
+              <SyncItem
+                key={item.id}
+                item={item}
+                onRetryDeadPhoto={item.type === 'photo' ? () => {
+                  const reason = retryDeadPhoto(item.id);
+                  if (reason) Alert.alert('No se puede reintentar', reason);
+                } : undefined}
+                onDeleteDeadPhoto={item.type === 'photo' ? () => {
+                  Alert.alert(
+                    'Eliminar foto',
+                    'Se quitará esta foto fallida de la cola. No se enviará a Odoo.',
+                    [
+                      { text: 'Cancelar', style: 'cancel' },
+                      {
+                        text: 'Eliminar',
+                        style: 'destructive',
+                        onPress: () => { removeDeadQueueItems([item.id]); },
+                      },
+                    ],
+                  );
+                } : undefined}
+              />
             ))}
           </>
         )}
@@ -224,7 +256,15 @@ export default function SyncScreen() {
   );
 }
 
-function SyncItem({ item }: { item: SyncQueueItem }) {
+function SyncItem({
+  item,
+  onRetryDeadPhoto,
+  onDeleteDeadPhoto,
+}: {
+  item: SyncQueueItem;
+  onRetryDeadPhoto?: () => void;
+  onDeleteDeadPhoto?: () => void;
+}) {
   const icon = typeIcons[item.type] || '📦';
   const label = item.type === 'prospection'
     ? describeProspectionSyncLabel(item)
@@ -270,9 +310,19 @@ function SyncItem({ item }: { item: SyncQueueItem }) {
         )}
         <Text style={styles.syncTime}>
           {time}
-          {item.retries > 0 ? ` · Intento ${item.retries}/3` : ''}
+          {item.retries > 0 ? ` · Intento ${item.retries}` : ''}
           {item.error_message && !blockedByParent ? ` · ${item.error_message}` : ''}
         </Text>
+        {(onRetryDeadPhoto || onDeleteDeadPhoto) && (
+          <View style={styles.photoActions}>
+            {onRetryDeadPhoto ? (
+              <Button label="Reintentar" small onPress={onRetryDeadPhoto} />
+            ) : null}
+            {onDeleteDeadPhoto ? (
+              <Button label="Eliminar" variant="danger" small onPress={onDeleteDeadPhoto} />
+            ) : null}
+          </View>
+        )}
       </View>
       <Badge label={physicalReview ? 'Revisión' : badge.label} variant={physicalReview ? 'red' : badge.variant} />
     </View>
@@ -316,6 +366,7 @@ const styles = StyleSheet.create({
   syncBlockedLine: { fontSize: 12, color: '#EF4444', fontWeight: '500', marginTop: 2, lineHeight: 16 },
   retryHint: { fontSize: 11, color: colors.textDim, marginBottom: 8, marginTop: -2 },
   syncTime: { fontSize: 11, color: colors.textDim },
+  photoActions: { flexDirection: 'row', gap: 6, marginTop: 8 },
   deadHint: {
     fontSize: 11, color: colors.textDim, fontStyle: 'italic',
     marginBottom: 8, lineHeight: 15,

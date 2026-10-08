@@ -28,6 +28,8 @@ import { useKoldStore } from '../../src/stores/useKoldStore';
 import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocationStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
+import { describeEvidencePhotoWarning } from '../../src/services/evidencePhotoSync';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { getStopTypeLabel } from '../../src/services/routePresentation';
 import { describeGeoStatus } from '../../src/services/trustSignals';
@@ -55,6 +57,7 @@ export default function StopDetailScreen() {
   const realDistance = useLocationStore((s) => s.distanceMeters);
   const realIsWithin = useLocationStore((s) => s.isWithinFence);
   const realAccuracy = useLocationStore((s) => s.accuracy);
+  const syncQueue = useSyncStore((s) => s.queue);
 
   React.useEffect(() => {
     if (stop?.customer_latitude && stop?.customer_longitude) {
@@ -170,6 +173,8 @@ export default function StopDetailScreen() {
     void openStopNavigation(stop);
   }
 
+  const photoWarning = describeEvidencePhotoWarning(syncQueue, stop.id);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title={stop.customer_name} showBack />
@@ -182,6 +187,13 @@ export default function StopDetailScreen() {
             variant="success"
             icon="✓"
             message={giftSuccessMessage}
+          />
+        ) : null}
+        {photoWarning ? (
+          <AlertBanner
+            variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
+            icon="📸"
+            message={photoWarning.message}
           />
         ) : null}
 
@@ -241,6 +253,14 @@ export default function StopDetailScreen() {
               />
             </View>
           )}
+          {photoWarning ? (
+            <View style={{ marginTop: 8 }}>
+              <Badge
+                label={photoWarning.badge}
+                variant={photoWarning.tone === 'failed' ? 'red' : 'orange'}
+              />
+            </View>
+          ) : null}
         </Card>
 
         {/* KoldScore card — actionable intelligence */}

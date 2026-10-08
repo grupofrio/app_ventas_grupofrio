@@ -22,6 +22,7 @@ import { CheckoutResultStatus } from './checkoutResult';
 // BLD-008: optional client event metadata. Feature-flagged inside the
 // helper — safe to pass from anywhere.
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
+import { buildStopImageUploadPayload } from './evidencePhotoSync.ts';
 import { logInfo, logWarn } from '../utils/logger';
 import { buildExchangeCreatePayload } from './gfLogisticsContracts';
 import { buildRouteLoadAcceptPayload, buildRouteLoadRejectPayload } from './routeLoadAcceptance';
@@ -553,11 +554,25 @@ export async function uploadStopImage(
   imageBase64: string,
   imageType: string = 'visit',
   meta?: ClientEventMeta | null,
+  extras?: {
+    evidenceType?: unknown;
+    latitude?: number | null;
+    longitude?: number | null;
+    capturedAt?: string | null;
+  },
 ): Promise<boolean> {
-  const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, image_base64: imageBase64, image_type: imageType },
-    meta ?? null,
-  );
+  // Photo uploads carry evidence_type and capture meta even when the global
+  // client-meta flag is off. Other endpoints stay gated by that flag.
+  const payload = buildStopImageUploadPayload({
+    stopId,
+    imageBase64,
+    imageType,
+    evidenceType: extras?.evidenceType,
+    meta: meta ?? null,
+    latitude: extras?.latitude,
+    longitude: extras?.longitude,
+    capturedAt: extras?.capturedAt,
+  });
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, payload);
   return !!result;
 }

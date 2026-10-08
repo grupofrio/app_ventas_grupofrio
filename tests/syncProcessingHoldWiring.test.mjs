@@ -122,12 +122,13 @@ assert.match(
 );
 assertOrdered(processQueueBlock, [
   /const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation\(queue, now\);/,
-  /if \(queueAfterRetryAgeCutoff !== queue\) \{[\s\S]*?set\(\{ queue: queueAfterRetryAgeCutoff, \.\.\.computeCounts\(queueAfterRetryAgeCutoff\) \}\);/,
-  /const candidates = processingHolds\.withoutHeld\(queueAfterRetryAgeCutoff\)\.filter\(isReady\);/,
-], 'aged operations become durable reconciliation state before candidate selection');
+  /const alignedQueue = alignEvidencePhotosBeforeClose\(queueAfterRetryAgeCutoff, now\);/,
+  /if \(alignedQueue !== queue\) \{[\s\S]*?set\(\{ queue: alignedQueue, \.\.\.computeCounts\(alignedQueue\) \}\);/,
+  /const candidates = processingHolds\.withoutHeld\(alignedQueue\)\.filter\(isReady\);/,
+], 'aged operations and evidence-photo ordering become queue state before candidate selection');
 assert.match(
   processQueueBlock,
-  /const candidates = processingHolds\.withoutHeld\(queueAfterRetryAgeCutoff\)\.filter\(isReady\);/,
+  /const candidates = processingHolds\.withoutHeld\(alignedQueue\)\.filter\(isReady\);/,
   'initial candidates exclude held ids before readiness checks',
 );
 assert.match(

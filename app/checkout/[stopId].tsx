@@ -11,6 +11,7 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { Badge } from '../../src/components/ui/Badge';
+import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
@@ -41,6 +42,11 @@ import {
   describeDayBundleActionBlock,
 } from '../../src/services/dayBundleMutationGate';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import {
+  blockingEvidencePhotoIds,
+  buildCloseDependsOn,
+  describeEvidencePhotoWarning,
+} from '../../src/services/evidencePhotoSync';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 
 function CheckoutScreenInner() {
@@ -279,20 +285,34 @@ function CheckoutScreenInner() {
 
     const checkoutOperationId = getCheckoutOperationId();
 
+    const blockingPhotoIds = blockingEvidencePhotoIds(
+      useSyncStore.getState().queue,
+      stop.id,
+      Date.now(),
+    );
     const enqueueCheckout = () => {
       const gpsQueueId = enqueueGpsPoint(position, 'checkout');
+      const dependsOn = buildCloseDependsOn(blockingPhotoIds, [gpsQueueId]);
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
         timestamp: Date.now(),
       }, {
         operationId: checkoutOperationId,
-        ...(gpsQueueId ? { dependsOn: [gpsQueueId] } : {}),
+        ...(dependsOn.length > 0 ? { dependsOn } : {}),
       });
     };
 
-    if (!isOnline) {
+    if (!isOnline || blockingPhotoIds.length > 0) {
       enqueueCheckout();
+      if (blockingPhotoIds.length > 0) {
+        Alert.alert(
+          'Check-out en cola',
+          'Primero se envían las fotos de evidencia. El cierre queda pendiente de sincronización.',
+          [{ text: 'OK', onPress: () => finalizeCheckout(shouldNavigateToNextStop) }],
+        );
+        return;
+      }
       if (salePending) {
         Alert.alert(
           'Visita cerrada',
@@ -381,11 +401,20 @@ function CheckoutScreenInner() {
       }
 
       const checkoutOperationId = getCheckoutOperationId();
+      const reviewPhotoIds = blockingEvidencePhotoIds(
+        useSyncStore.getState().queue,
+        stop.id,
+        Date.now(),
+      );
+      const reviewDependsOn = buildCloseDependsOn(reviewPhotoIds);
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
         timestamp: Date.now(),
-      }, { operationId: checkoutOperationId });
+      }, {
+        operationId: checkoutOperationId,
+        ...(reviewDependsOn.length > 0 ? { dependsOn: reviewDependsOn } : {}),
+      });
       Alert.alert(
         'Marcado para revisión',
         'La venta quedó reportada para que tu supervisor la revise. Puedes continuar tu ruta.',
@@ -409,6 +438,18 @@ function CheckoutScreenInner() {
             {stop.customer_name} · {formatElapsed(elapsedSeconds)}
           </Text>
         </View>
+
+        {(() => {
+          const photoWarning = describeEvidencePhotoWarning(queue, stop.id);
+          if (!photoWarning) return null;
+          return (
+            <AlertBanner
+              variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
+              icon="📸"
+              message={photoWarning.message}
+            />
+          );
+        })()}
 
         {/* Visit summary card */}
         <Card>

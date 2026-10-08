@@ -27,8 +27,13 @@ function main() {
 
   assert.match(
     noSaleScreen,
-    /no_sale_reason_code: checkoutPayload\.no_sale_reason_code/,
-    'el checkout online debe reenviar el motivo estructurado',
+    /enqueue\(\s*\n\s*'checkout',[\s\S]{0,180}\.\.\.checkoutPayload,/,
+    'el checkout encolado debe reenviar el payload estructurado, incluido el motivo',
+  );
+  assert.doesNotMatch(
+    noSaleScreen,
+    /await checkOut\(/,
+    'la no-venta no cierra la parada antes de encolar la foto',
   );
 
   assert.match(

@@ -3,6 +3,7 @@ import { classifySaleSubmissionError } from './saleSubmissionOutcome.ts';
 import type { SyncQueueItem } from '../types/sync.ts';
 import { isRetryableSyncErrorMessage } from '../utils/syncFailure.ts';
 import { classifySalesOpsMutationError } from './salesOpsMutationOutcome.ts';
+import { shouldRetryPhotoUploadError } from './evidencePhotoSync.ts';
 
 export const AUTOMATIC_SYNC_RETRY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 export const MANUAL_RECONCILIATION_REQUIRED_MESSAGE =
@@ -66,6 +67,7 @@ export function shouldRetrySyncItemError(type: SyncItemType, error: unknown): bo
   if (type === 'gift' || type === 'exchange') {
     return classifySalesOpsMutationError(error).kind !== 'definitive_rejection';
   }
+  if (type === 'photo') return shouldRetryPhotoUploadError(error);
   const message = error instanceof Error ? error.message : 'Sync error';
   return isRetryableSyncErrorMessage(message);
 }

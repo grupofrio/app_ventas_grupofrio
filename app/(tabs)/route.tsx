@@ -42,6 +42,7 @@ import { shouldRefetchOnFocus } from '../../src/services/focusRefresh';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { summarizePendingOrders, describePendingOrdersBanner, buildStopOrderStatusMap } from '../../src/services/pendingOrders';
+import { groupEvidencePhotoWarnings } from '../../src/services/evidencePhotoSync';
 import { OperationGate } from '../../src/components/OperationGate';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
@@ -107,6 +108,10 @@ export default function RouteScreen() {
   // Mapa stopId → estado de su pedido en cola (para badge por cliente).
   const stopOrderStatus = React.useMemo(
     () => buildStopOrderStatusMap(syncQueue),
+    [syncQueue],
+  );
+  const photoWarnings = React.useMemo(
+    () => groupEvidencePhotoWarnings(syncQueue),
     [syncQueue],
   );
 
@@ -295,6 +300,7 @@ export default function RouteScreen() {
       const badge = getStopBadge(stop);
       const stopTypeLabel = getStopTypeLabel(stop);
       const orderStatus = stopOrderStatus[stop.id];
+      const photoWarning = photoWarnings.get(stop.id);
       const resultLabel = getStopResultLabel(stop);
       // F1.12: la siguiente parada pendiente/en curso se resalta con acceso
       // directo "Ya llegué" — mismo criterio que el panel del mapa
@@ -329,6 +335,12 @@ export default function RouteScreen() {
               )}
               {orderStatus === 'pending' && <Badge label="📦 Pedido pendiente" variant="orange" />}
               {orderStatus === 'error' && <Badge label="📦 Pedido con error" variant="red" />}
+              {photoWarning ? (
+                <Badge
+                  label={`📸 ${photoWarning.badge}`}
+                  variant={photoWarning.tone === 'failed' ? 'red' : 'orange'}
+                />
+              ) : null}
             </View>
           </TouchableOpacity>
           <View style={styles.cardActions}>
@@ -352,7 +364,7 @@ export default function RouteScreen() {
         </View>
       );
     },
-    [handleOpenClient, handleOpenLocation, stopOrderStatus, nextStop],
+    [handleOpenClient, handleOpenLocation, stopOrderStatus, photoWarnings, nextStop],
   );
 
   return (

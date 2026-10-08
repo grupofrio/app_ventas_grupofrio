@@ -44,7 +44,7 @@ test('direct submissions create pending side effects only for ambiguous outcomes
 test('queue exhaustion holds ambiguous gift and exchange operations without rollback', () => {
   const store = read('src/stores/useSyncStore.ts');
   const holdStart = store.indexOf("if (salesOpsDisposition === 'hold')");
-  const terminalStart = store.indexOf("else if (!shouldRetry || newRetries >= MAX_RETRIES)", holdStart);
+  const terminalStart = store.indexOf("else if (!shouldRetry || newRetries >= attemptLimit)", holdStart);
   assert.ok(holdStart >= 0);
   assert.ok(terminalStart > holdStart);
   const holdBranch = store.slice(holdStart, terminalStart);

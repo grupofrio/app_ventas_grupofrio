@@ -75,7 +75,13 @@ import {
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
-import { areSyncDependenciesSatisfied, cascadeDeadToDependents } from '../services/syncDependencies';
+import { areSyncDependenciesSatisfied, cascadeDeadToDependents, isSyncDependencyMet } from '../services/syncDependencies';
+import {
+  alignEvidencePhotosBeforeClose,
+  deadPhotoRetryBlockReason,
+  rearmDeadEvidencePhoto,
+  retryCeilingForItem,
+} from '../services/evidencePhotoSync.ts';
 import { useProductStore } from './useProductStore';
 import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -257,6 +263,8 @@ interface SyncState {
   clearDone: () => void;
   clearDead: () => number;
   removeDeadQueueItems: (ids: string[]) => number;
+  /** Rearms one dead evidence photo. Returns a Spanish block reason, or null. */
+  retryDeadPhoto: (id: string) => string | null;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -596,6 +604,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     return removed;
   },
 
+  retryDeadPhoto: (id) => {
+    const queue = get().queue;
+    const photo = queue.find((item) => item.id === id);
+    if (!photo) return 'No se encontró la foto en la cola.';
+    const block = deadPhotoRetryBlockReason(photo, queue);
+    if (block) return block;
+    const next = rearmDeadEvidencePhoto(queue, id);
+    if (next === queue) return 'Esa foto no se puede reintentar.';
+    set({ queue: next, ...computeCounts(next) });
+    schedulePersist();
+    if (get().isOnline && !get().isSyncing) {
+      setTimeout(() => { void get().processQueue(); }, 0);
+    }
+    return null;
+  },
+
   // ═══ Persistence ═══
 
   persistQueue: () => {
@@ -688,27 +712,32 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     const now = Date.now();
     const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
-    if (queueAfterRetryAgeCutoff !== queue) {
-      set({ queue: queueAfterRetryAgeCutoff, ...computeCounts(queueAfterRetryAgeCutoff) });
+    const alignedQueue = alignEvidencePhotosBeforeClose(queueAfterRetryAgeCutoff, now);
+    if (alignedQueue !== queue) {
+      set({ queue: alignedQueue, ...computeCounts(alignedQueue) });
       schedulePersist();
-      logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
-        count: queue.filter((item, index) => item !== queueAfterRetryAgeCutoff[index]).length,
-      });
+      if (queueAfterRetryAgeCutoff !== queue) {
+        logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
+          count: queue.filter((item, index) => item !== queueAfterRetryAgeCutoff[index]).length,
+        });
+      }
     }
 
     // Items eligible for processing:
-    // - pending with no backoff, OR
-    // - error with retries < MAX and backoff elapsed
+    // - pending, OR
+    // - error under that type's retry ceiling, once backoff has elapsed.
+    // Photos keep a higher ceiling than the generic MAX so they can still
+    // retry after the close has been released.
     const isReady = (item: SyncQueueItem): boolean => {
       if (item.status === 'pending') return true;
-      if (item.status === 'error' && item.retries < MAX_RETRIES) {
+      if (item.status === 'error' && item.retries < retryCeilingForItem(item, MAX_RETRIES)) {
         if (item.next_retry_at && now < item.next_retry_at) return false;
         return true;
       }
       return false;
     };
 
-    const candidates = processingHolds.withoutHeld(queueAfterRetryAgeCutoff).filter(isReady);
+    const candidates = processingHolds.withoutHeld(alignedQueue).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -744,7 +773,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const p3 = candidates.filter((i) => i.priority === 3);
 
       // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
-      const orderedP1 = computeProcessingOrder(queueAfterRetryAgeCutoff, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+      const orderedP1 = computeProcessingOrder(alignedQueue, p1, now).slice(0, MAX_ITEMS_PER_CYCLE);
       for (const item of orderedP1) {
         tally(item, await processOneItem(item, get, set));
         // If a business item fails and its retries are now >= MAX_RETRIES,
@@ -1180,6 +1209,7 @@ async function processOneItemUnheld(
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
     const shouldRetry = shouldRetrySyncItemError(item.type, error);
+    const attemptLimit = retryCeilingForItem(item, MAX_RETRIES);
     const salesOpsDisposition = item.type === 'gift' || item.type === 'exchange'
       ? resolveSalesOpsQueueFailure(item.type, error, newRetries, MAX_RETRIES)
       : null;
@@ -1222,7 +1252,7 @@ async function processOneItemUnheld(
         retries: newRetries,
         error: msg,
       });
-    } else if (!shouldRetry || newRetries >= MAX_RETRIES) {
+    } else if (!shouldRetry || newRetries >= attemptLimit) {
       get().markDead(item.id, msg, newRetries);
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {
@@ -1338,6 +1368,7 @@ function handleGpsItemError(
 export function computeProcessingOrder(
   fullQueue: SyncQueueItem[],
   candidates: SyncQueueItem[],
+  now: number = Date.now(),
 ): SyncQueueItem[] {
   const anyDeps = candidates.some((c) => c.dependsOn && c.dependsOn.length > 0);
   if (!anyDeps) {
@@ -1347,11 +1378,7 @@ export function computeProcessingOrder(
   const byId = new Map<string, SyncQueueItem>();
   for (const q of fullQueue) byId.set(q.id, q);
 
-  const isDependencySatisfied = (depId: string): boolean => {
-    const dep = byId.get(depId);
-    if (!dep) return true;
-    return dep.status === 'done';
-  };
+  const isDependencySatisfied = (depId: string): boolean => isSyncDependencyMet(byId.get(depId), now);
 
   const result: SyncQueueItem[] = [];
   const remaining = [...candidates];
@@ -1549,6 +1576,12 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         base64,
         (payload.image_type as string) || 'visit',
         meta,
+        {
+          evidenceType: payload.evidence_type,
+          latitude: typeof payload.capture_latitude === 'number' ? payload.capture_latitude : null,
+          longitude: typeof payload.capture_longitude === 'number' ? payload.capture_longitude : null,
+          capturedAt: typeof payload.captured_at === 'string' ? payload.captured_at : null,
+        },
       );
       break;
     }

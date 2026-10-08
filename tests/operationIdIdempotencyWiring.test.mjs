@@ -29,10 +29,12 @@ function main() {
     'no-venta debe adquirir single-flight al guardar');
   assert(!/await reportIncident\(/.test(nosale),
     'no-venta canónica no debe llamar reportIncident (checkout es la autoridad)');
-  assert(/checkOut\(\s*\n\s*checkoutPayload\.stop_id,[\s\S]{0,400}operationId,\s*\n\s*\);/.test(nosale),
-    'la llamada online a checkOut debe mandar el operation_id estable');
-  assert(/enqueue\(\s*\n\s*'checkout',[\s\S]{0,200}operation_id: operationId,/.test(nosale),
-    'el checkout encolado debe llevar el mismo operation_id que el intento online');
+  assert(!/await checkOut\(/.test(nosale),
+    'la no-venta no debe cerrar la parada en línea antes de encolar sus fotos');
+  assert(/buildCloseDependsOn\(photoIds/.test(nosale),
+    'el cierre de no-venta debe esperar a las fotos de evidencia en la cola');
+  assert(/enqueue\(\s*\n\s*'checkout',[\s\S]{0,250}operation_id: operationId,/.test(nosale),
+    'el checkout encolado debe llevar el operation_id estable del intento');
   assert(!/enqueue\('no_sale'/.test(nosale),
     'el flujo nuevo no encola sync type no_sale (histórico se mantiene en dispatcher)');
 

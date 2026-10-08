@@ -15,6 +15,7 @@
  */
 
 import type { SyncQueueItem } from '../types/sync';
+import { retryCeilingForItem } from './evidencePhotoSync.ts';
 
 /** Snapshot tri-estado de NetInfo (isConnected / isInternetReachable). */
 export interface NetSnapshot {
@@ -89,12 +90,12 @@ export function shouldWakeOnWarehouseTransition(
  *  - error con retries < MAX y backoff vencido (o sin next_retry_at).
  */
 export function isEligibleNow(
-  item: Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'>,
+  item: Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'> & { type?: SyncQueueItem['type'] },
   now: number,
   maxRetries: number,
 ): boolean {
   if (item.status === 'pending') return true;
-  if (item.status === 'error' && item.retries < maxRetries) {
+  if (item.status === 'error' && item.retries < retryCeilingForItem(item, maxRetries)) {
     return item.next_retry_at == null || item.next_retry_at <= now;
   }
   return false;
@@ -109,7 +110,9 @@ export function hasEligibleWorkNow(
   return queue.some((i) => isEligibleNow(i, now, maxRetries));
 }
 
-type EligibleFields = Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'>;
+type EligibleFields = Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'> & {
+  type?: SyncQueueItem['type'];
+};
 type DepFields = Pick<SyncQueueItem, 'id' | 'status' | 'dependsOn'>;
 
 /**
@@ -215,13 +218,13 @@ export interface WakeDelayOpts {
  * dependencia. Pending se despierta por evento (enqueue / reconexión / AppState).
  */
 export function nextWakeDelayMs(
-  queue: Array<Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'>>,
+  queue: Array<Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'> & { type?: SyncQueueItem['type'] }>,
   opts: WakeDelayOpts,
 ): number | null {
   const { maxRetries, now, minDelayMs = 250, maxDelayMs = 60000 } = opts;
   let soonest: number | null = null;
   for (const i of queue) {
-    if (i.status === 'error' && i.retries < maxRetries) {
+    if (i.status === 'error' && i.retries < retryCeilingForItem(i, maxRetries)) {
       const due = i.next_retry_at ?? 0;
       if (soonest === null || due < soonest) soonest = due;
     }

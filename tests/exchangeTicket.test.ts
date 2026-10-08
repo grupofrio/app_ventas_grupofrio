@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyExchangeServerIdentity,
   buildExchangeTicketHtml,
   buildExchangeTicketSnapshot,
   getExchangeTicketStorageKey,
+  refreshExchangeTicketFolio,
 } from '../src/services/exchangeTicket.ts';
 import { formatTicketDate } from '../src/services/saleTicketFormatting.ts';
 
@@ -65,9 +67,62 @@ test('buildExchangeTicketSnapshot prefers exchangeName, then exchangeId, then th
     mermaLines: [],
   });
 
+  const nuevo = buildExchangeTicketSnapshot({
+    snapshotId: 'idempotency-123',
+    exchangeName: 'Nuevo',
+    exchangeId: 321,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [],
+    mermaLines: [],
+  });
+
+  const serverFolio = buildExchangeTicketSnapshot({
+    snapshotId: 'idempotency-123',
+    exchangeName: 'CAM/2026/00042',
+    exchangeId: 321,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [],
+    mermaLines: [],
+  });
+
   assert.equal(preferredName.folio, 'CAMBIO-ABC');
-  assert.equal(preferredId.folio, '321');
+  assert.equal(preferredId.folio, 'CAMBIO-321');
   assert.equal(fallback.folio, 'CAMBIO-idempote');
+  assert.equal(nuevo.folio, 'CAMBIO-321');
+  assert.notEqual(nuevo.folio, 'Nuevo');
+  assert.equal(serverFolio.folio, 'CAM/2026/00042');
+});
+
+test('a stored Nuevo folio reprints as CAMBIO-<id>, and a real folio replaces it', () => {
+  const legacy = refreshExchangeTicketFolio({
+    snapshotId: 'idempotency-123',
+    folio: 'Nuevo',
+    exchangeName: 'Nuevo',
+    exchangeId: 321,
+    customerName: 'Cliente',
+    createdAt: '2026-07-27T20:35:00.000Z',
+    deliveryLines: [],
+    mermaLines: [],
+    notes: '',
+    operationStatus: 'confirmed',
+  });
+  assert.equal(legacy.folio, 'CAMBIO-321');
+
+  const confirmed = applyExchangeServerIdentity(legacy, {
+    exchangeName: 'CAM/2026/00042',
+    exchangeId: 321,
+  });
+  assert.equal(confirmed.folio, 'CAM/2026/00042');
+  assert.equal(confirmed.operationStatus, 'confirmed');
+
+  const replayedPlaceholder = applyExchangeServerIdentity(confirmed, {
+    exchangeName: 'Nuevo',
+    exchangeId: 321,
+  });
+  assert.equal(replayedPlaceholder.folio, 'CAM/2026/00042');
+  assert.equal(replayedPlaceholder.exchangeName, 'CAM/2026/00042');
 });
 
 test('buildExchangeTicketSnapshot applies customer and product fallbacks and keeps empty sections empty', () => {

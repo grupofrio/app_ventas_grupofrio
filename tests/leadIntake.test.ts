@@ -62,6 +62,7 @@ function testPayloadWithGiro() {
   assert.match(String(p.description), /Giro: Abarrotes \/ Miscelánea/);
   assert.match(String(p.description), /Canal: TRADICIONAL/);
   assert.match(String(p.description), /frente a la plaza/);
+  assert.equal(p.note, 'frente a la plaza');
   assert.equal(p.latitude, 19.7);
   assert.equal(p.longitude, -101.19);
   assert.equal(p._source, 'nuevo_lead_ruta');
@@ -107,6 +108,7 @@ function testPayloadNoSeFallback() {
   assert.equal(p.phone, undefined);
   assert.equal(p.mobile, undefined);
   assert.equal(p.latitude, undefined);
+  assert.equal(p.note, undefined);
 }
 
 function testPayloadSinGiroSeleccionado() {
@@ -117,6 +119,7 @@ function testPayloadSinGiroSeleccionado() {
   assert.equal(p.x_canal, undefined);
   assert.equal(p.giro, undefined);
   assert.equal(p.description, 'solo nota');
+  assert.equal(p.note, 'solo nota');
 }
 
 function testNuncaTocaWaPhone() {

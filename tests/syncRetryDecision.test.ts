@@ -69,6 +69,24 @@ const cases = [
     expected: false,
   },
   {
+    name: 'retries a lead note when the endpoint is not deployed yet',
+    type: 'lead_note' as const,
+    error: withMeta({ httpStatus: 404, message: 'HTTP 404' }),
+    expected: true,
+  },
+  {
+    name: 'does not retry a lead note rejected by the server',
+    type: 'lead_note' as const,
+    error: withMeta({ httpStatus: 422, message: 'HTTP 422' }),
+    expected: false,
+  },
+  {
+    name: 'retries a lead note after a network failure',
+    type: 'lead_note' as const,
+    error: new Error('Network request failed'),
+    expected: true,
+  },
+  {
     name: 'retries a photo after a network failure',
     type: 'photo' as const,
     error: new Error('Network request failed'),

@@ -513,6 +513,18 @@ export async function checkOut(
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);
+  if (noSaleDetail?.no_sale_notes && operationId) {
+    try {
+      const { captureCheckoutLeadNote } = await import('./leadNoteQueue');
+      await captureCheckoutLeadNote({
+        checkoutOperationId: operationId,
+        stopId,
+        notes: noSaleDetail.no_sale_notes,
+      });
+    } catch {
+      // The note is a separate sync item. Checkout already succeeded.
+    }
+  }
   return !!result;
 }
 

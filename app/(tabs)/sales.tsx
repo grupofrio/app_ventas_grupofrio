@@ -101,6 +101,8 @@ export default function SalesScreen() {
             onPress={() => router.push('/cashclose' as never)} style={{ flex: 1.4 }} />
           <Button label="📈 Analiticas" variant="secondary" small
             onPress={() => router.push('/analytics' as never)} style={{ flex: 1 }} />
+          <Button label="Cambios" variant="secondary" small
+            onPress={() => router.push('/exchanges' as never)} style={{ flex: 1 }} />
         </View>
 
         {/* F1.13: totales efectivo/crédito/total — espejo de la liquidación

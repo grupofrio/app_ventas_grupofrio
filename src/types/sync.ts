@@ -18,6 +18,9 @@ export const SYNC_ITEM_TYPES = [
   'no_sale',
   'payment',
   'prospection',
+  // Seller note posted to the crm.lead. Independent of checkout: a missing
+  // lead/note endpoint must not fail the visit close.
+  'lead_note',
   'offroute_visit_close',
   'gps',
   'gift',
@@ -67,6 +70,7 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   payment: 1,
   customer_update: 1,
   prospection: 1,
+  lead_note: 1,
   offroute_visit_close: 1,
   gift: 1,
   exchange: 1,

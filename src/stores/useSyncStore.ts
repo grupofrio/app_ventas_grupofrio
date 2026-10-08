@@ -124,8 +124,17 @@ import {
   gateSaleDefinitiveFailure,
 } from '../services/saleDefinitiveFailure';
 import { promoteStoredSaleTicketServerResult } from '../services/saleTicketStorage';
+import { recordExchangeServerIdentity } from '../services/exchangeTicketStorage';
 import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
 import { resolveSalesOpsQueueFailure } from '../services/salesOpsMutationOutcome';
+import {
+  assignCreatedLeadToNoteItems,
+  buildLeadNoteRequest,
+  capLeadNoteRetries,
+  isLeadNoteEndpointMissing,
+} from '../services/leadNote';
+import { planCheckoutLeadNote } from '../services/leadNoteCheckout';
+import { postLeadNote } from '../services/leadNoteApi';
 
 // ═══ Constants ═══
 
@@ -431,6 +440,30 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           persistQueueInBackground('metadata_completion');
         })
         .catch(() => {});
+    }
+
+    // Lead/prospect close notes travel as their own item. Captured here, while
+    // the stop is still on the route, so an offline checkout can drop a virtual
+    // stop immediately afterwards. A failure must not reject the checkout.
+    if (type === 'checkout') {
+      try {
+        const stopId = typeof payload.stop_id === 'number'
+          ? payload.stop_id
+          : Number(payload.stop_id);
+        const plan = planCheckoutLeadNote({
+          checkoutOperationId: result.id,
+          stopId: Number.isFinite(stopId) ? stopId : 0,
+          notes: typeof payload.no_sale_notes === 'string' ? payload.no_sale_notes : '',
+        });
+        if (plan) {
+          get().enqueue('lead_note', plan.payload, {
+            operationId: plan.operationId,
+            ...(plan.dependsOn && plan.dependsOn.length > 0 ? { dependsOn: plan.dependsOn } : {}),
+          });
+        }
+      } catch {
+        // The visit close is already queued.
+      }
     }
 
     // Auto-trigger queue processing when online (fire-and-forget).
@@ -1208,7 +1241,20 @@ async function processOneItemUnheld(
       }
     }
 
-    if (salesOpsDisposition === 'hold') {
+    if (item.type === 'lead_note' && isLeadNoteEndpointMissing(error)) {
+      // lead/note 404: the gf endpoint may not be deployed yet. Hold the same
+      // item under the retry ceiling. Checkout already finished on its own.
+      get().markError(item.id, msg);
+      const heldQueue = capLeadNoteRetries(get().queue, item.id, MAX_RETRIES);
+      if (heldQueue !== get().queue) {
+        set({ queue: heldQueue, ...computeCounts(heldQueue) });
+        schedulePersist();
+      }
+      logWarn('sync', 'lead_note_endpoint_missing', {
+        id: item.id,
+        error: msg,
+      });
+    } else if (salesOpsDisposition === 'hold') {
       // HTTP 200 malformado, timeout o LOCK_BUSY no prueban que Odoo haya
       // rechazado la mutación. Conservamos el MISMO item/idempotency key y su
       // ledger para la conciliación; agotamiento de retries no es una reversión.
@@ -1496,11 +1542,23 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       await createGift(payload as Record<string, unknown>);
       break;
 
-    case 'exchange':
+    case 'exchange': {
       // Flat capture fields are validated and scoped by createExchange. The queue
       // operation id is stable, so an ambiguous retry is an idempotent replay.
-      await createExchange(payload as Record<string, unknown>, meta);
+      const exchange = await createExchange(payload as Record<string, unknown>, meta);
+      try {
+        await recordExchangeServerIdentity(item.id, {
+          exchangeName: exchange.data.exchange_name,
+          exchangeId: exchange.data.exchange_id,
+        });
+      } catch (ticketError) {
+        logWarn('sync', 'exchange_ticket_folio_update_failed', {
+          id: item.id,
+          error: ticketError instanceof Error ? ticketError.message : 'ticket update failed',
+        });
+      }
       break;
+    }
 
     case 'presale':
       // Draft quotation only — it never changes truck stock.
@@ -1573,6 +1631,12 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         const leadId = readCreatedLeadId(lead);
         const operationId = typeof payload._operationId === 'string' ? payload._operationId : '';
         if (leadId && operationId) {
+          const currentQueue = useSyncStore.getState().queue;
+          const withLead = assignCreatedLeadToNoteItems(currentQueue, operationId, leadId);
+          if (withLead !== currentQueue) {
+            useSyncStore.setState({ queue: withLead, ...computeCounts(withLead) });
+            schedulePersist();
+          }
           const { bindCreatedFieldLeadVisit } = await import('../services/sellerProspectVisitRuntime');
           await bindCreatedFieldLeadVisit(operationId, leadId, {
             online: useSyncStore.getState().isOnline,
@@ -1603,6 +1667,18 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     case 'customer_update':
       await syncCustomerContactUpdate(payload as Record<string, unknown>);
       break;
+
+    case 'lead_note': {
+      // The candidate object is from the start of the cycle. A lead create in
+      // the same cycle writes lead_id onto the live queue item before we post.
+      const latest = useSyncStore.getState().queue.find((queued) => queued.id === item.id) ?? item;
+      const request = buildLeadNoteRequest(latest.payload);
+      if (!request) {
+        throw new Error('La nota del prospecto no tiene un lead confirmado.');
+      }
+      await postLeadNote(request, meta);
+      break;
+    }
 
     default:
       logWarn('sync', 'unknown_type', { type });

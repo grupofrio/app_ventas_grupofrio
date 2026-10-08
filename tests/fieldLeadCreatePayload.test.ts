@@ -17,6 +17,19 @@ test('field lead create payload derives operation_id without leaking the queue k
   assert.equal('_operationId' in body, false);
 });
 
+test('field lead create payload keeps the seller note beside description', () => {
+  const body = buildFieldLeadCreatePayload({
+    _operationId: 'lead-operation-123',
+    customer_name: 'Abarrotes Lupita',
+    description: 'Giro: Abarrotes / Miscelánea\nfrente a la plaza',
+    note: 'frente a la plaza',
+  });
+
+  assert.equal(body.note, 'frente a la plaza');
+  assert.match(String(body.description), /frente a la plaza/);
+  assert.equal(body.operation_id, 'lead-operation-123');
+});
+
 test('field lead create payload requires the stable queue operation id', () => {
   assert.throws(
     () => buildFieldLeadCreatePayload({ customer_name: 'Sin operación' }),

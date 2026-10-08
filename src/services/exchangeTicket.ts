@@ -183,10 +183,79 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
 </html>`;
 }
 
-function buildVisibleFolio(snapshotId: string, exchangeName: string, exchangeId: number | null): string {
-  if (exchangeName) return exchangeName;
-  if (exchangeId !== null) return String(exchangeId);
+/**
+ * "Nuevo" is the placeholder Odoo returns when the CAM sequence is missing.
+ * A real folio (CAM/2026/xxxxx, or any other non-placeholder name) wins.
+ */
+export function isPlaceholderExchangeName(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length === 0 || trimmed.toLowerCase() === 'nuevo';
+}
+
+export function buildVisibleFolio(
+  snapshotId: string,
+  exchangeName: string,
+  exchangeId: number | null,
+): string {
+  const trimmedName = exchangeName.trim();
+  if (!isPlaceholderExchangeName(trimmedName)) return trimmedName;
+  if (exchangeId !== null && Number.isFinite(exchangeId) && exchangeId > 0) {
+    return `CAMBIO-${exchangeId}`;
+  }
   return `CAMBIO-${snapshotId.slice(0, 8)}`;
+}
+
+function isReusableExchangeName(value: string): boolean {
+  const trimmed = value.trim();
+  if (isPlaceholderExchangeName(trimmed)) return false;
+  return !trimmed.toUpperCase().startsWith('PENDIENTE/');
+}
+
+/**
+ * Recompute the visible folio from the name and id already stored.
+ * Older tickets saved the placeholder "Nuevo" as the folio itself.
+ */
+export function refreshExchangeTicketFolio(snapshot: ExchangeTicketSnapshot): ExchangeTicketSnapshot {
+  const folio = buildVisibleFolio(snapshot.snapshotId, snapshot.exchangeName, snapshot.exchangeId);
+  if (folio === snapshot.folio) return snapshot;
+  return { ...snapshot, folio };
+}
+
+/**
+ * A later server response can replace a local reference. A replay that still
+ * says "Nuevo" must not erase a real folio already stored on the ticket.
+ */
+export function applyExchangeServerIdentity(
+  snapshot: ExchangeTicketSnapshot,
+  identity: { exchangeName: string; exchangeId: number | null },
+): ExchangeTicketSnapshot {
+  const incomingName = identity.exchangeName.trim();
+  const incomingId = typeof identity.exchangeId === 'number'
+    && Number.isFinite(identity.exchangeId)
+    && identity.exchangeId > 0
+    ? identity.exchangeId
+    : snapshot.exchangeId;
+  const chosenName = isReusableExchangeName(incomingName)
+    ? incomingName
+    : (isReusableExchangeName(snapshot.exchangeName) ? snapshot.exchangeName : incomingName);
+
+  return {
+    ...snapshot,
+    exchangeName: chosenName,
+    exchangeId: incomingId,
+    folio: buildVisibleFolio(snapshot.snapshotId, chosenName, incomingId),
+    operationStatus: 'confirmed',
+  };
+}
+
+export function orderExchangeTicketsForReprint(
+  snapshots: ExchangeTicketSnapshot[],
+): ExchangeTicketSnapshot[] {
+  return [...snapshots].sort((left, right) => {
+    const byDate = right.createdAt.localeCompare(left.createdAt);
+    if (byDate !== 0) return byDate;
+    return right.snapshotId.localeCompare(left.snapshotId);
+  });
 }
 
 function normalizeExchangeName(value: string): string {

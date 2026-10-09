@@ -1,7 +1,15 @@
 import { formatMexicoClock, mexicoDayOf } from '../utils/localDate.ts';
 
 export const PLAZA_WEATHER_REFRESH_MS = 20 * 60 * 1000;
-export const BRANCH_WEATHER_PATH = 'gf/logistics/api/employee/weather';
+export const WEATHER_DAILY_CONTRACT = 'gf.weather.daily.v1';
+export const BRANCH_WEATHER_DAYS = 8;
+export const BRANCH_WEATHER_PATH = '/gf/logistics/api/employee/weather';
+
+export function branchWeatherRequestPath(days = BRANCH_WEATHER_DAYS): string {
+  const count = Number.isFinite(days) ? Math.trunc(days) : BRANCH_WEATHER_DAYS;
+  const clamped = Math.min(BRANCH_WEATHER_DAYS, Math.max(1, count));
+  return `${BRANCH_WEATHER_PATH}?days=${clamped}`;
+}
 
 export type PlazaWeatherSource = 'odoo' | 'open-meteo';
 
@@ -45,6 +53,7 @@ const KNOWN_PLAZAS: Array<{ match: string; label: string; latitude: number; long
 ];
 
 const CURRENT_KEYS = [
+  'temp_now',
   'current_c',
   'current_temp',
   'current_temperature',
@@ -206,16 +215,6 @@ export function readDeviceCoordinates(
   return { latitude, longitude };
 }
 
-export function embeddedBranchWeather(plan: unknown): unknown | null {
-  const root = asRecord(plan);
-  if (!root) return null;
-  for (const key of ['weather', 'branch_weather', 'plaza_weather']) {
-    const value = root[key];
-    if (value && typeof value === 'object') return value;
-  }
-  return null;
-}
-
 function weatherRecords(payload: unknown): Record<string, unknown>[] {
   const root = asRecord(payload);
   if (!root) return [];
@@ -228,7 +227,20 @@ function weatherRecords(payload: unknown): Record<string, unknown>[] {
   return records;
 }
 
-function readDayTemps(payload: Record<string, unknown>, nowIso: string): { maxC: number | null; minC: number | null; condition: string } {
+function readConditionCode(record: Record<string, unknown>): number | null {
+  const code = readNumber(record.condition_code ?? record.weather_code);
+  if (code === null || code < 0 || code > 99) return null;
+  return Math.trunc(code);
+}
+
+function readDayTemps(payload: Record<string, unknown>, nowIso: string): {
+  currentC: number | null;
+  maxC: number | null;
+  minC: number | null;
+  condition: string;
+  weatherCode: number | null;
+} {
+  const empty = { currentC: null, maxC: null, minC: null, condition: '', weatherCode: null };
   const groups = [payload.days, payload.forecast, payload.daily_forecast, payload.forecast_days];
   for (const group of groups) {
     if (!Array.isArray(group) || group.length === 0) continue;
@@ -240,12 +252,14 @@ function readDayTemps(payload: Record<string, unknown>, nowIso: string): { maxC:
     }) ?? records[0];
     if (!today) continue;
     return {
+      currentC: readTemp(today, CURRENT_KEYS),
       maxC: readTemp(today, MAX_KEYS),
       minC: readTemp(today, MIN_KEYS),
       condition: readText(today, CONDITION_KEYS),
+      weatherCode: readConditionCode(today),
     };
   }
-  return { maxC: null, minC: null, condition: '' };
+  return empty;
 }
 
 export function parseBranchWeather(
@@ -269,11 +283,13 @@ export function parseBranchWeather(
     if (!condition) condition = readText(record, CONDITION_KEYS);
     if (!place) place = readText(record, PLACE_KEYS);
     if (!observedAt) observedAt = readText(record, ['observed_at', 'updated_at', 'fetched_at', 'as_of']);
-    if (weatherCode === null) weatherCode = readNumber(record.weather_code);
+    if (weatherCode === null) weatherCode = readConditionCode(record);
     const day = readDayTemps(record, nowIso);
+    if (currentC === null) currentC = day.currentC;
     if (maxC === null) maxC = day.maxC;
     if (minC === null) minC = day.minC;
     if (!condition) condition = day.condition;
+    if (weatherCode === null) weatherCode = day.weatherCode;
   }
   if (currentC === null) return null;
   if (maxC !== null && minC !== null && maxC < minC) {
@@ -399,15 +415,6 @@ export function weatherPlaceChanged(
   const known = resolveKnownPlaza(hints);
   if (!known) return false;
   return normalizePlaceName(snapshot.place) !== normalizePlaceName(known.label);
-}
-
-export function isBranchWeatherEndpointMissing(error: unknown): boolean {
-  const status = error && typeof error === 'object' && typeof (error as { httpStatus?: unknown }).httpStatus === 'number'
-    ? (error as { httpStatus: number }).httpStatus
-    : null;
-  if (status === 404 || status === 405 || status === 501) return true;
-  const message = error instanceof Error ? error.message : '';
-  return /not found|no existe|método desconocido|metodo desconocido|unknown method/i.test(message);
 }
 
 export function readStoredPlazaWeather(raw: unknown, employeeId: number | null): PlazaWeatherSnapshot | null {

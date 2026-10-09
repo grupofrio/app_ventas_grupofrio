@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
+  branchWeatherRequestPath,
   buildOpenMeteoForecastUrl,
   formatPlazaWeatherCard,
   parseBranchWeather,
@@ -34,6 +35,82 @@ test('branch weather reads current, max, min and condition without inventing dem
 
 test('a disabled branch weather payload falls through', () => {
   assert.equal(parseBranchWeather({ available: false, current_c: 30 }, 'Iguala', '2026-10-09T14:16:00.000Z'), null);
+});
+
+test('gf.weather.daily.v1 is the primary card and demand_hint stays hidden', () => {
+  const snapshot = parseBranchWeather({
+    ok: true,
+    contract: 'gf.weather.daily.v1',
+    city: 'Iguala',
+    branch_config_id: 4,
+    branch_name: 'CEDIS Iguala',
+    timezone: 'America/Mexico_City',
+    date: '2026-10-09',
+    temp_now: 32.4,
+    temp_max: 34,
+    temp_min: 21,
+    condition_code: 0,
+    demand_hint: 'sube el pedido',
+    weather_available: true,
+    days: [{
+      city: 'Iguala',
+      date: '2026-10-09',
+      temp_now: 32.4,
+      temp_max: 34,
+      temp_min: 21,
+      temp_mean: 27,
+      precipitation_mm: 0,
+      humidity: 40,
+      apparent_temp_max: 36,
+      condition_code: 0,
+      kind: 'forecast',
+      source: 'open-meteo',
+      demand_hint: 'sube el pedido',
+    }],
+  }, 'Otra', '2026-10-09T14:16:00.000Z');
+  assert.ok(snapshot);
+  assert.equal(snapshot?.place, 'Iguala');
+  assert.equal(snapshot?.currentC, 32);
+  assert.equal(snapshot?.maxC, 34);
+  assert.equal(snapshot?.minC, 21);
+  assert.equal(snapshot?.condition, 'Despejado');
+  assert.equal(snapshot?.source, 'odoo');
+  const card = formatPlazaWeatherCard(snapshot!);
+  assert.equal(card.detail, 'Despejado · Máx 34° · Mín 21°');
+  assert.doesNotMatch(JSON.stringify(snapshot), /demand|sube el pedido|precipitation|humidity/);
+  assert.doesNotMatch(card.detail, /sube el pedido|demanda/i);
+});
+
+test('weather_available false keeps the Open-Meteo fallback', () => {
+  assert.equal(parseBranchWeather({
+    ok: true,
+    contract: 'gf.weather.daily.v1',
+    city: 'Iguala',
+    branch_name: 'CEDIS Iguala',
+    temp_now: null,
+    temp_max: null,
+    temp_min: null,
+    condition_code: null,
+    demand_hint: null,
+    weather_available: false,
+    message: 'El clima de esta sucursal no está disponible.',
+    days: [],
+  }, 'Iguala', '2026-10-09T14:16:00.000Z'), null);
+});
+
+test('employee weather is a GET with days between 1 and 8', () => {
+  assert.equal(branchWeatherRequestPath(), '/gf/logistics/api/employee/weather?days=8');
+  assert.equal(branchWeatherRequestPath(1), '/gf/logistics/api/employee/weather?days=1');
+  assert.equal(branchWeatherRequestPath(0), '/gf/logistics/api/employee/weather?days=1');
+  assert.equal(branchWeatherRequestPath(9), '/gf/logistics/api/employee/weather?days=8');
+  const source = readFileSync(resolve('src/services/plazaWeather.ts'), 'utf8');
+  const card = readFileSync(resolve('src/components/domain/PlazaWeatherCard.tsx'), 'utf8');
+  assert.match(source, /import \{ getRest \} from '\.\/api'/);
+  assert.match(source, /getRest<unknown>\(branchWeatherRequestPath\(\)/);
+  assert.doesNotMatch(source, /postRest/);
+  assert.match(source, /parseOpenMeteoForecast/);
+  assert.doesNotMatch(source, /throw error/);
+  assert.doesNotMatch(card, /demand_hint|demand/);
 });
 
 test('open-meteo fallback formats the Mexico clock and does not send an API key', () => {

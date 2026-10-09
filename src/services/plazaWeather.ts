@@ -1,12 +1,10 @@
-import { postRest } from './api';
+import { getRest } from './api';
 import { storeLoad, storeSave } from '../persistence/storage';
 import {
-  BRANCH_WEATHER_PATH,
+  branchWeatherRequestPath,
   buildOpenMeteoForecastUrl,
   buildOpenMeteoGeocodingUrl,
   displayPlaceFromHints,
-  embeddedBranchWeather,
-  isBranchWeatherEndpointMissing,
   isPlazaWeatherFresh,
   parseBranchWeather,
   parseOpenMeteoForecast,
@@ -20,9 +18,7 @@ import {
 
 const CACHE_KEY = 'cache:plaza-weather';
 const READ_TIMEOUT_MS = 8_000;
-const MISSING_ENDPOINT_MS = 30 * 60 * 1000;
 
-let branchWeatherMissingUntil = 0;
 let inFlight: Promise<PlazaWeatherSnapshot | null> | null = null;
 
 export interface RefreshPlazaWeatherInput {
@@ -67,27 +63,18 @@ async function refreshPlazaWeatherOnce(input: RefreshPlazaWeatherInput): Promise
   if (!input.isOnline) return cached;
 
   const fallbackPlace = displayPlaceFromHints(input.hints);
-  const embedded = embeddedBranchWeather(input.plan);
-  const embeddedSnapshot = embedded ? parseBranchWeather(embedded, fallbackPlace, nowIso) : null;
-  if (embeddedSnapshot) {
-    await remember(input.employeeId, embeddedSnapshot);
-    return embeddedSnapshot;
-  }
 
-  if (nowMs >= branchWeatherMissingUntil) {
-    try {
-      const body = input.planId && input.planId > 0 ? { plan_id: input.planId } : {};
-      const payload = await postRest<unknown>(BRANCH_WEATHER_PATH, body, { timeoutMs: READ_TIMEOUT_MS });
-      const snapshot = parseBranchWeather(payload, fallbackPlace, nowIso);
-      if (snapshot) {
-        await remember(input.employeeId, snapshot);
-        return snapshot;
-      }
-    } catch (error) {
-      if (isBranchWeatherEndpointMissing(error)) {
-        branchWeatherMissingUntil = nowMs + MISSING_ENDPOINT_MS;
-      }
+  // GET gf.weather.daily.v1. 401/403/404/409/422, 5xx and network errors
+  // fall through to Open-Meteo. weather_available:false parses as null.
+  try {
+    const payload = await getRest<unknown>(branchWeatherRequestPath(), { timeoutMs: READ_TIMEOUT_MS });
+    const snapshot = parseBranchWeather(payload, fallbackPlace, nowIso);
+    if (snapshot) {
+      await remember(input.employeeId, snapshot);
+      return snapshot;
     }
+  } catch {
+    // Open-Meteo below. Do not surface the HTTP error on the home card.
   }
 
   const target = resolveWeatherTarget(input.hints);

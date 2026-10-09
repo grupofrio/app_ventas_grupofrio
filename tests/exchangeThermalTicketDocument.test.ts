@@ -42,7 +42,7 @@ test('buildExchangeThermalTicketDocument builds a schemaVersion 1 exchange paylo
   assert.equal(document.folio, snapshot.folio);
   assert.equal(document.formattedDate, formatTicketDate(snapshot.createdAt));
   assert.equal(document.customerName, snapshot.customerName);
-  assert.equal(document.sellerName, '—');
+  assert.equal(document.sellerName, 'Vendedor no especificado');
   assert.equal(document.paymentLabel, 'No aplica');
   assert.equal(document.subtotal, '—');
   assert.equal(document.totalKg, '—');

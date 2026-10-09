@@ -28,6 +28,7 @@ export interface GFVehicleChecklist {
   checks_passed: number;
   checks_required_pending: number;
   notes: string;
+  rating_v2?: boolean;
 }
 
 export type VehicleCheckType = 'yes_no' | 'numeric' | 'text' | 'photo';
@@ -47,6 +48,8 @@ export interface GFVehicleCheck {
   min_value?: number | null;
   max_value?: number | null;
   result_bool?: boolean | null;
+  result_rating?: 'bien' | 'regular' | 'mal' | null;
+  rating?: 'bien' | 'regular' | 'mal' | null;
   result_numeric?: number | null;
   result_text?: string;
   result_photo_url?: string | null;
@@ -54,7 +57,12 @@ export interface GFVehicleCheck {
 
 /** Payload to submit a single check answer. Backend computes `passed`. */
 export type VehicleCheckAnswer =
-  | { result_bool: boolean; not_passed_reason?: string }
+  | {
+      result_bool: boolean;
+      not_passed_reason?: string;
+      rating?: 'bien' | 'regular' | 'mal';
+      result_rating?: 'bien' | 'regular' | 'mal';
+    }
   | { result_numeric: number }
   | { result_text: string }
   | { result_photo: string; result_photo_filename?: string };

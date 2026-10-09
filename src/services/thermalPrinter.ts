@@ -517,6 +517,8 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
       throw new ThermalPrinterError('invalid_ticket');
     }
     const localReference = optionalNonBlankTicketString(value, 'localReference');
+    const unitLabel = optionalNonBlankTicketString(value, 'unitLabel');
+    const stopLabel = optionalNonBlankTicketString(value, 'stopLabel');
     const ticketKind: ThermalTicketKind | undefined = rawTicketKind;
     const lines = snapshotTicketLines(ownDataValue(value, 'lines'));
     if (
@@ -539,6 +541,8 @@ function snapshotThermalTicketDocument(value: unknown): ThermalTicketDocument {
       formattedDate: requiredTicketString(value, 'formattedDate'),
       customerName: requiredTicketString(value, 'customerName'),
       sellerName: requiredTicketString(value, 'sellerName'),
+      ...(unitLabel === undefined ? {} : { unitLabel }),
+      ...(stopLabel === undefined ? {} : { stopLabel }),
       paymentLabel: requiredTicketString(value, 'paymentLabel'),
       lines,
       subtotal: requiredTicketString(value, 'subtotal'),

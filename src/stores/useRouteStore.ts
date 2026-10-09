@@ -14,6 +14,7 @@ import {
 // CROSS-STORE DEP: loads KOLD intelligence on route load. Documented in V1.3.1.
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
+import { rememberStopRemap } from '../services/stopIdRemap';
 import { useVisitStore } from './useVisitStore';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
@@ -66,6 +67,7 @@ interface RouteState {
   markPlanStarted: (planId: number) => void;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
   removeStop: (stopId: number) => void;
+  replaceStopId: (fromId: number, toId: number) => void;
   addVirtualStop: (
     customerId: number,
     customerName: string,
@@ -381,6 +383,43 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     });
     // F6: Persist updated stops
     storeSave(STORAGE_KEYS.STOPS, stops);
+  },
+
+  replaceStopId: (fromId, toId) => {
+    if (!(fromId < 0) || !(toId > 0) || fromId === toId) return;
+    const current = get().stops;
+    const virtual = current.find((stop) => stop.id === fromId);
+    const next = !virtual
+      ? current
+      : current.some((stop) => stop.id === toId)
+        ? current
+            .filter((stop) => stop.id !== fromId)
+            .map((stop) => (
+              stop.id === toId
+                ? {
+                    ...stop,
+                    state: virtual.state === 'in_progress' ? virtual.state : stop.state,
+                    _isOffroute: virtual._isOffroute ?? stop._isOffroute,
+                    _offrouteVisitId: virtual._offrouteVisitId ?? stop._offrouteVisitId,
+                    _entityType: virtual._entityType ?? stop._entityType,
+                    _leadId: virtual._leadId ?? stop._leadId,
+                    _partnerId: virtual._partnerId ?? stop._partnerId,
+                  }
+                : stop
+            ))
+        : current.map((stop) => (stop.id === fromId ? { ...stop, id: toId } : stop));
+    const completed = next.filter((stop) => (
+      ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(stop.state)
+    )).length;
+    set({
+      stops: next,
+      stopsCompleted: completed,
+      stopsTotal: next.length,
+      progressPct: next.length > 0 ? Math.round((completed / next.length) * 100) : 0,
+    });
+    storeSave(STORAGE_KEYS.STOPS, next);
+    rememberStopRemap(fromId, toId);
+    useSyncStore.getState().remapQueuedStop(fromId, toId);
   },
 
   removeStop: (stopId) => {

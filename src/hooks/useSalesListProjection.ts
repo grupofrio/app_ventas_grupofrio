@@ -30,6 +30,7 @@ import {
 } from '../services/localSaleTickets';
 import {
   mergeSalesListEntries,
+  projectLocalGift,
   projectLocalSale,
   summarizeLocalSales,
   localDayOf,
@@ -47,7 +48,7 @@ function buildSaleQueueSignature(
   queue: ReturnType<typeof useSyncStore.getState>['queue'],
 ): string {
   return queue
-    .filter((item) => item.type === 'sale_order')
+    .filter((item) => item.type === 'sale_order' || item.type === 'gift')
     .map((item) => `${item.id}|${item.status}|${item.error_message ?? ''}|${item.created_at}`)
     .join('\n');
 }
@@ -164,9 +165,14 @@ export function useSalesListProjection(): SalesListProjection {
   const localDay = localDayOf(Date.now());
 
   const entries = React.useMemo(() => {
-    const localEntries = selectProjectableSaleItems(queue, sessionCompleted)
+    const localSales = selectProjectableSaleItems(queue, sessionCompleted)
       .map((item) => projectLocalSale(item, tickets.get(item.id) ?? null))
       .filter((entry): entry is SalesListEntry => entry !== null);
+    const localGifts = queue
+      .filter((item) => item.type === 'gift')
+      .map((item) => projectLocalGift(item))
+      .filter((entry): entry is SalesListEntry => entry !== null);
+    const localEntries = [...localSales, ...localGifts];
     return mergeSalesListEntries({
       remoteOrders: orders,
       localEntries,

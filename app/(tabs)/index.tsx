@@ -14,6 +14,7 @@ import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { StopCard } from '../../src/components/domain/StopCard';
 import { RoutePreparationCard } from '../../src/components/domain/RoutePreparationCard';
 import { RouteLoadAcceptanceCard } from '../../src/components/domain/RouteLoadAcceptanceCard';
+import { PlazaWeatherCard } from '../../src/components/domain/PlazaWeatherCard';
 import { GrupoFrioIcon } from '../../src/components/ui/GrupoFrioLogo';
 import { useRouteStartStore } from '../../src/stores/useRouteStartStore';
 import { colors, spacing, radii } from '../../src/theme/tokens';
@@ -125,7 +126,9 @@ export default function HomeScreen() {
   const loadTasks = useTasksStore((s) => s.loadTasks);
   // Alert count only — store has no unread flag; never claim "sin leer".
   const alertCount = koldAlerts.length;
+  const [weatherRefreshToken, setWeatherRefreshToken] = React.useState(0);
   const refreshPlan = useCallback(async () => {
+    setWeatherRefreshToken((token) => token + 1);
     await Promise.all([
       loadPlan({ force: true }),
       loadTodaySales(),
@@ -333,14 +336,7 @@ export default function HomeScreen() {
               loadProductsAuthoritative={loadProductsAuthoritative}
             />
 
-            {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
-            <View style={styles.weatherCard}>
-              <Text style={typography.stateIcon}>🌤️</Text>
-              <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={styles.weatherCity}>Clima no disponible</Text>
-                <Text style={styles.weatherSub}>Proximamente en KOLD</Text>
-              </View>
-            </View>
+            <PlazaWeatherCard refreshToken={weatherRefreshToken} />
 
             {/* KPI Grid 2x2 */}
             <View style={styles.kpiGrid}>
@@ -528,16 +524,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: 100,
   },
-  weatherCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 10,
-    paddingHorizontal: 14,
-    borderRadius: radii.button,
-    marginBottom: 14,
-    backgroundColor: colors.primaryAlpha04,
-  },
   // BLD-SPRINT-A: CTA "Iniciar operación"
   routeStartCta: {
     flexDirection: 'row',
@@ -565,10 +551,6 @@ const styles = StyleSheet.create({
   routeStartTitle: { ...typography.body, fontFamily: fonts.bodyBold, fontWeight: '700' },
   routeStartSub: { ...typography.dim, marginTop: 2 },
   routeStartChevron: { ...typography.stepperGlyph, color: colors.primary, fontWeight: '300' },
-  weatherTemp: { ...typography.kpiValue },
-  weatherCity: { ...typography.dimSmall },
-  weatherImpact: { ...typography.dim, color: colors.primary, fontFamily: fonts.bodyBold, fontWeight: '700' },
-  weatherSub: { ...typography.dimSmall },
   kpiGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

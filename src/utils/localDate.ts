@@ -29,3 +29,46 @@ export function todayLocalISO(
 ): string {
   return formatLocalISODate(now, timeZone);
 }
+
+/**
+ * CDMX ended DST in 2022. Older Android timezone databases still apply
+ * summer UTC-5, so current instants use a fixed UTC-6 offset.
+ */
+export function mexicoDisplayTimeZone(date: Date): string {
+  return date.getTime() >= Date.parse('2022-10-30T07:00:00Z')
+    ? 'Etc/GMT+6'
+    : DEFAULT_OPERATION_TIME_ZONE;
+}
+
+export function formatMexicoClock(value: Date | number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: mexicoDisplayTimeZone(date),
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const hour = parts.find((part) => part.type === 'hour')?.value;
+  const minute = parts.find((part) => part.type === 'minute')?.value;
+  if (!hour || !minute) return '';
+  return `${hour}:${minute}`;
+}
+
+export function formatMexicoDateTime(value: Date | number | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return typeof value === 'string' ? value : '';
+  return date.toLocaleString('es-MX', {
+    timeZone: mexicoDisplayTimeZone(date),
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function mexicoDayOf(ms: number): string {
+  return formatLocalISODate(new Date(ms), mexicoDisplayTimeZone(new Date(ms)));
+}

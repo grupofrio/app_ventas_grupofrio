@@ -141,6 +141,31 @@ function testExchangeRequiresStopAndAtLeastOneList(module: ExchangeContractsModu
     }),
     /líneas válidas/,
   );
+  assert.throws(
+    () => module.buildExchangeCreatePayload({
+      idempotency_key: 'exchange-virtual-stop',
+      stop_id: -12,
+      delivery_lines: [{ product_id: 987, qty: 1 }],
+      merma_lines: [],
+      validate: true,
+    }),
+    /parada válida/,
+  );
+}
+
+function testExchangeOffrouteVisitOmitsVirtualStop(module: ExchangeContractsModule) {
+  const actual = module.buildExchangeCreatePayload({
+    idempotency_key: 'exchange-offroute',
+    stop_id: -12,
+    offroute_visit_id: 88,
+    partner_id: 501,
+    delivery_lines: [{ product_id: 987, qty: 1 }],
+    merma_lines: [],
+    validate: true,
+  });
+  assert.equal((actual.data as { stop_id?: number }).stop_id, undefined);
+  assert.equal((actual.data as { offroute_visit_id?: number }).offroute_visit_id, 88);
+  assert.equal((actual.data as { partner_id?: number }).partner_id, 501);
 }
 
 async function main() {
@@ -156,6 +181,7 @@ async function main() {
   testQueuedExchangeRetryUsesTheExactOriginalContract(module);
   testExchangeCannotDisableServerValidation(module);
   testExchangeRequiresStopAndAtLeastOneList(module);
+  testExchangeOffrouteVisitOmitsVirtualStop(module);
   console.log('gf exchange contracts tests: ok');
 }
 

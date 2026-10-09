@@ -45,7 +45,9 @@ export default function PrintTicketScreen() {
             <Text style={styles.ticketHeader}>GRUPO FRIO</Text>
             <Text style={styles.ticketLegalName}>{SALE_TICKET_LEGAL_NAME}</Text>
             <Text style={styles.ticketTaxId}>RFC: {SALE_TICKET_RFC}</Text>
-            <Text style={styles.ticketTitle}>{SALE_TICKET_BRANDING.title}</Text>
+            <Text style={styles.ticketTitle}>
+              {ticket.isGift ? 'Ticket de regalo' : SALE_TICKET_BRANDING.title}
+            </Text>
             <View style={styles.divider} />
             <View style={styles.ticketRow}>
               <Text style={styles.ticketLabel}>Folio Odoo</Text>

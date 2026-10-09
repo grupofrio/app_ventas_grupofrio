@@ -74,6 +74,7 @@ export interface GFSalesOrderLine {
   quantity: number;
   price_unit: number;
   price_subtotal: number;
+  discount?: number;
   kg_total: number;
 }
 
@@ -94,6 +95,9 @@ export interface GFSalesOrder {
   payment_method: string;
   payment_method_label: string;
   employee_name: string;
+  is_gift?: boolean;
+  client_order_ref?: string;
+  origin?: string;
   lines: GFSalesOrderLine[];
 }
 
@@ -178,6 +182,7 @@ export interface GFRouteCorteResult {
   code?: string;
   message: string;
   data?: Record<string, unknown> | null;
+  details?: unknown;
 }
 
 export interface GFRouteCorteAdjustmentLine {
@@ -190,6 +195,9 @@ export interface GFRouteCorteAdjustmentResult {
   ok: boolean;
   message: string;
   data?: Record<string, unknown> | null;
+  details?: unknown;
+  ignored_manual_qty?: number;
+  manual_qty_applied?: boolean;
 }
 
 export interface GFRouteLiquidationConfirmResult {
@@ -310,6 +318,9 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
         payment_method: typeof order.payment_method === 'string' ? order.payment_method : '',
         payment_method_label: typeof order.payment_method_label === 'string' ? order.payment_method_label : '',
         employee_name: typeof order.employee_name === 'string' ? order.employee_name : '',
+        ...(typeof order.is_gift === 'boolean' ? { is_gift: order.is_gift } : {}),
+        ...(typeof order.client_order_ref === 'string' ? { client_order_ref: order.client_order_ref } : {}),
+        ...(typeof order.origin === 'string' ? { origin: order.origin } : {}),
         lines: linesRaw.map((row) => {
           const line = row && typeof row === 'object' ? row as Record<string, unknown> : {};
           return {
@@ -318,6 +329,7 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
             quantity: toNumber(line.quantity ?? line.qty),
             price_unit: toNumber(line.price_unit),
             price_subtotal: toNumber(line.price_subtotal ?? line.subtotal),
+            ...(typeof line.discount === 'number' ? { discount: line.discount } : {}),
             kg_total: toNumber(line.kg_total ?? line.weight_total),
           };
         }),
@@ -904,11 +916,15 @@ function resultFromUnknown(result: unknown): Record<string, unknown> {
 function errorResult(error: unknown): {
   code: string;
   message: string;
+  data: Record<string, unknown> | null;
+  details?: unknown;
 } {
-  const err = error as Error & { code?: string };
+  const err = error as Error & { code?: string; data?: unknown; details?: unknown };
   return {
     code: typeof err?.code === 'string' && err.code.length > 0 ? err.code : 'error',
     message: err instanceof Error ? err.message : 'Error desconocido',
+    data: err?.data && typeof err.data === 'object' ? err.data as Record<string, unknown> : null,
+    details: err?.details,
   };
 }
 
@@ -949,6 +965,7 @@ export async function validateRouteCorte(
       data: data.data && typeof data.data === 'object'
         ? data.data as Record<string, unknown>
         : null,
+      details: data.details,
     };
   } catch (error) {
     const err = errorResult(error);
@@ -957,7 +974,8 @@ export async function validateRouteCorte(
       success: false,
       code: err.code,
       message: err.message,
-      data: null,
+      data: err.data,
+      details: err.details,
     };
   }
 }
@@ -981,13 +999,21 @@ export async function saveRouteCorteAdjustments(
       data: data.data && typeof data.data === 'object'
         ? data.data as Record<string, unknown>
         : null,
+      details: data.details,
+      ...(typeof data.ignored_manual_qty === 'number'
+        ? { ignored_manual_qty: data.ignored_manual_qty }
+        : {}),
+      ...(typeof data.manual_qty_applied === 'boolean'
+        ? { manual_qty_applied: data.manual_qty_applied }
+        : {}),
     };
   } catch (error) {
     const err = errorResult(error);
     return {
       ok: false,
       message: err.message,
-      data: null,
+      data: err.data,
+      details: err.details,
     };
   }
 }
@@ -1144,6 +1170,7 @@ export async function convertLeadData(
     operation_id: string;
     stop_id?: number | null;
     lead_id?: number | null;
+    offroute_visit_id?: number | null;
     phone?: string | null;
     street?: string | null;
     vat?: string | null;
@@ -1161,6 +1188,13 @@ export async function convertLeadData(
   }
   if (typeof payload.lead_id === 'number' && payload.lead_id > 0) {
     body.lead_id = payload.lead_id;
+  }
+  if (
+    body.stop_id == null
+    && typeof payload.offroute_visit_id === 'number'
+    && payload.offroute_visit_id > 0
+  ) {
+    body.offroute_visit_id = payload.offroute_visit_id;
   }
   if (typeof payload.phone === 'string' && payload.phone.trim()) body.phone = payload.phone.trim();
   if (typeof payload.street === 'string' && payload.street.trim()) body.street = payload.street.trim();

@@ -144,8 +144,10 @@ function testDayBundleDirectoryWiring() {
   assert.match(source, /loaded\.record\.bundle\.directory/);
   assert.match(source, /const q = query\.trim\(\)/);
   assert.match(source, /import\s*\{[^}]*matchesOffrouteDirectoryQuery[^}]*\}\s*from ['"]\.\/offrouteSearchLogic['"]/);
-  assert.match(source, /matchesOffrouteDirectoryQuery\(q,\s*\{\s*name,\s*address,\s*zone\s*\}\)/);
-  assert.doesNotMatch(source, /directory\/search|postRest/);
+  assert.match(source, /matchesOffrouteDirectoryQuery\(query,\s*\{\s*name,\s*address,\s*zone,\s*phone,\s*vat,\s*rfc\s*\}\)/);
+  assert.match(source, /directory\/search/);
+  assert.match(source, /postRest</);
+  assert.match(source, /Prepara los datos del día antes de buscar fuera de ruta\./);
   assert.doesNotMatch(
     source,
     /odooRpc|odooRead|odooSession|call_kw|execute_kw|get_records|\/api\/create_update/,

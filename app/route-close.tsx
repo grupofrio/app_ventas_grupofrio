@@ -28,6 +28,7 @@ import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
+import { reportOperationFailure } from '../src/services/operationFailureReport';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
@@ -191,6 +192,12 @@ function RouteCloseScreenInner() {
             setKmFinalInput('');
           } catch (err) {
             // Backend validates arrival >= departure; show its message.
+            reportOperationFailure({
+              operation: 'route_close',
+              planId,
+              error: err,
+              outcome: 'failed',
+            });
             Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
           } finally {
             setSavingKm(false);
@@ -217,7 +224,7 @@ function RouteCloseScreenInner() {
         syncBlockMsg ?? 'Sincroniza las operaciones pendientes antes de cerrar ruta.',
         [
           { text: 'Cancelar', style: 'cancel' },
-          { text: 'Ir a sincronizar', onPress: () => router.push('/cashclose' as never) },
+          { text: 'Ir a sincronizar', onPress: () => router.push('/sync' as never) },
         ],
       );
       return;
@@ -250,6 +257,12 @@ function RouteCloseScreenInner() {
               ]);
             } catch (err) {
               // Backend rejects if corte/liquidación incompletos — message claro.
+              reportOperationFailure({
+                operation: 'route_close',
+                planId,
+                error: err,
+                outcome: 'rejected',
+              });
               Alert.alert(
                 'No se pudo cerrar la ruta',
                 err instanceof Error ? err.message : 'Revisa corte y liquidación, luego intenta de nuevo.',
@@ -413,7 +426,7 @@ function RouteCloseScreenInner() {
               <Button
                 label="Ir a sincronizar"
                 variant="secondary"
-                onPress={() => router.push('/cashclose' as never)}
+                onPress={() => router.push('/sync' as never)}
                 fullWidth
                 style={{ marginTop: 8 }}
               />

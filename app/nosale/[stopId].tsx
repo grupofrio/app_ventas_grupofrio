@@ -179,11 +179,18 @@ export default function NoSaleScreen() {
   }
 
   async function handleAddNoSalePhoto() {
-    const photo = await takePhoto();
-    if (photo) {
-      setNoSalePhoto(photo.localUri);
-    } else {
-      Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
+    try {
+      const photo = await takePhoto();
+      if (photo) {
+        setNoSalePhoto(photo.localUri);
+      } else {
+        Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
+      }
+    } catch (error) {
+      Alert.alert(
+        'Cámara',
+        error instanceof Error ? error.message : 'No se pudo abrir la cámara',
+      );
     }
   }
 

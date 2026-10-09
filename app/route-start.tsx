@@ -885,8 +885,8 @@ export default function RouteStartScreen() {
           {!checklistDoneLive && (
             <Text style={[typography.dimSmall, styles.readyWarn]}>
               {checklistSyncPending
-                ? `⚠️ ${START_DAY_COPY.checklistSyncPending}. La carga permanece bloqueada.`
-                : '⚠️ Checklist de unidad pendiente. Completa y sincroniza la inspección para continuar.'}
+                ? `⚠️ ${START_DAY_COPY.checklistSyncPending}. ${START_DAY_COPY.checklistDoesNotBlock}`
+                : `⚠️ ${START_DAY_COPY.checklistDoesNotBlock}`}
             </Text>
           )}
           {checklistDoneLive && initialLoadState.initialLoadRejectedWaiting && (
@@ -907,7 +907,7 @@ export default function RouteStartScreen() {
             <Text style={[typography.dimSmall, styles.readyHint]}>
               {!dataMinReady && dataReady.blockReason
                 ? dataReady.blockReason
-                : 'El botón se habilita cuando termines checklist, carga y preparación de datos.'}
+                : START_DAY_COPY.startUnlockHint}
             </Text>
           )}
         </View>

@@ -48,6 +48,9 @@ import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { corteAdjustmentTitle, formatCorteFailureMessage } from '../src/services/corteFeedback';
+import { reportOperationFailure } from '../src/services/operationFailureReport';
+import { formatSyncedOperations } from '../src/services/syncProgressLabel';
 import { useSalesStore } from '../src/stores/useSalesStore';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import {
@@ -350,7 +353,7 @@ export default function CashCloseScreen() {
   // Sección 3: Operativo (sync queue + devoluciones pendientes backend)
   const opsLines: SummaryLine[] = [
     { label: 'Devoluciones', value: 'Pendiente backend', pending: true },
-    { label: 'Ops. sincronizadas', value: `${totalItems - pendingCount}/${totalItems}` },
+    { label: 'Ops. sincronizadas', value: formatSyncedOperations({ totalItems, pendingCount, deadCount }) },
     {
       label: 'Cobros por factura',
       value: invoiceCollectionSummary === null
@@ -457,12 +460,22 @@ export default function CashCloseScreen() {
       });
       await loadReconciliation();
       if (result.ok) {
-        Alert.alert('Ajustes guardados', result.message || 'Devolucion y merma guardadas.');
+        Alert.alert(
+          corteAdjustmentTitle(result),
+          result.message || 'Devolucion y merma guardadas.',
+        );
         return;
       }
+      reportOperationFailure({
+        operation: 'corte',
+        planId,
+        error: result,
+        outcome: 'rejected',
+      });
       Alert.alert('No se guardaron ajustes', result.message || 'Backend rechazo los ajustes.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
+      reportOperationFailure({ operation: 'corte', planId, error: err, outcome: 'failed' });
       Alert.alert('Error al guardar corte', message);
     } finally {
       setAdjustmentsBusy(false);
@@ -484,9 +497,22 @@ export default function CashCloseScreen() {
         Alert.alert('Corte validado', result.message || 'El corte quedo confirmado.');
         return;
       }
-      Alert.alert('El corte no cuadra', result.message || 'Revisa las diferencias por producto.');
+      reportOperationFailure({
+        operation: 'corte',
+        planId,
+        error: result,
+        outcome: 'rejected',
+      });
+      Alert.alert(
+        'El corte no cuadra',
+        formatCorteFailureMessage(result, 'Revisa las diferencias por producto.'),
+      );
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
+      const message = formatCorteFailureMessage(
+        err instanceof Error ? err : { message: 'Error desconocido' },
+        'Error desconocido',
+      );
+      reportOperationFailure({ operation: 'corte', planId, error: err, outcome: 'failed' });
       Alert.alert('Error al validar corte', message);
     } finally {
       setCorteBusy(false);
@@ -549,9 +575,23 @@ export default function CashCloseScreen() {
         );
         return;
       }
+      reportOperationFailure({
+        operation: 'corte',
+        operationId: getLiquidationOperationId(),
+        planId,
+        error: result,
+        outcome: 'rejected',
+      });
       Alert.alert('No se pudo liquidar', result.message || 'Backend rechazo la liquidacion.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
+      reportOperationFailure({
+        operation: 'corte',
+        operationId: getLiquidationOperationId(),
+        planId,
+        error: err,
+        outcome: 'failed',
+      });
       Alert.alert('Error al liquidar', message);
     } finally {
       setLiquidationBusy(false);
@@ -972,11 +1012,6 @@ export default function CashCloseScreen() {
           </>
         )}
 
-        <Text style={styles.footerNote}>
-          Fuente de cobranza: /pwa-ruta/liquidation (account.payment por bucket).
-          Corte: /pwa-ruta/validate-corte. Liquidacion:
-          /gf/logistics/api/employee/liquidacion/confirm.
-        </Text>
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

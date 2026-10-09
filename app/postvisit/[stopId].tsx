@@ -33,6 +33,7 @@ import {
 import { createConvertLeadIntentController } from '../../src/services/convertLeadIntent';
 import { hasContactPhone } from '../../src/services/customerContactUpdate';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { reportOperationFailure } from '../../src/services/operationFailureReport';
 import { createUuidV4 } from '../../src/utils/clientEvent';
 import { getCurrentPosition } from '../../src/services/gps';
 import { ProspectPinMap } from '../../src/components/domain/ProspectPinMap';
@@ -336,6 +337,7 @@ export default function ProspeccionScreen() {
         operation_id: operationId,
         stop_id: withCapture.id,
         lead_id: withCapture._leadId ?? null,
+        offroute_visit_id: withCapture.id > 0 ? null : (withCapture._offrouteVisitId ?? null),
         phone: phoneValue,
         street: address,
         vat: rfc,
@@ -392,6 +394,12 @@ export default function ProspeccionScreen() {
       openSale();
     } catch (error) {
       if (isReviewRequiredDuplicateError(error)) {
+        reportOperationFailure({
+          operation: 'prospect_convert',
+          stopId: currentStop.id,
+          error,
+          outcome: 'rejected',
+        });
         convertIntentRef.current.finalize('review_required_duplicate');
         Alert.alert(
           'Revisión requerida',
@@ -413,6 +421,12 @@ export default function ProspeccionScreen() {
         );
         return;
       }
+      reportOperationFailure({
+        operation: 'prospect_convert',
+        stopId: currentStop.id,
+        error,
+        outcome: 'rejected',
+      });
       convertIntentRef.current.finalize('rejected');
       Alert.alert('Conversión rechazada', message);
     } finally {

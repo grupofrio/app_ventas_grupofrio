@@ -16,6 +16,7 @@ export const ENCRYPTED_FIELD_DATA_KEYS = [
   'cache:consignments',
   'sync:queue',
   'sync:legacyRefreshPending',
+  'sync:operation-failures',
 ] as const;
 
 const encryptedFieldDataKeySet = new Set<string>(ENCRYPTED_FIELD_DATA_KEYS);

@@ -343,6 +343,9 @@ export default function StopDetailScreen() {
               />
             ) : null}
           </View>
+          {!visitGuard.canAccessVisitActions && visitGuard.visitActionBlockReason ? (
+            <Text style={styles.overrideHint}>{visitGuard.visitActionBlockReason}</Text>
+          ) : null}
           <View style={styles.actionRow}>
             <Button
               label="⭐ Lealtad"

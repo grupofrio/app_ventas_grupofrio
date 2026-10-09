@@ -6,6 +6,8 @@
  * route, product and pricelist services.
  */
 
+import { formatMexicoClock } from '../utils/localDate.ts';
+
 export interface PreparationFailure {
   partnerId: number;
   customerName?: string;
@@ -80,15 +82,13 @@ export function isPreparationFreshForPlan(
 }
 
 /**
- * Format a unix-ms timestamp as "HH:mm" 24h. Returns "" for null.
- * Pure / locale-independent so tests don't depend on the runtime tz.
+ * Format a unix-ms timestamp as "HH:mm" in America/Mexico_City.
+ * Current instants use fixed UTC-6 so old Android timezone data cannot
+ * shift the clock an hour. Returns "" for null.
  */
 export function formatPreparedAt(ts: number | null): string {
   if (!ts) return '';
-  const d = new Date(ts);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return formatMexicoClock(ts);
 }
 
 export type {

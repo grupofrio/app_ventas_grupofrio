@@ -78,7 +78,13 @@ function main() {
     /loadCurrentEmployeeDayBundle/,
     'la búsqueda de visita especial debe leer primero el directorio del bundle cifrado',
   );
-  assert.doesNotMatch(offrouteSearch, /directory\/search|postRest/);
+  assert.match(
+    offrouteSearch,
+    /directory\/search/,
+    'la búsqueda por teléfono o RFC consulta el directorio del servidor',
+  );
+  assert.match(offrouteSearch, /postRest/);
+  assert.doesNotMatch(offrouteSearch, /odooRpc|odooRead|odooSession|call_kw|execute_kw/);
   assert.doesNotMatch(
     offrouteSearch,
     /x_analytic_un_id|analyticPlazaId|employee_id|company_id/,

@@ -1,6 +1,6 @@
 import type { ExchangeTicketSnapshot } from './exchangeTicket.ts';
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
-import { formatQuantity, formatTicketDate } from './saleTicketFormatting.ts';
+import { formatQuantity, formatTicketDate, normalizeSellerName } from './saleTicketFormatting.ts';
 import type { ThermalTicketDocument } from './thermalPrinterTypes.ts';
 
 const EXCHANGE_TICKET_TITLE = 'TICKET DE CAMBIO';
@@ -24,7 +24,9 @@ export function buildExchangeThermalTicketDocument(
     folio: snapshot.folio,
     formattedDate: formatTicketDate(snapshot.createdAt),
     customerName: snapshot.customerName,
-    sellerName: '—',
+    sellerName: normalizeSellerName(snapshot.sellerName),
+    ...((snapshot.unitLabel ?? '').trim() ? { unitLabel: snapshot.unitLabel.trim() } : {}),
+    ...((snapshot.stopLabel ?? '').trim() ? { stopLabel: snapshot.stopLabel.trim() } : {}),
     paymentLabel: 'No aplica',
     lines: [
       ...snapshot.deliveryLines.map((line) => ({

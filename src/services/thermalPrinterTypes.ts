@@ -14,6 +14,8 @@ export interface ThermalTicketDocument {
   formattedDate: string;
   customerName: string;
   sellerName: string;
+  unitLabel?: string;
+  stopLabel?: string;
   paymentLabel: string;
   lines: Array<{
     productId: number;

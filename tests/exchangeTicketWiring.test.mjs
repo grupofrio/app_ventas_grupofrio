@@ -43,7 +43,11 @@ test('exchange print route wires snapshot loading, PDF opening, thermal builder,
   assert.match(source, /PRODUCTO RECOGIDO \/ MERMA/);
   assert.match(source, /formatQuantity/);
   assert.match(source, /formatQuantity\(line\.qty\)/);
-  assert.match(source, /Cambio registrado correctamente/);
+  assert.match(source, /exchangeTicketStatusCopy/);
+  assert.match(source, /statusCopy\.footerMessage/);
+  assert.match(source, /Vendedor/);
+  assert.match(read('src/services/exchangeTicket.ts'), /Cambio registrado correctamente/);
+  assert.match(read('src/services/exchangeTicket.ts'), /Cambio pendiente; no repetir la operación/);
   assert.match(source, /if \(lines\.length === 0\) return null/);
   assert.match(source, /Notas/);
   assert.match(source, /showOutputActionsWhenMissing/);

@@ -52,6 +52,17 @@ export function deriveVisitGuard({
   const canResume = canResumeVisit || canResumeOrphanedVisit;
   const canAccessVisitActions = canResume;
 
+  let visitActionBlockReason: string | null = null;
+  if (!canAccessVisitActions) {
+    if (isCompletedStop) {
+      visitActionBlockReason = 'La visita ya terminó. Venta y regalo quedan bloqueados.';
+    } else if (hasAnotherActiveVisit) {
+      visitActionBlockReason = 'Otra visita está en curso. Termina esa visita antes de registrar un regalo.';
+    } else {
+      visitActionBlockReason = 'Haz check-in para registrar un regalo.';
+    }
+  }
+
   let primaryActionLabel = '📍 Check-in · Iniciar Visita';
 
   if (isCompletedStop) {
@@ -69,6 +80,7 @@ export function deriveVisitGuard({
     canStartVisit,
     canResumeVisit: canResume,
     canAccessVisitActions,
+    visitActionBlockReason,
     primaryActionLabel,
   };
 }

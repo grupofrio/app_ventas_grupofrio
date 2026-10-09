@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { TicketOutputScreen } from '../../src/components/domain/TicketOutputScreen';
-import type { ExchangeTicketSnapshot } from '../../src/services/exchangeTicket';
+import { exchangeTicketStatusCopy, type ExchangeTicketSnapshot } from '../../src/services/exchangeTicket';
 import { loadExchangeTicketSnapshot } from '../../src/services/exchangeTicketStorage';
 import { openExchangeTicketPdf } from '../../src/services/exchangeTicketPdf';
 import { buildExchangeThermalTicketDocument } from '../../src/services/exchangeThermalTicketDocument';
@@ -48,7 +48,9 @@ export default function PrintExchangeTicketScreen() {
       loadSnapshot={loadExchangeTicketSnapshot}
       openPdf={openExchangeTicketPdf}
       buildThermalDocument={buildExchangeThermalTicketDocument}
-      renderPreview={(ticket) => (
+      renderPreview={(ticket) => {
+        const statusCopy = exchangeTicketStatusCopy(ticket.operationStatus);
+        return (
         <View style={styles.ticketPreview}>
           <Text style={styles.ticketHeader}>Grupo Frio</Text>
           <Text style={styles.ticketLegalName}>{SALE_TICKET_LEGAL_NAME}</Text>
@@ -64,8 +66,28 @@ export default function PrintExchangeTicketScreen() {
             <Text style={styles.ticketValue}>{ticket.customerName}</Text>
           </View>
           <View style={styles.ticketRow}>
+            <Text style={styles.ticketLabel}>Vendedor</Text>
+            <Text style={styles.ticketValue}>{ticket.sellerName}</Text>
+          </View>
+          {ticket.unitLabel ? (
+            <View style={styles.ticketRow}>
+              <Text style={styles.ticketLabel}>Unidad</Text>
+              <Text style={styles.ticketValue}>{ticket.unitLabel}</Text>
+            </View>
+          ) : null}
+          {ticket.stopLabel ? (
+            <View style={styles.ticketRow}>
+              <Text style={styles.ticketLabel}>Parada</Text>
+              <Text style={styles.ticketValue}>{ticket.stopLabel}</Text>
+            </View>
+          ) : null}
+          <View style={styles.ticketRow}>
             <Text style={styles.ticketLabel}>Fecha</Text>
             <Text style={styles.ticketValue}>{formatTicketDate(ticket.createdAt)}</Text>
+          </View>
+          <View style={styles.ticketRow}>
+            <Text style={styles.ticketLabel}>Estado</Text>
+            <Text style={styles.ticketValue}>{statusCopy.statusLabel}</Text>
           </View>
           {renderSection('PRODUCTO ENTREGADO', ticket.deliveryLines)}
           {renderSection('PRODUCTO RECOGIDO / MERMA', ticket.mermaLines)}
@@ -77,9 +99,10 @@ export default function PrintExchangeTicketScreen() {
             </>
           ) : null}
           <View style={styles.divider} />
-          <Text style={styles.confirmationText}>Cambio registrado correctamente</Text>
+          <Text style={styles.confirmationText}>{statusCopy.footerMessage}</Text>
         </View>
-      )}
+        );
+      }}
     />
   );
 }

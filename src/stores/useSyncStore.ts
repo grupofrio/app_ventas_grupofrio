@@ -125,6 +125,7 @@ import {
   processSyncItemToCompletion,
 } from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
+import { reportDeadSyncItem } from '../services/operationFailureReport';
 import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
@@ -278,6 +279,7 @@ interface SyncState {
 
   // Persistence
   persistQueue: () => Promise<void>;
+  remapQueuedStop: (fromId: number, toId: number) => void;
   /**
    * Replace in-memory queue after a durable envelope commit that already
    * wrote `sync:queue` (avoids a second plaintext race write).
@@ -538,7 +540,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   markDead: (id, message, retries) => {
-    const afterParent = get().queue.map((i) =>
+    const previousQueue = get().queue;
+    const afterParent = previousQueue.map((i) => (
       i.id === id
         ? {
             ...i,
@@ -548,7 +551,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             next_retry_at: null,
           }
         : i
-    );
+    ));
     // BLD-20260617-DEAD-CASCADE: un padre muerto arrastra a sus dependientes
     // directos vivos (p.ej. la foto de la venta) a `dead`, para que no queden
     // `pending` eternos bloqueando cashclose/route-close sin escape. clearDead
@@ -561,6 +564,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       (i, idx) => i.status === 'dead' && afterParent[idx].status !== 'dead',
     ).length;
     logError('sync', 'item_dead', { id, message });
+    for (const deadItem of newQueue) {
+      const before = previousQueue.find((item) => item.id === deadItem.id);
+      if (deadItem.status === 'dead' && before?.status !== 'dead' && deadItem.id !== id) {
+        reportDeadSyncItem(deadItem);
+      }
+    }
     if (cascaded > 0) {
       logInfo('sync', 'dead_cascade', { parent: id, dependents: cascaded });
     }
@@ -659,6 +668,23 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   // ═══ Persistence ═══
+
+  remapQueuedStop: (fromId, toId) => {
+    if (!(fromId < 0) || !(toId > 0)) return;
+    const queue = get().queue.map((item) => {
+      const payload = item.payload as Record<string, unknown> | null;
+      if (!payload || payload.stop_id !== fromId) return item;
+      const reopen = item.status === 'dead' || item.status === 'error';
+      return {
+        ...item,
+        status: reopen ? 'pending' as const : item.status,
+        error_message: reopen ? null : item.error_message,
+        payload: { ...payload, stop_id: toId },
+      };
+    });
+    set({ queue, ...computeCounts(queue) });
+    schedulePersist();
+  },
 
   persistQueue: () => {
     // Un write inmediato cancela cualquier persistencia agendada (sería
@@ -1306,6 +1332,7 @@ async function processOneItemUnheld(
         error: msg,
       });
     } else if (!shouldRetry || newRetries >= attemptLimit) {
+      reportDeadSyncItem(item, error, shouldRetry ? 'dead' : 'rejected');
       get().markDead(item.id, msg, newRetries);
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {
@@ -1466,6 +1493,29 @@ export function computeProcessingOrder(
 
 // ═══ Operation dispatcher (preserved from V1, extended for V2 types) ═══
 
+async function adoptSyncedStop(item: SyncQueueItem, response: unknown): Promise<void> {
+  const { readPositiveStopId } = await import('../services/stopIdRemap');
+  if (!readPositiveStopId(response)) return;
+  const ownStop = (item.payload as { stop_id?: unknown }).stop_id;
+  let requested = typeof ownStop === 'number' && ownStop < 0 ? ownStop : null;
+  if (requested === null) {
+    const dependent = useSyncStore.getState().queue.find((queued) => {
+      const stopId = (queued.payload as { stop_id?: unknown }).stop_id;
+      return queued.dependsOn?.includes(item.id) && typeof stopId === 'number' && stopId < 0;
+    });
+    const dependentStop = (dependent?.payload as { stop_id?: unknown } | undefined)?.stop_id;
+    if (typeof dependentStop === 'number' && dependentStop < 0) requested = dependentStop;
+  }
+  if (requested === null) {
+    const { useVisitStore } = await import('./useVisitStore');
+    const currentStopId = useVisitStore.getState().currentStopId;
+    if (typeof currentStopId === 'number' && currentStopId < 0) requested = currentStopId;
+  }
+  if (requested === null) return;
+  const { adoptServerStopFromResponse } = await import('../services/stopIdAdoption');
+  await adoptServerStopFromResponse(requested, response);
+}
+
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
   const meta = item.meta ?? null;
@@ -1485,6 +1535,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         meta,
       );
       const promotion = await promoteStoredSaleTicketServerResult(item.id, saleResult);
+      await adoptSyncedStop(item, saleResult);
       if (promotion === 'missing') {
         logWarn('sync', 'sale_ticket_odoo_folio_missing', {
           operation_id: item.id,
@@ -1569,17 +1620,20 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       await createPayment(buildPaymentsCreatePayload(payload as Record<string, unknown>), meta);
       break;
 
-    case 'gift':
+    case 'gift': {
       // El payload encolado YA es el {meta, data} de buildGiftPayload; createGift
       // lo postea a /gf/salesops/gift/create. La idempotencia la da
       // meta.idempotency_key (estable por intento) — un retry no duplica.
-      await createGift(payload as Record<string, unknown>);
+      const giftResult = await createGift(payload as Record<string, unknown>);
+      await adoptSyncedStop(item, giftResult);
       break;
+    }
 
     case 'exchange': {
       // Flat capture fields are validated and scoped by createExchange. The queue
       // operation id is stable, so an ambiguous retry is an idempotent replay.
       const exchange = await createExchange(payload as Record<string, unknown>, meta);
+      await adoptSyncedStop(item, exchange);
       try {
         await recordExchangeServerIdentity(item.id, {
           exchangeName: exchange.data.exchange_name,
@@ -1630,6 +1684,9 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     }
 
     case 'photo': {
+      const { resolveStopId } = await import('../services/stopIdRemap');
+      const rawStopId = payload.stop_id;
+      const stopId = typeof rawStopId === 'number' ? resolveStopId(rawStopId) : rawStopId;
       let base64 = payload.image_base64 as string;
       if (payload.localUri && !base64) {
         const fromFile = await readPhotoAsBase64(payload.localUri as string);
@@ -1637,7 +1694,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         base64 = fromFile;
       }
       await uploadStopImage(
-        payload.stop_id as number,
+        stopId as number,
         base64,
         (payload.image_type as string) || 'visit',
         meta,

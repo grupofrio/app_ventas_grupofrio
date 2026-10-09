@@ -8,8 +8,12 @@
 import type { GFVehicleCheck, VehicleCheckAnswer } from '../types/routeStart';
 import { buildYesNoVehicleCheckAnswer } from './vehicleChecklistLogic.ts';
 
+import type { ChecklistRating } from './checklistRating.ts';
+import { ratingToResultBool } from './checklistRating.ts';
+
 export interface ChecklistDraft {
   bool?: boolean;
+  rating?: ChecklistRating;
   numeric?: string;
   text?: string;
   reason?: string;
@@ -43,7 +47,7 @@ export function draftHasValidAnswer(
   draft: ChecklistDraft | undefined,
 ): boolean {
   if (!draft) return false;
-  if (check.check_type === 'yes_no') return draft.bool != null;
+  if (check.check_type === 'yes_no') return draft.bool != null || draft.rating != null;
   if (check.check_type === 'numeric') return parseDraftNumeric(draft) != null;
   if (check.check_type === 'text') return !!(draft.text || '').trim();
   if (check.check_type === 'photo') return !!draft.photoUri;
@@ -75,6 +79,7 @@ export function checkNeedsSubmit(
   if (!check.answered) return true;
 
   if (check.check_type === 'yes_no') {
+    if (draft.rating) return draft.rating !== check.result_rating && draft.rating !== check.rating;
     return draft.bool != null && draft.bool !== check.result_bool;
   }
   if (check.check_type === 'numeric') {
@@ -92,7 +97,8 @@ export function collectMissingRequiredChecks(
   drafts: DraftsMap,
 ): MissingRequiredCheck[] {
   return checks
-    .filter((check) => check.required && !isCheckSatisfiedLocally(check, getChecklistDraft(drafts, check.id)))
+    .filter((check) => check.required && check.check_type !== 'photo')
+    .filter((check) => !isCheckSatisfiedLocally(check, getChecklistDraft(drafts, check.id)))
     .map((check) => ({ id: check.id, sequence: check.sequence, name: check.name }));
 }
 
@@ -101,7 +107,7 @@ export function formatMissingRequiredChecks(missing: MissingRequiredCheck[]): st
   const listed = missing
     .map((item) => `${item.sequence}. ${item.name}`)
     .join('\n');
-  return `Responde todos los puntos obligatorios antes de guardar:\n${listed}`;
+  return `Responde todos los puntos obligatorios antes de guardar:\n${listed}\n\nNinguna respuesta detiene la salida.`;
 }
 
 /**
@@ -136,6 +142,21 @@ export function buildAnswerFromDraft(input: {
   const { check, draft } = input;
 
   if (check.check_type === 'yes_no') {
+    if (draft.rating) {
+      const passed = ratingToResultBool(draft.rating);
+      const reason = (draft.reason || '').trim();
+      return {
+        ok: true,
+        answer: {
+          result_bool: passed,
+          rating: draft.rating,
+          result_rating: draft.rating,
+          ...(passed
+            ? {}
+            : { not_passed_reason: reason || 'Hallazgo registrado en checklist de unidad.' }),
+        },
+      };
+    }
     if (draft.bool == null) {
       return { ok: false, error: 'Selecciona Sí o No.' };
     }

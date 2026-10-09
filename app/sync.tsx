@@ -9,6 +9,7 @@ import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
+import { formatMexicoClock } from '../src/utils/localDate';
 import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { SyncQueueItem } from '../src/types/sync';
@@ -293,9 +294,7 @@ function SyncItem({
   // causa real y se evita duplicar el mensaje en la línea de hora.
   const blockedByParent =
     item.status === 'dead' && !!item.dependsOn && item.dependsOn.length > 0;
-  const time = new Date(item.created_at).toLocaleTimeString('es-MX', {
-    hour: '2-digit', minute: '2-digit',
-  });
+  const time = formatMexicoClock(item.created_at);
 
   return (
     <View style={styles.syncItem}>
@@ -394,9 +393,7 @@ const styles = StyleSheet.create({
 });
 
 function LeadNoteInfoItem({ item }: { item: SyncQueueItem }) {
-  const time = new Date(item.created_at).toLocaleTimeString('es-MX', {
-    hour: '2-digit', minute: '2-digit',
-  });
+  const time = formatMexicoClock(item.created_at);
 
   return (
     <View style={styles.syncItem}>

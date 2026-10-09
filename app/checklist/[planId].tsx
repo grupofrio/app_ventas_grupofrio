@@ -34,6 +34,8 @@ import {
   findOdometerCheck,
 } from '../../src/services/routeStartLogic';
 import { takePhoto, readPhotoAsBase64, getCameraPermissionStatus } from '../../src/services/camera';
+import { CHECKLIST_RATING_OPTIONS, isChecklistRatingV2 } from '../../src/services/checklistRating';
+import { CAMERA_OPEN_ERROR } from '../../src/services/cameraAccess';
 import {
   type ChecklistDraft,
   buildAnswerFromDraft,
@@ -84,6 +86,7 @@ export default function ChecklistScreen() {
   const router = useRouter();
   const setChecklistCompleteForPlan = useRouteStartStore((s) => s.setChecklistCompleteForPlan);
   const setKmInitialForPlan = useRouteStartStore((s) => s.setKmInitialForPlan);
+  const currentPlan = useRouteStore((s) => s.plan);
   const currentRoutePlanId = useRouteStore((s) => s.plan?.plan_id ?? null);
   const currentStartPlanId = useRouteStartStore((s) => s.planId);
   const stalePlan = currentRoutePlanId !== planIdNum || currentStartPlanId !== planIdNum;
@@ -243,8 +246,11 @@ export default function ChecklistScreen() {
         return;
       }
       setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], photoUri: photo.localUri } }));
-    } catch {
-      Alert.alert('Error de cámara', 'No se pudo tomar la foto. Intenta de nuevo.');
+    } catch (error) {
+      Alert.alert(
+        'Cámara',
+        error instanceof Error ? error.message : CAMERA_OPEN_ERROR,
+      );
     } finally {
       setCapturingId(null);
     }
@@ -461,7 +467,14 @@ export default function ChecklistScreen() {
     }
     const validation = validateRequiredChecklistDrafts(checks, drafts);
     if (!validation.ok) {
-      Alert.alert('Faltan respuestas', formatMissingRequiredChecks(validation.missing));
+      Alert.alert(
+        'Faltan respuestas',
+        formatMissingRequiredChecks(validation.missing),
+        [
+          { text: 'Volver', onPress: () => router.back() },
+          { text: 'Seguir aquí', style: 'cancel' },
+        ],
+      );
       return;
     }
 
@@ -481,15 +494,14 @@ export default function ChecklistScreen() {
           completeOffline(capturedPlanId, useSyncStore.getState().queue);
           return;
         }
-        if (/checks_pending|pendiente/i.test(msg)) {
-          Alert.alert('Faltan respuestas', 'Responde todos los puntos obligatorios antes de completar.');
-        } else if (/blocking|bloqueante/i.test(msg)) {
+        if (/checks_pending|pendiente|blocking|bloqueante/i.test(msg)) {
           Alert.alert(
-            'No se pudo completar',
-            'Las respuestas quedaron guardadas. Reintenta completar el checklist. Los puntos no aprobados no detienen la salida.',
+            'Checklist',
+            'Ninguna respuesta detiene la salida. Puedes salir aunque el servidor no haya cerrado el checklist.',
+            [{ text: 'Volver', onPress: () => router.back() }],
           );
         } else {
-          Alert.alert('Error', msg);
+          Alert.alert('Error', `${msg}\n\nNinguna respuesta detiene la salida.`);
         }
       }
     } finally {
@@ -571,6 +583,18 @@ export default function ChecklistScreen() {
             </Text>
           </View>
         )}
+        {isChecklistRatingV2(header, currentPlan) ? (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>
+              Calificación Bien, Regular o Mal. Regular y Mal se notifican al supervisor y al gerente.
+              {' '}Ninguna respuesta detiene la salida.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>Ninguna respuesta detiene la salida.</Text>
+          </View>
+        )}
         <View style={styles.progressRow}>
           <Text style={styles.progressText}>{answered}/{checks.length} respondidos</Text>
           {completed && <Badge label="✓ Completado" variant="green" />}
@@ -594,7 +618,26 @@ export default function ChecklistScreen() {
                 )}
               </View>
 
-              {check.check_type === 'yes_no' && (
+              {check.check_type === 'yes_no' && isChecklistRatingV2(header, currentPlan) && (
+                <View style={styles.yesNoRow}>
+                  {CHECKLIST_RATING_OPTIONS.map((option) => (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[styles.choice, draft.rating === option.value && styles.choiceOn]}
+                      onPress={() => setDrafts((d) => ({
+                        ...d,
+                        [check.id]: { ...d[check.id], rating: option.value, bool: option.value === 'bien' },
+                      }))}
+                    >
+                      <Text style={[styles.choiceText, draft.rating === option.value && styles.choiceTextOn]}>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {check.check_type === 'yes_no' && !isChecklistRatingV2(header, currentPlan) && (
                 <View style={styles.yesNoRow}>
                   <TouchableOpacity
                     style={[styles.choice, draft.bool === true && styles.choiceOn]}
@@ -611,12 +654,14 @@ export default function ChecklistScreen() {
                 </View>
               )}
 
-              {willFail && (
+              {(willFail || (draft.rating && draft.rating !== 'bien')) && (
                 <TextInput
                   style={styles.reasonInput}
                   value={draft.reason || ''}
                   onChangeText={(t) => setDrafts((d) => ({ ...d, [check.id]: { ...d[check.id], reason: t } }))}
-                  placeholder="Motivo (opcional)"
+                  placeholder={draft.rating && draft.rating !== 'bien'
+                    ? 'Qué encontraste. Se avisa al supervisor y al gerente.'
+                    : 'Motivo (opcional)'}
                   placeholderTextColor={colors.textDim}
                   multiline
                 />

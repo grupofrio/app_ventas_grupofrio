@@ -80,6 +80,7 @@ interface VisitState {
   endVisit: (lat: number, lon: number) => void;
   setPhase: (phase: VisitPhase) => void;
   setOffrouteVisitId: (offrouteVisitId: number | null) => void;
+  adoptServerStopId: (fromId: number, toId: number) => void;
 
   // Sale actions
   addSaleLine: (line: SaleLineItem) => void;
@@ -171,6 +172,18 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   setPhase: (phase) => {
     set({ phase });
     persistVisitStateInBackground('set_phase');
+  },
+
+  adoptServerStopId: (fromId, toId) => {
+    if (!(fromId < 0) || !(toId > 0)) return;
+    const currentStop = get().currentStop;
+    set({
+      currentStopId: get().currentStopId === fromId ? toId : get().currentStopId,
+      currentStop: currentStop && currentStop.id === fromId
+        ? { ...currentStop, id: toId }
+        : currentStop,
+    });
+    persistVisitStateInBackground('adopt_server_stop');
   },
 
   setOffrouteVisitId: (offrouteVisitId) => {

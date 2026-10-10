@@ -37,6 +37,14 @@ function setup() {
       shouldTryServerPricingEndpoint: () => true,
       markServerPricingEndpointAvailable() {}, disableServerPricingEndpointIfMissing() {},
     },
+    './employeePriceRow': {
+      readEmployeePriceProductId: (value) => (
+        typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+      ),
+      readEmployeePriceAmount: (row) => (
+        typeof row.price_unit === 'number' && Number.isFinite(row.price_unit) ? row.price_unit : null
+      ),
+    },
     './api': { postRest: async (_path, payload) => {
       assert.ok(online, 'must not request prices offline');
       requests.push(payload);

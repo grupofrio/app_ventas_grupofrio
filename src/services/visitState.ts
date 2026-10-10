@@ -7,6 +7,7 @@ import {
   restorePersistedSaleLines,
   type PersistedVisitSaleLine,
 } from './visitPersistence.ts';
+import type { AcceptedLocalSale } from './checkoutSaleEvidence.ts';
 
 export interface VisitDataState {
   phase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
@@ -35,6 +36,7 @@ export interface VisitDataState {
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
   saleRecoveryIntent: SaleRecoveryIntentV1 | null;
+  acceptedSales: AcceptedLocalSale[];
 }
 
 export interface PersistedSaleRecoveryState {
@@ -153,6 +155,7 @@ export function createInitialVisitState(): VisitDataState {
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
     saleRecoveryIntent: null,
+    acceptedSales: [],
   };
 }
 

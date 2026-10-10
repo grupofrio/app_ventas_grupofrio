@@ -21,6 +21,8 @@ interface CatalogProductPickerProps {
   /** When set, the picker lists these products instead of the full store. */
   products?: TruckProduct[];
   emptyLabel?: string;
+  /** customer_return never treats zero van stock as unavailable. */
+  stockMode?: 'van' | 'customer_return';
   onClose: () => void;
   onSelect: (product: TruckProduct) => void;
 }
@@ -38,6 +40,7 @@ export function CatalogProductPicker({
   excludedProductIds = [],
   products: productsOverride,
   emptyLabel,
+  stockMode = 'van',
   onClose,
   onSelect,
 }: CatalogProductPickerProps) {
@@ -90,7 +93,11 @@ export function CatalogProductPicker({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.productName}>{item.name}</Text>
                   <Text style={styles.productMeta}>
-                    {item.default_code || 'Sin código'} · {item.qty_display} disp.
+                    {item.default_code || 'Sin código'} · {stockMode === 'customer_return'
+                      ? 'Se recibe del cliente'
+                      : item.qty_display <= 0
+                        ? 'Agotado'
+                        : `${item.qty_display} disp.`}
                   </Text>
                 </View>
                 <Text style={styles.pickLabel}>Elegir</Text>

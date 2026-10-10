@@ -14,6 +14,7 @@ export interface PersistAmbiguousSaleInput {
   total: number;
   stopId: number;
   photoUris: string[];
+  offrouteVisitId?: number | null;
   enqueue: Enqueue;
   persistQueue: () => Promise<void>;
   /**
@@ -42,6 +43,7 @@ export async function persistAmbiguousSaleRecovery({
   total,
   stopId,
   photoUris,
+  offrouteVisitId,
   enqueue,
   persistQueue,
   deferDurablePersist = false,
@@ -78,6 +80,12 @@ export async function persistAmbiguousSaleRecovery({
       throw new Error('La cola no conservó el identificador de la venta.');
     }
 
+    const payloadVisitId = payload.offroute_visit_id;
+    const visitId = typeof offrouteVisitId === 'number' && offrouteVisitId > 0
+      ? offrouteVisitId
+      : typeof payloadVisitId === 'number' && payloadVisitId > 0
+        ? payloadVisitId
+        : null;
     const photoIds = enqueueVisitPhotos({
       stopId,
       photoUris,
@@ -85,6 +93,7 @@ export async function persistAmbiguousSaleRecovery({
       dependsOn: [normalizedOperationId],
       holdProcessing: true,
       imageType: 'sale',
+      offrouteVisitId: visitId,
     });
 
     if (!deferDurablePersist) {

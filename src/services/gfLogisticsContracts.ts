@@ -164,6 +164,8 @@ export function buildExchangeCreatePayload(payload: Record<string, unknown>): Re
     return rejectSalesOpsClientPayload('El cambio debe enviarse con validate=true.');
   }
   const stopId = asPositiveNumber(payload.stop_id);
+  const offrouteVisitId = asPositiveNumber(payload.offroute_visit_id);
+  const partnerId = asPositiveNumber(payload.partner_id);
   const notes = asNonEmptyString(payload.notes);
   const validate = true;
   const deliveryLines = Array.isArray(payload.delivery_lines)
@@ -180,7 +182,7 @@ export function buildExchangeCreatePayload(payload: Record<string, unknown>): Re
           : null))
         .filter((line): line is Record<string, unknown> => line !== null)
     : [];
-  if (!stopId) {
+  if (!stopId && !offrouteVisitId) {
     return rejectSalesOpsClientPayload('El cambio no tiene una parada válida.');
   }
   if (deliveryLines.length === 0 && mermaLines.length === 0) {
@@ -192,11 +194,16 @@ export function buildExchangeCreatePayload(payload: Record<string, unknown>): Re
   };
 
   const data: Record<string, unknown> = {
-    stop_id: stopId,
     delivery_lines: deliveryLines,
     merma_lines: mermaLines,
     validate,
   };
+  if (stopId) {
+    data.stop_id = stopId;
+  } else if (offrouteVisitId) {
+    data.offroute_visit_id = offrouteVisitId;
+    if (partnerId) data.partner_id = partnerId;
+  }
   if (notes) data.notes = notes;
 
   return { meta, data };

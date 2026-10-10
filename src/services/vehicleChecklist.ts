@@ -24,6 +24,7 @@ import {
   VehicleChecklistState,
 } from '../types/routeStart';
 import { getVehicleChecklistBootstrapAction } from './vehicleChecklistLogic';
+import { isChecklistRatingV2, parseChecklistRating } from './checklistRating.ts';
 
 const PWA_RUTA = 'pwa-ruta';
 
@@ -61,6 +62,7 @@ function normalizeChecklistHeader(raw: Record<string, unknown>): GFVehicleCheckl
     checks_passed: num(raw.checks_passed),
     checks_required_pending: num(raw.checks_required_pending),
     notes: str(raw.notes),
+    ...(isChecklistRatingV2(raw) ? { rating_v2: true } : {}),
   };
 }
 
@@ -79,6 +81,8 @@ function normalizeCheck(raw: Record<string, unknown>): GFVehicleCheck {
     min_value: raw.min_value != null ? num(raw.min_value) : null,
     max_value: raw.max_value != null ? num(raw.max_value) : null,
     result_bool: raw.result_bool != null ? bool(raw.result_bool) : null,
+    result_rating: parseChecklistRating(raw.result_rating ?? raw.rating),
+    rating: parseChecklistRating(raw.rating ?? raw.result_rating),
     result_numeric: raw.result_numeric != null ? num(raw.result_numeric) : null,
     result_text: str(raw.result_text),
     result_photo_url: raw.result_photo_url != null ? str(raw.result_photo_url) : null,

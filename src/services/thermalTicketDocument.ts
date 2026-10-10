@@ -28,7 +28,7 @@ export function buildThermalTicketDocument(
       logoVersion: SALE_TICKET_BRANDING.version,
       legalName: SALE_TICKET_BRANDING.legalName,
       rfcLabel: SALE_TICKET_BRANDING.rfcLabel,
-      title: SALE_TICKET_BRANDING.title,
+      title: snapshot.isGift ? 'Ticket de regalo' : SALE_TICKET_BRANDING.title,
       footer: SALE_TICKET_BRANDING.footer,
     },
     folio: folioPresentation.odooFolio,

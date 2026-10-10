@@ -56,14 +56,16 @@ async function serializeCriticalSaleTicketOperation<T>(
 export function normalizeStoredSaleTicketSnapshot(
   snapshot: StoredSaleTicketSnapshot,
 ): SaleTicketSnapshot {
+  const { isGift, ...rest } = snapshot;
   return {
-    ...snapshot,
+    ...rest,
     odooFolio: normalizeOdooFolio(snapshot.odooFolio),
     sellerName: normalizeSellerName(
       typeof snapshot.sellerName === 'string' ? snapshot.sellerName : undefined,
     ),
     priceConfirmationPending: snapshot.priceConfirmationPending === true
       || hasPendingSalePriceConfirmation(snapshot.lines),
+    ...(isGift === true ? { isGift: true } : {}),
   };
 }
 

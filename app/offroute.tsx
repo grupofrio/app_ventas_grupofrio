@@ -31,12 +31,14 @@ import { useEmployeeDayBundleStore } from '../src/stores/useEmployeeDayBundleSto
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
-import { startOffrouteVisit } from '../src/services/gfLogistics';
+import { closeOffrouteVisit, startOffrouteVisit } from '../src/services/gfLogistics';
+import { readPositiveStopId } from '../src/services/stopIdRemap';
 import { extractOffrouteVisitId } from '../src/services/offrouteVisit';
 import { warmOffrouteCustomerPrices } from '../src/services/offroutePricing';
 import { computeCustomerPrices } from '../src/services/pricelist';
 import { openStopNavigation } from '../src/services/stopNavigationAction';
 import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
+import { reportOperationFailure } from '../src/services/operationFailureReport';
 
 const DEFAULT_OFFROUTE_COMPANY_ID = 34;
 
@@ -57,6 +59,8 @@ export default function OffRouteScreen() {
   const selectingKeyRef = useRef<string | null>(null);
   const addVirtualStop = useRouteStore((s) => s.addVirtualStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
+  const removeStop = useRouteStore((s) => s.removeStop);
+  const replaceStopId = useRouteStore((s) => s.replaceStopId);
   const patchStop = useRouteStore((s) => s.patchStop);
   const isOnline = useSyncStore((s) => s.isOnline);
   const companyId = useAuthStore((s) => s.companyId);
@@ -85,7 +89,10 @@ export default function OffRouteScreen() {
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
-      Alert.alert('Error', 'No se pudo buscar clientes o prospectos. Verifica tu conexion.');
+      const message = error instanceof Error && error.message.trim()
+        ? error.message
+        : 'No se pudo buscar clientes o prospectos.';
+      Alert.alert('Búsqueda', message);
     } finally {
       setIsSearching(false);
     }
@@ -121,6 +128,7 @@ export default function OffRouteScreen() {
 
     try {
       let offrouteVisitId: number | null = null;
+      let serverStopId: number | null = null;
 
       if (isOnline) {
         try {
@@ -134,9 +142,17 @@ export default function OffRouteScreen() {
           offrouteVisitId = extractOffrouteVisitId(
             visit && typeof visit === 'object' ? (visit.id as number | null | undefined) : null,
           );
+          serverStopId = readPositiveStopId(visit);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'No se pudo iniciar la visita especial.';
           if (!isRetryableSyncErrorMessage(message)) {
+            reportOperationFailure({
+              operation: 'offroute',
+              stopId: null,
+              planId: useRouteStore.getState().plan?.plan_id ?? null,
+              error,
+              outcome: 'rejected',
+            });
             Alert.alert('Visita especial rechazada', message);
             return;
           }
@@ -147,7 +163,7 @@ export default function OffRouteScreen() {
         }
       }
 
-      const virtualStopId = addVirtualStop(
+      let virtualStopId = addVirtualStop(
         result.partnerId ?? result.id,
         result.name,
         {
@@ -164,6 +180,10 @@ export default function OffRouteScreen() {
           city: result.city,
         },
       );
+      if (serverStopId) {
+        replaceStopId(virtualStopId, serverStopId);
+        virtualStopId = serverStopId;
+      }
       updateStopState(virtualStopId, 'in_progress');
 
       // Start a visit for this virtual stop
@@ -226,7 +246,29 @@ export default function OffRouteScreen() {
         'Visita especial',
         `¿Qué quieres hacer con ${result.name}?`,
         [
-          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Cancelar',
+            style: 'cancel',
+            onPress: () => {
+              void (async () => {
+                if (offrouteVisitId) {
+                  try {
+                    await closeOffrouteVisit({
+                      visit_id: offrouteVisitId,
+                      result_status: 'cancelled',
+                      latitude: latitude || 0,
+                      longitude: longitude || 0,
+                    });
+                  } catch {
+                    // Cancel must still remove the local stop. A failed server
+                    // close is retried only if the seller keeps the visit.
+                  }
+                }
+                useVisitStore.getState().resetVisit();
+                removeStop(virtualStopId);
+              })();
+            },
+          },
           {
             text: 'Ir a ubicacion',
             onPress: () => { void openSpecialVisitLocation(result); },

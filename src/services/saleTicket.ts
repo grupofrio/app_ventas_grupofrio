@@ -11,6 +11,7 @@ import {
   PENDING_PRICE_CONFIRMATION_LABEL,
   hasPendingSalePriceConfirmation,
 } from './salePricePresentation.ts';
+import { GIFT_PAYMENT_LABEL, GIFT_TICKET_TITLE, recognizeGift } from './giftRecognition.ts';
 
 export { SALE_TICKET_DEFAULT_SELLER } from './saleTicketFormatting.ts';
 
@@ -34,6 +35,7 @@ export interface BuildSaleTicketSnapshotInput {
   paymentLabel?: string;
   createdAt: string;
   lines: SaleTicketSourceLine[];
+  isGift?: boolean;
 }
 
 export interface SaleTicketOrderSource {
@@ -48,6 +50,9 @@ export interface SaleTicketOrderSource {
   payment_method?: string;
   payment_method_label?: string;
   employee_name?: string;
+  is_gift?: boolean;
+  client_order_ref?: string;
+  origin?: string;
   lines?: SaleTicketOrderLineSource[];
 }
 
@@ -57,6 +62,7 @@ export interface SaleTicketOrderLineSource {
   quantity: number;
   price_unit: number;
   price_subtotal: number;
+  discount?: number;
   kg_total?: number;
   weight?: number;
 }
@@ -85,7 +91,10 @@ export interface SaleTicketSnapshot {
   totalKg: number;
   /** True until Odoo returns the authoritative order totals. */
   priceConfirmationPending?: boolean;
+  isGift?: boolean;
 }
+
+export { GIFT_TICKET_TITLE };
 
 const SALE_TICKET_LOGO_DATA_URI = `data:image/png;base64,${SALE_TICKET_BRANDING.logoPngBase64}`;
 export const ODOO_FOLIO_PENDING_LABEL = 'Pendiente por sincronizar';
@@ -138,16 +147,17 @@ export function getSaleTicketFolioPresentation(snapshot: SaleTicketSnapshot): {
 }
 
 export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): SaleTicketSnapshot {
+  const isGift = input.isGift === true;
   const lines = input.lines.map((line) => ({
     productId: line.productId,
     productName: line.productName,
     qty: line.qty,
-    unitPrice: line.price,
-    lineTotal: line.qty * line.price,
-    ...(line.priceConfirmation ? { priceConfirmation: line.priceConfirmation } : {}),
+    unitPrice: isGift ? 0 : line.price,
+    lineTotal: isGift ? 0 : line.qty * line.price,
+    ...(line.priceConfirmation && !isGift ? { priceConfirmation: line.priceConfirmation } : {}),
     weight: line.weight,
   }));
-  const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
+  const subtotal = isGift ? 0 : lines.reduce((sum, line) => sum + line.lineTotal, 0);
   const totalKg = lines.reduce((sum, line) => sum + line.weight * line.qty, 0);
 
   return {
@@ -156,14 +166,35 @@ export function buildSaleTicketSnapshot(input: BuildSaleTicketSnapshotInput): Sa
     customerName: input.customerName,
     sellerName: normalizeSellerName(input.sellerName),
     paymentMethod: input.paymentMethod,
-    paymentLabel: input.paymentLabel?.trim() || getPaymentLabel(input.paymentMethod),
+    paymentLabel: isGift
+      ? GIFT_PAYMENT_LABEL
+      : (input.paymentLabel?.trim() || getPaymentLabel(input.paymentMethod)),
     createdAt: input.createdAt,
     lines,
     subtotal,
     total: subtotal,
     totalKg,
-    priceConfirmationPending: hasPendingSalePriceConfirmation(lines),
+    priceConfirmationPending: isGift ? false : hasPendingSalePriceConfirmation(lines),
+    ...(isGift ? { isGift: true } : {}),
   };
+}
+
+function resolveOrderLineUnitPrice(
+  line: SaleTicketOrderLineSource,
+  isGift: boolean,
+): number {
+  if (isGift) return 0;
+  const discount = typeof line.discount === 'number' ? line.discount : null;
+  if (discount !== null && discount >= 100) return 0;
+  if (
+    discount !== null
+    && discount > 0
+    && line.quantity > 0
+    && typeof line.price_subtotal === 'number'
+  ) {
+    return line.price_subtotal / line.quantity;
+  }
+  return line.price_unit || (line.quantity > 0 ? line.price_subtotal / line.quantity : 0);
 }
 
 export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): SaleTicketSnapshot {
@@ -173,7 +204,10 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
   const sellerName = normalizeSellerName(order.employee_name);
   const createdAt = order.confirmation_date.trim() || order.date_order.trim() || new Date().toISOString();
   const paymentMethod = normalizePaymentMethod(order.payment_method);
-  const paymentLabel = order.payment_method_label?.trim() || getPaymentLabel(paymentMethod);
+  const isGift = recognizeGift(order);
+  const paymentLabel = isGift
+    ? GIFT_PAYMENT_LABEL
+    : (order.payment_method_label?.trim() || getPaymentLabel(paymentMethod));
   const orderLines = Array.isArray(order.lines)
     ? order.lines.filter((line) => line.quantity > 0)
     : [];
@@ -190,7 +224,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
       paymentLabel,
       createdAt,
       lines: orderLines.map((line) => {
-        const unitPrice = line.price_unit || (line.price_subtotal / line.quantity);
+        const unitPrice = resolveOrderLineUnitPrice(line, isGift);
         const unitWeight = typeof line.weight === 'number'
           ? line.weight
           : typeof line.kg_total === 'number' && line.quantity > 0
@@ -210,6 +244,7 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
     return {
       ...snapshot,
       totalKg: order.kg_total || snapshot.totalKg,
+      ...(isGift ? { isGift: true, subtotal: 0, total: 0 } : {}),
     };
   }
 
@@ -221,11 +256,12 @@ export function buildSaleTicketSnapshotFromOrder(order: SaleTicketOrderSource): 
     paymentMethod,
     paymentLabel,
     createdAt,
+    isGift,
     lines: [{
       productId: order.id,
-      productName: `Venta ${orderName}`,
+      productName: isGift ? `Regalo ${orderName}` : `Venta ${orderName}`,
       qty: 1,
-      price: order.amount_total,
+      price: isGift ? 0 : order.amount_total,
       weight: order.kg_total,
     }],
   });
@@ -237,6 +273,13 @@ export function mergeSaleTicketFromOrder(
 ): SaleTicketSnapshot {
   const authoritative = buildSaleTicketSnapshotFromOrder(order);
   if (!current) return authoritative;
+  if (authoritative.isGift) {
+    return {
+      ...authoritative,
+      saleId: current.saleId || authoritative.saleId,
+      sellerName: order.employee_name?.trim() || current.sellerName,
+    };
+  }
 
   const employeeName = order.employee_name?.trim();
   return {
@@ -400,7 +443,7 @@ export function buildSaleTicketHtml(snapshot: SaleTicketSnapshot): string {
     <img class="brand-logo" src="${escapeHtml(SALE_TICKET_LOGO_DATA_URI)}" alt="Grupo Frio" />
     <div class="legal-name">${escapeHtml(SALE_TICKET_BRANDING.legalName)}</div>
     <div class="tax-id">${escapeHtml(SALE_TICKET_BRANDING.rfcLabel)}</div>
-    <div class="ticket-title">${escapeHtml(SALE_TICKET_BRANDING.title)}</div>
+    <div class="ticket-title">${escapeHtml(snapshot.isGift ? GIFT_TICKET_TITLE : SALE_TICKET_BRANDING.title)}</div>
   </div>
   <div class="divider"></div>
   <div class="row"><span>Folio Odoo</span><span>${escapeHtml(folioPresentation.odooFolio)}</span></div>

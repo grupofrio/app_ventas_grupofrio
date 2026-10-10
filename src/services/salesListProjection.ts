@@ -13,6 +13,7 @@
 import type { SyncQueueItem } from '../types/sync';
 import type { GFSalesOrder } from './gfLogistics';
 import type { SaleTicketSnapshot } from './saleTicket';
+import { recognizeGift } from './giftRecognition.ts';
 
 export type LocalSaleStatus =
   | 'pending'
@@ -35,6 +36,7 @@ export interface SalesListEntry {
   remoteOrder?: GFSalesOrder;
   /** F1.13: chip de forma de pago en la tarjeta — 'Efectivo' / 'Crédito'. */
   paymentMethodLabel?: string | null;
+  movementKind?: 'sale' | 'gift';
 }
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -82,6 +84,30 @@ export function normalizeOperationIdForComparison(value: string): string {
  * Devuelve null para cualquier otro tipo. El ticket persistido (si existe)
  * es la fuente preferida de nombre, total y kilogramos.
  */
+export function projectLocalGift(
+  item: Pick<SyncQueueItem, 'id' | 'type' | 'status' | 'payload' | 'created_at' | 'error_message'>,
+): SalesListEntry | null {
+  if (item.type !== 'gift') return null;
+  const localStatus = QUEUE_STATUS_TO_LOCAL[item.status];
+  if (!localStatus) return null;
+  const payload = (item.payload ?? {}) as Record<string, unknown>;
+  return {
+    key: `local:${item.id}`,
+    operationId: item.id,
+    origin: 'local',
+    customerName: strOrNull(payload._clientCustomerName) ?? LEGACY_CUSTOMER_NAME,
+    amountTotal: 0,
+    kgTotal: null,
+    createdAtMs: item.created_at,
+    localStatus,
+    errorMessage: localStatus === 'retrying' || localStatus === 'needs_attention'
+      ? (strOrNull(item.error_message) ?? null)
+      : null,
+    paymentMethodLabel: null,
+    movementKind: 'gift',
+  };
+}
+
 export function projectLocalSale(
   item: Pick<SyncQueueItem, 'id' | 'type' | 'status' | 'payload' | 'created_at' | 'error_message'>,
   ticket?: SaleTicketSnapshot | null,
@@ -113,17 +139,20 @@ export function projectLocalSale(
     paymentMethodLabel: payloadPaymentMethod
       ? PAYMENT_METHOD_LABELS[payloadPaymentMethod.toLowerCase()] ?? null
       : null,
+    movementKind: 'sale',
   };
 }
 
 export function projectRemoteSale(order: GFSalesOrder): SalesListEntry {
   const operationId = typeof order.operation_id === 'string' ? order.operation_id : '';
+  const isGift = recognizeGift(order);
   return {
     key: operationId.trim() ? `remote:${operationId}` : `odoo:${order.id}`,
     operationId,
     origin: 'odoo',
     customerName: order.partner_name,
-    amountTotal: order.amount_total,
+    amountTotal: isGift ? 0 : order.amount_total,
+    movementKind: isGift ? 'gift' : 'sale',
     kgTotal: order.kg_total,
     createdAtMs: parseOdooDateMs(order.date_order),
     remoteOrder: order,

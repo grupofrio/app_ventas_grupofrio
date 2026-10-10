@@ -6,8 +6,7 @@
  * `routeLoadAcceptance.ts` (buildRouteLoadAcceptanceState + acceptRouteLoad,
  * shipped by Sebas). Sprint A REUSES that — it does not reimplement the load
  * card parsing here. This file owns checklist progress, KM validation, and
- * readiness composition. Checklist is required for route start, but the gate is
- * based on answers captured, not whether every answer passed.
+ * readiness composition. The checklist is recorded, and it never locks departure.
  */
 
 import type {
@@ -35,8 +34,8 @@ export function isChecklistComplete(header: GFVehicleChecklist | null): boolean 
 }
 
 /**
- * Authoritative start-of-day gate: the server has confirmed `state === 'completed'`.
- * Answers-only (`isChecklistAnsweredForStart`) must NOT unlock Load / Prepare / Start.
+ * The server has confirmed `state === 'completed'`.
+ * That confirmation is a badge only: it does not unlock or lock departure.
  * A complete that is only queued offline is NOT server-confirmed.
  */
 export function isChecklistServerConfirmed(header: GFVehicleChecklist | null): boolean {
@@ -55,6 +54,8 @@ export const START_DAY_COPY = {
   checklistSyncPending: 'Checklist pendiente de sincronizar',
   acceptLoadToPrepare: 'Acepta la carga para preparar tu ruta.',
   loadRejectedWaiting: 'Tu carga fue rechazada. Espera la corrección de Almacén.',
+  checklistDoesNotBlock: 'El checklist no detiene la salida.',
+  startUnlockHint: 'El botón se habilita cuando aceptes la carga, captures el KM y prepares los datos.',
 } as const;
 
 export interface StartDayStepGates {
@@ -68,11 +69,10 @@ export interface StartDayStepGates {
 }
 
 /**
- * Sequential start-of-day locks (enforced, not just visual):
- *   1 Checklist (server-confirmed)
- *   2 Load accept/reject
- *   3 Prepare day data
- *   4 Start route
+ * Start-of-day locks. The vehicle checklist never blocks load or departure.
+ *   1 Load accept/reject
+ *   2 Prepare day data
+ *   3 KM + online start
  */
 export function computeStartDayStepGates(input: {
   checklistServerConfirmed: boolean;
@@ -85,32 +85,22 @@ export function computeStartDayStepGates(input: {
 }): StartDayStepGates {
   const checklistServerConfirmed = input.checklistServerConfirmed === true;
   const checklistSyncPending = !checklistServerConfirmed && input.checklistSyncPending === true;
-  const loadUnlocked = checklistServerConfirmed;
-  const prepareUnlocked = checklistServerConfirmed && input.initialLoadAccepted === true;
-  const startUnlocked = checklistServerConfirmed
-    && input.kmCaptured === true
+  const loadUnlocked = true;
+  const prepareUnlocked = input.initialLoadAccepted === true
+    && input.initialLoadRejectedWaiting !== true;
+  const startUnlocked = input.kmCaptured === true
     && input.initialLoadAccepted === true
     && input.dataMinimumReady === true
-    && input.isOnline === true;
+    && input.isOnline === true
+    && input.initialLoadRejectedWaiting !== true;
 
-  let loadLockMessage: string | null = null;
-  if (!loadUnlocked) {
-    loadLockMessage = checklistSyncPending
-      ? START_DAY_COPY.checklistSyncPending
-      : START_DAY_COPY.completeChecklistFirst;
-  }
+  const loadLockMessage: string | null = null;
 
   let prepareLockMessage: string | null = null;
   if (!prepareUnlocked) {
-    if (!checklistServerConfirmed) {
-      prepareLockMessage = checklistSyncPending
-        ? START_DAY_COPY.checklistSyncPending
-        : START_DAY_COPY.completeChecklistFirst;
-    } else if (input.initialLoadRejectedWaiting) {
-      prepareLockMessage = START_DAY_COPY.loadRejectedWaiting;
-    } else {
-      prepareLockMessage = START_DAY_COPY.acceptLoadToPrepare;
-    }
+    prepareLockMessage = input.initialLoadRejectedWaiting
+      ? START_DAY_COPY.loadRejectedWaiting
+      : START_DAY_COPY.acceptLoadToPrepare;
   }
 
   return {

@@ -21,6 +21,8 @@ class ThermalTicketDocumentRecord : Record {
   @Field var total: String? = null
   @Field var creditNote: String? = null
   @Field var exchangeNotes: String? = null
+  @Field var unitLabel: String? = null
+  @Field var stopLabel: String? = null
 }
 
 class ThermalTicketBrandingRecord : Record {
@@ -58,6 +60,8 @@ data class ThermalTicket(
   val exchangeNotes: String? = null,
   /** Internal-only diagnostic seam; never exposed by the Expo Record or sale DTO. */
   internal val diagnosticCalibrationText16: String? = null,
+  val unitLabel: String? = null,
+  val stopLabel: String? = null,
 )
 
 data class TicketBranding(
@@ -105,6 +109,8 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
   budget.required(total, "total", MAX_AMOUNT_CHARS)
   budget.optional(creditNote, "creditNote", MAX_LONG_TEXT_CHARS)
   budget.optional(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS)
+  budget.optional(unitLabel, "unitLabel", MAX_TEXT_CHARS)
+  budget.optional(stopLabel, "stopLabel", MAX_TEXT_CHARS)
 
   val domainLines = ArrayList<TicketLine>(safeLines.size)
   safeLines.forEachIndexed { index, line -> domainLines += line.toRawDomain(index) }
@@ -124,6 +130,8 @@ fun ThermalTicketDocumentRecord.toDomain(): ThermalTicket {
     total = requiredRawText(total, "total"),
     creditNote = creditNote,
     exchangeNotes = exchangeNotes,
+    unitLabel = unitLabel,
+    stopLabel = stopLabel,
   ).validatedAndNormalized()
 }
 
@@ -401,6 +409,8 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
   budget.required(total, "total", MAX_AMOUNT_CHARS)
   budget.optional(creditNote, "creditNote", MAX_LONG_TEXT_CHARS)
   budget.optional(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS)
+  budget.optional(unitLabel, "unitLabel", MAX_TEXT_CHARS)
+  budget.optional(stopLabel, "stopLabel", MAX_TEXT_CHARS)
   budget.optional(
     diagnosticCalibrationText16,
     "diagnosticCalibrationText16",
@@ -473,6 +483,8 @@ private fun ThermalTicket.validatedAndNormalized(): ThermalTicket {
     total = requiredDisplayText(total, "total", MAX_AMOUNT_CHARS),
     creditNote = optionalDisplayText(creditNote, "creditNote", MAX_LONG_TEXT_CHARS),
     exchangeNotes = optionalDisplayText(exchangeNotes, "exchangeNotes", MAX_LONG_TEXT_CHARS),
+    unitLabel = optionalDisplayText(unitLabel, "unitLabel", MAX_TEXT_CHARS),
+    stopLabel = optionalDisplayText(stopLabel, "stopLabel", MAX_TEXT_CHARS),
     diagnosticCalibrationText16 = optionalDisplayText(
       diagnosticCalibrationText16,
       "diagnosticCalibrationText16",

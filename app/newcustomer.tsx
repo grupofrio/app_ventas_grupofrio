@@ -65,15 +65,20 @@ export default function NewCustomerScreen() {
   const pinMoved = useRef(false);
 
   useEffect(() => {
-    void getCurrentPosition();
+    let cancelled = false;
+    void (async () => {
+      const fresh = await getCurrentPosition({ allowLastKnown: false });
+      if (cancelled || pinMoved.current) return;
+      if (fresh && isUsableCoordinate(fresh.latitude, fresh.longitude)) {
+        setPin({ latitude: fresh.latitude, longitude: fresh.longitude });
+        setFocusToken((value) => value + 1);
+      }
+    })();
     void hydrateDayBundle();
+    return () => {
+      cancelled = true;
+    };
   }, [hydrateDayBundle]);
-
-  useEffect(() => {
-    if (pin || pinMoved.current) return;
-    if (!isUsableCoordinate(latitude, longitude)) return;
-    setPin({ latitude: latitude as number, longitude: longitude as number });
-  }, [latitude, longitude, pin]);
 
   function updateField(key: keyof NewLeadForm, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -84,14 +89,16 @@ export default function NewCustomerScreen() {
     setPin(next);
   }
 
-  function recenterOnMe() {
-    if (!isUsableCoordinate(latitude, longitude)) {
+  async function recenterOnMe() {
+    const fresh = await getCurrentPosition({ allowLastKnown: false });
+    const nextLatitude = fresh?.latitude ?? latitude;
+    const nextLongitude = fresh?.longitude ?? longitude;
+    if (!isUsableCoordinate(nextLatitude, nextLongitude)) {
       Alert.alert('Sin ubicación', 'Activa el GPS para centrar el mapa en donde estás.');
       return;
     }
-    const next = { latitude: latitude as number, longitude: longitude as number };
     pinMoved.current = true;
-    setPin(next);
+    setPin({ latitude: nextLatitude as number, longitude: nextLongitude as number });
     setFocusToken((value) => value + 1);
   }
 

@@ -420,6 +420,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           onPress={() => !disabled && handleSelect(p)}
           activeOpacity={disabled ? 1 : 0.7}
           disabled={disabled}
+          pressRetentionOffset={{ top: 48, left: 48, bottom: 48, right: 48 }}
         >
           <View style={styles.listHeader}>
             <Text style={[styles.listName, disabled && styles.textDim]} numberOfLines={1}>
@@ -473,6 +474,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
           activeOpacity={disabled ? 1 : 0.7}
           disabled={disabled}
           style={styles.gridTouchArea}
+          pressRetentionOffset={{ top: 48, left: 48, bottom: 48, right: 48 }}
         >
           <View style={styles.gridImgWrap}>
             <ProductImage productId={p.id} name={p.name} size={GRID_CARD_WIDTH - 24} />
@@ -526,7 +528,16 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId,
   const hasCustomPrices = priceMap.size > 0;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => {
+        setSearch('');
+        setQuantities({});
+        onClose();
+      }}
+    >
       <SafeAreaView style={styles.modal}>
         {/* Header */}
         <View style={styles.header}>

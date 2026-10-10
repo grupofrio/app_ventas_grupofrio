@@ -1,5 +1,5 @@
 import { SALE_TICKET_BRANDING } from './saleTicketBranding.ts';
-import { formatQuantity, formatTicketDate } from './saleTicketFormatting.ts';
+import { formatQuantity, formatTicketDate, normalizeSellerName } from './saleTicketFormatting.ts';
 
 export interface ExchangeTicketSourceLine {
   productId: number;
@@ -23,6 +23,9 @@ export interface BuildExchangeTicketSnapshotInput {
   mermaLines: ExchangeTicketSourceLine[];
   notes?: string | null;
   operationStatus?: 'pending' | 'confirmed';
+  sellerName?: string;
+  unitLabel?: string;
+  stopLabel?: string;
 }
 
 export interface ExchangeTicketSnapshot {
@@ -36,6 +39,63 @@ export interface ExchangeTicketSnapshot {
   mermaLines: ExchangeTicketLine[];
   notes: string;
   operationStatus: 'pending' | 'confirmed';
+  sellerName: string;
+  unitLabel: string;
+  stopLabel: string;
+}
+
+export function exchangeTicketStatusCopy(
+  operationStatus: ExchangeTicketSnapshot['operationStatus'],
+): { statusLabel: string; footerMessage: string } {
+  if (operationStatus === 'pending') {
+    return {
+      statusLabel: 'PENDIENTE DE SINCRONIZACIÓN',
+      footerMessage: 'Cambio pendiente; no repetir la operación',
+    };
+  }
+  return {
+    statusLabel: 'CONFIRMADO POR ODOO',
+    footerMessage: 'Cambio registrado correctamente',
+  };
+}
+
+export function formatExchangeUnitLabel(source: {
+  vehicle_name?: string | null;
+  unit_name?: string | null;
+  mobile_location_name?: string | null;
+  route?: string | null;
+} | null | undefined): string {
+  if (!source) return '';
+  const candidates = [
+    source.vehicle_name,
+    source.unit_name,
+    source.mobile_location_name,
+    source.route,
+  ];
+  for (const value of candidates) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+export function formatExchangeStopLabel(stop: {
+  id?: number;
+  route_sequence?: number;
+  customer_name?: string;
+} | null | undefined): string {
+  if (!stop) return '';
+  const sequence = typeof stop.route_sequence === 'number'
+    && Number.isFinite(stop.route_sequence)
+    && stop.route_sequence > 0
+    && stop.route_sequence < 900
+    ? String(stop.route_sequence)
+    : '';
+  const name = stop.customer_name?.trim() ?? '';
+  if (sequence && name) return `${sequence} · ${name}`;
+  if (name) return name;
+  if (typeof stop.id === 'number' && Number.isFinite(stop.id)) return `Parada ${stop.id}`;
+  return '';
 }
 
 const EXCHANGE_TICKET_TITLE = 'TICKET DE CAMBIO';
@@ -64,6 +124,9 @@ export function buildExchangeTicketSnapshot(
     notes: normalizeNotes(input.notes),
     operationStatus: input.operationStatus
       ?? (exchangeName.toUpperCase().startsWith('PENDIENTE/') ? 'pending' : 'confirmed'),
+    sellerName: normalizeSellerName(input.sellerName),
+    unitLabel: input.unitLabel?.trim() ?? '',
+    stopLabel: input.stopLabel?.trim() ?? '',
   };
 }
 
@@ -73,12 +136,15 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
   const notesSection = snapshot.notes
     ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(snapshot.notes)}</div>`
     : '';
-  const statusLabel = snapshot.operationStatus === 'pending'
-    ? 'PENDIENTE DE SINCRONIZACIÓN'
-    : 'CONFIRMADO POR ODOO';
-  const footerMessage = snapshot.operationStatus === 'pending'
-    ? 'Cambio pendiente; no repetir la operación'
-    : 'Cambio registrado correctamente';
+  const statusCopy = exchangeTicketStatusCopy(snapshot.operationStatus);
+  const statusLabel = statusCopy.statusLabel;
+  const footerMessage = statusCopy.footerMessage;
+  const unitRow = snapshot.unitLabel
+    ? `<div class="row"><span>Unidad</span><span>${escapeHtml(snapshot.unitLabel)}</span></div>`
+    : '';
+  const stopRow = snapshot.stopLabel
+    ? `<div class="row"><span>Parada</span><span>${escapeHtml(snapshot.stopLabel)}</span></div>`
+    : '';
 
   return `<!doctype html>
 <html>
@@ -173,6 +239,9 @@ export function buildExchangeTicketHtml(snapshot: ExchangeTicketSnapshot): strin
   <div class="row"><span>Estado</span><span>${escapeHtml(statusLabel)}</span></div>
   <div>Cliente:</div>
   <div><strong>${escapeHtml(snapshot.customerName)}</strong></div>
+  <div class="row"><span>Vendedor</span><span>${escapeHtml(normalizeSellerName(snapshot.sellerName))}</span></div>
+  ${unitRow}
+  ${stopRow}
   <div class="divider"></div>
   ${deliverySection}
   ${mermaSection}
@@ -215,10 +284,16 @@ function isReusableExchangeName(value: string): boolean {
  * Recompute the visible folio from the name and id already stored.
  * Older tickets saved the placeholder "Nuevo" as the folio itself.
  */
-export function refreshExchangeTicketFolio(snapshot: ExchangeTicketSnapshot): ExchangeTicketSnapshot {
+export function refreshExchangeTicketFolio(
+  snapshot: Omit<ExchangeTicketSnapshot, 'sellerName' | 'unitLabel' | 'stopLabel'> & Partial<Pick<ExchangeTicketSnapshot, 'sellerName' | 'unitLabel' | 'stopLabel'>>,
+): ExchangeTicketSnapshot {
   const folio = buildVisibleFolio(snapshot.snapshotId, snapshot.exchangeName, snapshot.exchangeId);
-  if (folio === snapshot.folio) return snapshot;
-  return { ...snapshot, folio };
+  const sellerName = normalizeSellerName(
+    typeof snapshot.sellerName === 'string' ? snapshot.sellerName : undefined,
+  );
+  const unitLabel = typeof snapshot.unitLabel === 'string' ? snapshot.unitLabel.trim() : '';
+  const stopLabel = typeof snapshot.stopLabel === 'string' ? snapshot.stopLabel.trim() : '';
+  return { ...snapshot, folio, sellerName, unitLabel, stopLabel };
 }
 
 /**

@@ -4,8 +4,9 @@
  * V2 CHANGES (from blueprint):
  * - Priority-based processing: P1 (business) > P2 (media) > P3 (telemetry)
  * - GPS batch processing with concurrent-5 fallback
- * - Backoff with jitter: 2s / 8s / 30s (±20%)
- * - 'dead' status after MAX_RETRIES with rollback for proven failures;
+ * - Backoff with jitter: 2s / 8s / 30s / 2min / 5min (±20%, cap 5 min)
+ * - 'dead' only for a real 4xx business rejection (with rollback);
+ *   HTTP 5xx, 408/429, timeouts and network errors stay retryable;
  *   ambiguous gift/exchange outcomes stay held for reconciliation
  * - Rollback GENÉRICO por `_localStockDelta` (independiente del type)
  * - Migración/guard de eventos legacy refill/unload (retirados del producto):
@@ -55,6 +56,7 @@ import {
   reportIncident,
   uploadStopImage,
   createSale,
+  fetchSalesList,
   createPayment,
   createFieldLeadData,
   upsertLeadData,
@@ -73,15 +75,25 @@ import {
   completeVehicleChecklist,
 } from '../services/vehicleChecklist';
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
-import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
-import { areSyncDependenciesSatisfied, cascadeDeadToDependents, isSyncDependencyMet } from '../services/syncDependencies';
+import {
+  areSyncDependenciesSatisfied,
+  cascadeDeadToDependents,
+  dependencyBlockedByDeadParent,
+  failDependentsOfDeadParents,
+  isSyncDependencyMet,
+} from '../services/syncDependencies';
 import {
   alignEvidencePhotosBeforeClose,
-  deadPhotoRetryBlockReason,
-  rearmDeadEvidencePhoto,
+  readStopId,
+  releaseClosesFromFailedPhotos,
   retryCeilingForItem,
 } from '../services/evidencePhotoSync.ts';
+import {
+  isMissingDeliveryLinesCheckoutError,
+  resolveCheckoutResultStatus,
+  resolveSyncedSaleForStop,
+} from '../services/checkoutSaleEvidence';
 import { useProductStore } from './useProductStore';
 import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -111,7 +123,9 @@ import {
   runDurableLegacyMigration,
   handleDurableMigrationResult,
 } from '../services/legacyRefillUnloadMigration';
-import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
+import { isEligibleNow, nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
+import { decideBusinessFailureDisposition, reviveTransientDeadItems, transientBackoffMs } from '../services/transientSyncFailure';
+import { deadBusinessRetryBlockReason, rearmDeadBusinessItem } from '../services/deadBusinessRetry';
 import { applySyncEnqueue } from '../services/syncEnqueue';
 import {
   createSyncCycleMetrics,
@@ -125,6 +139,8 @@ import {
   processSyncItemToCompletion,
 } from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
+import { useSalesStore } from './useSalesStore';
+import { reportDeadSyncItem } from '../services/operationFailureReport';
 import {
   applySaleDefinitiveClearDeferral,
   gateSaleDefinitiveFailure,
@@ -140,6 +156,8 @@ import {
   decideLeadNoteFailure,
 } from '../services/leadNote';
 import { shouldExposeCloseSyncing } from '../services/closeSyncBlockers';
+import { dropSilentGpsItems, shouldSilentlyDropGpsItem } from '../services/gpsTelemetryQueue';
+import { isAlreadyClosedResponse } from '../services/idempotentResponse';
 import { planCheckoutLeadNote } from '../services/leadNoteCheckout';
 import { postLeadNote } from '../services/leadNoteApi';
 
@@ -149,9 +167,8 @@ const MAX_RETRIES = 3;
 const MAX_ITEMS_PER_CYCLE = 200;
 const GPS_BATCH_SIZE = 50;
 
-// Backoff: 2s, 8s, 30s with ±20% jitter
-const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
-const BACKOFF_JITTER = 0.2;
+// Backoff: 2s, 8s, 30s, 2min, then 5 min. Jitter and the cap live in
+// transientBackoffMs so a 503 window longer than 3 attempts keeps waiting.
 
 // Backoff de un ítem legacy DIFERIDO por fallo de persistencia final. Fijo (no
 // escalante) y != 0ms: reintenta con cadencia moderada sin redrenaje agresivo.
@@ -230,9 +247,7 @@ function uuid(): string {
 }
 
 function calculateBackoff(retryCount: number): number {
-  const base = BACKOFF_SCHEDULE_MS[Math.min(retryCount, BACKOFF_SCHEDULE_MS.length - 1)];
-  const jitter = base * BACKOFF_JITTER * (Math.random() * 2 - 1);
-  return Math.round(base + jitter);
+  return transientBackoffMs(retryCount);
 }
 
 // ═══ Store interface ═══
@@ -275,9 +290,12 @@ interface SyncState {
   removeDeadQueueItems: (ids: string[]) => number;
   /** Rearms one dead evidence photo. Returns a Spanish block reason, or null. */
   retryDeadPhoto: (id: string) => string | null;
+  /** Rearms one dead business op (or photo) onto the same id. */
+  retryDeadItem: (id: string) => string | null;
 
   // Persistence
   persistQueue: () => Promise<void>;
+  remapQueuedStop: (fromId: number, toId: number) => void;
   /**
    * Replace in-memory queue after a durable envelope commit that already
    * wrote `sync:queue` (avoids a second plaintext race write).
@@ -434,6 +452,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     if (result.action !== 'reused') {
       set({ queue: result.queue, ...computeCounts(result.queue) });
+      for (const item of result.queue) {
+        const before = originalQueue.find((prev) => prev.id === item.id);
+        if (item.status === 'dead' && before?.status !== 'dead') {
+          reportDeadSyncItem(item);
+        }
+      }
 
       // Persist every queue mutation immediately (fire-and-forget), unless the
       // caller is about to commit queue + ledger atomically.
@@ -538,7 +562,24 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   markDead: (id, message, retries) => {
-    const afterParent = get().queue.map((i) =>
+    const previousQueue = get().queue;
+    const target = previousQueue.find((item) => item.id === id);
+    if (target?.type === 'gps') {
+      const dropped = dropSilentGpsItems(
+        previousQueue.map((item) => (
+          item.id === id
+            ? { ...item, status: 'dead' as SyncItemStatus, retries: retries ?? item.retries }
+            : item
+        )),
+        Date.now(),
+      );
+      set({ queue: dropped.queue, ...computeCounts(dropped.queue) });
+      schedulePersist();
+      logInfo('sync', 'gps_dropped', { id, reason: 'mark_dead', message });
+      return;
+    }
+    const rejectedSale = previousQueue.find((item) => item.id === id && item.type === 'sale_order');
+    const afterParent = previousQueue.map((i) => (
       i.id === id
         ? {
             ...i,
@@ -548,7 +589,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             next_retry_at: null,
           }
         : i
-    );
+    ));
     // BLD-20260617-DEAD-CASCADE: un padre muerto arrastra a sus dependientes
     // directos vivos (p.ej. la foto de la venta) a `dead`, para que no queden
     // `pending` eternos bloqueando cashclose/route-close sin escape. clearDead
@@ -561,6 +602,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       (i, idx) => i.status === 'dead' && afterParent[idx].status !== 'dead',
     ).length;
     logError('sync', 'item_dead', { id, message });
+    if (rejectedSale) discardCartForRejectedSale(rejectedSale);
+    for (const deadItem of newQueue) {
+      const before = previousQueue.find((item) => item.id === deadItem.id);
+      if (deadItem.status === 'dead' && before?.status !== 'dead' && deadItem.id !== id) {
+        reportDeadSyncItem(deadItem);
+      }
+    }
     if (cascaded > 0) {
       logInfo('sync', 'dead_cascade', { parent: id, dependents: cascaded });
     }
@@ -613,6 +661,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // operador sin necesidad de consultar el queue de vuelta.
   clearDead: () => {
     const before = get().queue.length;
+    const removedSales = get().queue.filter(
+      (item) => item.status === 'dead'
+        && item.type === 'sale_order'
+        && !isProtectedPhysicalReviewItem(item),
+    );
     const newQueue = get().queue.filter(
       (i) => i.status !== 'dead' || isProtectedPhysicalReviewItem(i),
     );
@@ -621,6 +674,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_purged', { removed });
+      for (const sale of removedSales) discardCartForRejectedSale(sale);
     }
     return removed;
   },
@@ -630,26 +684,37 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // anterior jamás borren una operación que ya volvió a estar viva.
   removeDeadQueueItems: (ids) => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter(
-      (i) => i.status !== 'dead' || !ids.includes(i.id),
+    const removedSales = get().queue.filter(
+      (item) => item.status === 'dead' && item.type === 'sale_order' && ids.includes(item.id),
     );
+    const removedIds = new Set(ids);
+    const newQueue = get().queue
+      .filter((i) => i.status !== 'dead' || !ids.includes(i.id))
+      .map((item) => {
+        if (!item.dependsOn?.some((dependencyId) => removedIds.has(dependencyId))) return item;
+        const dependsOn = item.dependsOn.filter((dependencyId) => !removedIds.has(dependencyId));
+        return { ...item, dependsOn: dependsOn.length > 0 ? dependsOn : undefined };
+      });
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_selectively_removed', { removed });
+      for (const sale of removedSales) discardCartForRejectedSale(sale);
     }
     return removed;
   },
 
-  retryDeadPhoto: (id) => {
+  retryDeadPhoto: (id) => get().retryDeadItem(id),
+
+  retryDeadItem: (id) => {
     const queue = get().queue;
-    const photo = queue.find((item) => item.id === id);
-    if (!photo) return 'No se encontró la foto en la cola.';
-    const block = deadPhotoRetryBlockReason(photo, queue);
+    const item = queue.find((candidate) => candidate.id === id);
+    if (!item) return 'No se encontró la operación en la cola.';
+    const block = deadBusinessRetryBlockReason(item, queue);
     if (block) return block;
-    const next = rearmDeadEvidencePhoto(queue, id);
-    if (next === queue) return 'Esa foto no se puede reintentar.';
+    const next = rearmDeadBusinessItem(queue, id);
+    if (next === queue) return 'Esa operación no se puede reintentar.';
     set({ queue: next, ...computeCounts(next) });
     schedulePersist();
     if (get().isOnline && !get().isSyncing) {
@@ -659,6 +724,23 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   // ═══ Persistence ═══
+
+  remapQueuedStop: (fromId, toId) => {
+    if (!(fromId < 0) || !(toId > 0)) return;
+    const queue = get().queue.map((item) => {
+      const payload = item.payload as Record<string, unknown> | null;
+      if (!payload || payload.stop_id !== fromId) return item;
+      const reopen = item.status === 'dead' || item.status === 'error';
+      return {
+        ...item,
+        status: reopen ? 'pending' as const : item.status,
+        error_message: reopen ? null : item.error_message,
+        payload: { ...payload, stop_id: toId },
+      };
+    });
+    set({ queue, ...computeCounts(queue) });
+    schedulePersist();
+  },
 
   persistQueue: () => {
     // Un write inmediato cancela cualquier persistencia agendada (sería
@@ -715,15 +797,27 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const saved = await storeLoad<unknown[]>(STORAGE_KEYS.SYNC_QUEUE);
     if (Array.isArray(saved) && saved.length > 0) {
       const { queue: restored, discardedCount, syncingRecoveredCount } = restorePersistedSyncQueue(saved);
-      set({ queue: restored, ...computeCounts(restored) });
+      const droppedGps = dropSilentGpsItems(restored, Date.now());
+      const revived = reviveTransientDeadItems(droppedGps.queue);
+      set({ queue: revived.queue, ...computeCounts(revived.queue) });
       logInfo('sync', 'rehydrate', {
-        total: restored.length,
+        total: revived.queue.length,
         syncing_recovered: syncingRecoveredCount,
+        gps_dropped: droppedGps.droppedIds.length,
+        transient_revived: revived.revivedIds.length,
       });
-      if (discardedCount > 0) {
+      if (discardedCount > 0 || droppedGps.droppedIds.length > 0 || revived.revivedIds.length > 0) {
         try {
           await persistCurrentQueue();
-          logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+          if (discardedCount > 0) {
+            logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+          }
+          if (droppedGps.droppedIds.length > 0) {
+            logInfo('sync', 'gps_dropped', {
+              count: droppedGps.droppedIds.length,
+              reason: 'rehydrate',
+            });
+          }
         } catch (error: unknown) {
           logError('sync', 'rehydrate_discard_persist_failed', {
             discardedCount,
@@ -745,14 +839,36 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ V2: Priority-based Sync Processor ═══
 
   processQueue: async () => {
-    const { queue, isOnline, isSyncing } = get();
+    const { isOnline, isSyncing } = get();
     if (!isOnline || isSyncing) return;
+
+    const gpsClean = dropSilentGpsItems(get().queue, Date.now());
+    if (gpsClean.droppedIds.length > 0) {
+      set({ queue: gpsClean.queue, ...computeCounts(gpsClean.queue) });
+      schedulePersist();
+      logInfo('sync', 'gps_dropped', { count: gpsClean.droppedIds.length, reason: 'process' });
+    }
+
+    const queued = get().queue;
+    const settled = failDependentsOfDeadParents(queued);
+    if (settled !== queued) {
+      set({ queue: settled, ...computeCounts(settled) });
+      schedulePersist();
+      for (const item of settled) {
+        const before = queued.find((prev) => prev.id === item.id);
+        if (item.status === 'dead' && before?.status !== 'dead') {
+          reportDeadSyncItem(item);
+        }
+      }
+    }
+    const queue = settled;
 
     const now = Date.now();
     const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
     const alignedQueue = alignEvidencePhotosBeforeClose(queueAfterRetryAgeCutoff, now);
-    if (alignedQueue !== queue) {
-      set({ queue: alignedQueue, ...computeCounts(alignedQueue) });
+    const releasedQueue = releaseClosesFromFailedPhotos(alignedQueue, now);
+    if (releasedQueue !== queue) {
+      set({ queue: releasedQueue, ...computeCounts(releasedQueue) });
       schedulePersist();
       if (queueAfterRetryAgeCutoff !== queue) {
         logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
@@ -763,19 +879,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     // Items eligible for processing:
     // - pending, OR
-    // - error under that type's retry ceiling, once backoff has elapsed.
-    // Photos keep a higher ceiling than the generic MAX so they can still
-    // retry after the close has been released.
-    const isReady = (item: SyncQueueItem): boolean => {
-      if (item.status === 'pending') return true;
-      if (item.status === 'error' && item.retries < retryCeilingForItem(item, MAX_RETRIES)) {
-        if (item.next_retry_at && now < item.next_retry_at) return false;
-        return true;
-      }
-      return false;
-    };
+    // - error once backoff has elapsed. Business ops stay eligible past the
+    //   old attempt ceiling so a 5xx window cannot strand them. GPS still
+    //   drops on its own ceiling before this filter.
+    const isReady = (item: SyncQueueItem): boolean => isEligibleNow(item, now, MAX_RETRIES);
 
-    const candidates = processingHolds.withoutHeld(alignedQueue).filter(isReady);
+    const candidates = processingHolds.withoutHeld(releasedQueue).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -1197,8 +1306,17 @@ async function processOneItemUnheld(
     return 'handled'; // completed o not_legacy: nada más que hacer
   }
 
-  if (!areSyncDependenciesSatisfied(item, get().queue)) {
-    logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
+  const fresh = get().queue.find((queued) => queued.id === item.id) ?? item;
+  if (fresh.status === 'dead' || fresh.status === 'done') return 'dependency_wait';
+  const blockedReason = dependencyBlockedByDeadParent(fresh, get().queue);
+  if (blockedReason) {
+    reportDeadSyncItem({ ...fresh, error_message: blockedReason });
+    get().markDead(fresh.id, blockedReason);
+    return 'failed';
+  }
+
+  if (!areSyncDependenciesSatisfied(fresh, get().queue)) {
+    logInfo('sync', 'dependency_wait', { id: fresh.id, type: fresh.type, dependsOn: fresh.dependsOn });
     return 'dependency_wait';
   }
 
@@ -1305,7 +1423,24 @@ async function processOneItemUnheld(
         retries: newRetries,
         error: msg,
       });
+    } else if (decideBusinessFailureDisposition({
+      type: item.type,
+      error,
+      retriesAfterAttempt: newRetries,
+      attemptLimit,
+      shouldRetry,
+    }) === 'retry') {
+      // 5xx, 408/429, timeout o red: el mismo operation_id se reintenta con
+      // backoff hasta 5 min. Nunca pasa a dead ni revierte stock local.
+      get().markError(item.id, msg);
+      logWarn('sync', 'item_transient_retry', {
+        id: item.id,
+        type: item.type,
+        retries: newRetries,
+        error: msg,
+      });
     } else if (!shouldRetry || newRetries >= attemptLimit) {
+      reportDeadSyncItem(item, error, shouldRetry ? 'dead' : 'rejected');
       get().markDead(item.id, msg, newRetries);
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {
@@ -1407,13 +1542,23 @@ function handleGpsItemError(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): void {
-  const newRetries = item.retries + 1;
-  if (newRetries >= MAX_RETRIES) {
-    get().markDead(item.id, message);
-    // GPS has no rollback — it's fire-and-forget telemetry
-  } else {
-    get().markError(item.id, message);
+  const attempt = { ...item, retries: item.retries + 1 };
+  if (shouldSilentlyDropGpsItem(attempt, Date.now())) {
+    const dropped = dropSilentGpsItems(
+      get().queue.map((queued) => (queued.id === item.id ? attempt : queued)),
+      Date.now(),
+    );
+    set({ queue: dropped.queue, ...computeCounts(dropped.queue) });
+    schedulePersist();
+    logInfo('sync', 'gps_dropped', {
+      id: item.id,
+      retries: attempt.retries,
+      reason: 'retry_or_stale',
+      message,
+    });
+    return;
   }
+  get().markError(item.id, message);
 }
 
 // ═══ DAG resolver (preserved from V1 BLD-010, unchanged logic) ═══
@@ -1466,6 +1611,45 @@ export function computeProcessingOrder(
 
 // ═══ Operation dispatcher (preserved from V1, extended for V2 types) ═══
 
+async function adoptSyncedStop(item: SyncQueueItem, response: unknown): Promise<void> {
+  const { readPositiveStopId } = await import('../services/stopIdRemap');
+  if (!readPositiveStopId(response)) return;
+  const ownStop = (item.payload as { stop_id?: unknown }).stop_id;
+  let requested = typeof ownStop === 'number' && ownStop < 0 ? ownStop : null;
+  if (requested === null) {
+    const dependent = useSyncStore.getState().queue.find((queued) => {
+      const stopId = (queued.payload as { stop_id?: unknown }).stop_id;
+      return queued.dependsOn?.includes(item.id) && typeof stopId === 'number' && stopId < 0;
+    });
+    const dependentStop = (dependent?.payload as { stop_id?: unknown } | undefined)?.stop_id;
+    if (typeof dependentStop === 'number' && dependentStop < 0) requested = dependentStop;
+  }
+  if (requested === null) {
+    const { useVisitStore } = await import('./useVisitStore');
+    const currentStopId = useVisitStore.getState().currentStopId;
+    if (typeof currentStopId === 'number' && currentStopId < 0) requested = currentStopId;
+  }
+  if (requested === null) return;
+  const { adoptServerStopFromResponse } = await import('../services/stopIdAdoption');
+  await adoptServerStopFromResponse(requested, response);
+}
+
+async function checkoutStatusForStop(stopId: number): Promise<'sale' | 'no_sale'> {
+  const result = await resolveSyncedSaleForStop({
+    stopId,
+    queue: useSyncStore.getState().queue,
+    orders: useSalesStore.getState().orders,
+    acceptedSales: useVisitStore.getState().acceptedSales,
+    isOnline: true,
+    fetchRemoteOrders: async () => {
+      const list = await fetchSalesList();
+      useSalesStore.getState().mergeRemoteOrders(list.orders);
+      return list.orders;
+    },
+  });
+  return resolveCheckoutResultStatus(result.hasSyncedSale);
+}
+
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
   const meta = item.meta ?? null;
@@ -1485,6 +1669,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         meta,
       );
       const promotion = await promoteStoredSaleTicketServerResult(item.id, saleResult);
+      await adoptSyncedStop(item, saleResult);
       if (promotion === 'missing') {
         logWarn('sync', 'sale_ticket_odoo_folio_missing', {
           operation_id: item.id,
@@ -1492,30 +1677,80 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }
       break;
 
-    case 'checkin':
+    case 'checkin': {
+      const { capturedGpsBatchBody, capturedInstantIso } = await import('../services/visitCapturePayload');
+      const capturedAt = capturedInstantIso(payload);
+      const gpsBody = capturedGpsBatchBody(payload);
+      if (gpsBody) {
+        try {
+          await postRest('/pwa-ruta/gps-batch', gpsBody);
+        } catch (gpsError) {
+          logWarn('sync', 'checkin_captured_gps_replay_failed', {
+            id: item.id,
+            message: gpsError instanceof Error ? gpsError.message : String(gpsError),
+          });
+        }
+      }
+      const checkinOperationId = typeof payload.operation_id === 'string' && payload.operation_id
+        ? payload.operation_id
+        : typeof payload._operationId === 'string' && payload._operationId
+          ? payload._operationId
+          : item.id;
       await checkIn(
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
         meta,
+        capturedAt,
+        checkinOperationId,
       );
       break;
+    }
 
-    case 'checkout':
-      await checkOut(
-        payload.stop_id as number,
-        payload.latitude as number,
-        payload.longitude as number,
-        payload.result_status as CheckoutResultStatus,
-        {
-          no_sale_reason_code: payload.no_sale_reason_code as string | undefined,
-          no_sale_notes: payload.no_sale_notes as string | undefined,
-          no_sale_competitor: payload.no_sale_competitor as string | undefined,
-        },
-        meta,
-        payload.operation_id as string | undefined,
-      );
+    case 'checkout': {
+      const operationId = payload.operation_id as string | undefined,
+        status = await checkoutStatusForStop(typeof payload.stop_id === 'number' ? payload.stop_id : 0);
+      const { capturedInstantIso } = await import('../services/visitCapturePayload');
+      const capturedAt = capturedInstantIso(payload);
+      const noSaleDetail = {
+        no_sale_reason_code: payload.no_sale_reason_code as string | undefined,
+        no_sale_notes: payload.no_sale_notes as string | undefined,
+        no_sale_competitor: payload.no_sale_competitor as string | undefined,
+      };
+      try {
+        await checkOut(
+          payload.stop_id as number,
+          payload.latitude as number,
+          payload.longitude as number,
+          status,
+          noSaleDetail,
+          meta,
+          operationId,
+          capturedAt,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const code = typeof (error as { code?: unknown }).code === 'string'
+          ? (error as { code: string }).code
+          : null;
+        if (isAlreadyClosedResponse(code, message)) break;
+        if (status === 'sale' && isMissingDeliveryLinesCheckoutError(message)) {
+          await checkOut(
+            payload.stop_id as number,
+            payload.latitude as number,
+            payload.longitude as number,
+            'no_sale',
+            noSaleDetail,
+            meta,
+            operationId,
+            capturedAt,
+          );
+          break;
+        }
+        throw error;
+      }
       break;
+    }
 
     case 'vehicle_check': {
       // Respuesta de checklist encolada offline. Idempotente por contrato:
@@ -1569,17 +1804,20 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       await createPayment(buildPaymentsCreatePayload(payload as Record<string, unknown>), meta);
       break;
 
-    case 'gift':
+    case 'gift': {
       // El payload encolado YA es el {meta, data} de buildGiftPayload; createGift
       // lo postea a /gf/salesops/gift/create. La idempotencia la da
       // meta.idempotency_key (estable por intento) — un retry no duplica.
-      await createGift(payload as Record<string, unknown>);
+      const giftResult = await createGift(payload as Record<string, unknown>);
+      await adoptSyncedStop(item, giftResult);
       break;
+    }
 
     case 'exchange': {
       // Flat capture fields are validated and scoped by createExchange. The queue
       // operation id is stable, so an ambiguous retry is an idempotent replay.
       const exchange = await createExchange(payload as Record<string, unknown>, meta);
+      await adoptSyncedStop(item, exchange);
       try {
         await recordExchangeServerIdentity(item.id, {
           exchangeName: exchange.data.exchange_name,
@@ -1630,6 +1868,9 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     }
 
     case 'photo': {
+      const { resolveStopId } = await import('../services/stopIdRemap');
+      const rawStopId = payload.stop_id;
+      const stopId = typeof rawStopId === 'number' ? resolveStopId(rawStopId) : rawStopId;
       let base64 = payload.image_base64 as string;
       if (payload.localUri && !base64) {
         const fromFile = await readPhotoAsBase64(payload.localUri as string);
@@ -1637,7 +1878,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         base64 = fromFile;
       }
       await uploadStopImage(
-        payload.stop_id as number,
+        stopId as number,
         base64,
         (payload.image_type as string) || 'visit',
         meta,
@@ -1646,6 +1887,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
           latitude: typeof payload.capture_latitude === 'number' ? payload.capture_latitude : null,
           longitude: typeof payload.capture_longitude === 'number' ? payload.capture_longitude : null,
           capturedAt: typeof payload.captured_at === 'string' ? payload.captured_at : null,
+          offrouteVisitId: typeof payload.offroute_visit_id === 'number' ? payload.offroute_visit_id : null,
         },
       );
       break;
@@ -1774,6 +2016,14 @@ function markConsignmentPhysicalDeliveryReviewRequired(id: string): void {
   );
   useSyncStore.setState({ queue, ...computeCounts(queue) });
   persistQueueInBackground('consignment_physical_delivery_review');
+}
+
+function discardCartForRejectedSale(item: Pick<SyncQueueItem, 'id' | 'type' | 'payload'>): void {
+  if (item.type !== 'sale_order') return;
+  const payload = item.payload && typeof item.payload === 'object'
+    ? item.payload as Record<string, unknown>
+    : undefined;
+  useVisitStore.getState().discardRejectedSaleCart(item.id, readStopId(payload));
 }
 
 function rollbackFailedOperation(item: SyncQueueItem): void {

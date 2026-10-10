@@ -119,6 +119,13 @@ class ThermalTicketLayout(private val textMeasurer: TextMeasurer) {
     builder.addLabelValue("Folio:", safeTicket.folio, LABEL_STYLE, BODY_STYLE)
     builder.addLabelValue("Fecha:", safeTicket.formattedDate, LABEL_STYLE, BODY_STYLE)
     builder.addLabelValue("Cliente:", safeTicket.customerName, LABEL_STYLE, BODY_STYLE)
+    builder.addLabelValue("Vendedor:", safeTicket.sellerName, LABEL_STYLE, BODY_STYLE)
+    safeTicket.unitLabel?.takeIf { it.isNotBlank() }?.let { unit ->
+      builder.addLabelValue("Unidad:", unit, LABEL_STYLE, BODY_STYLE)
+    }
+    safeTicket.stopLabel?.takeIf { it.isNotBlank() }?.let { stop ->
+      builder.addLabelValue("Parada:", stop, LABEL_STYLE, BODY_STYLE)
+    }
     builder.addDivider()
 
     var currentSectionLabel: String? = null

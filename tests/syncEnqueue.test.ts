@@ -154,6 +154,27 @@ function testCopiesDependsOnInsteadOfAliasingCallerArray(m: SyncEnqueueModule) {
   assert.deepEqual(result.queue[0].dependsOn, ['sale-1']);
 }
 
+function testInsertAfterDeadParentIsFailedImmediately(m: SyncEnqueueModule) {
+  const sale = makeItem({
+    id: 'sale-1',
+    type: 'sale_order',
+    status: 'dead',
+    error_message: 'rechazo Odoo',
+  });
+  const result = insert(m, {
+    queue: [sale],
+    type: 'photo',
+    payload: { localUri: 'file://photo' },
+    options: { dependsOn: ['sale-1'] },
+    generatedId: 'photo-late',
+  });
+  const photo = result.queue.find((item) => item.id === 'photo-late');
+  assert.equal(result.action, 'inserted');
+  assert.equal(photo?.status, 'dead');
+  assert.match(photo?.error_message ?? '', /venta falló/i);
+  assert.equal(result.queue.find((item) => item.id === 'sale-1')?.status, 'dead');
+}
+
 function testExistingExplicitGpsIsReusedBeforeCapEviction(m: SyncEnqueueModule) {
   const originalPayload = { latitude: 1, longitude: 2, _operationId: 'gps-1' };
   const queue = [makeItem({
@@ -195,6 +216,7 @@ async function main() {
   testRejectsExplicitIdCollisionAcrossTypes(module);
   testRejectsInvalidExplicitIdsWithoutUuidFallback(module);
   testCopiesDependsOnInsteadOfAliasingCallerArray(module);
+  testInsertAfterDeadParentIsFailedImmediately(module);
   testExistingExplicitGpsIsReusedBeforeCapEviction(module);
 
   console.log('sync enqueue tests: ok');

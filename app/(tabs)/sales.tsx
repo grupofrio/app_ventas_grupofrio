@@ -227,9 +227,11 @@ export default function SalesScreen() {
                         no se unifican en /sales/list (ver plan B2.2/B2.3/B2.6).
                         No se inventa un chip para datos que no existen aquí. */}
                     <View style={styles.typeChip}>
-                      <Text style={styles.typeChipText}>Venta</Text>
+                      <Text style={styles.typeChipText}>
+                        {entry.movementKind === 'gift' ? 'Regalo' : 'Venta'}
+                      </Text>
                     </View>
-                    {entry.paymentMethodLabel && (
+                    {entry.movementKind !== 'gift' && entry.paymentMethodLabel && (
                       <View style={styles.typeChip}>
                         <Text style={styles.typeChipText}>{entry.paymentMethodLabel}</Text>
                       </View>

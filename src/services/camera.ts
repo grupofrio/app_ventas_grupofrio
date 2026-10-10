@@ -10,6 +10,7 @@
  */
 
 import * as ImagePicker from 'expo-image-picker';
+import { CAMERA_OPEN_ERROR, decideCameraPermission, isCameraOpenError, withCameraTimeout } from './cameraAccess.ts';
 // expo-file-system types vary by version; use namespace import
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const ExpoFS = require('expo-file-system') as {
@@ -101,22 +102,24 @@ export interface CapturedPhoto {
  */
 export async function takePhoto(): Promise<CapturedPhoto | null> {
   try {
-    // Request permission
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      console.warn('[camera] Permission denied');
-      return null;
+    const current = await withCameraTimeout(ImagePicker.getCameraPermissionsAsync());
+    if (decideCameraPermission(current.status) === 'request') {
+      const requested = await withCameraTimeout(ImagePicker.requestCameraPermissionsAsync());
+      if (requested.status !== 'granted') {
+        console.warn('[camera] Permission denied');
+        return null;
+      }
     }
 
     // BLD-20260404-011: quality tightened to 0.4 for smaller payloads.
     // Proper max-dimension resize still requires expo-image-manipulator
     // (not currently in deps — would introduce native build risk).
-    const result = await ImagePicker.launchCameraAsync({
+    const result = await withCameraTimeout(ImagePicker.launchCameraAsync({
       mediaTypes: 'images',
       quality: PHOTO_QUALITY,
       allowsEditing: false,
       exif: false,
-    });
+    }));
 
     if (result.canceled || !result.assets || result.assets.length === 0) {
       return null;
@@ -158,6 +161,9 @@ export async function takePhoto(): Promise<CapturedPhoto | null> {
       timestamp,
     };
   } catch (error) {
+    if (isCameraOpenError(error)) {
+      throw error;
+    }
     console.error('[camera] Error:', error);
     return null;
   }

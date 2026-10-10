@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +17,11 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { CatalogProductPicker } from '../../src/components/domain/CatalogProductPicker';
 import { deletePhoto, takePhoto } from '../../src/services/camera';
-import { buildExchangeTicketSnapshot } from '../../src/services/exchangeTicket';
+import { buildExchangeTicketSnapshot, formatExchangeStopLabel, formatExchangeUnitLabel } from '../../src/services/exchangeTicket';
+import { mergeMermaCatalog, type DayBundleCatalogItem } from '../../src/services/mermaCatalog';
+import { CAMERA_OPEN_ERROR, isCameraOpenError } from '../../src/services/cameraAccess';
+import { adoptServerStopFromResponse } from '../../src/services/stopIdAdoption';
+import { readPositiveStopId } from '../../src/services/stopIdRemap';
 import { saveExchangeTicketSnapshot } from '../../src/services/exchangeTicketStorage';
 import { createExchange } from '../../src/services/gfLogistics';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
@@ -39,6 +43,7 @@ import {
 import { decideExchangeFailureAction } from '../../src/services/exchangeSubmit';
 import { isSessionExpiredError } from '../../src/services/sessionError';
 import { classifySalesOpsMutationError } from '../../src/services/salesOpsMutationOutcome';
+import { reportOperationFailure } from '../../src/services/operationFailureReport';
 import { describeExchangeRejection } from '../../src/services/exchangeRejectionMessage';
 import {
   availableReplacementQty,
@@ -105,7 +110,9 @@ function hasIncompleteLines(lines: DraftLine[]): boolean {
 export default function CambioProductoScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
-  const planId = useRouteStore((s) => s.plan?.plan_id ?? null);
+  const plan = useRouteStore((s) => s.plan);
+  const planId = plan?.plan_id ?? null;
+  const employeeName = useAuthStore((s) => s.employeeName);
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const products = useProductStore((s) => s.products);
@@ -133,6 +140,7 @@ export default function CambioProductoScreen() {
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const capturingPhotoRef = useRef(false);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const [dayCatalog, setDayCatalog] = useState<DayBundleCatalogItem[]>([]);
 
   // Read live state once on focus/reconnection. Loading/error renders must
   // never recreate this callback and start another request.
@@ -149,9 +157,43 @@ export default function CambioProductoScreen() {
     }, [warehouseId, isOnline, planId]),
   );
 
+  useEffect(() => {
+    let cancelled = false;
+    void import('../../src/services/employeeDayBundle').then(({ loadCurrentEmployeeDayBundle }) => (
+      loadCurrentEmployeeDayBundle()
+    )).then((loaded) => {
+      if (cancelled || !loaded) return;
+      const catalog = Array.isArray(loaded.record.bundle.catalog)
+        ? loaded.record.bundle.catalog as DayBundleCatalogItem[]
+        : [];
+      setDayCatalog(catalog);
+    }).catch(() => {
+      if (!cancelled) setDayCatalog([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const mermaProducts = useMemo(
+    () => mergeMermaCatalog(products, dayCatalog, (item) => ({
+      id: item.id,
+      name: item.name,
+      default_code: item.default_code,
+      list_price: 0,
+      qty_available: 0,
+      sale_ok: true,
+      product_tmpl_id: [item.id, item.name] as [number, string],
+      qty_reserved: 0,
+      qty_display: 0,
+      _totalKg: 0,
+      _isGlobalFallback: false as const,
+    })),
+    [products, dayCatalog],
+  );
   const productMap = useMemo(
-    () => new Map(products.map((product) => [product.id, product])),
-    [products],
+    () => new Map(mermaProducts.map((product) => [product.id, product])),
+    [mermaProducts],
   );
   const replacementCatalog = useMemo(
     () => selectExchangeReplacementCatalog(products, {
@@ -254,6 +296,11 @@ export default function CambioProductoScreen() {
         return;
       }
       setPhotoUris((previous) => [...previous, photo.localUri]);
+    } catch (error) {
+      Alert.alert(
+        'Cámara',
+        isCameraOpenError(error) ? error.message : CAMERA_OPEN_ERROR,
+      );
     } finally {
       capturingPhotoRef.current = false;
       setCapturingPhoto(false);
@@ -305,6 +352,10 @@ export default function CambioProductoScreen() {
       product_id: line.product_id,
       qty: line.qty,
     }));
+    const offrouteExchangeFields = currentStop.id > 0 ? {} : {
+      offroute_visit_id: currentStop._offrouteVisitId ?? null,
+      partner_id: partnerId,
+    };
     const exchangeCapturePayload: Record<string, unknown> = {
       idempotency_key: idempotencyKey,
       stop_id: currentStop.id,
@@ -312,6 +363,7 @@ export default function CambioProductoScreen() {
       merma_lines: mermaPayloadLines,
       notes,
       validate: true,
+      ...offrouteExchangeFields,
     };
 
     const queueExchangeWithLedger = async () => {
@@ -343,6 +395,7 @@ export default function CambioProductoScreen() {
           enqueue,
           imageType: 'exchange',
           dependsOn: [idempotencyKey],
+          offrouteVisitId: currentStop._offrouteVisitId ?? null,
         });
         await persistQueue();
       } catch (error) {
@@ -384,6 +437,18 @@ export default function CambioProductoScreen() {
         mermaLines: mermaSnapshotLines,
         notes,
         operationStatus: args.operationStatus,
+        sellerName: employeeName,
+        unitLabel: formatExchangeUnitLabel({
+          mobile_location_name: plan?.mobile_location_name,
+          route: plan?.route,
+          vehicle_name: typeof (plan as { vehicle_name?: unknown } | null)?.vehicle_name === 'string'
+            ? (plan as { vehicle_name?: string }).vehicle_name
+            : null,
+          unit_name: typeof (plan as { unit_name?: unknown } | null)?.unit_name === 'string'
+            ? (plan as { unit_name?: string }).unit_name
+            : null,
+        }),
+        stopLabel: formatExchangeStopLabel(currentStop),
       });
       try {
         await saveExchangeTicketSnapshot(snapshot);
@@ -437,6 +502,14 @@ export default function CambioProductoScreen() {
           isRetryable: outcome.kind !== 'definitive_rejection',
         });
         if (action === 'session_relogin') {
+          reportOperationFailure({
+            operation: 'exchange',
+            operationId: idempotencyKey,
+            stopId: currentStop.id,
+            planId: plan?.plan_id ?? null,
+            error,
+            outcome: 'failed',
+          });
           Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar el cambio.');
           return;
         }
@@ -456,12 +529,33 @@ export default function CambioProductoScreen() {
           });
           return;
         }
+        reportOperationFailure({
+          operation: 'exchange',
+          operationId: idempotencyKey,
+          stopId: currentStop.id,
+          planId: plan?.plan_id ?? null,
+          error,
+          outcome: 'rejected',
+        });
         Alert.alert('Cambio no registrado', describeExchangeRejection(error));
         return;
       }
 
       // Online success: evidence + ledger (post-hoc; server already committed).
-      await enqueueEvidence();
+      if (currentStop.id < 0 && readPositiveStopId(response)) {
+        const adoptedStopId = await adoptServerStopFromResponse(currentStop.id, response);
+        enqueueVisitPhotos({
+          stopId: adoptedStopId,
+          photoUris,
+          enqueue,
+          imageType: 'exchange',
+          dependsOn: [idempotencyKey],
+          offrouteVisitId: currentStop._offrouteVisitId ?? null,
+        });
+        await persistQueue();
+      } else {
+        await enqueueEvidence();
+      }
       try {
         await applyExchangeStockViaLedger({
           operationId: idempotencyKey,
@@ -539,7 +633,11 @@ export default function CambioProductoScreen() {
                         {product.default_code || 'Sin código'}
                         {section === 'delivery' && replacementCatalog.mode === 'van_stock'
                           ? ` · Disponible en van: ${formatStockQty(availableReplacementQty(product) ?? 0)}`
-                          : ` · ${product.qty_display} disp.`}
+                          : section === 'merma'
+                            ? ' · Se recibe del cliente'
+                            : product.qty_display <= 0
+                              ? ' · Agotado'
+                              : ` · ${product.qty_display} disp.`}
                       </Text>
                     ) : null}
                   </View>
@@ -617,7 +715,7 @@ export default function CambioProductoScreen() {
         {renderSection(
           'merma',
           'Producto Dañado (Merma)',
-          'Productos dañados que el chofer recoge del cliente.',
+          'Se recibe del cliente. No necesita existencia en la van.',
           mermaLines,
         )}
 
@@ -691,7 +789,8 @@ export default function CambioProductoScreen() {
       <CatalogProductPicker
         visible={pickerState != null}
         title={pickerState?.section === 'merma' ? 'Producto dañado' : 'Producto con stock en la van'}
-        products={pickerState?.section === 'merma' ? products : replacementCatalog.products}
+        products={pickerState?.section === 'merma' ? mermaProducts : replacementCatalog.products}
+        stockMode={pickerState?.section === 'merma' ? 'customer_return' : 'van'}
         emptyLabel={
           pickerState?.section !== 'merma' && replacementCatalog.mode === 'van_stock'
             ? 'No hay productos con stock en la van.'

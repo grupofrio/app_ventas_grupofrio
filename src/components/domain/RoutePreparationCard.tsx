@@ -133,6 +133,9 @@ export function RoutePreparationCard({
         ) : null}
         <Text style={styles.metric}>
           Clientes: {customersPrepared}/{customersTotal} · Precios precargados: {pricesPrepared}
+          {pricesPrepared === 0 && customersPrepared > 0
+            ? ' (el servidor no devolvió precios distintos a la lista)'
+            : ''}
         </Text>
         {hasFailures && (
           <>

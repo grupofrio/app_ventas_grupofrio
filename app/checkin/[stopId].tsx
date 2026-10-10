@@ -20,6 +20,7 @@ import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocati
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
+import { formatMexicoClock } from '../../src/utils/localDate';
 import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import {
   enqueueGpsPoint,
@@ -34,6 +35,7 @@ import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { openStopNavigation } from '../../src/services/stopNavigationAction';
 import { formatCustomerAddress } from '../../src/services/formatCustomerAddress';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { reportOperationFailure } from '../../src/services/operationFailureReport';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 
@@ -205,11 +207,13 @@ export default function CheckinScreen() {
       setGpsMode('in_visit');
       if (queueForSync) {
         const gpsQueueId = enqueueGpsPoint(position, 'checkin');
+        const capturedAt = new Date().toISOString();
         enqueue('checkin', {
           stop_id: stop.id,
           latitude: lat,
           longitude: lon,
-          timestamp: Date.now(),
+          timestamp: Date.parse(capturedAt),
+          client_checkin_at: capturedAt,
         }, gpsQueueId ? { dependsOn: [gpsQueueId] } : undefined);
       }
     };
@@ -221,7 +225,7 @@ export default function CheckinScreen() {
 
     try {
       await publishGpsPointNow(position);
-      await checkIn(stop.id, lat, lon);
+      await checkIn(stop.id, lat, lon, null, new Date().toISOString());
       startLocalVisit(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo realizar el check-in.';
@@ -251,9 +255,25 @@ export default function CheckinScreen() {
 
   function handleCloseSpecialVisit() {
     if (!stop || !stop._isOffroute) return;
+    const queue = useSyncStore.getState().queue;
+    const hasCommercialResult = useVisitStore.getState().saleConfirmed
+      || queue.some((item) => {
+        if (item.type !== 'sale_order' && item.type !== 'gift' && item.type !== 'exchange') return false;
+        const payload = item.payload as Record<string, unknown>;
+        if (payload.stop_id === stop.id) return true;
+        const data = payload.data && typeof payload.data === 'object'
+          ? payload.data as Record<string, unknown>
+          : null;
+        return data?.partner_id === (stop.partner_id ?? stop._partnerId ?? stop.customer_id);
+      });
+    const closeMessage = hasCommercialResult
+      ? 'Esta visita ya tiene una venta, un regalo o un cambio. Se cierra en el teléfono sin cancelarla en el servidor.'
+      : offrouteVisitId
+        ? 'Se cerrará esta visita especial y podrás abrir otra.'
+        : 'Esta visita especial solo está en este teléfono. Se quitará de tu ruta.';
     Alert.alert(
       'Cerrar visita especial',
-      'Esta visita especial solo existe localmente en la app. Se cerrará y ya podrás abrir otra visita.',
+      closeMessage,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -261,7 +281,7 @@ export default function CheckinScreen() {
           style: 'destructive',
           onPress: () => {
             void (async () => {
-              const closePayload = offrouteVisitId
+              const closePayload = offrouteVisitId && !hasCommercialResult
                 ? {
                     visit_id: offrouteVisitId,
                     result_status: 'cancelled' as const,
@@ -286,6 +306,13 @@ export default function CheckinScreen() {
                         timestamp: Date.now(),
                       });
                     } else {
+                      reportOperationFailure({
+                        operation: 'offroute',
+                        operationId: offrouteVisitId ? String(offrouteVisitId) : null,
+                        stopId: stop.id,
+                        error,
+                        outcome: 'rejected',
+                      });
                       Alert.alert(
                         'Cierre pendiente en servidor',
                         'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
@@ -505,7 +532,7 @@ export default function CheckinScreen() {
         {/* GPS confirmation bar */}
         <View style={styles.geoBar}>
           <Text style={[typography.dimSmall, styles.geoBarText]}>
-            📍 Check-in: {new Date(checkInTime || Date.now()).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+            📍 Check-in: {formatMexicoClock(checkInTime || Date.now())}
             {latitude ? ` · ${latitude.toFixed(4)}, ${longitude?.toFixed(4)}` : ''} ✓
           </Text>
         </View>

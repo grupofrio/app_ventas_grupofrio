@@ -14,6 +14,7 @@ import {
 // CROSS-STORE DEP: loads KOLD intelligence on route load. Documented in V1.3.1.
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
+import { rememberStopRemap } from '../services/stopIdRemap';
 import { useVisitStore } from './useVisitStore';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
@@ -33,6 +34,7 @@ import {
 import { logInfo, logWarn } from '../utils/logger';
 import { visitTelemetryCounters } from '../utils/visitTelemetry';
 import { createVirtualStop } from '../services/virtualStopFactory';
+import { mergePlanCorteValidated } from '../services/cortePlanState';
 import { useRouteStartStore } from './useRouteStartStore';
 import {
   buildRouteRefreshFailurePatch,
@@ -64,8 +66,10 @@ interface RouteState {
   // Actions
   loadPlan: (opts?: { force?: boolean }) => Promise<void>;
   markPlanStarted: (planId: number) => void;
+  noteCorteValidated: (planId: number) => void;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
   removeStop: (stopId: number) => void;
+  replaceStopId: (fromId: number, toId: number) => void;
   addVirtualStop: (
     customerId: number,
     customerName: string,
@@ -194,14 +198,15 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       }
 
       useRouteStartStore.getState().syncFromPlan(plan);
-      const nextToken = routePlanVersionToken(plan);
+      const hydratedPlan = mergePlanCorteValidated(cachedPlan, plan);
+      const nextToken = routePlanVersionToken(hydratedPlan);
       if (!shouldReloadRouteStops({
         cachedStopsCount: cachedStops.length,
         cachedToken,
         nextToken,
       })) {
         set({
-          plan,
+          plan: hydratedPlan,
           isLoading: false,
           error: null,
           loadOutcome: null,
@@ -209,7 +214,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
           routeFreshness: 'updated',
           planVersionToken: nextToken,
         });
-        storeSave(STORAGE_KEYS.PLAN, plan);
+        storeSave(STORAGE_KEYS.PLAN, hydratedPlan);
         return;
       }
 
@@ -293,7 +298,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
               : null;
 
       set({
-        plan,
+        plan: hydratedPlan,
         stops,
         isLoading: false,
         error: keepCachedStops
@@ -309,7 +314,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       });
 
       // F6: Persist for offline rehydration
-      storeSave(STORAGE_KEYS.PLAN, plan);
+      storeSave(STORAGE_KEYS.PLAN, hydratedPlan);
       storeSave(STORAGE_KEYS.STOPS, stops);
     } catch (error: unknown) {
       if (!flight.isCurrent()) return;
@@ -383,6 +388,43 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     storeSave(STORAGE_KEYS.STOPS, stops);
   },
 
+  replaceStopId: (fromId, toId) => {
+    if (!(fromId < 0) || !(toId > 0) || fromId === toId) return;
+    const current = get().stops;
+    const virtual = current.find((stop) => stop.id === fromId);
+    const next = !virtual
+      ? current
+      : current.some((stop) => stop.id === toId)
+        ? current
+            .filter((stop) => stop.id !== fromId)
+            .map((stop) => (
+              stop.id === toId
+                ? {
+                    ...stop,
+                    state: virtual.state === 'in_progress' ? virtual.state : stop.state,
+                    _isOffroute: virtual._isOffroute ?? stop._isOffroute,
+                    _offrouteVisitId: virtual._offrouteVisitId ?? stop._offrouteVisitId,
+                    _entityType: virtual._entityType ?? stop._entityType,
+                    _leadId: virtual._leadId ?? stop._leadId,
+                    _partnerId: virtual._partnerId ?? stop._partnerId,
+                  }
+                : stop
+            ))
+        : current.map((stop) => (stop.id === fromId ? { ...stop, id: toId } : stop));
+    const completed = next.filter((stop) => (
+      ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(stop.state)
+    )).length;
+    set({
+      stops: next,
+      stopsCompleted: completed,
+      stopsTotal: next.length,
+      progressPct: next.length > 0 ? Math.round((completed / next.length) * 100) : 0,
+    });
+    storeSave(STORAGE_KEYS.STOPS, next);
+    rememberStopRemap(fromId, toId);
+    useSyncStore.getState().remapQueuedStop(fromId, toId);
+  },
+
   removeStop: (stopId) => {
     const stops = removeStopById(get().stops, stopId);
     const completed = stops.filter((s) =>
@@ -413,6 +455,14 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     set({ plan: patched });
     storeSave(STORAGE_KEYS.PLAN, patched);
     useRouteStartStore.getState().syncFromPlan(patched);
+  },
+
+  noteCorteValidated: (planId) => {
+    const plan = get().plan;
+    if (!plan || plan.plan_id !== planId || plan.corte_validated === true) return;
+    const patched: GFPlan = { ...plan, corte_validated: true };
+    set({ plan: patched });
+    storeSave(STORAGE_KEYS.PLAN, patched);
   },
 
   reset: () => {

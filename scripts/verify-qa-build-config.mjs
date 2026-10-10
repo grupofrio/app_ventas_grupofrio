@@ -92,8 +92,8 @@ try {
   const createExpoConfig = require(path.join(repoRoot, 'app.config.js'));
   const resolved = createExpoConfig();
   assert.equal(resolved.android?.package, QA_APPLICATION_ID, 'QA must resolve the isolated Android package');
-  assert.equal(resolved.version, '1.4.4');
-  assert.equal(resolved.android?.versionCode, 10);
+  assert.equal(resolved.version, '1.4.5');
+  assert.equal(resolved.android?.versionCode, 11);
 
   // Prove Babel can inline the legacy computed environment access before Metro
   // bundles it. The previous build failed exactly at this boundary.

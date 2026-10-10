@@ -29,8 +29,20 @@ import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocati
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
-import { describeEvidencePhotoWarning } from '../../src/services/evidencePhotoSync';
+import { describeEvidencePhotoWarning, readStopId } from '../../src/services/evidencePhotoSync';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
+import { shouldOfferStuckVisitClose, stuckVisitSaleTotal } from '../../src/services/stuckVisitClose';
+import {
+  checkoutResultSaleTotal,
+  retryCheckoutAsNoSale,
+} from '../../src/services/checkoutSaleEvidence';
+import { readHasSyncedSale } from '../../src/services/checkoutSaleLookup';
+import { buildCheckoutPayload } from '../../src/services/checkoutResult';
+import { checkOut } from '../../src/services/gfLogistics';
+import { getCurrentPosition, setGpsMode } from '../../src/services/gps';
+import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { createUuidV4 } from '../../src/utils/clientEvent';
 import { getStopTypeLabel } from '../../src/services/routePresentation';
 import { describeGeoStatus } from '../../src/services/trustSignals';
 import { logInfo } from '../../src/utils/logger';
@@ -49,7 +61,10 @@ export default function StopDetailScreen() {
   const router = useRouter();
   const [giftSuccessMessage, setGiftSuccessMessage] = React.useState<string | null>(null);
   const stops = useRouteStore((s) => s.stops);
+  const updateStopState = useRouteStore((s) => s.updateStopState);
+  const removeStop = useRouteStore((s) => s.removeStop);
   const stop = stops.find((s) => s.id === Number(stopId));
+  const closingStuckVisit = React.useRef(false);
 
   // F7: Set geo-fence target for this customer
   const setTarget = useLocationStore((s) => s.setTarget);
@@ -108,6 +123,7 @@ export default function StopDetailScreen() {
   const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
   const phase = useVisitStore((s) => s.phase);
   const currentStopId = useVisitStore((s) => s.currentStopId);
+  const resetVisit = useVisitStore((s) => s.resetVisit);
   const currentStopExists = currentStopId == null
     ? true
     : stops.some((candidate) => candidate.id === currentStopId);
@@ -174,6 +190,122 @@ export default function StopDetailScreen() {
   }
 
   const photoWarning = describeEvidencePhotoWarning(syncQueue, stop.id);
+  const failedPhotoIds = syncQueue
+    .filter((item) => (
+      item.type === 'photo'
+      && item.status === 'dead'
+      && readStopId(item.payload) === stop.id
+    ))
+    .map((item) => item.id);
+  const offerStuckClose = shouldOfferStuckVisitClose({
+    stopState: stop.state,
+    hasAnotherActiveVisit: visitGuard.hasAnotherActiveVisit,
+    failedPhotoCount: failedPhotoIds.length,
+  });
+
+  async function handleCloseStuckVisit() {
+    if (!stop || closingStuckVisit.current) return;
+    closingStuckVisit.current = true;
+    try {
+      const hasSyncedSale = await readHasSyncedSale(stop.id);
+      const saleTotal = checkoutResultSaleTotal(
+        hasSyncedSale,
+        stuckVisitSaleTotal({
+          currentStopId,
+          stopId: stop.id,
+          visitSaleTotal: useVisitStore.getState().saleTotal(),
+          hasSyncedSale,
+        }),
+      );
+      const position = await getCurrentPosition();
+      const latitude = position?.latitude ?? useLocationStore.getState().latitude ?? 0;
+      const longitude = position?.longitude ?? useLocationStore.getState().longitude ?? 0;
+      const checkoutPayload = buildCheckoutPayload({
+        stopId: stop.id,
+        latitude,
+        longitude,
+        saleTotal,
+        noSaleReasonId: null,
+      });
+      const isCurrent = currentStopId === stop.id;
+      const finishLocal = () => {
+        if (shouldSkipStopCheckout(stop.id)) {
+          removeStop(stop.id);
+        } else {
+          updateStopState(stop.id, 'done');
+        }
+        if (isCurrent) {
+          resetVisit();
+          setGpsMode('in_transit');
+        }
+      };
+      if (shouldSkipStopCheckout(checkoutPayload.stop_id)) {
+        finishLocal();
+        return;
+      }
+      const capturedAt = new Date().toISOString();
+      const operationId = createUuidV4();
+      const isOnline = useSyncStore.getState().isOnline;
+      if (!isOnline) {
+        useSyncStore.getState().enqueue('checkout', {
+          ...checkoutPayload,
+          operation_id: operationId,
+          timestamp: Date.parse(capturedAt),
+          client_checkout_at: capturedAt,
+        }, { operationId });
+        finishLocal();
+        Alert.alert('Visita en cola', 'El cierre quedó pendiente de sincronización. La foto fallida no lo bloquea.');
+        return;
+      }
+      const sendCheckout = (status: 'sale' | 'no_sale') => checkOut(
+        checkoutPayload.stop_id,
+        checkoutPayload.latitude,
+        checkoutPayload.longitude,
+        status,
+        null,
+        null,
+        operationId,
+        capturedAt,
+      );
+      try {
+        await sendCheckout(checkoutPayload.result_status);
+        finishLocal();
+        Alert.alert('Visita cerrada', 'Puedes continuar con la otra visita.');
+      } catch (error) {
+        try {
+          const recovered = await retryCheckoutAsNoSale(
+            error,
+            checkoutPayload.result_status,
+            () => sendCheckout('no_sale'),
+          );
+          if (recovered) {
+            finishLocal();
+            Alert.alert('Visita cerrada', 'Puedes continuar con la otra visita.');
+            return;
+          }
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : 'No se pudo cerrar la visita.';
+          Alert.alert('Cierre rechazado', retryMessage);
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita.';
+        if (isRetryableSyncErrorMessage(message)) {
+          useSyncStore.getState().enqueue('checkout', {
+            ...checkoutPayload,
+            operation_id: operationId,
+            timestamp: Date.parse(capturedAt),
+            client_checkout_at: capturedAt,
+          }, { operationId });
+          finishLocal();
+          Alert.alert('Visita en cola', 'No se pudo confirmar ahora. El cierre quedó pendiente y no espera la foto.');
+          return;
+        }
+        Alert.alert('Cierre rechazado', message);
+      }
+    } finally {
+      closingStuckVisit.current = false;
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -193,7 +325,43 @@ export default function StopDetailScreen() {
           <AlertBanner
             variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
             icon="📸"
-            message={photoWarning.message}
+            message={photoWarning.tone === 'failed'
+              ? `${photoWarning.message} Puedes reintentarla, omitirla o cerrar la visita.`
+              : photoWarning.message}
+          />
+        ) : null}
+        {failedPhotoIds.length > 0 ? (
+          <View style={styles.actionRow}>
+            <Button
+              label="Reintentar foto"
+              variant="secondary"
+              onPress={() => {
+                for (const photoId of failedPhotoIds) {
+                  const reason = useSyncStore.getState().retryDeadPhoto(photoId);
+                  if (reason) {
+                    Alert.alert('Foto', reason);
+                    return;
+                  }
+                }
+              }}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Omitir foto"
+              variant="secondary"
+              onPress={() => {
+                useSyncStore.getState().removeDeadQueueItems(failedPhotoIds);
+              }}
+              style={{ flex: 1 }}
+            />
+          </View>
+        ) : null}
+        {offerStuckClose ? (
+          <Button
+            label="Cerrar esta visita"
+            variant="primary"
+            onPress={() => { void handleCloseStuckVisit(); }}
+            fullWidth
           />
         ) : null}
 
@@ -343,6 +511,9 @@ export default function StopDetailScreen() {
               />
             ) : null}
           </View>
+          {!visitGuard.canAccessVisitActions && visitGuard.visitActionBlockReason ? (
+            <Text style={styles.overrideHint}>{visitGuard.visitActionBlockReason}</Text>
+          ) : null}
           <View style={styles.actionRow}>
             <Button
               label="⭐ Lealtad"

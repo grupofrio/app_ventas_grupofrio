@@ -74,6 +74,7 @@ export interface GFSalesOrderLine {
   quantity: number;
   price_unit: number;
   price_subtotal: number;
+  discount?: number;
   kg_total: number;
 }
 
@@ -94,6 +95,9 @@ export interface GFSalesOrder {
   payment_method: string;
   payment_method_label: string;
   employee_name: string;
+  is_gift?: boolean;
+  client_order_ref?: string;
+  origin?: string;
   lines: GFSalesOrderLine[];
 }
 
@@ -178,6 +182,7 @@ export interface GFRouteCorteResult {
   code?: string;
   message: string;
   data?: Record<string, unknown> | null;
+  details?: unknown;
 }
 
 export interface GFRouteCorteAdjustmentLine {
@@ -190,6 +195,9 @@ export interface GFRouteCorteAdjustmentResult {
   ok: boolean;
   message: string;
   data?: Record<string, unknown> | null;
+  details?: unknown;
+  ignored_manual_qty?: number;
+  manual_qty_applied?: boolean;
 }
 
 export interface GFRouteLiquidationConfirmResult {
@@ -310,6 +318,9 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
         payment_method: typeof order.payment_method === 'string' ? order.payment_method : '',
         payment_method_label: typeof order.payment_method_label === 'string' ? order.payment_method_label : '',
         employee_name: typeof order.employee_name === 'string' ? order.employee_name : '',
+        ...(typeof order.is_gift === 'boolean' ? { is_gift: order.is_gift } : {}),
+        ...(typeof order.client_order_ref === 'string' ? { client_order_ref: order.client_order_ref } : {}),
+        ...(typeof order.origin === 'string' ? { origin: order.origin } : {}),
         lines: linesRaw.map((row) => {
           const line = row && typeof row === 'object' ? row as Record<string, unknown> : {};
           return {
@@ -318,6 +329,7 @@ function normalizeSalesList(result: unknown): GFSalesListResult {
             quantity: toNumber(line.quantity ?? line.qty),
             price_unit: toNumber(line.price_unit),
             price_subtotal: toNumber(line.price_subtotal ?? line.subtotal),
+            ...(typeof line.discount === 'number' ? { discount: line.discount } : {}),
             kg_total: toNumber(line.kg_total ?? line.weight_total),
           };
         }),
@@ -464,9 +476,14 @@ export async function checkIn(
   latitude: number,
   longitude: number,
   meta?: ClientEventMeta | null,
+  capturedAt?: string | null,
+  // Same stable id on every retry. Checkout already sends operation_id;
+  // check-in now does too so a 503 replay does not mint a second arrival.
+  operationId?: string | null,
 ): Promise<boolean> {
+  const { buildCheckinRequestBody } = await import('./visitCapturePayload');
   const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, latitude, longitude },
+    buildCheckinRequestBody({ stopId, latitude, longitude, capturedAt, operationId }),
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, payload);
@@ -491,9 +508,11 @@ export async function checkOut(
   // B1.3 del plan) — mandarlo ya deja el frontend listo para cuando lo haga,
   // sin más cambios de este lado.
   operationId?: string | null,
+  capturedAt?: string | null,
 ): Promise<boolean> {
+  const { withCheckoutCapturedAt } = await import('./visitCapturePayload');
   const payload = attachClientMetaToRestPayload(
-    {
+    withCheckoutCapturedAt({
       stop_id: stopId,
       latitude,
       longitude,
@@ -510,7 +529,7 @@ export async function checkOut(
         ? { no_sale_competitor: noSaleDetail.no_sale_competitor }
         : {}),
       ...(operationId ? { operation_id: operationId } : {}),
-    },
+    }, capturedAt),
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);
@@ -571,6 +590,7 @@ export async function uploadStopImage(
     latitude?: number | null;
     longitude?: number | null;
     capturedAt?: string | null;
+    offrouteVisitId?: number | null;
   },
 ): Promise<boolean> {
   // Photo uploads carry evidence_type and capture meta even when the global
@@ -584,6 +604,7 @@ export async function uploadStopImage(
     latitude: extras?.latitude,
     longitude: extras?.longitude,
     capturedAt: extras?.capturedAt,
+    offrouteVisitId: extras?.offrouteVisitId,
   });
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, payload);
   return !!result;
@@ -904,11 +925,15 @@ function resultFromUnknown(result: unknown): Record<string, unknown> {
 function errorResult(error: unknown): {
   code: string;
   message: string;
+  data: Record<string, unknown> | null;
+  details?: unknown;
 } {
-  const err = error as Error & { code?: string };
+  const err = error as Error & { code?: string; data?: unknown; details?: unknown };
   return {
     code: typeof err?.code === 'string' && err.code.length > 0 ? err.code : 'error',
     message: err instanceof Error ? err.message : 'Error desconocido',
+    data: err?.data && typeof err.data === 'object' ? err.data as Record<string, unknown> : null,
+    details: err?.details,
   };
 }
 
@@ -949,6 +974,7 @@ export async function validateRouteCorte(
       data: data.data && typeof data.data === 'object'
         ? data.data as Record<string, unknown>
         : null,
+      details: data.details,
     };
   } catch (error) {
     const err = errorResult(error);
@@ -957,7 +983,8 @@ export async function validateRouteCorte(
       success: false,
       code: err.code,
       message: err.message,
-      data: null,
+      data: err.data,
+      details: err.details,
     };
   }
 }
@@ -981,13 +1008,21 @@ export async function saveRouteCorteAdjustments(
       data: data.data && typeof data.data === 'object'
         ? data.data as Record<string, unknown>
         : null,
+      details: data.details,
+      ...(typeof data.ignored_manual_qty === 'number'
+        ? { ignored_manual_qty: data.ignored_manual_qty }
+        : {}),
+      ...(typeof data.manual_qty_applied === 'boolean'
+        ? { manual_qty_applied: data.manual_qty_applied }
+        : {}),
     };
   } catch (error) {
     const err = errorResult(error);
     return {
       ok: false,
       message: err.message,
-      data: null,
+      data: err.data,
+      details: err.details,
     };
   }
 }
@@ -1005,6 +1040,14 @@ export async function confirmRouteLiquidation(
      * (o por plan_id). Ver docs/KOLDFIELD_BACKEND_HARDENING_REQUESTS.md.
      */
     operation_id?: string;
+    /**
+     * F39: persisted llegada. The confirm handler auto-closes the plan, so
+     * the value has to travel with the confirm (and already be stored via
+     * km-update) or arrival_km stays 0.
+     */
+    arrival_km?: number;
+    /** Seller saw the pending / in-progress list and chose to continue. */
+    acknowledge_open_stops?: boolean;
   } = {},
 ): Promise<GFRouteLiquidationConfirmResult> {
   const body: Record<string, unknown> = {};
@@ -1022,6 +1065,12 @@ export async function confirmRouteLiquidation(
   }
   if (typeof payload.operation_id === 'string' && payload.operation_id) {
     body.operation_id = payload.operation_id;
+  }
+  if (typeof payload.arrival_km === 'number' && payload.arrival_km > 0) {
+    body.arrival_km = payload.arrival_km;
+  }
+  if (payload.acknowledge_open_stops === true) {
+    body.acknowledge_open_stops = true;
   }
 
   try {
@@ -1144,6 +1193,7 @@ export async function convertLeadData(
     operation_id: string;
     stop_id?: number | null;
     lead_id?: number | null;
+    offroute_visit_id?: number | null;
     phone?: string | null;
     street?: string | null;
     vat?: string | null;
@@ -1161,6 +1211,13 @@ export async function convertLeadData(
   }
   if (typeof payload.lead_id === 'number' && payload.lead_id > 0) {
     body.lead_id = payload.lead_id;
+  }
+  if (
+    body.stop_id == null
+    && typeof payload.offroute_visit_id === 'number'
+    && payload.offroute_visit_id > 0
+  ) {
+    body.offroute_visit_id = payload.offroute_visit_id;
   }
   if (typeof payload.phone === 'string' && payload.phone.trim()) body.phone = payload.phone.trim();
   if (typeof payload.street === 'string' && payload.street.trim()) body.street = payload.street.trim();

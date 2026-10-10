@@ -82,7 +82,7 @@ function main() {
   );
   assert.match(
     screen,
-    /validateRequiredChecklistDrafts\(checks, drafts\)[\s\S]{0,400}if \(!validation\.ok\) \{[\s\S]{0,250}return;/,
+    /validateRequiredChecklistDrafts\(checks, drafts\)[\s\S]{0,400}if \(!validation\.ok\) \{[\s\S]{0,900}return;/,
     'la validación local de requeridos corre ANTES de cualquier mutación de red',
   );
   assert.match(screen, /Guardar y completar checklist/, 'un solo CTA guarda y completa');

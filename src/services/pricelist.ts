@@ -24,6 +24,10 @@ import {
   peekCachedCustomerPrices,
   clearPricelistCaches as clearPartnerPricelistCaches,
 } from './pricelistCache';
+import {
+  readEmployeePriceAmount,
+  readEmployeePriceProductId,
+} from './employeePriceRow';
 
 export {
   DEFAULT_SALES_COMPANY_ID,
@@ -119,17 +123,21 @@ async function fetchServerSidePrices(
 
     const productById = new Map(products.map((product) => [product.id, product]));
     const priceMap = new Map<number, number>();
-    const addPrice = (productId: unknown, price: unknown): void => {
-      if (typeof productId !== 'number' || !Number.isFinite(productId) || productId <= 0) return;
-      if (typeof price !== 'number' || !Number.isFinite(price)) return;
+    let readableRows = 0;
+    const addPrice = (productId: number | null, price: number | null): void => {
+      if (productId == null || price == null) return;
+      readableRows += 1;
       const product = productById.get(productId);
       if (product && Math.abs(price - product.list_price) > 0.01) priceMap.set(productId, price);
     };
 
     rawPrices.forEach((row: unknown) => {
       const priceRow = row && typeof row === 'object' ? row as Record<string, unknown> : {};
-      addPrice(priceRow.product_id, priceRow.price_unit);
+      addPrice(readEmployeePriceProductId(priceRow.product_id), readEmployeePriceAmount(priceRow));
     });
+    if (rawPrices.length > 0 && readableRows === 0) {
+      throw new PricingUnavailableError();
+    }
     markServerPricingEndpointAvailable();
     return priceMap;
   } catch (error) {

@@ -10,6 +10,7 @@ import {
   buildCloseDependsOn,
   buildStopImageUploadPayload,
   deadPhotoRetryBlockReason,
+  releaseClosesFromFailedPhotos,
   describeEvidencePhotoWarning,
   evidenceTypeForImageType,
   isEvidencePhotoReleased,
@@ -212,6 +213,26 @@ test('spanish warnings distinguish pending, retrying, and dead evidence photos',
   assert.match(failed?.message ?? '', /Reintentar/);
   assert.equal(describeEvidencePhotoWarning([photo({ id: 'photo-1', status: 'done' })], 44), null);
   assert.equal(describeEvidencePhotoWarning([photo({ id: 'photo-1', status: 'dead' })], 7), null);
+});
+
+test('a dead evidence photo releases the visit close that was waiting on it', () => {
+  const evidence = photo({ id: 'photo-1', status: 'dead', retries: 12 });
+  const close = checkout({ id: 'checkout-1', dependsOn: ['photo-1'] });
+  const released = releaseClosesFromFailedPhotos([evidence, close], NOW);
+  const releasedClose = released.find((item) => item.id === 'checkout-1');
+  assert.equal(releasedClose?.dependsOn, undefined);
+  assert.equal(areSyncDependenciesSatisfied(releasedClose!, released, NOW), true);
+});
+
+test('stop image payload sends offroute_visit_id when the visit is known', () => {
+  const body = buildStopImageUploadPayload({
+    stopId: 220980,
+    imageBase64: 'abc',
+    imageType: 'sale',
+    offrouteVisitId: 2061,
+  });
+  assert.equal(body.stop_id, 220980);
+  assert.equal(body.offroute_visit_id, 2061);
 });
 
 test('rearming a dead photo clears the failure unless its parent operation is dead', () => {

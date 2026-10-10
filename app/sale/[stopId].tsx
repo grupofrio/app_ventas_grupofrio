@@ -26,9 +26,11 @@ import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundle
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { formatCatalogPrice, formatCurrency } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
+import { CAMERA_OPEN_ERROR, isCameraOpenError } from '../../src/services/cameraAccess';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import { OperationGate } from '../../src/components/OperationGate';
@@ -43,6 +45,7 @@ import {
 import { decideSalePricelist } from '../../src/services/salePricelistDecision';
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logError, logInfo } from '../../src/utils/logger';
+import { reportOperationFailure } from '../../src/services/operationFailureReport';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { startFocusedProductRefresh } from '../../src/utils/productLoading';
 import {
@@ -65,6 +68,7 @@ import {
 } from '../../src/services/saleTicket';
 import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
+import { adoptServerStopFromResponse } from '../../src/services/stopIdAdoption';
 import {
   classifySaleSubmissionError,
   readSaleSubmissionErrorMetadata,
@@ -257,11 +261,18 @@ function SaleScreenInner() {
   }
 
   async function handleAddSalePhoto() {
-    const photo = await takePhoto();
-    if (photo) {
-      useVisitStore.getState().setSalePhoto(photo.localUri);
-    } else {
-      Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
+    try {
+      const photo = await takePhoto();
+      if (photo) {
+        useVisitStore.getState().setSalePhoto(photo.localUri);
+      } else {
+        Alert.alert('Foto requerida', 'No se pudo capturar la foto. Intenta de nuevo.');
+      }
+    } catch (error) {
+      Alert.alert(
+        'Cámara',
+        isCameraOpenError(error) ? error.message : CAMERA_OPEN_ERROR,
+      );
     }
   }
 
@@ -498,6 +509,7 @@ function SaleScreenInner() {
           total: recoveryIntent.ticketSnapshot.total,
           stopId: recoveryIntent.stopId,
           photoUris: recoveryIntent.photoUris,
+          offrouteVisitId: saleOffrouteVisitId,
           enqueue,
           persistQueue,
           deferDurablePersist: true,
@@ -618,8 +630,21 @@ function SaleScreenInner() {
     }
 
     let confirmedTicketSnapshot: typeof recoveryIntent.ticketSnapshot;
+    let adoptedSaleResponse: Awaited<ReturnType<typeof createSale>> | null = null;
     try {
       const saleResult = await createSale(buildSalesCreatePayload(payload));
+      adoptedSaleResponse = saleResult;
+      const acceptedSale = {
+        stopId: stop.id,
+        orderId: saleResult.order_id,
+        partnerId: salePartnerId > 0 ? salePartnerId : null,
+        amount: useVisitStore.getState().saleTotal(),
+        operationId: saleResult.operation_id,
+        name: saleResult.name,
+        partnerName: stop.customer_name,
+      };
+      useVisitStore.getState().recordAcceptedSale(acceptedSale);
+      useSalesStore.getState().rememberAcceptedOrder(acceptedSale);
       confirmedTicketSnapshot = withSaleTicketServerPayment(
         withSaleTicketOdooFolio(recoveryIntent.ticketSnapshot, saleResult.name),
         {
@@ -649,6 +674,14 @@ function SaleScreenInner() {
       });
 
       if (outcome.kind === 'definitive_rejection') {
+        reportOperationFailure({
+          operation: 'sale',
+          operationId,
+          stopId: stop.id,
+          planId,
+          error,
+          outcome: 'rejected',
+        });
         try {
           const cleared = await clearSaleConfirmationLock(operationId);
           if (!cleared) {
@@ -767,11 +800,28 @@ function SaleScreenInner() {
     }
 
     try {
+      const evidenceStopId = stop.id < 0 && adoptedSaleResponse
+        ? await adoptServerStopFromResponse(stop.id, adoptedSaleResponse)
+        : stop.id;
+      if (evidenceStopId !== stop.id && evidenceStopId > 0 && adoptedSaleResponse) {
+        const adoptedSale = {
+          stopId: evidenceStopId,
+          orderId: adoptedSaleResponse.order_id,
+          partnerId: salePartnerId > 0 ? salePartnerId : null,
+          amount: useVisitStore.getState().saleTotal(),
+          operationId: adoptedSaleResponse.operation_id,
+          name: adoptedSaleResponse.name,
+          partnerName: stop.customer_name,
+        };
+        useVisitStore.getState().recordAcceptedSale(adoptedSale);
+        useSalesStore.getState().rememberAcceptedOrder(adoptedSale);
+      }
       enqueueVisitPhotos({
-        stopId: stop.id,
+        stopId: evidenceStopId,
         photoUris: salePhotoUris,
         enqueue,
         imageType: 'sale',
+        offrouteVisitId: saleOffrouteVisitId,
         capture: {
           latitude,
           longitude,

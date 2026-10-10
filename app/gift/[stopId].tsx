@@ -38,6 +38,19 @@ import { isSessionExpiredError } from '../../src/services/sessionError';
 import { decideGiftFailureAction } from '../../src/services/giftSubmit';
 import { createUuidV4 } from '../../src/utils/clientEvent';
 import { classifySalesOpsMutationError } from '../../src/services/salesOpsMutationOutcome';
+import { reportOperationFailure } from '../../src/services/operationFailureReport';
+import { buildSaleTicketSnapshot } from '../../src/services/saleTicket';
+import { saveSaleTicketSnapshot } from '../../src/services/saleTicketStorage';
+import {
+  DUPLICATE_GIFT_MESSAGE,
+  findDuplicateGift,
+  giftCandidateFromOrder,
+  giftCandidateFromQueueItem,
+  rememberConfirmedGift,
+  sessionGiftCandidates,
+} from '../../src/services/giftDuplicate';
+import { readPositiveStopId } from '../../src/services/stopIdRemap';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 
 interface EditableGiftLine extends GiftDraftLine {
   productName: string;
@@ -69,12 +82,13 @@ function getIssueMessage(issue: string): string {
 }
 
 export default function GiftScreen() {
-  const { stopId, from } = useLocalSearchParams<{ stopId: string; from?: string }>();
+  const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
   const planId = plan?.plan_id ?? null;
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const employeeName = useAuthStore((s) => s.employeeName);
   const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
   const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
   const products = useProductStore((s) => s.products);
@@ -217,6 +231,39 @@ export default function GiftScreen() {
       return;
     }
 
+    const existingGifts = [
+      ...sessionGiftCandidates(),
+      ...useSyncStore.getState().queue.flatMap((item) => {
+        const candidate = giftCandidateFromQueueItem(item);
+        return candidate ? [candidate] : [];
+      }),
+      ...useSalesStore.getState().orders.flatMap((order) => {
+        const candidate = giftCandidateFromOrder(order);
+        return candidate ? [candidate] : [];
+      }),
+    ];
+    const rememberThisGift = () => {
+      rememberConfirmedGift({
+        partnerId,
+        productIds: payloadLines.map((line) => line.productId),
+        createdAtMs: Date.now(),
+      });
+    };
+    if (findDuplicateGift({
+      partnerId,
+      productIds: payloadLines.map((line) => line.productId),
+      nowMs: Date.now(),
+      existing: existingGifts,
+    })) {
+      const proceed = await new Promise<boolean>((resolve) => {
+        Alert.alert('Regalo', DUPLICATE_GIFT_MESSAGE, [
+          { text: 'Revisar', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Registrar de todos modos', onPress: () => resolve(true) },
+        ]);
+      });
+      if (!proceed) return;
+    }
+
     // Payload construido UNA vez con operation_id estable: el intento online y
     // el encolado offline usan el MISMO idempotency_key → el backend deduplica.
     const payload = buildGiftPayload({
@@ -229,12 +276,39 @@ export default function GiftScreen() {
       notes,
     });
 
-    const navigateAfter = (message: string) => {
-      operationIdRef.current = null; // siguiente regalo = nuevo id
-      const target = from === 'checkin'
-        ? `/checkin/${stop.id}?giftSuccess=${encodeURIComponent(message)}`
-        : `/stop/${stop.id}?giftSuccess=${encodeURIComponent(message)}`;
-      router.replace(target as never);
+    const navigateAfter = async () => {
+      operationIdRef.current = null;
+      const snapshot = buildSaleTicketSnapshot({
+        saleId: String(payload.meta.idempotency_key),
+        customerName: stop.customer_name,
+        sellerName: employeeName,
+        paymentMethod: 'unknown',
+        createdAt: new Date().toISOString(),
+        isGift: true,
+        lines: payloadLines.map((line) => {
+          const product = products.find((item) => item.id === line.productId);
+          return {
+            productId: line.productId,
+            productName: product?.name || `Producto ${line.productId}`,
+            qty: line.qty,
+            price: 0,
+            weight: product?.weight ?? 0,
+          };
+        }),
+      });
+      try {
+        await saveSaleTicketSnapshot(snapshot);
+        router.replace({
+          pathname: '/print/[orderId]',
+          params: { orderId: snapshot.saleId },
+        } as never);
+      } catch {
+        Alert.alert(
+          'Ticket no preparado',
+          'El regalo quedó registrado, pero no se pudo preparar el ticket.',
+        );
+        router.replace(`/stop/${stop.id}` as never);
+      }
     };
 
     // F3.2: el regalo también sale de la camioneta local (antes S1 solo lo
@@ -264,6 +338,7 @@ export default function GiftScreen() {
           _localStockDelta: localStockDelta,
           _ledgerApplied: true,
           _operationId: giftOperationId,
+          _clientCustomerName: stop.customer_name,
         } as unknown as Record<string, unknown>, {
           operationId: giftOperationId,
           skipPersist: true,
@@ -289,12 +364,18 @@ export default function GiftScreen() {
       // Sin red: encolar directo (no perder la captura en ruta).
       if (!isOnline) {
         await queueGiftWithLedger();
-        navigateAfter('Regalo guardado para sincronizar');
+        rememberThisGift();
+        await navigateAfter();
         return;
       }
       const result = await createGift(payload);
+      rememberThisGift();
+      const serverStopId = readPositiveStopId(result);
+      if (stop.id < 0 && serverStopId) {
+        useRouteStore.getState().replaceStopId(stop.id, serverStopId);
+      }
       await deductLocalStockOptimistically();
-      navigateAfter(result.userMessage);
+      await navigateAfter();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo registrar el regalo.';
       const outcome = classifySalesOpsMutationError(error);
@@ -303,16 +384,33 @@ export default function GiftScreen() {
         isRetryable: outcome.kind !== 'definitive_rejection',
       });
       if (action === 'session_relogin') {
+        reportOperationFailure({
+          operation: 'gift',
+          operationId: getGiftOperationId(),
+          stopId: stop.id,
+          planId,
+          error,
+          outcome: 'failed',
+        });
         // No encolar: sin sesión válida no es seguro. Pedir re-login.
         Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión para registrar el regalo.');
         return;
       }
       if (action === 'enqueue') {
         await queueGiftWithLedger();
+        rememberThisGift();
         Alert.alert('Sincronización pendiente', 'El regalo quedó guardado y se sincronizará al reconectar.');
-        navigateAfter('Regalo guardado para sincronizar');
+        await navigateAfter();
         return;
       }
+      reportOperationFailure({
+        operation: 'gift',
+        operationId: getGiftOperationId(),
+        stopId: stop.id,
+        planId,
+        error,
+        outcome: 'rejected',
+      });
       // 'show_error' → rechazo de validación/backend: NO encolar a ciegas.
       Alert.alert('Regalo rechazado', message);
     } finally {

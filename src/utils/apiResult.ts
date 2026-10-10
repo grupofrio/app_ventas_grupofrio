@@ -34,6 +34,9 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
     attachRejectionDetail(err, 'user_message', userMessage);
     attachRejectionDetail(err, 'reason', result.reason);
     attachRejectionDetail(err, 'detail_code', result.detail_code);
+    if (result.details !== undefined) {
+      (err as Error & { details?: unknown }).details = result.details;
+    }
     // Algunas rutas type=json devuelven HTTP 200 con un estado de negocio
     // determinista dentro del sobre. Preservarlo permite que postRest exponga
     // conflictos idempotentes sin confundirlos con un éxito de transporte.

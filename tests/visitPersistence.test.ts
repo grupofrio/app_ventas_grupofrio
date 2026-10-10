@@ -105,6 +105,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
     saleReadyToContinue: false,
     saleRecoveryPersistenceFailed: false,
     saleRecoveryIntent: null,
+    acceptedSales: [],
   });
 }
 

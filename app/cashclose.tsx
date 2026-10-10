@@ -40,14 +40,18 @@
  *   - NO usar campos hardcoded de /sales/summary como fallback (sería falso).
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
-import { useSyncStore } from '../src/stores/useSyncStore';
+import { isUserVisibleSyncItem, useSyncStore } from '../src/stores/useSyncStore';
+import { isCorteValidatedFlag } from '../src/services/cortePlanState';
+import { formatCorteFailureMessage } from '../src/services/corteFeedback';
+import { reportOperationFailure } from '../src/services/operationFailureReport';
+import { formatSyncedOperations } from '../src/services/syncProgressLabel';
 import { useSalesStore } from '../src/stores/useSalesStore';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import {
@@ -57,9 +61,16 @@ import {
   getLiquidationExpectedCashTotal,
   GFRouteReconciliation,
   GFLiquidationSummary,
-  saveRouteCorteAdjustments,
   validateRouteCorte,
 } from '../src/services/gfLogistics';
+import { updateKm } from '../src/services/routeKm';
+import { checkoutInProgressStops } from '../src/services/closeInProgressStops';
+import {
+  describeOpenStopsConfirmation,
+  partitionOpenStops,
+  validateArrivalKm,
+} from '../src/services/routeClosePreconditions';
+import { isAbsurdKmDriven, isAbsurdOdometer } from '../src/services/routeStartLogic';
 import { formatCurrency } from '../src/utils/time';
 import {
   canConfirmLiquidation,
@@ -79,11 +90,6 @@ interface SummaryLine {
   highlight?: boolean;
   pending?: boolean;     // estilo "Pendiente backend"
   unavailable?: boolean; // estilo "No disponible"
-}
-
-interface CorteAdjustmentInput {
-  returnQty: string;
-  scrapQty: string;
 }
 
 /**
@@ -122,12 +128,13 @@ function colorForDiff(diff: number): string {
 }
 
 export default function CashCloseScreen() {
+  const router = useRouter();
   const [cashInHand, setCashInHand] = useState('');
   const [notes, setNotes] = useState('');
 
   // Sync queue
   const pendingCount = useSyncStore((s) => s.pendingCount);
-  const totalItems = useSyncStore((s) => s.queue.length);
+  const totalItems = useSyncStore((s) => s.queue.filter((item) => isUserVisibleSyncItem(item)).length);
   const isOnline = useSyncStore((s) => s.isOnline);
   const isSyncing = useSyncStore((s) => s.isSyncing);
   const processQueue = useSyncStore((s) => s.processQueue);
@@ -161,8 +168,13 @@ export default function CashCloseScreen() {
 
   // Plan del día (para resolver plan_id en liquidation)
   const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
   const loadPlan = useRouteStore((s) => s.loadPlan);
   const planId = plan?.plan_id ?? null;
+  const departureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
+  const [arrivalKmInput, setArrivalKmInput] = useState('');
+  const arrivalKmInputRef = useRef('');
+  arrivalKmInputRef.current = arrivalKmInput;
 
   // Liquidation summary (account.payment vía /pwa-ruta/liquidation)
   const [liquidation, setLiquidation] = useState<GFLiquidationSummary | null>(null);
@@ -173,10 +185,10 @@ export default function CashCloseScreen() {
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
   const [corteBusy, setCorteBusy] = useState(false);
   const [liquidationBusy, setLiquidationBusy] = useState(false);
-  const [corteConfirmed, setCorteConfirmed] = useState(false);
+  const [corteConfirmed, setCorteConfirmed] = useState(() => (
+    isCorteValidatedFlag(useRouteStore.getState().plan?.corte_validated)
+  ));
   const [liquidationConfirmedAt, setLiquidationConfirmedAt] = useState<string | null>(null);
-  const [corteAdjustments, setCorteAdjustments] = useState<Record<number, CorteAdjustmentInput>>({});
-  const [adjustmentsBusy, setAdjustmentsBusy] = useState(false);
 
   const loadLiquidation = useCallback(async () => {
     setLiquidationLoading(true);
@@ -221,25 +233,14 @@ export default function CashCloseScreen() {
       void loadLiquidation();
       void loadReconciliation();
       void loadInvoiceCollectionSummary();
-      setCorteConfirmed(Boolean(plan?.corte_validated));
+      void loadPlan({ force: true });
+      setCorteConfirmed(isCorteValidatedFlag(plan?.corte_validated));
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
-    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at]),
+      if (!arrivalKmInputRef.current && typeof plan?.arrival_km === 'number' && plan.arrival_km > 0) {
+        setArrivalKmInput(String(Math.round(plan.arrival_km)));
+      }
+    }, [loadPlan, loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at, plan?.arrival_km]),
   );
-
-  useEffect(() => {
-    if (!reconciliation) return;
-    setCorteAdjustments((current) => {
-      const next = { ...current };
-      reconciliation.lines.forEach((line) => {
-        if (!line.product_id || next[line.product_id]) return;
-        next[line.product_id] = {
-          returnQty: line.qty_returned > 0 ? String(line.qty_returned) : '',
-          scrapQty: line.qty_scrap > 0 ? String(line.qty_scrap) : '',
-        };
-      });
-      return next;
-    });
-  }, [reconciliation]);
 
   // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
   // corte. La app SIEMPRE intenta auto-procesar la cola al reconectar
@@ -350,7 +351,7 @@ export default function CashCloseScreen() {
   // Sección 3: Operativo (sync queue + devoluciones pendientes backend)
   const opsLines: SummaryLine[] = [
     { label: 'Devoluciones', value: 'Pendiente backend', pending: true },
-    { label: 'Ops. sincronizadas', value: `${totalItems - pendingCount}/${totalItems}` },
+    { label: 'Ops. sincronizadas', value: formatSyncedOperations({ totalItems, pendingCount, deadCount }) },
     {
       label: 'Cobros por factura',
       value: invoiceCollectionSummary === null
@@ -380,7 +381,7 @@ export default function CashCloseScreen() {
       ? colors.textDim
       : colorForDiff(physicalDiff);
 
-  const corteAlreadyConfirmed = corteConfirmed || Boolean(plan?.corte_validated);
+  const corteAlreadyConfirmed = corteConfirmed || isCorteValidatedFlag(plan?.corte_validated);
   const liquidationAlreadyConfirmed = Boolean(liquidationConfirmedAt || plan?.liquidacion_done_at);
   const invoiceCollectionBlockingCount = invoiceCollectionSummary?.blockingCount ?? 0;
   const invoiceCollectionSummaryReady = invoiceCollectionSummary !== null;
@@ -412,63 +413,6 @@ export default function CashCloseScreen() {
     invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
     invoiceCollectionSummaryReady,
   });
-  const canSaveCorteAdjustments = !adjustmentsBusy
-    && !corteAlreadyConfirmed
-    && pendingCount === 0
-    && !isSyncing
-    && !syncBusy
-    && !!reconciliation
-    && !reconciliationLoading
-    && invoiceCollectionSummaryReady
-    && invoiceCollectionBlockingCount === 0;
-
-  const setCorteAdjustmentValue = useCallback((
-    productId: number,
-    field: keyof CorteAdjustmentInput,
-    value: string,
-  ) => {
-    setCorteAdjustments((current) => ({
-      ...current,
-      [productId]: {
-        returnQty: current[productId]?.returnQty ?? '',
-        scrapQty: current[productId]?.scrapQty ?? '',
-        [field]: value,
-      },
-    }));
-  }, []);
-
-  const handleSaveCorteAdjustments = useCallback(async () => {
-    if (!canSaveCorteAdjustments || !reconciliation) return;
-    setAdjustmentsBusy(true);
-    try {
-      const lines = reconciliation.lines
-        .filter((line) => line.product_id > 0)
-        .map((line) => {
-          const input = corteAdjustments[line.product_id] ?? { returnQty: '', scrapQty: '' };
-          return {
-            product_id: line.product_id,
-            return_qty: parseCashInput(input.returnQty),
-            scrap_qty: parseCashInput(input.scrapQty),
-          };
-        });
-      const result = await saveRouteCorteAdjustments({
-        ...(planId ? { plan_id: planId } : {}),
-        lines,
-      });
-      await loadReconciliation();
-      if (result.ok) {
-        Alert.alert('Ajustes guardados', result.message || 'Devolucion y merma guardadas.');
-        return;
-      }
-      Alert.alert('No se guardaron ajustes', result.message || 'Backend rechazo los ajustes.');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
-      Alert.alert('Error al guardar corte', message);
-    } finally {
-      setAdjustmentsBusy(false);
-    }
-  }, [canSaveCorteAdjustments, corteAdjustments, loadReconciliation, planId, reconciliation]);
-
   const handleValidateCorte = useCallback(async () => {
     if (!canValidateCorte) return;
     setCorteBusy(true);
@@ -479,14 +423,28 @@ export default function CashCloseScreen() {
       });
       await loadReconciliation();
       if (result.ok && result.success) {
+        if (planId) useRouteStore.getState().noteCorteValidated(planId);
         setCorteConfirmed(true);
-        await loadPlan();
+        await loadPlan({ force: true });
         Alert.alert('Corte validado', result.message || 'El corte quedo confirmado.');
         return;
       }
-      Alert.alert('El corte no cuadra', result.message || 'Revisa las diferencias por producto.');
+      reportOperationFailure({
+        operation: 'corte',
+        planId,
+        error: result,
+        outcome: 'rejected',
+      });
+      Alert.alert(
+        'El corte no cuadra',
+        formatCorteFailureMessage(result, 'Revisa las diferencias por producto.'),
+      );
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
+      const message = formatCorteFailureMessage(
+        err instanceof Error ? err : { message: 'Error desconocido' },
+        'Error desconocido',
+      );
+      reportOperationFailure({ operation: 'corte', planId, error: err, outcome: 'failed' });
       Alert.alert('Error al validar corte', message);
     } finally {
       setCorteBusy(false);
@@ -497,6 +455,7 @@ export default function CashCloseScreen() {
   // una sola vez (mismo id para el reintento "force") para que el backend pueda
   // deduplicar un doble-tap/retry y no confirme dos veces.
   const liquidationOpIdRef = useRef<string | null>(null);
+  const liquidationCloseRef = useRef<{ arrivalKm: number; acknowledgeOpenStops: boolean } | null>(null);
   function getLiquidationOperationId(): string {
     if (!liquidationOpIdRef.current) {
       liquidationOpIdRef.current = createUuidV4();
@@ -507,12 +466,41 @@ export default function CashCloseScreen() {
   const submitLiquidation = useCallback(async (force: boolean) => {
     setLiquidationBusy(true);
     try {
+      const closePrep = liquidationCloseRef.current;
+      if (!planId || !closePrep) {
+        Alert.alert('Falta KM de llegada', 'Captura el KM de llegada antes de liquidar.');
+        return;
+      }
+      // F39: liquidacion/confirm auto-closes the plan. Check out in-progress
+      // stops and persist llegada before that POST, or the plan closes with
+      // arrival_km 0 and visits still open.
+      const openNow = partitionOpenStops(useRouteStore.getState().stops);
+      if (openNow.inProgress.length > 0) {
+        const closedVisits = await checkoutInProgressStops(openNow.inProgress);
+        if (!closedVisits.ok) {
+          const failure = closedVisits.failure;
+          Alert.alert(
+            'No se cerró la visita',
+            failure
+              ? `${failure.customerName}: ${failure.message}`
+              : 'Hay una visita en curso que no se pudo cerrar.',
+          );
+          return;
+        }
+      }
+      const storedArrival = useRouteStore.getState().plan?.arrival_km;
+      if (storedArrival !== closePrep.arrivalKm) {
+        await updateKm(planId, 'arrival', closePrep.arrivalKm);
+        await loadPlan({ force: true });
+      }
       const result = await confirmRouteLiquidation({
         ...(planId ? { plan_id: planId } : {}),
         cash_collected: cashCaptured,
         notes,
         force,
         operation_id: getLiquidationOperationId(),
+        ...(closePrep ? { arrival_km: closePrep.arrivalKm } : {}),
+        ...(closePrep?.acknowledgeOpenStops ? { acknowledge_open_stops: true } : {}),
       });
       if (result.ok) {
         const confirmedAt = result.data?.liquidacion_done_at ?? new Date().toISOString();
@@ -520,11 +508,12 @@ export default function CashCloseScreen() {
         await loadLiquidation();
         await loadPlan();
         const routeWarning = result.data?.route_close_warning;
+        const llegada = closePrep.arrivalKm.toLocaleString('es-MX');
         Alert.alert(
           'Liquidacion confirmada',
           routeWarning
-            ? `El efectivo quedo confirmado. Cierre de ruta pendiente: ${routeWarning}`
-            : 'El efectivo quedo confirmado en Odoo.',
+            ? `El efectivo quedo confirmado. KM llegada: ${llegada}. Cierre de ruta pendiente: ${routeWarning}`
+            : `El efectivo quedo confirmado en Odoo. KM llegada: ${llegada}.`,
         );
         return;
       }
@@ -549,9 +538,23 @@ export default function CashCloseScreen() {
         );
         return;
       }
+      reportOperationFailure({
+        operation: 'corte',
+        operationId: getLiquidationOperationId(),
+        planId,
+        error: result,
+        outcome: 'rejected',
+      });
       Alert.alert('No se pudo liquidar', result.message || 'Backend rechazo la liquidacion.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
+      reportOperationFailure({
+        operation: 'corte',
+        operationId: getLiquidationOperationId(),
+        planId,
+        error: err,
+        outcome: 'failed',
+      });
       Alert.alert('Error al liquidar', message);
     } finally {
       setLiquidationBusy(false);
@@ -569,8 +572,56 @@ export default function CashCloseScreen() {
       Alert.alert('Efectivo invalido', 'El efectivo capturado no puede ser negativo.');
       return;
     }
-    await submitLiquidation(false);
-  }, [canConfirmFinalLiquidation, hasInput, cashCaptured, submitLiquidation]);
+    const km = validateArrivalKm({ arrival: arrivalKmInput, departure: departureKm });
+    if (!km.ok) {
+      Alert.alert('KM llegada', km.message);
+      return;
+    }
+    const open = partitionOpenStops(stops);
+    const warning = describeOpenStopsConfirmation(open);
+    const start = (acknowledgeOpenStops: boolean) => {
+      liquidationCloseRef.current = { arrivalKm: km.arrival, acknowledgeOpenStops };
+      void submitLiquidation(false);
+    };
+    const askAbsurdThenStart = (acknowledgeOpenStops: boolean) => {
+      const driven = departureKm != null && departureKm > 0 ? km.arrival - departureKm : null;
+      if (!isAbsurdKmDriven(driven) && !isAbsurdOdometer(km.arrival)) {
+        start(acknowledgeOpenStops);
+        return;
+      }
+      const detail = isAbsurdKmDriven(driven)
+        ? `El recorrido del día sería ${driven!.toLocaleString('es-MX')} km`
+        : `${km.arrival.toLocaleString('es-MX')} km de odómetro`;
+      Alert.alert(
+        'KM inusualmente alto',
+        `${detail}, parece un error de captura. ¿Es correcto?`,
+        [
+          { text: 'Corregir', style: 'cancel' },
+          { text: 'Sí, es correcto', onPress: () => start(acknowledgeOpenStops) },
+        ],
+      );
+    };
+    if (warning.requiresAcknowledgement) {
+      Alert.alert(warning.title, warning.message, [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: warning.requiresCheckout ? 'Cerrar visitas y liquidar' : 'Liquidar de todos modos',
+          style: 'destructive',
+          onPress: () => askAbsurdThenStart(true),
+        },
+      ]);
+      return;
+    }
+    askAbsurdThenStart(false);
+  }, [
+    arrivalKmInput,
+    canConfirmFinalLiquidation,
+    cashCaptured,
+    departureKm,
+    hasInput,
+    stops,
+    submitLiquidation,
+  ]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -605,6 +656,7 @@ export default function CashCloseScreen() {
             <Text style={styles.syncMetric}>
               Pendientes: {pendingCount}
               {errorCount > 0 ? `  ·  Con error: ${errorCount}` : ''}
+              {deadCount > 0 ? `  ·  Fallidos: ${deadCount}` : ''}
               {invoiceCollectionSummaryReady
                 ? `  ·  Cobranza pendiente/revisión: ${invoiceCollectionBlockingCount}`
                 : '  ·  Cobranza: verificando'}
@@ -628,6 +680,17 @@ export default function CashCloseScreen() {
                 <Text style={styles.syncBtnText}>Sincronizar pendientes</Text>
               )}
             </TouchableOpacity>
+            {deadCount > 0 && (
+              <TouchableOpacity
+                style={styles.syncDeadLink}
+                onPress={() => router.push('/sync' as never)}
+                accessibilityRole="button"
+                accessibilityLabel="Cola de Sincronizacion. Limpiar Historial de Errores"
+              >
+                <Text style={styles.syncDeadLinkText}>Cola de Sincronizacion</Text>
+                <Text style={styles.syncDeadLinkHint}>Limpiar Historial de Errores</Text>
+              </TouchableOpacity>
+            )}
             {!isOnline && (
               <Text style={styles.syncHint}>
                 Sin conexión: conéctate al WiFi del CEDIS para sincronizar.
@@ -711,34 +774,6 @@ export default function CashCloseScreen() {
                     <Text style={styles.productMeta}>
                       Cargado {line.qty_loaded.toFixed(1)} · Entregado {line.qty_delivered.toFixed(1)} · Devuelto {line.qty_returned.toFixed(1)} · Merma {line.qty_scrap.toFixed(1)}
                     </Text>
-                    <View style={styles.adjustmentGrid}>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Regresa a stock</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.returnQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'returnQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Regresa a stock ${line.product_name}`}
-                        />
-                      </View>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Merma</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.scrapQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'scrapQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Merma ${line.product_name}`}
-                        />
-                      </View>
-                    </View>
                     <Text style={[styles.productDiff, { color: colorForDiff(line.qty_difference) }]}>
                       Dif. {line.qty_difference.toFixed(1)}
                     </Text>
@@ -746,28 +781,15 @@ export default function CashCloseScreen() {
                 ))
               )}
 
+              <Text style={styles.statusText}>
+                Devolución y merma las calcula el corte. No se capturan a mano.
+              </Text>
               {corteAlreadyConfirmed ? (
                 <View style={styles.confirmedBadge}>
                   <Text style={styles.confirmedBadgeText}>Corte confirmado en Odoo</Text>
                 </View>
               ) : (
                 <>
-                  <TouchableOpacity
-                    style={[
-                      styles.secondaryAction,
-                      !canSaveCorteAdjustments && styles.actionDisabled,
-                    ]}
-                    onPress={handleSaveCorteAdjustments}
-                    disabled={!canSaveCorteAdjustments}
-                    accessibilityRole="button"
-                    accessibilityLabel="Guardar devolución y merma"
-                  >
-                    {adjustmentsBusy ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Text style={styles.secondaryActionText}>Guardar devolución / merma</Text>
-                    )}
-                  </TouchableOpacity>
                   <TouchableOpacity
                     style={[
                       styles.primaryAction,
@@ -941,6 +963,24 @@ export default function CashCloseScreen() {
           </Text>
         </View>
 
+        <View style={styles.inputCard}>
+          <Text style={styles.sectionTitle}>KM llegada</Text>
+          <Text style={styles.inputHint}>
+            {departureKm != null && departureKm > 0
+              ? `Salida ${departureKm.toLocaleString('es-MX')} km. La llegada tiene que ser mayor o igual.`
+              : 'Captura el kilometraje de llegada de la unidad. Tiene que ser mayor a 0.'}
+          </Text>
+          <TextInput
+            style={styles.cashInput}
+            placeholder="Ej. 125000"
+            placeholderTextColor={colors.textDim}
+            keyboardType="number-pad"
+            value={arrivalKmInput}
+            onChangeText={setArrivalKmInput}
+            accessibilityLabel="KM llegada"
+          />
+        </View>
+
         {liquidationAlreadyConfirmed ? (
           <View style={styles.confirmedBadge}>
             <Text style={styles.confirmedBadgeText}>
@@ -972,11 +1012,6 @@ export default function CashCloseScreen() {
           </>
         )}
 
-        <Text style={styles.footerNote}>
-          Fuente de cobranza: /pwa-ruta/liquidation (account.payment por bucket).
-          Corte: /pwa-ruta/validate-corte. Liquidacion:
-          /gf/logistics/api/employee/liquidacion/confirm.
-        </Text>
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1045,6 +1080,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   syncBtnText: { ...typography.buttonSmall },
+  syncDeadLink: {
+    marginTop: 8,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  syncDeadLinkText: { ...typography.buttonSmall, color: colors.primary },
+  syncDeadLinkHint: { ...typography.dimSmall, color: colors.primary, marginTop: 2 },
   syncHint: {
     ...typography.dimSmall,
     marginTop: 8,

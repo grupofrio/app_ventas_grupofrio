@@ -213,6 +213,31 @@ export function alignEvidencePhotosBeforeClose(
   });
 }
 
+/**
+ * A failed or released evidence photo must not keep the visit close waiting.
+ * The close is sent without that photo; the photo can still be retried or skipped.
+ */
+export function releaseClosesFromFailedPhotos(
+  queue: SyncQueueItem[],
+  now: number,
+): SyncQueueItem[] {
+  const released = new Set(
+    queue
+      .filter((item) => item.type === 'photo' && isEvidencePhotoReleased(item, now))
+      .map((item) => item.id),
+  );
+  if (released.size === 0) return queue;
+  let changed = false;
+  const next = queue.map((item) => {
+    if (!isCloseType(item.type) || !item.dependsOn?.length) return item;
+    if (!item.dependsOn.some((id) => released.has(id))) return item;
+    changed = true;
+    const dependsOn = item.dependsOn.filter((id) => !released.has(id));
+    return { ...item, dependsOn: dependsOn.length > 0 ? dependsOn : undefined };
+  });
+  return changed ? next : queue;
+}
+
 export function buildEvidenceClientMeta(input: {
   meta?: ClientEventMeta | null;
   latitude?: number | null;
@@ -250,6 +275,7 @@ export function buildStopImageUploadPayload(input: {
   latitude?: number | null;
   longitude?: number | null;
   capturedAt?: string | null;
+  offrouteVisitId?: number | null;
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     stop_id: input.stopId,
@@ -257,6 +283,9 @@ export function buildStopImageUploadPayload(input: {
     image_type: input.imageType,
     evidence_type: coerceEvidenceType(input.evidenceType, input.imageType),
   };
+  if (typeof input.offrouteVisitId === 'number' && input.offrouteVisitId > 0) {
+    body.offroute_visit_id = input.offrouteVisitId;
+  }
   const meta = buildEvidenceClientMeta({
     meta: input.meta,
     latitude: input.latitude,

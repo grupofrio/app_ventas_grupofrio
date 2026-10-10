@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 interface SyncDependencyItem {
   id: string;
@@ -23,6 +25,13 @@ interface SyncDependenciesModule {
     deadParentId: string,
   ) => SyncDependencyItem[];
   dependencyBlockedMessage: (type?: string) => string;
+  dependencyBlockedByDeadParent: (
+    item: SyncDependencyItem,
+    queue: SyncDependencyItem[],
+  ) => string | null;
+  failDependentsOfDeadParents: (
+    queue: SyncDependencyItem[],
+  ) => SyncDependencyItem[];
 }
 
 function testDependencyGate(m: SyncDependenciesModule) {
@@ -113,6 +122,39 @@ function testDeadPhotoDoesNotKillCheckout(m: SyncDependenciesModule) {
   assert.equal(out.find((item) => item.id === 'checkout-1')!.next_retry_at, 50);
 }
 
+function testFailDependentsEnqueuedAfterParentDied(m: SyncDependenciesModule) {
+  const queue: SyncDependencyItem[] = [
+    { id: 'sale-1', type: 'sale_order', status: 'dead', error_message: 'rechazo Odoo' },
+    { id: 'photo-1', type: 'photo', status: 'pending', dependsOn: ['sale-1'], next_retry_at: 50 },
+    { id: 'payment-1', type: 'payment', status: 'error', dependsOn: ['sale-1'] },
+    { id: 'note-1', type: 'lead_note', status: 'pending', dependsOn: ['payment-1'] },
+    { id: 'checkout-1', type: 'checkout', status: 'pending', dependsOn: ['photo-dead'], next_retry_at: 80 },
+    { id: 'photo-dead', type: 'photo', status: 'dead' },
+    { id: 'gps-1', type: 'gps', status: 'pending' },
+  ];
+  const out = m.failDependentsOfDeadParents(queue);
+  const photo = out.find((item) => item.id === 'photo-1')!;
+  assert.equal(photo.status, 'dead');
+  assert.match(photo.error_message ?? '', /venta falló/i);
+  assert.equal(photo.next_retry_at, null);
+  const payment = out.find((item) => item.id === 'payment-1')!;
+  assert.equal(payment.status, 'dead');
+  assert.match(payment.error_message ?? '', /depende/i);
+  const note = out.find((item) => item.id === 'note-1')!;
+  assert.equal(note.status, 'dead', 'un dependiente encolado detrás de otro fallido también pasa a dead');
+  assert.equal(out.find((item) => item.id === 'checkout-1')!.status, 'pending');
+  assert.equal(out.find((item) => item.id === 'checkout-1')!.next_retry_at, 80);
+  assert.equal(out.find((item) => item.id === 'gps-1')!.status, 'pending');
+  assert.equal(queue.find((item) => item.id === 'photo-1')!.status, 'pending');
+  const alreadySettled = queue.slice(5);
+  assert.equal(m.failDependentsOfDeadParents(alreadySettled), alreadySettled);
+  assert.equal(
+    m.dependencyBlockedByDeadParent(photo, queue),
+    null,
+    'el resultado ya muerto no se vuelve a marcar',
+  );
+}
+
 function testMessages(m: SyncDependenciesModule) {
   assert.match(m.dependencyBlockedMessage('photo'), /Foto/i);
   assert.match(m.dependencyBlockedMessage('payment'), /depende/i);
@@ -129,6 +171,20 @@ testDependencyGate(module);
 testFindLiveDependents(module);
 testCascadeDeadToDependents(module);
 testDeadPhotoDoesNotKillCheckout(module);
+testFailDependentsEnqueuedAfterParentDied(module);
 testMessages(module);
+
+const syncStore = readFileSync(resolve('src/stores/useSyncStore.ts'), 'utf8');
+const cashclose = readFileSync(resolve('app/cashclose.tsx'), 'utf8');
+const beforeSend = syncStore.slice(syncStore.indexOf('async function processOneItemUnheld'));
+assert.match(beforeSend, /dependencyBlockedByDeadParent\(fresh, get\(\)\.queue\)/);
+assert.match(beforeSend, /if \(blockedReason\) \{[\s\S]*?markDead\(fresh\.id, blockedReason\)/);
+const processQueueStart = syncStore.indexOf('processQueue: async () =>');
+const processQueue = syncStore.slice(processQueueStart, syncStore.indexOf('cycle_start', processQueueStart));
+assert.match(processQueue, /failDependentsOfDeadParents\(queued\)/);
+assert.match(cashclose, /Fallidos: \$\{deadCount\}/);
+assert.match(cashclose, /Cola de Sincronizacion/);
+assert.match(cashclose, /Limpiar Historial de Errores/);
+assert.match(cashclose, /router\.push\('\/sync'/);
 
 console.log('sync dependencies tests: ok');

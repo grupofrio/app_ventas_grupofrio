@@ -17,8 +17,17 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
+import {
+  checkoutResultSaleTotal,
+  describeCheckoutSalePresentation,
+  hasSyncedSaleForStop,
+  retryCheckoutAsNoSale,
+  syncedSaleAmountForStop,
+} from '../../src/services/checkoutSaleEvidence';
+import { readHasSyncedSale } from '../../src/services/checkoutSaleLookup';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import {
   enqueueGpsPoint,
@@ -46,6 +55,7 @@ import {
   blockingEvidencePhotoIds,
   buildCloseDependsOn,
   describeEvidencePhotoWarning,
+  readStopId,
 } from '../../src/services/evidencePhotoSync';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 
@@ -67,6 +77,7 @@ function CheckoutScreenInner() {
   const salePhotoUris = useVisitStore((s) => s.salePhotoUris);
   const noSaleReasonId = useVisitStore((s) => s.noSaleReasonId);
   const saleOperationId = useVisitStore((s) => s.saleOperationId);
+  const acceptedSales = useVisitStore((s) => s.acceptedSales);
   const resetVisit = useVisitStore((s) => s.resetVisit);
 
   const latitude = useLocationStore((s) => s.latitude);
@@ -75,7 +86,23 @@ function CheckoutScreenInner() {
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
+  const orders = useSalesStore((s) => s.orders);
   const processQueue = useSyncStore((s) => s.processQueue);
+
+  const checkoutStopId = typeof stop?.id === 'number' ? stop.id : 0;
+  const probedSaleStopId = React.useRef(0);
+  React.useEffect(() => {
+    if (!(checkoutStopId > 0) || !isOnline) return;
+    if (probedSaleStopId.current === checkoutStopId) return;
+    probedSaleStopId.current = checkoutStopId;
+    if (hasSyncedSaleForStop(
+      checkoutStopId,
+      useSyncStore.getState().queue,
+      useSalesStore.getState().orders,
+      useVisitStore.getState().acceptedSales,
+    )) return;
+    void readHasSyncedSale(checkoutStopId);
+  }, [checkoutStopId, isOnline]);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
@@ -163,6 +190,14 @@ function CheckoutScreenInner() {
 
   const total = saleTotal();
   const totalKg = saleTotalKg();
+  const hasSyncedSale = hasSyncedSaleForStop(stop.id, queue, orders, acceptedSales);
+  const checkoutSaleTotal = checkoutResultSaleTotal(hasSyncedSale, total);
+  const salePresentation = describeCheckoutSalePresentation({
+    hasSyncedSale,
+    saleSyncStatus: liveSaleSyncState.status,
+    cartTotal: total,
+    syncedAmount: syncedSaleAmountForStop(stop.id, queue, orders, acceptedSales),
+  });
 
   function finalizeCheckout(shouldNavigateToNextStop: boolean) {
     setGpsMode('in_transit');
@@ -269,11 +304,14 @@ function CheckoutScreenInner() {
 
     const lat = position.latitude;
     const lon = position.longitude;
+    // Online createSale does not sit in the queue. Re-read local evidence
+    // and, if the phone is online and nothing local proves a sale, the server.
+    const syncedNow = await readHasSyncedSale(stop.id);
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
       latitude: lat,
       longitude: lon,
-      saleTotal: total,
+      saleTotal: checkoutResultSaleTotal(syncedNow, useVisitStore.getState().saleTotal()),
       noSaleReasonId,
     });
 
@@ -293,10 +331,12 @@ function CheckoutScreenInner() {
     const enqueueCheckout = () => {
       const gpsQueueId = enqueueGpsPoint(position, 'checkout');
       const dependsOn = buildCloseDependsOn(blockingPhotoIds, [gpsQueueId]);
+      const capturedAt = new Date().toISOString();
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
-        timestamp: Date.now(),
+        timestamp: Date.parse(capturedAt),
+        client_checkout_at: capturedAt,
       }, {
         operationId: checkoutOperationId,
         ...(dependsOn.length > 0 ? { dependsOn } : {}),
@@ -325,6 +365,12 @@ function CheckoutScreenInner() {
       return;
     }
 
+    const capturedAt = new Date().toISOString();
+    const noSaleDetail = {
+      no_sale_reason_code: checkoutPayload.no_sale_reason_code,
+      no_sale_notes: checkoutPayload.no_sale_notes,
+      no_sale_competitor: checkoutPayload.no_sale_competitor,
+    };
     try {
       await publishGpsPointNow(position);
       await checkOut(
@@ -332,16 +378,38 @@ function CheckoutScreenInner() {
         checkoutPayload.latitude,
         checkoutPayload.longitude,
         checkoutPayload.result_status,
-        {
-          no_sale_reason_code: checkoutPayload.no_sale_reason_code,
-          no_sale_notes: checkoutPayload.no_sale_notes,
-          no_sale_competitor: checkoutPayload.no_sale_competitor,
-        },
+        noSaleDetail,
         undefined,
         checkoutOperationId,
+        capturedAt,
       );
       finalizeCheckout(shouldNavigateToNextStop);
     } catch (error) {
+      try {
+        const recovered = await retryCheckoutAsNoSale(
+          error,
+          checkoutPayload.result_status,
+          () => checkOut(
+            checkoutPayload.stop_id,
+            checkoutPayload.latitude,
+            checkoutPayload.longitude,
+            'no_sale',
+            noSaleDetail,
+            undefined,
+            checkoutOperationId,
+            capturedAt,
+          ),
+        );
+        if (recovered) {
+          finalizeCheckout(shouldNavigateToNextStop);
+          return;
+        }
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : 'No se pudo completar el check-out.';
+        Alert.alert('Check-out rechazado', retryMessage);
+        setCheckingOut(false);
+        return;
+      }
       const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
       if (isRetryableSyncErrorMessage(message)) {
         enqueueCheckout();
@@ -390,7 +458,7 @@ function CheckoutScreenInner() {
         stopId: stop.id,
         latitude: lat,
         longitude: lon,
-        saleTotal: total,
+        saleTotal: checkoutSaleTotal,
         noSaleReasonId,
       });
 
@@ -407,10 +475,12 @@ function CheckoutScreenInner() {
         Date.now(),
       );
       const reviewDependsOn = buildCloseDependsOn(reviewPhotoIds);
+      const reviewCapturedAt = new Date().toISOString();
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
-        timestamp: Date.now(),
+        timestamp: Date.parse(reviewCapturedAt),
+        client_checkout_at: reviewCapturedAt,
       }, {
         operationId: checkoutOperationId,
         ...(reviewDependsOn.length > 0 ? { dependsOn: reviewDependsOn } : {}),
@@ -442,24 +512,69 @@ function CheckoutScreenInner() {
         {(() => {
           const photoWarning = describeEvidencePhotoWarning(queue, stop.id);
           if (!photoWarning) return null;
+          const failedPhotoIds = queue
+            .filter((item) => (
+              item.type === 'photo'
+              && item.status === 'dead'
+              && readStopId(item.payload) === stop.id
+            ))
+            .map((item) => item.id);
           return (
-            <AlertBanner
-              variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
-              icon="📸"
-              message={photoWarning.message}
-            />
+            <>
+              <AlertBanner
+                variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
+                icon="📸"
+                message={photoWarning.tone === 'failed'
+                  ? `${photoWarning.message} Puedes reintentarla, omitirla y cerrar la visita.`
+                  : photoWarning.message}
+              />
+              {failedPhotoIds.length > 0 ? (
+                <View style={{ gap: 8, marginBottom: 8 }}>
+                  <Button
+                    label="Reintentar foto"
+                    variant="secondary"
+                    onPress={() => {
+                      for (const photoId of failedPhotoIds) {
+                        const reason = useSyncStore.getState().retryDeadPhoto(photoId);
+                        if (reason) {
+                          Alert.alert('Foto', reason);
+                          return;
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    label="Omitir foto y continuar"
+                    variant="secondary"
+                    onPress={() => {
+                      useSyncStore.getState().removeDeadQueueItems(failedPhotoIds);
+                    }}
+                  />
+                </View>
+              ) : null}
+            </>
           );
         })()}
 
         {/* Visit summary card */}
         <Card>
           <View style={styles.metricRow}>
-            <Text style={typography.dim}>Venta realizada</Text>
-            <Text style={[typography.metricValue, { color: total > 0 ? colors.success : colors.textDim }]}>
-              {total > 0 ? formatCurrency(total) : 'Sin venta'}
+            <Text style={typography.dim}>
+              {salePresentation.kind === 'synced'
+                ? 'Venta realizada'
+                : salePresentation.kind === 'pending'
+                  ? 'Venta pendiente'
+                  : 'Sin venta'}
+            </Text>
+            <Text style={[typography.metricValue, {
+              color: salePresentation.kind === 'synced' ? colors.success : colors.textDim,
+            }]}>
+              {salePresentation.kind === 'none'
+                ? 'Sin venta'
+                : formatCurrency(salePresentation.amount)}
             </Text>
           </View>
-          {totalKg > 0 && (
+          {salePresentation.kind === 'synced' && totalKg > 0 && (
             <View style={styles.metricRow}>
               <Text style={typography.dim}>kg entregados</Text>
               <Text style={typography.metricValue}>{totalKg.toFixed(1)} kg</Text>

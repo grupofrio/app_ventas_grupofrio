@@ -19,6 +19,7 @@ interface VisitPhotosModule {
       longitude?: number | null;
       capturedAt?: string | null;
     };
+    offrouteVisitId?: number | null;
   }) => string[];
 }
 
@@ -235,6 +236,20 @@ function testEnqueueStoresCaptureWhenAvailable(module: VisitPhotosModule) {
   });
   assert.equal('capture_latitude' in omitted[0], false);
   assert.equal('captured_at' in omitted[0], false);
+
+  const offroute: Array<Record<string, unknown>> = [];
+  module.enqueueVisitPhotos({
+    stopId: 220980,
+    photoUris: ['file://point.jpg'],
+    imageType: 'sale',
+    offrouteVisitId: 2061,
+    enqueue: (_type, payload) => {
+      offroute.push(payload);
+      return 'photo-3';
+    },
+  });
+  assert.equal(offroute[0].stop_id, 220980);
+  assert.equal(offroute[0].offroute_visit_id, 2061);
 }
 
 async function main() {

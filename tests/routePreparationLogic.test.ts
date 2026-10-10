@@ -95,8 +95,8 @@ function testFreshnessIsPlanScoped(m: RoutePrepLogicModule) {
 }
 
 function testFormatPreparedAtPadsTwoDigits(m: RoutePrepLogicModule) {
-  // Construct a Date locally so we don't depend on tz.
-  const d = new Date(2026, 4, 5, 9, 7); // 09:07 local
+  // 15:07 UTC is 09:07 in Mexico (fixed UTC-6 after 2022).
+  const d = new Date('2026-05-05T15:07:00Z');
   assert.equal(m.formatPreparedAt(d.getTime()), '09:07');
   assert.equal(m.formatPreparedAt(null), '');
 }

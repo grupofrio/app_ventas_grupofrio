@@ -28,11 +28,19 @@ import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
+import { reportOperationFailure } from '../src/services/operationFailureReport';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useRouteStartStore } from '../src/stores/useRouteStartStore';
 import { useRoutePreparationStore } from '../src/stores/useRoutePreparationStore';
 import { updateKm } from '../src/services/routeKm';
 import { closeRoute } from '../src/services/routeClose';
+import { checkoutInProgressStops } from '../src/services/closeInProgressStops';
+import {
+  describeOpenStopsConfirmation,
+  partitionOpenStops,
+  planIsClosedState,
+  routeCloseShowsFinished,
+} from '../src/services/routeClosePreconditions';
 import {
   chooseAuthoritativeKm,
   isValidKm,
@@ -63,6 +71,7 @@ function StatusBadge({ status }: { status: StepStatus }) {
 function RouteCloseScreenInner() {
   const router = useRouter();
   const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
   const loadPlan = useRouteStore((s) => s.loadPlan);
   const planId = plan?.plan_id ?? null;
   const planState = plan?.state ?? null;
@@ -123,16 +132,13 @@ function RouteCloseScreenInner() {
           if (freshArrival != null) setKmFinal(freshArrival);
         });
       }
-      if (planState === 'closed' || planState === 'reconciled' || planState === 'done') {
-        setClosed(true);
-      }
       const planArrival = typeof plan?.arrival_km === 'number' && plan.arrival_km > 0
         ? plan.arrival_km
         : null;
       if (planArrival != null) {
         setKmFinal((prev) => (prev == null ? planArrival : prev));
       }
-    }, [isOnline, loadPlan, planState, plan?.arrival_km]),
+    }, [isOnline, loadPlan, plan?.arrival_km]),
   );
 
   const kmDriven = calculateKmDriven(kmInitial, kmFinal);
@@ -191,6 +197,12 @@ function RouteCloseScreenInner() {
             setKmFinalInput('');
           } catch (err) {
             // Backend validates arrival >= departure; show its message.
+            reportOperationFailure({
+              operation: 'route_close',
+              planId,
+              error: err,
+              outcome: 'failed',
+            });
             Alert.alert('Error al guardar KM', err instanceof Error ? err.message : 'Intenta de nuevo.');
           } finally {
             setSavingKm(false);
@@ -217,22 +229,40 @@ function RouteCloseScreenInner() {
         syncBlockMsg ?? 'Sincroniza las operaciones pendientes antes de cerrar ruta.',
         [
           { text: 'Cancelar', style: 'cancel' },
-          { text: 'Ir a sincronizar', onPress: () => router.push('/cashclose' as never) },
+          { text: 'Ir a sincronizar', onPress: () => router.push('/sync' as never) },
         ],
       );
       return;
     }
+    const openStops = partitionOpenStops(stops);
+    const stopWarning = describeOpenStopsConfirmation(openStops);
+    const closeMessage = stopWarning.requiresAcknowledgement
+      ? `${stopWarning.message}\n\nEl servidor también valida corte y liquidación.`
+      : 'Vas a cerrar la ruta del día. El servidor valida corte y liquidación. ¿Continuar?';
     Alert.alert(
-      'Cerrar ruta',
-      'Vas a cerrar la ruta del día. El servidor valida corte y liquidación. ¿Continuar?',
+      stopWarning.requiresAcknowledgement ? stopWarning.title : 'Cerrar ruta',
+      closeMessage,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Cerrar ruta',
+          text: stopWarning.requiresCheckout ? 'Cerrar visitas y ruta' : 'Cerrar ruta',
           style: 'destructive',
           onPress: async () => {
             setClosing(true);
             try {
+              if (openStops.inProgress.length > 0) {
+                const closedVisits = await checkoutInProgressStops(openStops.inProgress);
+                if (!closedVisits.ok) {
+                  const failure = closedVisits.failure;
+                  Alert.alert(
+                    'No se cerró la visita',
+                    failure
+                      ? `${failure.customerName}: ${failure.message}`
+                      : 'Hay una visita en curso que no se pudo cerrar.',
+                  );
+                  return;
+                }
+              }
               const res = await closeRoute(planId, { departureKm: kmInitial, arrivalKm: kmFinal });
               setClosed(true);
               // Perf Fase 2E: limpiar caché de jornada SOLO tras cierre exitoso.
@@ -250,6 +280,12 @@ function RouteCloseScreenInner() {
               ]);
             } catch (err) {
               // Backend rejects if corte/liquidación incompletos — message claro.
+              reportOperationFailure({
+                operation: 'route_close',
+                planId,
+                error: err,
+                outcome: 'rejected',
+              });
               Alert.alert(
                 'No se pudo cerrar la ruta',
                 err instanceof Error ? err.message : 'Revisa corte y liquidación, luego intenta de nuevo.',
@@ -276,7 +312,16 @@ function RouteCloseScreenInner() {
     );
   }
 
-  if (closed) {
+  const shownArrival = kmFinal ?? (typeof plan?.arrival_km === 'number' ? plan.arrival_km : null);
+  const finished = routeCloseShowsFinished({
+    planState,
+    localClosed: closed,
+    arrivalKm: shownArrival,
+    departureKm: kmInitial,
+  });
+  const closedWithoutArrival = planIsClosedState(planState) && !finished;
+
+  if (finished) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TopBar title="Cerrar ruta" showBack />
@@ -296,6 +341,14 @@ function RouteCloseScreenInner() {
       <TopBar title="Cerrar ruta" showBack />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+        {closedWithoutArrival && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineText}>
+              La ruta figura cerrada sin KM de llegada. Captúralo para dejar el recorrido registrado.
+            </Text>
+          </View>
+        )}
+
         {!isOnline && (
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineText}>📶 Sin conexión. El cierre requiere WiFi de la sucursal.</Text>
@@ -397,8 +450,8 @@ function RouteCloseScreenInner() {
           />
         </Card>
 
-        {/* Step 4: cerrar ruta */}
-        <View style={styles.closeCard}>
+        {/* Step 4: cerrar ruta. Hidden once the server already closed the plan. */}
+        {!planIsClosedState(planState) && !closed && <View style={styles.closeCard}>
           <Text style={styles.closeTitle}>4 · Cerrar ruta</Text>
           <Text style={styles.closeBody}>
             El servidor valida que el corte y la liquidación estén completos. Si
@@ -413,7 +466,7 @@ function RouteCloseScreenInner() {
               <Button
                 label="Ir a sincronizar"
                 variant="secondary"
-                onPress={() => router.push('/cashclose' as never)}
+                onPress={() => router.push('/sync' as never)}
                 fullWidth
                 style={{ marginTop: 8 }}
               />
@@ -435,7 +488,7 @@ function RouteCloseScreenInner() {
               El cierre se habilita cuando no queden operaciones pendientes de sincronizar.
             </Text>
           )}
-        </View>
+        </View>}
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

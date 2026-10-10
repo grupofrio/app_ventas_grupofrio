@@ -179,11 +179,18 @@ export default function NoSaleScreen() {
   }
 
   async function handleAddNoSalePhoto() {
-    const photo = await takePhoto();
-    if (photo) {
-      setNoSalePhoto(photo.localUri);
-    } else {
-      Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
+    try {
+      const photo = await takePhoto();
+      if (photo) {
+        setNoSalePhoto(photo.localUri);
+      } else {
+        Alert.alert('Foto requerida', 'No se pudo capturar la foto.');
+      }
+    } catch (error) {
+      Alert.alert(
+        'Cámara',
+        error instanceof Error ? error.message : 'No se pudo abrir la cámara',
+      );
     }
   }
 
@@ -291,6 +298,7 @@ export default function NoSaleScreen() {
           photoUris: capturedPhotoUris,
           enqueue,
           imageType: 'visit',
+          offrouteVisitId,
           capture: {
             latitude: capturedLatitude,
             longitude: capturedLongitude,
@@ -341,15 +349,17 @@ export default function NoSaleScreen() {
         gpsQueueId = enqueueGpsPoint(position, 'checkout');
       }
 
+      const checkoutCapturedAt = new Date().toISOString();
       const photoIds = enqueueVisitPhotos({
         stopId: stop.id,
         photoUris: capturedPhotoUris,
         enqueue,
         imageType: 'visit',
+        offrouteVisitId: offrouteVisitId ?? stop._offrouteVisitId ?? null,
         capture: {
           latitude: capturedLatitude,
           longitude: capturedLongitude,
-          capturedAt: new Date().toISOString(),
+          capturedAt: checkoutCapturedAt,
         },
       });
       const dependsOn = buildCloseDependsOn(photoIds, [gpsQueueId]);
@@ -358,7 +368,8 @@ export default function NoSaleScreen() {
         {
           ...checkoutPayload,
           operation_id: operationId,
-          timestamp: Date.now(),
+          timestamp: Date.parse(checkoutCapturedAt),
+          client_checkout_at: checkoutCapturedAt,
         },
         {
           operationId,

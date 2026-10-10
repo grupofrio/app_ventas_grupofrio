@@ -29,6 +29,11 @@ export interface OffrouteDirectorySearchable {
   name: string;
   address?: string;
   zone?: string;
+  phone?: string;
+  mobile?: string;
+  email?: string;
+  vat?: string;
+  rfc?: string;
 }
 
 export interface OffrouteSearchResult {
@@ -69,7 +74,16 @@ export function matchesOffrouteDirectoryQuery(
 ): boolean {
   const tokens = normalizeSearchText(query).split(' ').filter(Boolean);
   if (tokens.length === 0) return false;
-  const searchable = normalizeSearchText([entry.name, entry.address ?? '', entry.zone ?? ''].join(' '));
+  const searchable = normalizeSearchText([
+    entry.name,
+    entry.address ?? '',
+    entry.zone ?? '',
+    entry.phone ?? '',
+    entry.mobile ?? '',
+    entry.email ?? '',
+    entry.vat ?? '',
+    entry.rfc ?? '',
+  ].join(' '));
   return tokens.every((token) => searchable.includes(token));
 }
 
@@ -136,4 +150,103 @@ export function buildOffrouteResults(
       city: lead.city || null,
     })),
   ];
+}
+
+function textField(record: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function numberField(record: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && value > 0) return value;
+    if (Array.isArray(value) && typeof value[0] === 'number' && value[0] > 0) return value[0];
+  }
+  return null;
+}
+
+function mapDirectoryRows(
+  rows: unknown,
+  entityType: 'customer' | 'lead',
+): OffrouteSearchResult[] {
+  if (!Array.isArray(rows)) return [];
+  const customers: OffrouteCustomerRecord[] = [];
+  const leads: OffrouteLeadRecord[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const record = row as Record<string, unknown>;
+    const id = numberField(record, 'id', 'partner_id', 'lead_id');
+    const name = textField(record, 'name', 'partner_name', 'display_name');
+    if (!id || !name) continue;
+    if (entityType === 'customer') {
+      customers.push({
+        id,
+        name,
+        street: textField(record, 'street', 'address') || undefined,
+        city: textField(record, 'city', 'zone') || undefined,
+        phone: textField(record, 'phone') || undefined,
+        mobile: textField(record, 'mobile') || undefined,
+        email: textField(record, 'email') || undefined,
+        vat: textField(record, 'vat', 'rfc') || undefined,
+        partner_latitude: typeof record.partner_latitude === 'number'
+          ? record.partner_latitude
+          : typeof record.latitude === 'number' ? record.latitude : undefined,
+        partner_longitude: typeof record.partner_longitude === 'number'
+          ? record.partner_longitude
+          : typeof record.longitude === 'number' ? record.longitude : undefined,
+      });
+    } else {
+      const partnerId = numberField(record, 'partner_id');
+      leads.push({
+        id,
+        name,
+        partner_name: textField(record, 'partner_name') || undefined,
+        phone: textField(record, 'phone') || undefined,
+        mobile: textField(record, 'mobile') || undefined,
+        email_from: textField(record, 'email_from', 'email') || undefined,
+        street: textField(record, 'street', 'address') || undefined,
+        city: textField(record, 'city') || undefined,
+        partner_id: partnerId ? [partnerId, textField(record, 'partner_name') || name] : false,
+      });
+    }
+  }
+  return entityType === 'customer'
+    ? buildOffrouteResults(customers, [])
+    : buildOffrouteResults([], leads);
+}
+
+/** Accept the shapes the directory endpoint has used in the field. */
+export function parseDirectorySearchResponse(payload: unknown): OffrouteSearchResult[] {
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : root;
+  const customers = mapDirectoryRows(
+    data.customers ?? data.partners ?? data.customer,
+    'customer',
+  );
+  const leads = mapDirectoryRows(
+    data.leads ?? data.prospects ?? data.lead,
+    'lead',
+  );
+  return mergeOffrouteSearchResults(customers, leads);
+}
+
+export function mergeOffrouteSearchResults(
+  ...groups: OffrouteSearchResult[][]
+): OffrouteSearchResult[] {
+  const seen = new Set<string>();
+  const merged: OffrouteSearchResult[] = [];
+  for (const group of groups) {
+    for (const result of group) {
+      const key = `${result.entityType}:${result.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(result);
+      if (merged.length >= 20) return merged;
+    }
+  }
+  return merged;
 }

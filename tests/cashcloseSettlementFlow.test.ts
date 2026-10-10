@@ -37,11 +37,10 @@ function main() {
   assert.match(gfLogistics, /\$\{GF_BASE\}\/corte\/adjustments/);
 
   assert.match(cashclose, /handleValidateCorte/);
-  assert.match(cashclose, /handleSaveCorteAdjustments/);
   assert.match(cashclose, /handleConfirmLiquidation/);
-  assert.match(cashclose, /Regresa a stock/);
   assert.match(cashclose, /Merma/);
-  assert.match(cashclose, /Guardar devolución \/ merma/);
+  assert.match(cashclose, /No se capturan a mano/);
+  assert.doesNotMatch(cashclose, /Guardar devolución \/ merma/);
   assert.match(cashclose, /Confirmar corte/);
   assert.match(cashclose, /Confirmar liquidacion/);
   assert.match(cashclose, /difference_warning/);

@@ -345,7 +345,9 @@ export function stopLocationWatch(): void {
  * Get current position once (for check-in/check-out).
  * NEVER blocked by GPS mode — always works if permission is granted.
  */
-export async function getCurrentPosition(): Promise<GpsPosition | null> {
+export async function getCurrentPosition(options?: {
+  allowLastKnown?: boolean;
+}): Promise<GpsPosition | null> {
   try {
     const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') return null;
@@ -357,11 +359,13 @@ export async function getCurrentPosition(): Promise<GpsPosition | null> {
       setTimeout(() => resolve(null), GPS_POSITION_TIMEOUT_MS);
     });
 
-    const position = await Promise.race([currentPositionPromise, timeoutPromise])
-      || await Location.getLastKnownPositionAsync({
+    const fresh = await Promise.race([currentPositionPromise, timeoutPromise]);
+    const position = fresh || (options?.allowLastKnown === false
+      ? null
+      : await Location.getLastKnownPositionAsync({
         maxAge: 10 * 60 * 1000,
         requiredAccuracy: 1000,
-      });
+      }));
 
     if (!position) return null;
 

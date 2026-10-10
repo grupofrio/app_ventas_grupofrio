@@ -117,11 +117,11 @@ function testStartDayStepGates(m: LogicModule) {
     dataMinimumReady: true,
     isOnline: true,
   });
-  assert.equal(blocked.loadUnlocked, false);
+  assert.equal(blocked.loadUnlocked, true, 'el checklist no bloquea la carga');
   assert.equal(blocked.prepareUnlocked, false);
   assert.equal(blocked.startUnlocked, false);
-  assert.equal(blocked.loadLockMessage, m.START_DAY_COPY.completeChecklistFirst);
-  assert.equal(blocked.prepareLockMessage, m.START_DAY_COPY.completeChecklistFirst);
+  assert.equal(blocked.loadLockMessage, null);
+  assert.equal(blocked.prepareLockMessage, m.START_DAY_COPY.acceptLoadToPrepare);
 
   const pendingSync = m.computeStartDayStepGates({
     checklistServerConfirmed: false,
@@ -132,9 +132,10 @@ function testStartDayStepGates(m: LogicModule) {
     dataMinimumReady: true,
     isOnline: true,
   });
-  assert.equal(pendingSync.loadUnlocked, false);
-  assert.equal(pendingSync.loadLockMessage, m.START_DAY_COPY.checklistSyncPending);
-  assert.equal(pendingSync.prepareLockMessage, m.START_DAY_COPY.checklistSyncPending);
+  assert.equal(pendingSync.loadUnlocked, true);
+  assert.equal(pendingSync.loadLockMessage, null);
+  assert.equal(pendingSync.prepareLockMessage, m.START_DAY_COPY.acceptLoadToPrepare);
+  assert.equal(pendingSync.startUnlocked, false);
 
   const loadOpen = m.computeStartDayStepGates({
     checklistServerConfirmed: true,

@@ -40,7 +40,7 @@
  *   - NO usar campos hardcoded de /sales/summary como fallback (sería falso).
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -48,7 +48,7 @@ import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useSyncStore } from '../src/stores/useSyncStore';
-import { corteAdjustmentTitle, formatCorteFailureMessage } from '../src/services/corteFeedback';
+import { formatCorteFailureMessage } from '../src/services/corteFeedback';
 import { reportOperationFailure } from '../src/services/operationFailureReport';
 import { formatSyncedOperations } from '../src/services/syncProgressLabel';
 import { useSalesStore } from '../src/stores/useSalesStore';
@@ -60,7 +60,6 @@ import {
   getLiquidationExpectedCashTotal,
   GFRouteReconciliation,
   GFLiquidationSummary,
-  saveRouteCorteAdjustments,
   validateRouteCorte,
 } from '../src/services/gfLogistics';
 import { formatCurrency } from '../src/utils/time';
@@ -82,11 +81,6 @@ interface SummaryLine {
   highlight?: boolean;
   pending?: boolean;     // estilo "Pendiente backend"
   unavailable?: boolean; // estilo "No disponible"
-}
-
-interface CorteAdjustmentInput {
-  returnQty: string;
-  scrapQty: string;
 }
 
 /**
@@ -179,8 +173,6 @@ export default function CashCloseScreen() {
   const [liquidationBusy, setLiquidationBusy] = useState(false);
   const [corteConfirmed, setCorteConfirmed] = useState(false);
   const [liquidationConfirmedAt, setLiquidationConfirmedAt] = useState<string | null>(null);
-  const [corteAdjustments, setCorteAdjustments] = useState<Record<number, CorteAdjustmentInput>>({});
-  const [adjustmentsBusy, setAdjustmentsBusy] = useState(false);
 
   const loadLiquidation = useCallback(async () => {
     setLiquidationLoading(true);
@@ -229,21 +221,6 @@ export default function CashCloseScreen() {
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
     }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at]),
   );
-
-  useEffect(() => {
-    if (!reconciliation) return;
-    setCorteAdjustments((current) => {
-      const next = { ...current };
-      reconciliation.lines.forEach((line) => {
-        if (!line.product_id || next[line.product_id]) return;
-        next[line.product_id] = {
-          returnQty: line.qty_returned > 0 ? String(line.qty_returned) : '',
-          scrapQty: line.qty_scrap > 0 ? String(line.qty_scrap) : '',
-        };
-      });
-      return next;
-    });
-  }, [reconciliation]);
 
   // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
   // corte. La app SIEMPRE intenta auto-procesar la cola al reconectar
@@ -416,73 +393,6 @@ export default function CashCloseScreen() {
     invoiceCollectionReviewCount: invoiceCollectionSummary?.reviewRequiredCount ?? 0,
     invoiceCollectionSummaryReady,
   });
-  const canSaveCorteAdjustments = !adjustmentsBusy
-    && !corteAlreadyConfirmed
-    && pendingCount === 0
-    && !isSyncing
-    && !syncBusy
-    && !!reconciliation
-    && !reconciliationLoading
-    && invoiceCollectionSummaryReady
-    && invoiceCollectionBlockingCount === 0;
-
-  const setCorteAdjustmentValue = useCallback((
-    productId: number,
-    field: keyof CorteAdjustmentInput,
-    value: string,
-  ) => {
-    setCorteAdjustments((current) => ({
-      ...current,
-      [productId]: {
-        returnQty: current[productId]?.returnQty ?? '',
-        scrapQty: current[productId]?.scrapQty ?? '',
-        [field]: value,
-      },
-    }));
-  }, []);
-
-  const handleSaveCorteAdjustments = useCallback(async () => {
-    if (!canSaveCorteAdjustments || !reconciliation) return;
-    setAdjustmentsBusy(true);
-    try {
-      const lines = reconciliation.lines
-        .filter((line) => line.product_id > 0)
-        .map((line) => {
-          const input = corteAdjustments[line.product_id] ?? { returnQty: '', scrapQty: '' };
-          return {
-            product_id: line.product_id,
-            return_qty: parseCashInput(input.returnQty),
-            scrap_qty: parseCashInput(input.scrapQty),
-          };
-        });
-      const result = await saveRouteCorteAdjustments({
-        ...(planId ? { plan_id: planId } : {}),
-        lines,
-      });
-      await loadReconciliation();
-      if (result.ok) {
-        Alert.alert(
-          corteAdjustmentTitle(result),
-          result.message || 'Devolucion y merma guardadas.',
-        );
-        return;
-      }
-      reportOperationFailure({
-        operation: 'corte',
-        planId,
-        error: result,
-        outcome: 'rejected',
-      });
-      Alert.alert('No se guardaron ajustes', result.message || 'Backend rechazo los ajustes.');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error desconocido';
-      reportOperationFailure({ operation: 'corte', planId, error: err, outcome: 'failed' });
-      Alert.alert('Error al guardar corte', message);
-    } finally {
-      setAdjustmentsBusy(false);
-    }
-  }, [canSaveCorteAdjustments, corteAdjustments, loadReconciliation, planId, reconciliation]);
-
   const handleValidateCorte = useCallback(async () => {
     if (!canValidateCorte) return;
     setCorteBusy(true);
@@ -764,34 +674,6 @@ export default function CashCloseScreen() {
                     <Text style={styles.productMeta}>
                       Cargado {line.qty_loaded.toFixed(1)} · Entregado {line.qty_delivered.toFixed(1)} · Devuelto {line.qty_returned.toFixed(1)} · Merma {line.qty_scrap.toFixed(1)}
                     </Text>
-                    <View style={styles.adjustmentGrid}>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Regresa a stock</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.returnQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'returnQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Regresa a stock ${line.product_name}`}
-                        />
-                      </View>
-                      <View style={styles.adjustmentField}>
-                        <Text style={styles.adjustmentLabel}>Merma</Text>
-                        <TextInput
-                          style={styles.adjustmentInput}
-                          placeholder="0"
-                          placeholderTextColor={colors.textDim}
-                          keyboardType="decimal-pad"
-                          value={corteAdjustments[line.product_id]?.scrapQty ?? ''}
-                          onChangeText={(value) => setCorteAdjustmentValue(line.product_id, 'scrapQty', value)}
-                          editable={!corteAlreadyConfirmed}
-                          accessibilityLabel={`Merma ${line.product_name}`}
-                        />
-                      </View>
-                    </View>
                     <Text style={[styles.productDiff, { color: colorForDiff(line.qty_difference) }]}>
                       Dif. {line.qty_difference.toFixed(1)}
                     </Text>
@@ -799,28 +681,15 @@ export default function CashCloseScreen() {
                 ))
               )}
 
+              <Text style={styles.statusText}>
+                Devolución y merma las calcula el corte. No se capturan a mano.
+              </Text>
               {corteAlreadyConfirmed ? (
                 <View style={styles.confirmedBadge}>
                   <Text style={styles.confirmedBadgeText}>Corte confirmado en Odoo</Text>
                 </View>
               ) : (
                 <>
-                  <TouchableOpacity
-                    style={[
-                      styles.secondaryAction,
-                      !canSaveCorteAdjustments && styles.actionDisabled,
-                    ]}
-                    onPress={handleSaveCorteAdjustments}
-                    disabled={!canSaveCorteAdjustments}
-                    accessibilityRole="button"
-                    accessibilityLabel="Guardar devolución y merma"
-                  >
-                    {adjustmentsBusy ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Text style={styles.secondaryActionText}>Guardar devolución / merma</Text>
-                    )}
-                  </TouchableOpacity>
                   <TouchableOpacity
                     style={[
                       styles.primaryAction,

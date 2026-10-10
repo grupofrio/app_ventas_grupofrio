@@ -476,9 +476,11 @@ export async function checkIn(
   latitude: number,
   longitude: number,
   meta?: ClientEventMeta | null,
+  capturedAt?: string | null,
 ): Promise<boolean> {
+  const { buildCheckinRequestBody } = await import('./visitCapturePayload');
   const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, latitude, longitude },
+    buildCheckinRequestBody({ stopId, latitude, longitude, capturedAt }),
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, payload);
@@ -503,9 +505,11 @@ export async function checkOut(
   // B1.3 del plan) — mandarlo ya deja el frontend listo para cuando lo haga,
   // sin más cambios de este lado.
   operationId?: string | null,
+  capturedAt?: string | null,
 ): Promise<boolean> {
+  const { withCheckoutCapturedAt } = await import('./visitCapturePayload');
   const payload = attachClientMetaToRestPayload(
-    {
+    withCheckoutCapturedAt({
       stop_id: stopId,
       latitude,
       longitude,
@@ -522,7 +526,7 @@ export async function checkOut(
         ? { no_sale_competitor: noSaleDetail.no_sale_competitor }
         : {}),
       ...(operationId ? { operation_id: operationId } : {}),
-    },
+    }, capturedAt),
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);
@@ -583,6 +587,7 @@ export async function uploadStopImage(
     latitude?: number | null;
     longitude?: number | null;
     capturedAt?: string | null;
+    offrouteVisitId?: number | null;
   },
 ): Promise<boolean> {
   // Photo uploads carry evidence_type and capture meta even when the global
@@ -596,6 +601,7 @@ export async function uploadStopImage(
     latitude: extras?.latitude,
     longitude: extras?.longitude,
     capturedAt: extras?.capturedAt,
+    offrouteVisitId: extras?.offrouteVisitId,
   });
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, payload);
   return !!result;

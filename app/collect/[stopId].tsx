@@ -8,6 +8,7 @@ import { Card } from '../../src/components/ui/Card';
 import { colors, radii, spacing } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { formatCurrency } from '../../src/utils/time';
+import { formatOdooUtcAsMexico } from '../../src/utils/localDate';
 import { loadCurrentEmployeeDayBundle, prepareCurrentEmployeeDayBundle } from '../../src/services/employeeDayBundle';
 import { createCurrentInvoiceCollectionPersistence } from '../../src/services/invoiceCollectionPersistence';
 import { captureCurrentInvoiceCollection, isInvoiceCollectionCaptureFailure } from '../../src/services/invoiceCollectionSync';
@@ -222,7 +223,7 @@ export default function CollectScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={typography.dim}>Parada #{collection.stop_id}</Text>
         {collection.customer_name ? <Text style={typography.body}>{collection.customer_name}</Text> : null}
-        {collection.snapshot_as_of ? <Text style={typography.dimSmall}>Snapshot: {collection.snapshot_as_of}</Text> : null}
+        {collection.snapshot_as_of ? <Text style={typography.dimSmall}>Snapshot: {formatOdooUtcAsMexico(collection.snapshot_as_of)}</Text> : null}
 
         {mustRefreshBundle ? (
           <Card style={styles.notice}>

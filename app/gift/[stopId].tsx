@@ -46,6 +46,8 @@ import {
   findDuplicateGift,
   giftCandidateFromOrder,
   giftCandidateFromQueueItem,
+  rememberConfirmedGift,
+  sessionGiftCandidates,
 } from '../../src/services/giftDuplicate';
 import { readPositiveStopId } from '../../src/services/stopIdRemap';
 import { useSalesStore } from '../../src/stores/useSalesStore';
@@ -230,6 +232,7 @@ export default function GiftScreen() {
     }
 
     const existingGifts = [
+      ...sessionGiftCandidates(),
       ...useSyncStore.getState().queue.flatMap((item) => {
         const candidate = giftCandidateFromQueueItem(item);
         return candidate ? [candidate] : [];
@@ -239,6 +242,13 @@ export default function GiftScreen() {
         return candidate ? [candidate] : [];
       }),
     ];
+    const rememberThisGift = () => {
+      rememberConfirmedGift({
+        partnerId,
+        productIds: payloadLines.map((line) => line.productId),
+        createdAtMs: Date.now(),
+      });
+    };
     if (findDuplicateGift({
       partnerId,
       productIds: payloadLines.map((line) => line.productId),
@@ -354,10 +364,12 @@ export default function GiftScreen() {
       // Sin red: encolar directo (no perder la captura en ruta).
       if (!isOnline) {
         await queueGiftWithLedger();
+        rememberThisGift();
         await navigateAfter();
         return;
       }
       const result = await createGift(payload);
+      rememberThisGift();
       const serverStopId = readPositiveStopId(result);
       if (stop.id < 0 && serverStopId) {
         useRouteStore.getState().replaceStopId(stop.id, serverStopId);
@@ -386,6 +398,7 @@ export default function GiftScreen() {
       }
       if (action === 'enqueue') {
         await queueGiftWithLedger();
+        rememberThisGift();
         Alert.alert('Sincronización pendiente', 'El regalo quedó guardado y se sincronizará al reconectar.');
         await navigateAfter();
         return;

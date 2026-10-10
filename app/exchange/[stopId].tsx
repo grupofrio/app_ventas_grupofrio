@@ -395,6 +395,7 @@ export default function CambioProductoScreen() {
           enqueue,
           imageType: 'exchange',
           dependsOn: [idempotencyKey],
+          offrouteVisitId: currentStop._offrouteVisitId ?? null,
         });
         await persistQueue();
       } catch (error) {
@@ -549,6 +550,7 @@ export default function CambioProductoScreen() {
           enqueue,
           imageType: 'exchange',
           dependsOn: [idempotencyKey],
+          offrouteVisitId: currentStop._offrouteVisitId ?? null,
         });
         await persistQueue();
       } else {

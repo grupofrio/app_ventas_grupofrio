@@ -207,11 +207,13 @@ export default function CheckinScreen() {
       setGpsMode('in_visit');
       if (queueForSync) {
         const gpsQueueId = enqueueGpsPoint(position, 'checkin');
+        const capturedAt = new Date().toISOString();
         enqueue('checkin', {
           stop_id: stop.id,
           latitude: lat,
           longitude: lon,
-          timestamp: Date.now(),
+          timestamp: Date.parse(capturedAt),
+          client_checkin_at: capturedAt,
         }, gpsQueueId ? { dependsOn: [gpsQueueId] } : undefined);
       }
     };
@@ -223,7 +225,7 @@ export default function CheckinScreen() {
 
     try {
       await publishGpsPointNow(position);
-      await checkIn(stop.id, lat, lon);
+      await checkIn(stop.id, lat, lon, null, new Date().toISOString());
       startLocalVisit(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo realizar el check-in.';

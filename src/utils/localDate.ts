@@ -72,3 +72,36 @@ export function formatMexicoDateTime(value: Date | number | string): string {
 export function mexicoDayOf(ms: number): string {
   return formatLocalISODate(new Date(ms), mexicoDisplayTimeZone(new Date(ms)));
 }
+
+/**
+ * Odoo naive datetimes on collection snapshots are UTC (`2026-10-10 02:12:42`).
+ * Show them in the fixed Mexico offset used by the rest of the field app.
+ */
+export function formatOdooUtcAsMexico(value: string | null | undefined): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const hasZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
+  const normalized = hasZone ? trimmed : `${trimmed.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return trimmed;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: mexicoDisplayTimeZone(date),
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const read = (type: Intl.DateTimeFormatPartTypes) => (
+    parts.find((part) => part.type === type)?.value ?? ''
+  );
+  const day = read('day');
+  const month = read('month');
+  const year = read('year');
+  const hour = read('hour');
+  const minute = read('minute');
+  if (!day || !month || !year || !hour || !minute) return trimmed;
+  return `${day}/${month}/${year} ${hour}:${minute}`;
+}

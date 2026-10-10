@@ -86,6 +86,7 @@ import {
   alignEvidencePhotosBeforeClose,
   deadPhotoRetryBlockReason,
   rearmDeadEvidencePhoto,
+  releaseClosesFromFailedPhotos,
   retryCeilingForItem,
 } from '../services/evidencePhotoSync.ts';
 import { useProductStore } from './useProductStore';
@@ -651,9 +652,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // anterior jamás borren una operación que ya volvió a estar viva.
   removeDeadQueueItems: (ids) => {
     const before = get().queue.length;
-    const newQueue = get().queue.filter(
-      (i) => i.status !== 'dead' || !ids.includes(i.id),
-    );
+    const removedIds = new Set(ids);
+    const newQueue = get().queue
+      .filter((i) => i.status !== 'dead' || !ids.includes(i.id))
+      .map((item) => {
+        if (!item.dependsOn?.some((dependencyId) => removedIds.has(dependencyId))) return item;
+        const dependsOn = item.dependsOn.filter((dependencyId) => !removedIds.has(dependencyId));
+        return { ...item, dependsOn: dependsOn.length > 0 ? dependsOn : undefined };
+      });
     const removed = before - newQueue.length;
     if (removed > 0) {
       set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -803,8 +809,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const now = Date.now();
     const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
     const alignedQueue = alignEvidencePhotosBeforeClose(queueAfterRetryAgeCutoff, now);
-    if (alignedQueue !== queue) {
-      set({ queue: alignedQueue, ...computeCounts(alignedQueue) });
+    const releasedQueue = releaseClosesFromFailedPhotos(alignedQueue, now);
+    if (releasedQueue !== queue) {
+      set({ queue: releasedQueue, ...computeCounts(releasedQueue) });
       schedulePersist();
       if (queueAfterRetryAgeCutoff !== queue) {
         logWarn('sync', 'automatic_retry_expired_requires_reconciliation', {
@@ -827,7 +834,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return false;
     };
 
-    const candidates = processingHolds.withoutHeld(alignedQueue).filter(isReady);
+    const candidates = processingHolds.withoutHeld(releasedQueue).filter(isReady);
     if (candidates.length === 0) {
       // Nada listo AHORA, pero puede haber ítems en error con backoff futuro:
       // arma el despertador para cuando venza el más próximo.
@@ -1578,16 +1585,32 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }
       break;
 
-    case 'checkin':
+    case 'checkin': {
+      const { capturedGpsBatchBody, capturedInstantIso } = await import('../services/visitCapturePayload');
+      const capturedAt = capturedInstantIso(payload);
+      const gpsBody = capturedGpsBatchBody(payload);
+      if (gpsBody) {
+        try {
+          await postRest('/pwa-ruta/gps-batch', gpsBody);
+        } catch (gpsError) {
+          logWarn('sync', 'checkin_captured_gps_replay_failed', {
+            id: item.id,
+            message: gpsError instanceof Error ? gpsError.message : String(gpsError),
+          });
+        }
+      }
       await checkIn(
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
         meta,
+        capturedAt,
       );
       break;
+    }
 
-    case 'checkout':
+    case 'checkout': {
+      const { capturedInstantIso } = await import('../services/visitCapturePayload');
       await checkOut(
         payload.stop_id as number,
         payload.latitude as number,
@@ -1600,8 +1623,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         },
         meta,
         payload.operation_id as string | undefined,
+        capturedInstantIso(payload),
       );
       break;
+    }
 
     case 'vehicle_check': {
       // Respuesta de checklist encolada offline. Idempotente por contrato:
@@ -1738,6 +1763,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
           latitude: typeof payload.capture_latitude === 'number' ? payload.capture_latitude : null,
           longitude: typeof payload.capture_longitude === 'number' ? payload.capture_longitude : null,
           capturedAt: typeof payload.captured_at === 'string' ? payload.captured_at : null,
+          offrouteVisitId: typeof payload.offroute_visit_id === 'number' ? payload.offroute_visit_id : null,
         },
       );
       break;

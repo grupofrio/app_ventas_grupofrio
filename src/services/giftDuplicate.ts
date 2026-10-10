@@ -10,6 +10,29 @@ export interface GiftDuplicateCandidate {
 export const DUPLICATE_GIFT_MESSAGE =
   'Ya registraste este producto como regalo para este cliente hoy. ¿Quieres registrarlo otra vez?';
 
+const sessionGifts: GiftDuplicateCandidate[] = [];
+
+/** Gifts already accepted or queued in this app session, including ones no longer in the sync queue. */
+export function rememberConfirmedGift(candidate: GiftDuplicateCandidate): void {
+  if (candidate.partnerId <= 0 || candidate.productIds.length === 0) return;
+  sessionGifts.push({
+    partnerId: candidate.partnerId,
+    productIds: [...candidate.productIds],
+    createdAtMs: candidate.createdAtMs,
+  });
+}
+
+export function sessionGiftCandidates(): GiftDuplicateCandidate[] {
+  return sessionGifts.map((candidate) => ({
+    ...candidate,
+    productIds: [...candidate.productIds],
+  }));
+}
+
+export function resetSessionGiftsForTests(): void {
+  sessionGifts.length = 0;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }

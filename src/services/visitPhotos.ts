@@ -23,6 +23,7 @@ export function enqueueVisitPhotos({
   holdProcessing,
   imageType = 'visit',
   capture,
+  offrouteVisitId,
 }: {
   stopId: number;
   photoUris: string[];
@@ -31,6 +32,7 @@ export function enqueueVisitPhotos({
   holdProcessing?: boolean;
   imageType?: string;
   capture?: EvidencePhotoCapture;
+  offrouteVisitId?: number | null;
 }): string[] {
   return photoUris.map((localUri) => {
     const opts: SyncEnqueueOptions | undefined = dependsOn?.length || holdProcessing
@@ -53,6 +55,9 @@ export function enqueueVisitPhotos({
     }
     if (typeof capture?.capturedAt === 'string' && capture.capturedAt.trim()) {
       payload.captured_at = capture.capturedAt.trim();
+    }
+    if (typeof offrouteVisitId === 'number' && offrouteVisitId > 0) {
+      payload.offroute_visit_id = offrouteVisitId;
     }
 
     return enqueue('photo', payload, opts);

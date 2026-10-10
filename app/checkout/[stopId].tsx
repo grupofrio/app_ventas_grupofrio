@@ -46,6 +46,7 @@ import {
   blockingEvidencePhotoIds,
   buildCloseDependsOn,
   describeEvidencePhotoWarning,
+  readStopId,
 } from '../../src/services/evidencePhotoSync';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 
@@ -293,10 +294,12 @@ function CheckoutScreenInner() {
     const enqueueCheckout = () => {
       const gpsQueueId = enqueueGpsPoint(position, 'checkout');
       const dependsOn = buildCloseDependsOn(blockingPhotoIds, [gpsQueueId]);
+      const capturedAt = new Date().toISOString();
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
-        timestamp: Date.now(),
+        timestamp: Date.parse(capturedAt),
+        client_checkout_at: capturedAt,
       }, {
         operationId: checkoutOperationId,
         ...(dependsOn.length > 0 ? { dependsOn } : {}),
@@ -339,6 +342,7 @@ function CheckoutScreenInner() {
         },
         undefined,
         checkoutOperationId,
+        new Date().toISOString(),
       );
       finalizeCheckout(shouldNavigateToNextStop);
     } catch (error) {
@@ -407,10 +411,12 @@ function CheckoutScreenInner() {
         Date.now(),
       );
       const reviewDependsOn = buildCloseDependsOn(reviewPhotoIds);
+      const reviewCapturedAt = new Date().toISOString();
       enqueue('checkout', {
         ...checkoutPayload,
         operation_id: checkoutOperationId,
-        timestamp: Date.now(),
+        timestamp: Date.parse(reviewCapturedAt),
+        client_checkout_at: reviewCapturedAt,
       }, {
         operationId: checkoutOperationId,
         ...(reviewDependsOn.length > 0 ? { dependsOn: reviewDependsOn } : {}),
@@ -442,12 +448,47 @@ function CheckoutScreenInner() {
         {(() => {
           const photoWarning = describeEvidencePhotoWarning(queue, stop.id);
           if (!photoWarning) return null;
+          const failedPhotoIds = queue
+            .filter((item) => (
+              item.type === 'photo'
+              && item.status === 'dead'
+              && readStopId(item.payload) === stop.id
+            ))
+            .map((item) => item.id);
           return (
-            <AlertBanner
-              variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
-              icon="📸"
-              message={photoWarning.message}
-            />
+            <>
+              <AlertBanner
+                variant={photoWarning.tone === 'failed' ? 'critical' : 'warning'}
+                icon="📸"
+                message={photoWarning.tone === 'failed'
+                  ? `${photoWarning.message} Puedes reintentarla, omitirla y cerrar la visita.`
+                  : photoWarning.message}
+              />
+              {failedPhotoIds.length > 0 ? (
+                <View style={{ gap: 8, marginBottom: 8 }}>
+                  <Button
+                    label="Reintentar foto"
+                    variant="secondary"
+                    onPress={() => {
+                      for (const photoId of failedPhotoIds) {
+                        const reason = useSyncStore.getState().retryDeadPhoto(photoId);
+                        if (reason) {
+                          Alert.alert('Foto', reason);
+                          return;
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    label="Omitir foto y continuar"
+                    variant="secondary"
+                    onPress={() => {
+                      useSyncStore.getState().removeDeadQueueItems(failedPhotoIds);
+                    }}
+                  />
+                </View>
+              ) : null}
+            </>
           );
         })()}
 

@@ -10,6 +10,7 @@ import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
 import { Card } from '../src/components/ui/Card';
 import { Badge } from '../src/components/ui/Badge';
+import Constants from 'expo-constants';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
@@ -129,7 +130,9 @@ export default function ProfileScreen() {
           <TouchableOpacity onPress={handleVersionTap} activeOpacity={1}>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Version</Text>
-              <Text style={styles.infoValue}>2.0.0-pilot</Text>
+              <Text style={styles.infoValue}>
+                {Constants.expoConfig?.version || Constants.nativeApplicationVersion || '1.4.5'}
+              </Text>
             </View>
           </TouchableOpacity>
           <View style={styles.infoRow}>

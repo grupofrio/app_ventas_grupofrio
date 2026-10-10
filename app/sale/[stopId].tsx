@@ -508,6 +508,7 @@ function SaleScreenInner() {
           total: recoveryIntent.ticketSnapshot.total,
           stopId: recoveryIntent.stopId,
           photoUris: recoveryIntent.photoUris,
+          offrouteVisitId: saleOffrouteVisitId,
           enqueue,
           persistQueue,
           deferDurablePersist: true,
@@ -795,6 +796,7 @@ function SaleScreenInner() {
         photoUris: salePhotoUris,
         enqueue,
         imageType: 'sale',
+        offrouteVisitId: saleOffrouteVisitId,
         capture: {
           latitude,
           longitude,

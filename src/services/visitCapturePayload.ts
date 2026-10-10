@@ -16,6 +16,7 @@ export function buildCheckinRequestBody(input: {
   latitude: number;
   longitude: number;
   capturedAt?: string | null;
+  operationId?: string | null;
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     stop_id: input.stopId,
@@ -25,6 +26,8 @@ export function buildCheckinRequestBody(input: {
   if (typeof input.capturedAt === 'string' && input.capturedAt.trim()) {
     body.client_checkin_at = input.capturedAt.trim();
   }
+  const operationId = typeof input.operationId === 'string' ? input.operationId.trim() : '';
+  if (operationId) body.operation_id = operationId;
   return body;
 }
 

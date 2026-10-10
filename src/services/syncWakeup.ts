@@ -84,10 +84,23 @@ export function shouldWakeOnWarehouseTransition(
   return prev !== next;                        // cambió de un válido a otro válido
 }
 
+type RetryCandidate = Pick<SyncQueueItem, 'status' | 'retries'> & { type?: SyncQueueItem['type'] };
+
+/**
+ * Business ops in `error` stay eligible after backoff no matter how many
+ * times they failed. Only GPS keeps a hard attempt ceiling; `dead` is the
+ * terminal stop for a real 4xx rejection.
+ */
+export function isAutomaticRetryCandidate(item: RetryCandidate, maxRetries: number): boolean {
+  if (item.status !== 'error') return false;
+  if (item.type === 'gps') return item.retries < retryCeilingForItem(item, maxRetries);
+  return true;
+}
+
 /**
  * ¿Está listo AHORA para procesarse? Espeja `isReady` de `processQueue`:
  *  - pending → listo, o
- *  - error con retries < MAX y backoff vencido (o sin next_retry_at).
+ *  - error (negocio, o GPS bajo su tope) con backoff vencido.
  */
 export function isEligibleNow(
   item: Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'> & { type?: SyncQueueItem['type'] },
@@ -95,7 +108,7 @@ export function isEligibleNow(
   maxRetries: number,
 ): boolean {
   if (item.status === 'pending') return true;
-  if (item.status === 'error' && item.retries < retryCeilingForItem(item, maxRetries)) {
+  if (isAutomaticRetryCandidate(item, maxRetries)) {
     return item.next_retry_at == null || item.next_retry_at <= now;
   }
   return false;
@@ -204,7 +217,7 @@ export interface WakeDelayOpts {
   now: number;
   /** piso del delay para que un ítem ya vencido dispare pronto sin busy-loop */
   minDelayMs?: number;
-  /** techo defensivo (el backoff real nunca pasa de ~30s) */
+  /** techo defensivo; el backoff de negocio llega hasta 5 min */
   maxDelayMs?: number;
 }
 
@@ -213,18 +226,19 @@ export interface WakeDelayOpts {
  * acotado a [minDelayMs, maxDelayMs]. Los vencidos / sin next_retry_at colapsan
  * a minDelayMs. Devuelve `null` cuando NO hay nada que agendar.
  *
- * Solo considera ítems en `error` (retries acotados → 0..MAX), nunca `pending`:
- * incluir pending arriesgaría un busy-loop si un pending queda bloqueado por
- * dependencia. Pending se despierta por evento (enqueue / reconexión / AppState).
+ * Solo considera ítems en `error` (negocio sin tope; GPS bajo su techo), nunca
+ * `pending`: incluir pending arriesgaría un busy-loop si un pending queda
+ * bloqueado por dependencia. Pending se despierta por evento (enqueue /
+ * reconexión / AppState).
  */
 export function nextWakeDelayMs(
   queue: Array<Pick<SyncQueueItem, 'status' | 'retries' | 'next_retry_at'> & { type?: SyncQueueItem['type'] }>,
   opts: WakeDelayOpts,
 ): number | null {
-  const { maxRetries, now, minDelayMs = 250, maxDelayMs = 60000 } = opts;
+  const { maxRetries, now, minDelayMs = 250, maxDelayMs = 300_000 } = opts;
   let soonest: number | null = null;
   for (const i of queue) {
-    if (i.status === 'error' && i.retries < retryCeilingForItem(i, maxRetries)) {
+    if (isAutomaticRetryCandidate(i, maxRetries)) {
       const due = i.next_retry_at ?? 0;
       if (soonest === null || due < soonest) soonest = due;
     }

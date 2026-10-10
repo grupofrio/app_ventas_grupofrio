@@ -4,8 +4,9 @@
  * V2 CHANGES (from blueprint):
  * - Priority-based processing: P1 (business) > P2 (media) > P3 (telemetry)
  * - GPS batch processing with concurrent-5 fallback
- * - Backoff with jitter: 2s / 8s / 30s (±20%)
- * - 'dead' status after MAX_RETRIES with rollback for proven failures;
+ * - Backoff with jitter: 2s / 8s / 30s / 2min / 5min (±20%, cap 5 min)
+ * - 'dead' only for a real 4xx business rejection (with rollback);
+ *   HTTP 5xx, 408/429, timeouts and network errors stay retryable;
  *   ambiguous gift/exchange outcomes stay held for reconciliation
  * - Rollback GENÉRICO por `_localStockDelta` (independiente del type)
  * - Migración/guard de eventos legacy refill/unload (retirados del producto):
@@ -84,8 +85,6 @@ import {
 } from '../services/syncDependencies';
 import {
   alignEvidencePhotosBeforeClose,
-  deadPhotoRetryBlockReason,
-  rearmDeadEvidencePhoto,
   readStopId,
   releaseClosesFromFailedPhotos,
   retryCeilingForItem,
@@ -124,7 +123,9 @@ import {
   runDurableLegacyMigration,
   handleDurableMigrationResult,
 } from '../services/legacyRefillUnloadMigration';
-import { nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
+import { isEligibleNow, nextWakeDelayMs, decidePostCycleActionAfterCycle } from '../services/syncWakeup';
+import { decideBusinessFailureDisposition, reviveTransientDeadItems, transientBackoffMs } from '../services/transientSyncFailure';
+import { deadBusinessRetryBlockReason, rearmDeadBusinessItem } from '../services/deadBusinessRetry';
 import { applySyncEnqueue } from '../services/syncEnqueue';
 import {
   createSyncCycleMetrics,
@@ -156,6 +157,7 @@ import {
 } from '../services/leadNote';
 import { shouldExposeCloseSyncing } from '../services/closeSyncBlockers';
 import { dropSilentGpsItems, shouldSilentlyDropGpsItem } from '../services/gpsTelemetryQueue';
+import { isAlreadyClosedResponse } from '../services/idempotentResponse';
 import { planCheckoutLeadNote } from '../services/leadNoteCheckout';
 import { postLeadNote } from '../services/leadNoteApi';
 
@@ -165,9 +167,8 @@ const MAX_RETRIES = 3;
 const MAX_ITEMS_PER_CYCLE = 200;
 const GPS_BATCH_SIZE = 50;
 
-// Backoff: 2s, 8s, 30s with ±20% jitter
-const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
-const BACKOFF_JITTER = 0.2;
+// Backoff: 2s, 8s, 30s, 2min, then 5 min. Jitter and the cap live in
+// transientBackoffMs so a 503 window longer than 3 attempts keeps waiting.
 
 // Backoff de un ítem legacy DIFERIDO por fallo de persistencia final. Fijo (no
 // escalante) y != 0ms: reintenta con cadencia moderada sin redrenaje agresivo.
@@ -246,9 +247,7 @@ function uuid(): string {
 }
 
 function calculateBackoff(retryCount: number): number {
-  const base = BACKOFF_SCHEDULE_MS[Math.min(retryCount, BACKOFF_SCHEDULE_MS.length - 1)];
-  const jitter = base * BACKOFF_JITTER * (Math.random() * 2 - 1);
-  return Math.round(base + jitter);
+  return transientBackoffMs(retryCount);
 }
 
 // ═══ Store interface ═══
@@ -291,6 +290,8 @@ interface SyncState {
   removeDeadQueueItems: (ids: string[]) => number;
   /** Rearms one dead evidence photo. Returns a Spanish block reason, or null. */
   retryDeadPhoto: (id: string) => string | null;
+  /** Rearms one dead business op (or photo) onto the same id. */
+  retryDeadItem: (id: string) => string | null;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -704,14 +705,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     return removed;
   },
 
-  retryDeadPhoto: (id) => {
+  retryDeadPhoto: (id) => get().retryDeadItem(id),
+
+  retryDeadItem: (id) => {
     const queue = get().queue;
-    const photo = queue.find((item) => item.id === id);
-    if (!photo) return 'No se encontró la foto en la cola.';
-    const block = deadPhotoRetryBlockReason(photo, queue);
+    const item = queue.find((candidate) => candidate.id === id);
+    if (!item) return 'No se encontró la operación en la cola.';
+    const block = deadBusinessRetryBlockReason(item, queue);
     if (block) return block;
-    const next = rearmDeadEvidencePhoto(queue, id);
-    if (next === queue) return 'Esa foto no se puede reintentar.';
+    const next = rearmDeadBusinessItem(queue, id);
+    if (next === queue) return 'Esa operación no se puede reintentar.';
     set({ queue: next, ...computeCounts(next) });
     schedulePersist();
     if (get().isOnline && !get().isSyncing) {
@@ -795,13 +798,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (Array.isArray(saved) && saved.length > 0) {
       const { queue: restored, discardedCount, syncingRecoveredCount } = restorePersistedSyncQueue(saved);
       const droppedGps = dropSilentGpsItems(restored, Date.now());
-      set({ queue: droppedGps.queue, ...computeCounts(droppedGps.queue) });
+      const revived = reviveTransientDeadItems(droppedGps.queue);
+      set({ queue: revived.queue, ...computeCounts(revived.queue) });
       logInfo('sync', 'rehydrate', {
-        total: droppedGps.queue.length,
+        total: revived.queue.length,
         syncing_recovered: syncingRecoveredCount,
         gps_dropped: droppedGps.droppedIds.length,
+        transient_revived: revived.revivedIds.length,
       });
-      if (discardedCount > 0 || droppedGps.droppedIds.length > 0) {
+      if (discardedCount > 0 || droppedGps.droppedIds.length > 0 || revived.revivedIds.length > 0) {
         try {
           await persistCurrentQueue();
           if (discardedCount > 0) {
@@ -874,17 +879,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     // Items eligible for processing:
     // - pending, OR
-    // - error under that type's retry ceiling, once backoff has elapsed.
-    // Photos keep a higher ceiling than the generic MAX so they can still
-    // retry after the close has been released.
-    const isReady = (item: SyncQueueItem): boolean => {
-      if (item.status === 'pending') return true;
-      if (item.status === 'error' && item.retries < retryCeilingForItem(item, MAX_RETRIES)) {
-        if (item.next_retry_at && now < item.next_retry_at) return false;
-        return true;
-      }
-      return false;
-    };
+    // - error once backoff has elapsed. Business ops stay eligible past the
+    //   old attempt ceiling so a 5xx window cannot strand them. GPS still
+    //   drops on its own ceiling before this filter.
+    const isReady = (item: SyncQueueItem): boolean => isEligibleNow(item, now, MAX_RETRIES);
 
     const candidates = processingHolds.withoutHeld(releasedQueue).filter(isReady);
     if (candidates.length === 0) {
@@ -1425,6 +1423,22 @@ async function processOneItemUnheld(
         retries: newRetries,
         error: msg,
       });
+    } else if (decideBusinessFailureDisposition({
+      type: item.type,
+      error,
+      retriesAfterAttempt: newRetries,
+      attemptLimit,
+      shouldRetry,
+    }) === 'retry') {
+      // 5xx, 408/429, timeout o red: el mismo operation_id se reintenta con
+      // backoff hasta 5 min. Nunca pasa a dead ni revierte stock local.
+      get().markError(item.id, msg);
+      logWarn('sync', 'item_transient_retry', {
+        id: item.id,
+        type: item.type,
+        retries: newRetries,
+        error: msg,
+      });
     } else if (!shouldRetry || newRetries >= attemptLimit) {
       reportDeadSyncItem(item, error, shouldRetry ? 'dead' : 'rejected');
       get().markDead(item.id, msg, newRetries);
@@ -1677,12 +1691,18 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
           });
         }
       }
+      const checkinOperationId = typeof payload.operation_id === 'string' && payload.operation_id
+        ? payload.operation_id
+        : typeof payload._operationId === 'string' && payload._operationId
+          ? payload._operationId
+          : item.id;
       await checkIn(
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
         meta,
         capturedAt,
+        checkinOperationId,
       );
       break;
     }
@@ -1710,6 +1730,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
+        const code = typeof (error as { code?: unknown }).code === 'string'
+          ? (error as { code: string }).code
+          : null;
+        if (isAlreadyClosedResponse(code, message)) break;
         if (status === 'sale' && isMissingDeliveryLinesCheckoutError(message)) {
           await checkOut(
             payload.stop_id as number,

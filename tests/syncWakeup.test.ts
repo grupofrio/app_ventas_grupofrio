@@ -52,8 +52,9 @@ function testEligibility(m: Mod) {
   assert.equal(isEligibleNow(item('error', 1, null), NOW, MAX), true);
   // error con backoff FUTURO → NO elegible aún
   assert.equal(isEligibleNow(item('error', 1, NOW + 5_000), NOW, MAX), false);
-  // error que agotó reintentos → NO elegible (irá/está dead)
-  assert.equal(isEligibleNow(item('error', MAX, NOW - 1), NOW, MAX), false);
+  // Un error de negocio pasado el tope viejo SIGUE elegible: un 503 no es terminal.
+  assert.equal(isEligibleNow(item('error', MAX, NOW - 1), NOW, MAX), true);
+  assert.equal(isEligibleNow(item('error', MAX, NOW + 5_000), NOW, MAX), false);
   // syncing / done / dead → nunca elegibles (evita doble envío de algo en vuelo)
   assert.equal(isEligibleNow(item('syncing'), NOW, MAX), false);
   assert.equal(isEligibleNow(item('done'), NOW, MAX), false);
@@ -65,6 +66,10 @@ function testEligibility(m: Mod) {
   );
   assert.equal(
     isEligibleNow({ ...item('error', 12, NOW - 1), type: 'photo' }, NOW, MAX),
+    true,
+  );
+  assert.equal(
+    isEligibleNow({ ...item('error', MAX, NOW - 1), type: 'gps' }, NOW, MAX),
     false,
   );
 
@@ -145,8 +150,10 @@ function testWakeDelay(m: Mod) {
     3_000,
   );
 
-  // error que agotó reintentos → NO cuenta (está/estará dead)
-  assert.equal(nextWakeDelayMs([item('error', MAX, NOW + 1_000)], opts), null);
+  // error de negocio pasado el tope viejo → sí agenda el wake
+  assert.equal(nextWakeDelayMs([item('error', MAX, NOW + 1_000)], opts), 1_000);
+  // GPS agotado no agenda wake
+  assert.equal(nextWakeDelayMs([{ ...item('error', MAX, NOW + 1_000), type: 'gps' }], opts), null);
 
   // techo defensivo
   assert.equal(nextWakeDelayMs([item('error', 0, NOW + 999_999)], opts), 60_000);

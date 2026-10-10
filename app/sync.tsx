@@ -44,7 +44,7 @@ const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' |
 export default function SyncScreen() {
   const {
     queue, isOnline, isSyncing, pendingCount, errorCount, deadCount,
-    processQueue, clearDone, clearDead, retryDeadPhoto, removeDeadQueueItems,
+    processQueue, clearDone, clearDead, retryDeadItem, removeDeadQueueItems,
   } = useSyncStore();
 
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
@@ -193,6 +193,9 @@ export default function SyncScreen() {
         {visibleErrors.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>CON ERROR ({visibleErrors.length})</Text>
+            <Text style={styles.deadHint}>
+              Fallo de red o del servidor. Se reintenta sola, con el mismo identificador, hasta que Odoo responda.
+            </Text>
             {visibleErrors.map((item) => (
               <SyncItem key={item.id} item={item} />
             ))}
@@ -219,16 +222,16 @@ export default function SyncScreen() {
           <>
             <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({purgeableDead.length})</Text>
             <Text style={styles.deadHint}>
-              No se completarán solas: agotaron sus reintentos o dependían de una venta que falló. En una foto fallida puedes pulsar Reintentar. También puedes reintentar la venta desde su visita, o usar "Limpiar Historial" arriba.
+              Un rechazo del servidor no se reintenta solo. Pulsa Reintentar para enviarla de nuevo con el mismo identificador. Limpiar Historial la borra y no llega a Odoo.
             </Text>
             {purgeableDead.map((item) => (
               <SyncItem
                 key={item.id}
                 item={item}
-                onRetryDeadPhoto={item.type === 'photo' ? () => {
-                  const reason = retryDeadPhoto(item.id);
+                onRetryDead={() => {
+                  const reason = retryDeadItem(item.id);
                   if (reason) Alert.alert('No se puede reintentar', reason);
-                } : undefined}
+                }}
                 onDeleteDeadPhoto={item.type === 'photo' ? () => {
                   Alert.alert(
                     'Eliminar foto',
@@ -275,11 +278,11 @@ export default function SyncScreen() {
 
 function SyncItem({
   item,
-  onRetryDeadPhoto,
+  onRetryDead,
   onDeleteDeadPhoto,
 }: {
   item: SyncQueueItem;
-  onRetryDeadPhoto?: () => void;
+  onRetryDead?: () => void;
   onDeleteDeadPhoto?: () => void;
 }) {
   const icon = typeIcons[item.type] || '📦';
@@ -328,10 +331,10 @@ function SyncItem({
           {item.retries > 0 ? ` · Intento ${item.retries}` : ''}
           {item.error_message && !blockedByParent ? ` · ${item.error_message}` : ''}
         </Text>
-        {(onRetryDeadPhoto || onDeleteDeadPhoto) && (
+        {(onRetryDead || onDeleteDeadPhoto) && (
           <View style={styles.photoActions}>
-            {onRetryDeadPhoto ? (
-              <Button label="Reintentar" small onPress={onRetryDeadPhoto} />
+            {onRetryDead ? (
+              <Button label="Reintentar" small onPress={onRetryDead} />
             ) : null}
             {onDeleteDeadPhoto ? (
               <Button label="Eliminar" variant="danger" small onPress={onDeleteDeadPhoto} />

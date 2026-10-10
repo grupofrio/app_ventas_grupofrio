@@ -477,10 +477,13 @@ export async function checkIn(
   longitude: number,
   meta?: ClientEventMeta | null,
   capturedAt?: string | null,
+  // Same stable id on every retry. Checkout already sends operation_id;
+  // check-in now does too so a 503 replay does not mint a second arrival.
+  operationId?: string | null,
 ): Promise<boolean> {
   const { buildCheckinRequestBody } = await import('./visitCapturePayload');
   const payload = attachClientMetaToRestPayload(
-    buildCheckinRequestBody({ stopId, latitude, longitude, capturedAt }),
+    buildCheckinRequestBody({ stopId, latitude, longitude, capturedAt, operationId }),
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, payload);

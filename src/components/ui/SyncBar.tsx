@@ -10,8 +10,10 @@ import { colors, radii, spacing } from '../../theme/tokens';
 import { hasUserVisibleSyncing, useSyncStore } from '../../stores/useSyncStore';
 
 export function SyncBar() {
-  const { isOnline, pendingCount, queue } = useSyncStore();
+  const { isOnline, pendingCount, errorCount, deadCount, queue } = useSyncStore();
   const isSyncing = hasUserVisibleSyncing(queue);
+  const failed = errorCount + deadCount;
+  const waiting = pendingCount + failed;
 
   if (isSyncing) {
     return (
@@ -25,7 +27,30 @@ export function SyncBar() {
     return (
       <View style={[styles.bar, styles.offline]}>
         <Text style={styles.text}>
-          🟡 Sin conexion · {pendingCount} operacion{pendingCount !== 1 ? 'es' : ''} en cola
+          🟡 Sin conexion · {waiting} operacion{waiting !== 1 ? 'es' : ''} en cola
+        </Text>
+      </View>
+    );
+  }
+
+  if (failed > 0) {
+    const pendingLabel = pendingCount > 0
+      ? ` · ${pendingCount} pendiente${pendingCount !== 1 ? 's' : ''}`
+      : '';
+    return (
+      <View style={[styles.bar, styles.attention]}>
+        <Text style={styles.text}>
+          🟠 En linea · {failed} con error{pendingLabel}
+        </Text>
+      </View>
+    );
+  }
+
+  if (pendingCount > 0) {
+    return (
+      <View style={[styles.bar, styles.offline]}>
+        <Text style={styles.text}>
+          🟡 En linea · {pendingCount} pendiente{pendingCount !== 1 ? 's' : ''} por enviar
         </Text>
       </View>
     );
@@ -56,6 +81,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningAlpha08,
     borderWidth: 1,
     borderColor: 'rgba(245,158,11,0.15)',
+  },
+  attention: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.18)',
   },
   syncing: {
     backgroundColor: colors.primaryAlpha08,

@@ -43,7 +43,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
@@ -125,6 +125,7 @@ function colorForDiff(diff: number): string {
 }
 
 export default function CashCloseScreen() {
+  const router = useRouter();
   const [cashInHand, setCashInHand] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -645,6 +646,7 @@ export default function CashCloseScreen() {
             <Text style={styles.syncMetric}>
               Pendientes: {pendingCount}
               {errorCount > 0 ? `  ·  Con error: ${errorCount}` : ''}
+              {deadCount > 0 ? `  ·  Fallidos: ${deadCount}` : ''}
               {invoiceCollectionSummaryReady
                 ? `  ·  Cobranza pendiente/revisión: ${invoiceCollectionBlockingCount}`
                 : '  ·  Cobranza: verificando'}
@@ -668,6 +670,17 @@ export default function CashCloseScreen() {
                 <Text style={styles.syncBtnText}>Sincronizar pendientes</Text>
               )}
             </TouchableOpacity>
+            {deadCount > 0 && (
+              <TouchableOpacity
+                style={styles.syncDeadLink}
+                onPress={() => router.push('/sync' as never)}
+                accessibilityRole="button"
+                accessibilityLabel="Cola de Sincronizacion. Limpiar Historial de Errores"
+              >
+                <Text style={styles.syncDeadLinkText}>Cola de Sincronizacion</Text>
+                <Text style={styles.syncDeadLinkHint}>Limpiar Historial de Errores</Text>
+              </TouchableOpacity>
+            )}
             {!isOnline && (
               <Text style={styles.syncHint}>
                 Sin conexión: conéctate al WiFi del CEDIS para sincronizar.
@@ -1080,6 +1093,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   syncBtnText: { ...typography.buttonSmall },
+  syncDeadLink: {
+    marginTop: 8,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  syncDeadLinkText: { ...typography.buttonSmall, color: colors.primary },
+  syncDeadLinkHint: { ...typography.dimSmall, color: colors.primary, marginTop: 2 },
   syncHint: {
     ...typography.dimSmall,
     marginTop: 8,

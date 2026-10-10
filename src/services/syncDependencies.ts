@@ -80,6 +80,60 @@ export function findLiveDependents(
  * entrada. Padre ya marcado `dead` por el caller (markDead). Items sin relación
  * se devuelven por referencia (sin cambios) — gps/gift/no_sale normales intactos.
  */
+/**
+ * A live item whose dependency is already dead can never send. Returns the
+ * seller-facing reason, or null when the item may still wait or run.
+ * A dead evidence photo does not fail the close that was waiting on it.
+ */
+export function dependencyBlockedByDeadParent<T extends SyncDependencyItem>(
+  item: T,
+  queue: T[],
+): string | null {
+  if (item.status === 'done' || item.status === 'dead') return null;
+  const deps = item.dependsOn ?? [];
+  if (deps.length === 0) return null;
+  const byId = new Map(queue.map((entry) => [entry.id, entry]));
+  for (const depId of deps) {
+    const parent = byId.get(depId);
+    if (!parent || parent.status !== 'dead') continue;
+    if (
+      parent.type === 'photo'
+      && (item.type === 'checkout' || item.type === 'offroute_visit_close')
+    ) {
+      continue;
+    }
+    return dependencyBlockedMessage(item.type);
+  }
+  return null;
+}
+
+/**
+ * Move every live item that depends on an already-dead operation to dead.
+ * Covers enqueue-after-failure and retries; cascadeDeadToDependents only runs
+ * at the moment the parent itself fails. Returns the same array when nothing
+ * changes.
+ */
+export function failDependentsOfDeadParents<T extends SyncDependencyItem>(queue: T[]): T[] {
+  let current = queue;
+  for (let pass = 0; pass < 20; pass += 1) {
+    let changed = false;
+    const next = current.map((item) => {
+      const reason = dependencyBlockedByDeadParent(item, current);
+      if (!reason) return item;
+      changed = true;
+      return {
+        ...item,
+        status: 'dead' as SyncItemStatus,
+        error_message: reason,
+        next_retry_at: null,
+      };
+    });
+    if (!changed) return current;
+    current = next as T[];
+  }
+  return current;
+}
+
 export function cascadeDeadToDependents(
   queue: SyncQueueItem[],
   deadParentId: string,

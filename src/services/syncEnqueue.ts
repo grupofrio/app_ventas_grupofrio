@@ -1,3 +1,4 @@
+import { failDependentsOfDeadParents } from './syncDependencies.ts';
 import {
   SYNC_PRIORITY_MAP,
   type SyncEnqueueOptions,
@@ -51,7 +52,7 @@ export function applySyncEnqueue(input: ApplySyncEnqueueInput): ApplySyncEnqueue
           }
         : item,
     );
-    return { id, queue: rearmed, action: 'rearmed_dead' };
+    return { id, queue: failDependentsOfDeadParents(rearmed), action: 'rearmed_dead' };
   }
 
   const item: SyncQueueItem = {
@@ -67,5 +68,5 @@ export function applySyncEnqueue(input: ApplySyncEnqueueInput): ApplySyncEnqueue
     dependsOn: options?.dependsOn ? [...options.dependsOn] : undefined,
   };
 
-  return { id, queue: [...queue, item], action: 'inserted' };
+  return { id, queue: failDependentsOfDeadParents([...queue, item]), action: 'inserted' };
 }

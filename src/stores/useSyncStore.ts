@@ -75,7 +75,13 @@ import {
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
-import { areSyncDependenciesSatisfied, cascadeDeadToDependents, isSyncDependencyMet } from '../services/syncDependencies';
+import {
+  areSyncDependenciesSatisfied,
+  cascadeDeadToDependents,
+  dependencyBlockedByDeadParent,
+  failDependentsOfDeadParents,
+  isSyncDependencyMet,
+} from '../services/syncDependencies';
 import {
   alignEvidencePhotosBeforeClose,
   deadPhotoRetryBlockReason,
@@ -436,6 +442,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     if (result.action !== 'reused') {
       set({ queue: result.queue, ...computeCounts(result.queue) });
+      for (const item of result.queue) {
+        const before = originalQueue.find((prev) => prev.id === item.id);
+        if (item.status === 'dead' && before?.status !== 'dead') {
+          reportDeadSyncItem(item);
+        }
+      }
 
       // Persist every queue mutation immediately (fire-and-forget), unless the
       // caller is about to commit queue + ledger atomically.
@@ -771,8 +783,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // ═══ V2: Priority-based Sync Processor ═══
 
   processQueue: async () => {
-    const { queue, isOnline, isSyncing } = get();
+    const { isOnline, isSyncing } = get();
     if (!isOnline || isSyncing) return;
+
+    const queued = get().queue;
+    const settled = failDependentsOfDeadParents(queued);
+    if (settled !== queued) {
+      set({ queue: settled, ...computeCounts(settled) });
+      schedulePersist();
+      for (const item of settled) {
+        const before = queued.find((prev) => prev.id === item.id);
+        if (item.status === 'dead' && before?.status !== 'dead') {
+          reportDeadSyncItem(item);
+        }
+      }
+    }
+    const queue = settled;
 
     const now = Date.now();
     const queueAfterRetryAgeCutoff = transitionAgedItemsToManualReconciliation(queue, now);
@@ -1223,8 +1249,17 @@ async function processOneItemUnheld(
     return 'handled'; // completed o not_legacy: nada más que hacer
   }
 
-  if (!areSyncDependenciesSatisfied(item, get().queue)) {
-    logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
+  const fresh = get().queue.find((queued) => queued.id === item.id) ?? item;
+  if (fresh.status === 'dead' || fresh.status === 'done') return 'dependency_wait';
+  const blockedReason = dependencyBlockedByDeadParent(fresh, get().queue);
+  if (blockedReason) {
+    reportDeadSyncItem({ ...fresh, error_message: blockedReason });
+    get().markDead(fresh.id, blockedReason);
+    return 'failed';
+  }
+
+  if (!areSyncDependenciesSatisfied(fresh, get().queue)) {
+    logInfo('sync', 'dependency_wait', { id: fresh.id, type: fresh.type, dependsOn: fresh.dependsOn });
     return 'dependency_wait';
   }
 

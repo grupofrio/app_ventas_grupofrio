@@ -47,7 +47,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
-import { useSyncStore } from '../src/stores/useSyncStore';
+import { isUserVisibleSyncItem, useSyncStore } from '../src/stores/useSyncStore';
+import { isCorteValidatedFlag } from '../src/services/cortePlanState';
 import { formatCorteFailureMessage } from '../src/services/corteFeedback';
 import { reportOperationFailure } from '../src/services/operationFailureReport';
 import { formatSyncedOperations } from '../src/services/syncProgressLabel';
@@ -133,7 +134,7 @@ export default function CashCloseScreen() {
 
   // Sync queue
   const pendingCount = useSyncStore((s) => s.pendingCount);
-  const totalItems = useSyncStore((s) => s.queue.length);
+  const totalItems = useSyncStore((s) => s.queue.filter((item) => isUserVisibleSyncItem(item)).length);
   const isOnline = useSyncStore((s) => s.isOnline);
   const isSyncing = useSyncStore((s) => s.isSyncing);
   const processQueue = useSyncStore((s) => s.processQueue);
@@ -184,7 +185,9 @@ export default function CashCloseScreen() {
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
   const [corteBusy, setCorteBusy] = useState(false);
   const [liquidationBusy, setLiquidationBusy] = useState(false);
-  const [corteConfirmed, setCorteConfirmed] = useState(false);
+  const [corteConfirmed, setCorteConfirmed] = useState(() => (
+    isCorteValidatedFlag(useRouteStore.getState().plan?.corte_validated)
+  ));
   const [liquidationConfirmedAt, setLiquidationConfirmedAt] = useState<string | null>(null);
 
   const loadLiquidation = useCallback(async () => {
@@ -230,12 +233,13 @@ export default function CashCloseScreen() {
       void loadLiquidation();
       void loadReconciliation();
       void loadInvoiceCollectionSummary();
-      setCorteConfirmed(Boolean(plan?.corte_validated));
+      void loadPlan({ force: true });
+      setCorteConfirmed(isCorteValidatedFlag(plan?.corte_validated));
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
       if (!arrivalKmInputRef.current && typeof plan?.arrival_km === 'number' && plan.arrival_km > 0) {
         setArrivalKmInput(String(Math.round(plan.arrival_km)));
       }
-    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at, plan?.arrival_km]),
+    }, [loadPlan, loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at, plan?.arrival_km]),
   );
 
   // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
@@ -377,7 +381,7 @@ export default function CashCloseScreen() {
       ? colors.textDim
       : colorForDiff(physicalDiff);
 
-  const corteAlreadyConfirmed = corteConfirmed || Boolean(plan?.corte_validated);
+  const corteAlreadyConfirmed = corteConfirmed || isCorteValidatedFlag(plan?.corte_validated);
   const liquidationAlreadyConfirmed = Boolean(liquidationConfirmedAt || plan?.liquidacion_done_at);
   const invoiceCollectionBlockingCount = invoiceCollectionSummary?.blockingCount ?? 0;
   const invoiceCollectionSummaryReady = invoiceCollectionSummary !== null;
@@ -419,8 +423,9 @@ export default function CashCloseScreen() {
       });
       await loadReconciliation();
       if (result.ok && result.success) {
+        if (planId) useRouteStore.getState().noteCorteValidated(planId);
         setCorteConfirmed(true);
-        await loadPlan();
+        await loadPlan({ force: true });
         Alert.alert('Corte validado', result.message || 'El corte quedo confirmado.');
         return;
       }

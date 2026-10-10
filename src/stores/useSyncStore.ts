@@ -155,6 +155,7 @@ import {
   decideLeadNoteFailure,
 } from '../services/leadNote';
 import { shouldExposeCloseSyncing } from '../services/closeSyncBlockers';
+import { dropSilentGpsItems, shouldSilentlyDropGpsItem } from '../services/gpsTelemetryQueue';
 import { planCheckoutLeadNote } from '../services/leadNoteCheckout';
 import { postLeadNote } from '../services/leadNoteApi';
 
@@ -561,6 +562,21 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   markDead: (id, message, retries) => {
     const previousQueue = get().queue;
+    const target = previousQueue.find((item) => item.id === id);
+    if (target?.type === 'gps') {
+      const dropped = dropSilentGpsItems(
+        previousQueue.map((item) => (
+          item.id === id
+            ? { ...item, status: 'dead' as SyncItemStatus, retries: retries ?? item.retries }
+            : item
+        )),
+        Date.now(),
+      );
+      set({ queue: dropped.queue, ...computeCounts(dropped.queue) });
+      schedulePersist();
+      logInfo('sync', 'gps_dropped', { id, reason: 'mark_dead', message });
+      return;
+    }
     const rejectedSale = previousQueue.find((item) => item.id === id && item.type === 'sale_order');
     const afterParent = previousQueue.map((i) => (
       i.id === id
@@ -778,15 +794,25 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const saved = await storeLoad<unknown[]>(STORAGE_KEYS.SYNC_QUEUE);
     if (Array.isArray(saved) && saved.length > 0) {
       const { queue: restored, discardedCount, syncingRecoveredCount } = restorePersistedSyncQueue(saved);
-      set({ queue: restored, ...computeCounts(restored) });
+      const droppedGps = dropSilentGpsItems(restored, Date.now());
+      set({ queue: droppedGps.queue, ...computeCounts(droppedGps.queue) });
       logInfo('sync', 'rehydrate', {
-        total: restored.length,
+        total: droppedGps.queue.length,
         syncing_recovered: syncingRecoveredCount,
+        gps_dropped: droppedGps.droppedIds.length,
       });
-      if (discardedCount > 0) {
+      if (discardedCount > 0 || droppedGps.droppedIds.length > 0) {
         try {
           await persistCurrentQueue();
-          logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+          if (discardedCount > 0) {
+            logWarn('sync', 'rehydrate_discarded_unauthorized_items', { discardedCount });
+          }
+          if (droppedGps.droppedIds.length > 0) {
+            logInfo('sync', 'gps_dropped', {
+              count: droppedGps.droppedIds.length,
+              reason: 'rehydrate',
+            });
+          }
         } catch (error: unknown) {
           logError('sync', 'rehydrate_discard_persist_failed', {
             discardedCount,
@@ -810,6 +836,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   processQueue: async () => {
     const { isOnline, isSyncing } = get();
     if (!isOnline || isSyncing) return;
+
+    const gpsClean = dropSilentGpsItems(get().queue, Date.now());
+    if (gpsClean.droppedIds.length > 0) {
+      set({ queue: gpsClean.queue, ...computeCounts(gpsClean.queue) });
+      schedulePersist();
+      logInfo('sync', 'gps_dropped', { count: gpsClean.droppedIds.length, reason: 'process' });
+    }
 
     const queued = get().queue;
     const settled = failDependentsOfDeadParents(queued);
@@ -1495,13 +1528,23 @@ function handleGpsItemError(
   get: () => SyncState,
   set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
 ): void {
-  const newRetries = item.retries + 1;
-  if (newRetries >= MAX_RETRIES) {
-    get().markDead(item.id, message);
-    // GPS has no rollback — it's fire-and-forget telemetry
-  } else {
-    get().markError(item.id, message);
+  const attempt = { ...item, retries: item.retries + 1 };
+  if (shouldSilentlyDropGpsItem(attempt, Date.now())) {
+    const dropped = dropSilentGpsItems(
+      get().queue.map((queued) => (queued.id === item.id ? attempt : queued)),
+      Date.now(),
+    );
+    set({ queue: dropped.queue, ...computeCounts(dropped.queue) });
+    schedulePersist();
+    logInfo('sync', 'gps_dropped', {
+      id: item.id,
+      retries: attempt.retries,
+      reason: 'retry_or_stale',
+      message,
+    });
+    return;
   }
+  get().markError(item.id, message);
 }
 
 // ═══ DAG resolver (preserved from V1 BLD-010, unchanged logic) ═══

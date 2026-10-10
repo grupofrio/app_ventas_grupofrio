@@ -51,12 +51,12 @@ export default function SyncScreen() {
   const errors = queue.filter((i) => i.status === 'error');
   const dead = queue.filter((i) => i.status === 'dead');
   const backgroundLeadNotes = queue.filter((i) => i.type === 'lead_note' && i.status !== 'done');
-  const visiblePending = pending.filter((i) => i.type !== 'lead_note');
-  const visibleErrors = errors.filter((i) => i.type !== 'lead_note');
-  const visibleDead = dead.filter((i) => i.type !== 'lead_note');
+  const visiblePending = pending.filter((i) => i.type !== 'lead_note').filter((i) => i.type !== 'gps');
+  const visibleErrors = errors.filter((i) => i.type !== 'lead_note').filter((i) => i.type !== 'gps');
+  const visibleDead = dead.filter((i) => i.type !== 'lead_note').filter((i) => i.type !== 'gps');
   const physicalReview = visibleDead.filter(isProtectedPhysicalReviewItem);
   const purgeableDead = visibleDead.filter((item) => !isProtectedPhysicalReviewItem(item));
-  const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
+  const done = queue.filter((i) => i.status === 'done' && i.type !== 'gps').slice(-10); // Last 10
 
   // P1: estado claro de la cola (sincronizado / sincronizando / pendiente / error).
   const syncCopy = describeSyncQueueState({ pendingCount, errorCount, deadCount, isSyncing, isOnline });

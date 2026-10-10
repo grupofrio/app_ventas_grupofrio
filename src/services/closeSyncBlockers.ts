@@ -2,6 +2,9 @@
  * Route close and cash close count unfinished sync work. A lead note is not
  * that work: it retries in the background and must not block or warn-block
  * cierre de ruta or corte, even while gf/lead/note is still 404.
+ *
+ * GPS telemetry is the same kind of background work. A 503 must not raise
+ * the syncing flag or the pending/error/dead counters those screens read.
  */
 
 export interface CloseSyncQueueItem {
@@ -15,8 +18,10 @@ export interface CloseBlockingSyncCounts {
   deadCount: number;
 }
 
+const BACKGROUND_SYNC_TYPES = new Set(['lead_note', 'gps']);
+
 export function isCloseBlockingSyncItem(item: Pick<CloseSyncQueueItem, 'type'>): boolean {
-  return item.type !== 'lead_note';
+  return !BACKGROUND_SYNC_TYPES.has(item.type);
 }
 
 /** Pending, error, and dead totals that cierre de ruta and corte are allowed to see. */
@@ -34,5 +39,5 @@ export function countCloseBlockingSyncItems(queue: CloseSyncQueueItem[]): CloseB
  * That flag is what the close screens read as "espera a que termine".
  */
 export function shouldExposeCloseSyncing(candidates: Array<Pick<CloseSyncQueueItem, 'type'>>): boolean {
-  return candidates.some((item) => item.type !== 'lead_note');
+  return candidates.some((item) => isCloseBlockingSyncItem(item));
 }

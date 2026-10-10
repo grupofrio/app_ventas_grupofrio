@@ -12,6 +12,27 @@ export interface CloseStopRef {
   customer_name?: string | null;
   route_sequence?: number | null;
   state?: string | null;
+  source_model?: string | null;
+  _isOffroute?: boolean | null;
+  _offrouteVisitId?: number | null;
+}
+
+/** Prospect / off-route visit. Virtual stops use a negative id and sequence 999. */
+export function isOffrouteOpenStop(stop: CloseStopRef): boolean {
+  if (stop._isOffroute === true) return true;
+  if (typeof stop.id === 'number' && stop.id < 0) return true;
+  return stop.source_model === 'gf.offroute.visit';
+}
+
+export function offrouteVisitIdForClose(
+  stop: CloseStopRef,
+  fallbackVisitId?: number | null,
+): number | null {
+  if (typeof stop._offrouteVisitId === 'number' && stop._offrouteVisitId > 0) {
+    return stop._offrouteVisitId;
+  }
+  if (typeof fallbackVisitId === 'number' && fallbackVisitId > 0) return fallbackVisitId;
+  return null;
 }
 
 export interface OpenStopsForClose {
@@ -41,7 +62,9 @@ export function partitionOpenStops(stops: readonly CloseStopRef[]): OpenStopsFor
 }
 
 export function formatCloseStopLine(stop: CloseStopRef): string {
-  const name = (stop.customer_name ?? '').trim() || `Parada ${stop.id}`;
+  const name = (stop.customer_name ?? '').trim()
+    || (isOffrouteOpenStop(stop) ? 'Visita fuera de ruta' : `Parada ${stop.id}`);
+  if (isOffrouteOpenStop(stop)) return `Fuera de ruta · ${name}`;
   if (typeof stop.route_sequence === 'number' && Number.isFinite(stop.route_sequence)) {
     return `${stop.route_sequence} · ${name}`;
   }
@@ -79,6 +102,9 @@ export function describeOpenStopsConfirmation(open: OpenStopsForClose): OpenStop
       `En curso (${activeCount}). Se cierran en el servidor antes de liquidar, sin marcarlas como no-venta si ya hubo entrega:`,
     );
     parts.push(listLines(open.inProgress));
+    if (open.inProgress.some(isOffrouteOpenStop)) {
+      parts.push('Las visitas fuera de ruta se cierran en el servidor como sin venta.');
+    }
   }
   if (pendingCount > 0) {
     parts.push(`Pendientes (${pendingCount}). Siguen sin visitarse:`);

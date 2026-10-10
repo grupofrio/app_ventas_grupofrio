@@ -2,11 +2,13 @@
  * F39 — check out every in-progress stop before liquidación / route close.
  *
  * result_status is sale only when that stop has a server-accepted sale.
- * A missing-delivery rejection is retried once as no_sale. Virtual stops
- * never hit the checkout endpoint.
+ * A missing-delivery rejection is retried once as no_sale. An in-progress
+ * prospect / off-route visit (virtual stop, sequence 999, gf.offroute.visit)
+ * is closed with the off-route endpoint as no_sale. If that call fails, the
+ * liquidation stops and the visit stays on the phone.
  */
 
-import { checkOut } from './gfLogistics';
+import { checkOut, closeOffrouteVisit } from './gfLogistics';
 import { getCurrentPosition, setGpsMode } from './gps';
 import { buildCheckoutPayload } from './checkoutResult';
 import { stuckVisitSaleTotal } from './stuckVisitClose';
@@ -16,6 +18,10 @@ import {
 } from './checkoutSaleEvidence';
 import { readHasSyncedSale } from './checkoutSaleLookup';
 import { shouldSkipStopCheckout } from './virtualStops';
+import {
+  isOffrouteOpenStop,
+  offrouteVisitIdForClose,
+} from './routeClosePreconditions';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useVisitStore } from '../stores/useVisitStore';
 import { useLocationStore } from '../stores/useLocationStore';
@@ -49,14 +55,48 @@ export async function checkoutInProgressStops(
   stops: readonly CloseStopRef[],
 ): Promise<InProgressCloseResult> {
   const closedIds: number[] = [];
-  const { latitude, longitude } = stops.some((stop) => !shouldSkipStopCheckout(stop.id))
+  const { latitude, longitude } = stops.some((stop) => !shouldSkipStopCheckout(stop.id) || isOffrouteOpenStop(stop))
     ? await checkoutCoordinates()
     : { latitude: 0, longitude: 0 };
 
   for (const stop of stops) {
     const name = (stop.customer_name ?? '').trim() || `Parada ${stop.id}`;
-    if (shouldSkipStopCheckout(stop.id)) {
+    if (isOffrouteOpenStop(stop)) {
+      const visitState = useVisitStore.getState();
+      const visitId = offrouteVisitIdForClose(
+        stop,
+        visitState.currentStopId === stop.id ? visitState.offrouteVisitId : null,
+      );
+      if (visitId != null) {
+        try {
+          await closeOffrouteVisit({
+            visit_id: visitId,
+            result_status: 'no_sale',
+            latitude,
+            longitude,
+          });
+        } catch (error) {
+          const serverMessage = error instanceof Error
+            ? error.message
+            : 'No se pudo cerrar la visita fuera de ruta.';
+          if (!alreadyClosedMessage(serverMessage)) {
+            return {
+              ok: false,
+              closedIds,
+              failure: {
+                stopId: stop.id,
+                customerName: name,
+                message: `No se cerró la visita fuera de ruta en el servidor: ${serverMessage}`,
+              },
+            };
+          }
+        }
+      }
       useRouteStore.getState().removeStop(stop.id);
+      if (useVisitStore.getState().currentStopId === stop.id) {
+        useVisitStore.getState().resetVisit();
+        setGpsMode('in_transit');
+      }
       closedIds.push(stop.id);
       continue;
     }

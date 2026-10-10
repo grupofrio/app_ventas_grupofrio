@@ -1037,6 +1037,14 @@ export async function confirmRouteLiquidation(
      * (o por plan_id). Ver docs/KOLDFIELD_BACKEND_HARDENING_REQUESTS.md.
      */
     operation_id?: string;
+    /**
+     * F39: persisted llegada. The confirm handler auto-closes the plan, so
+     * the value has to travel with the confirm (and already be stored via
+     * km-update) or arrival_km stays 0.
+     */
+    arrival_km?: number;
+    /** Seller saw the pending / in-progress list and chose to continue. */
+    acknowledge_open_stops?: boolean;
   } = {},
 ): Promise<GFRouteLiquidationConfirmResult> {
   const body: Record<string, unknown> = {};
@@ -1054,6 +1062,12 @@ export async function confirmRouteLiquidation(
   }
   if (typeof payload.operation_id === 'string' && payload.operation_id) {
     body.operation_id = payload.operation_id;
+  }
+  if (typeof payload.arrival_km === 'number' && payload.arrival_km > 0) {
+    body.arrival_km = payload.arrival_km;
+  }
+  if (payload.acknowledge_open_stops === true) {
+    body.acknowledge_open_stops = true;
   }
 
   try {

@@ -62,6 +62,14 @@ import {
   GFLiquidationSummary,
   validateRouteCorte,
 } from '../src/services/gfLogistics';
+import { updateKm } from '../src/services/routeKm';
+import { checkoutInProgressStops } from '../src/services/closeInProgressStops';
+import {
+  describeOpenStopsConfirmation,
+  partitionOpenStops,
+  validateArrivalKm,
+} from '../src/services/routeClosePreconditions';
+import { isAbsurdKmDriven, isAbsurdOdometer } from '../src/services/routeStartLogic';
 import { formatCurrency } from '../src/utils/time';
 import {
   canConfirmLiquidation,
@@ -159,8 +167,13 @@ export default function CashCloseScreen() {
 
   // Plan del día (para resolver plan_id en liquidation)
   const plan = useRouteStore((s) => s.plan);
+  const stops = useRouteStore((s) => s.stops);
   const loadPlan = useRouteStore((s) => s.loadPlan);
   const planId = plan?.plan_id ?? null;
+  const departureKm = typeof plan?.departure_km === 'number' ? plan.departure_km : null;
+  const [arrivalKmInput, setArrivalKmInput] = useState('');
+  const arrivalKmInputRef = useRef('');
+  arrivalKmInputRef.current = arrivalKmInput;
 
   // Liquidation summary (account.payment vía /pwa-ruta/liquidation)
   const [liquidation, setLiquidation] = useState<GFLiquidationSummary | null>(null);
@@ -219,7 +232,10 @@ export default function CashCloseScreen() {
       void loadInvoiceCollectionSummary();
       setCorteConfirmed(Boolean(plan?.corte_validated));
       setLiquidationConfirmedAt(plan?.liquidacion_done_at ?? null);
-    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at]),
+      if (!arrivalKmInputRef.current && typeof plan?.arrival_km === 'number' && plan.arrival_km > 0) {
+        setArrivalKmInput(String(Math.round(plan.arrival_km)));
+      }
+    }, [loadTodaySales, loadLiquidation, loadReconciliation, loadInvoiceCollectionSummary, plan?.corte_validated, plan?.liquidacion_done_at, plan?.arrival_km]),
   );
 
   // BLD-20260505-CLOSESYNC: forzar sincronización de pendientes desde el
@@ -434,6 +450,7 @@ export default function CashCloseScreen() {
   // una sola vez (mismo id para el reintento "force") para que el backend pueda
   // deduplicar un doble-tap/retry y no confirme dos veces.
   const liquidationOpIdRef = useRef<string | null>(null);
+  const liquidationCloseRef = useRef<{ arrivalKm: number; acknowledgeOpenStops: boolean } | null>(null);
   function getLiquidationOperationId(): string {
     if (!liquidationOpIdRef.current) {
       liquidationOpIdRef.current = createUuidV4();
@@ -444,12 +461,41 @@ export default function CashCloseScreen() {
   const submitLiquidation = useCallback(async (force: boolean) => {
     setLiquidationBusy(true);
     try {
+      const closePrep = liquidationCloseRef.current;
+      if (!planId || !closePrep) {
+        Alert.alert('Falta KM de llegada', 'Captura el KM de llegada antes de liquidar.');
+        return;
+      }
+      // F39: liquidacion/confirm auto-closes the plan. Check out in-progress
+      // stops and persist llegada before that POST, or the plan closes with
+      // arrival_km 0 and visits still open.
+      const openNow = partitionOpenStops(useRouteStore.getState().stops);
+      if (openNow.inProgress.length > 0) {
+        const closedVisits = await checkoutInProgressStops(openNow.inProgress);
+        if (!closedVisits.ok) {
+          const failure = closedVisits.failure;
+          Alert.alert(
+            'No se cerró la visita',
+            failure
+              ? `${failure.customerName}: ${failure.message}`
+              : 'Hay una visita en curso que no se pudo cerrar.',
+          );
+          return;
+        }
+      }
+      const storedArrival = useRouteStore.getState().plan?.arrival_km;
+      if (storedArrival !== closePrep.arrivalKm) {
+        await updateKm(planId, 'arrival', closePrep.arrivalKm);
+        await loadPlan({ force: true });
+      }
       const result = await confirmRouteLiquidation({
         ...(planId ? { plan_id: planId } : {}),
         cash_collected: cashCaptured,
         notes,
         force,
         operation_id: getLiquidationOperationId(),
+        ...(closePrep ? { arrival_km: closePrep.arrivalKm } : {}),
+        ...(closePrep?.acknowledgeOpenStops ? { acknowledge_open_stops: true } : {}),
       });
       if (result.ok) {
         const confirmedAt = result.data?.liquidacion_done_at ?? new Date().toISOString();
@@ -457,11 +503,12 @@ export default function CashCloseScreen() {
         await loadLiquidation();
         await loadPlan();
         const routeWarning = result.data?.route_close_warning;
+        const llegada = closePrep.arrivalKm.toLocaleString('es-MX');
         Alert.alert(
           'Liquidacion confirmada',
           routeWarning
-            ? `El efectivo quedo confirmado. Cierre de ruta pendiente: ${routeWarning}`
-            : 'El efectivo quedo confirmado en Odoo.',
+            ? `El efectivo quedo confirmado. KM llegada: ${llegada}. Cierre de ruta pendiente: ${routeWarning}`
+            : `El efectivo quedo confirmado en Odoo. KM llegada: ${llegada}.`,
         );
         return;
       }
@@ -520,8 +567,56 @@ export default function CashCloseScreen() {
       Alert.alert('Efectivo invalido', 'El efectivo capturado no puede ser negativo.');
       return;
     }
-    await submitLiquidation(false);
-  }, [canConfirmFinalLiquidation, hasInput, cashCaptured, submitLiquidation]);
+    const km = validateArrivalKm({ arrival: arrivalKmInput, departure: departureKm });
+    if (!km.ok) {
+      Alert.alert('KM llegada', km.message);
+      return;
+    }
+    const open = partitionOpenStops(stops);
+    const warning = describeOpenStopsConfirmation(open);
+    const start = (acknowledgeOpenStops: boolean) => {
+      liquidationCloseRef.current = { arrivalKm: km.arrival, acknowledgeOpenStops };
+      void submitLiquidation(false);
+    };
+    const askAbsurdThenStart = (acknowledgeOpenStops: boolean) => {
+      const driven = departureKm != null && departureKm > 0 ? km.arrival - departureKm : null;
+      if (!isAbsurdKmDriven(driven) && !isAbsurdOdometer(km.arrival)) {
+        start(acknowledgeOpenStops);
+        return;
+      }
+      const detail = isAbsurdKmDriven(driven)
+        ? `El recorrido del día sería ${driven!.toLocaleString('es-MX')} km`
+        : `${km.arrival.toLocaleString('es-MX')} km de odómetro`;
+      Alert.alert(
+        'KM inusualmente alto',
+        `${detail}, parece un error de captura. ¿Es correcto?`,
+        [
+          { text: 'Corregir', style: 'cancel' },
+          { text: 'Sí, es correcto', onPress: () => start(acknowledgeOpenStops) },
+        ],
+      );
+    };
+    if (warning.requiresAcknowledgement) {
+      Alert.alert(warning.title, warning.message, [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: warning.requiresCheckout ? 'Cerrar visitas y liquidar' : 'Liquidar de todos modos',
+          style: 'destructive',
+          onPress: () => askAbsurdThenStart(true),
+        },
+      ]);
+      return;
+    }
+    askAbsurdThenStart(false);
+  }, [
+    arrivalKmInput,
+    canConfirmFinalLiquidation,
+    cashCaptured,
+    departureKm,
+    hasInput,
+    stops,
+    submitLiquidation,
+  ]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -861,6 +956,24 @@ export default function CashCloseScreen() {
           <Text style={styles.differenceHint}>
             Positivo = sobrante, Negativo = faltante
           </Text>
+        </View>
+
+        <View style={styles.inputCard}>
+          <Text style={styles.sectionTitle}>KM llegada</Text>
+          <Text style={styles.inputHint}>
+            {departureKm != null && departureKm > 0
+              ? `Salida ${departureKm.toLocaleString('es-MX')} km. La llegada tiene que ser mayor o igual.`
+              : 'Captura el kilometraje de llegada de la unidad. Tiene que ser mayor a 0.'}
+          </Text>
+          <TextInput
+            style={styles.cashInput}
+            placeholder="Ej. 125000"
+            placeholderTextColor={colors.textDim}
+            keyboardType="number-pad"
+            value={arrivalKmInput}
+            onChangeText={setArrivalKmInput}
+            accessibilityLabel="KM llegada"
+          />
         </View>
 
         {liquidationAlreadyConfirmed ? (

@@ -29,9 +29,15 @@ import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocati
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 import { describeEvidencePhotoWarning, readStopId } from '../../src/services/evidencePhotoSync';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { shouldOfferStuckVisitClose, stuckVisitSaleTotal } from '../../src/services/stuckVisitClose';
+import {
+  checkoutResultSaleTotal,
+  hasSyncedSaleForStop,
+  retryCheckoutAsNoSale,
+} from '../../src/services/checkoutSaleEvidence';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { checkOut } from '../../src/services/gfLogistics';
 import { getCurrentPosition, setGpsMode } from '../../src/services/gps';
@@ -202,11 +208,20 @@ export default function StopDetailScreen() {
     if (!stop || closingStuckVisit.current) return;
     closingStuckVisit.current = true;
     try {
-      const saleTotal = stuckVisitSaleTotal({
-        currentStopId,
-        stopId: stop.id,
-        visitSaleTotal: useVisitStore.getState().saleTotal(),
-      });
+      const hasSyncedSale = hasSyncedSaleForStop(
+        stop.id,
+        useSyncStore.getState().queue,
+        useSalesStore.getState().orders,
+      );
+      const saleTotal = checkoutResultSaleTotal(
+        hasSyncedSale,
+        stuckVisitSaleTotal({
+          currentStopId,
+          stopId: stop.id,
+          visitSaleTotal: useVisitStore.getState().saleTotal(),
+          hasSyncedSale,
+        }),
+      );
       const position = await getCurrentPosition();
       const latitude = position?.latitude ?? useLocationStore.getState().latitude ?? 0;
       const longitude = position?.longitude ?? useLocationStore.getState().longitude ?? 0;
@@ -247,20 +262,37 @@ export default function StopDetailScreen() {
         Alert.alert('Visita en cola', 'El cierre quedó pendiente de sincronización. La foto fallida no lo bloquea.');
         return;
       }
+      const sendCheckout = (status: 'sale' | 'no_sale') => checkOut(
+        checkoutPayload.stop_id,
+        checkoutPayload.latitude,
+        checkoutPayload.longitude,
+        status,
+        null,
+        null,
+        operationId,
+        capturedAt,
+      );
       try {
-        await checkOut(
-          checkoutPayload.stop_id,
-          checkoutPayload.latitude,
-          checkoutPayload.longitude,
-          checkoutPayload.result_status,
-          null,
-          null,
-          operationId,
-          capturedAt,
-        );
+        await sendCheckout(checkoutPayload.result_status);
         finishLocal();
         Alert.alert('Visita cerrada', 'Puedes continuar con la otra visita.');
       } catch (error) {
+        try {
+          const recovered = await retryCheckoutAsNoSale(
+            error,
+            checkoutPayload.result_status,
+            () => sendCheckout('no_sale'),
+          );
+          if (recovered) {
+            finishLocal();
+            Alert.alert('Visita cerrada', 'Puedes continuar con la otra visita.');
+            return;
+          }
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : 'No se pudo cerrar la visita.';
+          Alert.alert('Cierre rechazado', retryMessage);
+          return;
+        }
         const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita.';
         if (isRetryableSyncErrorMessage(message)) {
           useSyncStore.getState().enqueue('checkout', {

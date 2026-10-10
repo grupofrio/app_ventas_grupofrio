@@ -1,18 +1,25 @@
 /**
  * F39 — check out every in-progress stop before liquidación / route close.
  *
- * A stop that is not the current cart is closed as a sale so a delivery that
- * already synced is not rewritten as no-sale. The current cart uses its real
- * total (0 → no-sale). Virtual stops never hit the checkout endpoint.
+ * result_status is sale only when that stop has a server-accepted sale.
+ * A missing-delivery rejection is retried once as no_sale. Virtual stops
+ * never hit the checkout endpoint.
  */
 
 import { checkOut } from './gfLogistics';
 import { getCurrentPosition, setGpsMode } from './gps';
 import { buildCheckoutPayload } from './checkoutResult';
 import { stuckVisitSaleTotal } from './stuckVisitClose';
+import {
+  checkoutResultSaleTotal,
+  hasSyncedSaleForStop,
+  retryCheckoutAsNoSale,
+} from './checkoutSaleEvidence';
 import { shouldSkipStopCheckout } from './virtualStops';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useVisitStore } from '../stores/useVisitStore';
+import { useSalesStore } from '../stores/useSalesStore';
+import { useSyncStore } from '../stores/useSyncStore';
 import { useLocationStore } from '../stores/useLocationStore';
 import { createUuidV4 } from '../utils/clientEvent';
 import type { CloseStopRef } from './routeClosePreconditions';
@@ -57,11 +64,20 @@ export async function checkoutInProgressStops(
     }
 
     const currentStopId = useVisitStore.getState().currentStopId;
-    const saleTotal = stuckVisitSaleTotal({
-      currentStopId,
-      stopId: stop.id,
-      visitSaleTotal: useVisitStore.getState().saleTotal(),
-    });
+    const hasSyncedSale = hasSyncedSaleForStop(
+      stop.id,
+      useSyncStore.getState().queue,
+      useSalesStore.getState().orders,
+    );
+    const saleTotal = checkoutResultSaleTotal(
+      hasSyncedSale,
+      stuckVisitSaleTotal({
+        currentStopId,
+        stopId: stop.id,
+        visitSaleTotal: useVisitStore.getState().saleTotal(),
+        hasSyncedSale,
+      }),
+    );
     const payload = buildCheckoutPayload({
       stopId: stop.id,
       latitude,
@@ -70,21 +86,34 @@ export async function checkoutInProgressStops(
       noSaleReasonId: null,
     });
     const isCurrent = currentStopId === stop.id;
+    const operationId = createUuidV4();
+    const capturedAt = new Date().toISOString();
+    const send = (status: 'sale' | 'no_sale') => checkOut(
+      payload.stop_id,
+      payload.latitude,
+      payload.longitude,
+      status,
+      null,
+      null,
+      operationId,
+      capturedAt,
+    );
     try {
-      await checkOut(
-        payload.stop_id,
-        payload.latitude,
-        payload.longitude,
-        payload.result_status,
-        null,
-        null,
-        createUuidV4(),
-        new Date().toISOString(),
-      );
+      await send(payload.result_status);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita.';
-      if (!alreadyClosedMessage(message)) {
-        return { ok: false, closedIds, failure: { stopId: stop.id, customerName: name, message } };
+      try {
+        const recovered = await retryCheckoutAsNoSale(error, payload.result_status, () => send('no_sale'));
+        if (!recovered) {
+          const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita.';
+          if (!alreadyClosedMessage(message)) {
+            return { ok: false, closedIds, failure: { stopId: stop.id, customerName: name, message } };
+          }
+        }
+      } catch (retryError) {
+        const message = retryError instanceof Error ? retryError.message : 'No se pudo cerrar la visita.';
+        if (!alreadyClosedMessage(message)) {
+          return { ok: false, closedIds, failure: { stopId: stop.id, customerName: name, message } };
+        }
       }
     }
 

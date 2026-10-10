@@ -77,6 +77,18 @@ test('an in-progress stop can be closed when another visit or a failed photo blo
     currentStopId: 8,
     stopId: 220969,
     visitSaleTotal: 0,
+  }), 0);
+  assert.equal(stuckVisitSaleTotal({
+    currentStopId: 221167,
+    stopId: 220969,
+    visitSaleTotal: 342,
+    hasSyncedSale: false,
+  }), 0);
+  assert.equal(stuckVisitSaleTotal({
+    currentStopId: 221167,
+    stopId: 220969,
+    visitSaleTotal: 0,
+    hasSyncedSale: true,
   }), 1);
 });
 

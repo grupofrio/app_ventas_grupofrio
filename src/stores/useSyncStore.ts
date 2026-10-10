@@ -73,7 +73,6 @@ import {
   completeVehicleChecklist,
 } from '../services/vehicleChecklist';
 import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
-import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
 import {
   areSyncDependenciesSatisfied,
@@ -86,9 +85,15 @@ import {
   alignEvidencePhotosBeforeClose,
   deadPhotoRetryBlockReason,
   rearmDeadEvidencePhoto,
+  readStopId,
   releaseClosesFromFailedPhotos,
   retryCeilingForItem,
 } from '../services/evidencePhotoSync.ts';
+import {
+  hasSyncedSaleForStop,
+  isMissingDeliveryLinesCheckoutError,
+  resolveCheckoutResultStatus,
+} from '../services/checkoutSaleEvidence';
 import { useProductStore } from './useProductStore';
 import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -132,6 +137,7 @@ import {
   processSyncItemToCompletion,
 } from '../services/syncItemCompletion';
 import { useVisitStore } from './useVisitStore';
+import { useSalesStore } from './useSalesStore';
 import { reportDeadSyncItem } from '../services/operationFailureReport';
 import {
   applySaleDefinitiveClearDeferral,
@@ -554,6 +560,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   markDead: (id, message, retries) => {
     const previousQueue = get().queue;
+    const rejectedSale = previousQueue.find((item) => item.id === id && item.type === 'sale_order');
     const afterParent = previousQueue.map((i) => (
       i.id === id
         ? {
@@ -577,6 +584,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       (i, idx) => i.status === 'dead' && afterParent[idx].status !== 'dead',
     ).length;
     logError('sync', 'item_dead', { id, message });
+    if (rejectedSale) discardCartForRejectedSale(rejectedSale);
     for (const deadItem of newQueue) {
       const before = previousQueue.find((item) => item.id === deadItem.id);
       if (deadItem.status === 'dead' && before?.status !== 'dead' && deadItem.id !== id) {
@@ -635,6 +643,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // operador sin necesidad de consultar el queue de vuelta.
   clearDead: () => {
     const before = get().queue.length;
+    const removedSales = get().queue.filter(
+      (item) => item.status === 'dead'
+        && item.type === 'sale_order'
+        && !isProtectedPhysicalReviewItem(item),
+    );
     const newQueue = get().queue.filter(
       (i) => i.status !== 'dead' || isProtectedPhysicalReviewItem(i),
     );
@@ -643,6 +656,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_purged', { removed });
+      for (const sale of removedSales) discardCartForRejectedSale(sale);
     }
     return removed;
   },
@@ -652,6 +666,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   // anterior jamás borren una operación que ya volvió a estar viva.
   removeDeadQueueItems: (ids) => {
     const before = get().queue.length;
+    const removedSales = get().queue.filter(
+      (item) => item.status === 'dead' && item.type === 'sale_order' && ids.includes(item.id),
+    );
     const removedIds = new Set(ids);
     const newQueue = get().queue
       .filter((i) => i.status !== 'dead' || !ids.includes(i.id))
@@ -665,6 +682,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       set({ queue: newQueue, ...computeCounts(newQueue) });
       schedulePersist();
       logInfo('sync', 'dead_items_selectively_removed', { removed });
+      for (const sale of removedSales) discardCartForRejectedSale(sale);
     }
     return removed;
   },
@@ -1558,6 +1576,14 @@ async function adoptSyncedStop(item: SyncQueueItem, response: unknown): Promise<
   await adoptServerStopFromResponse(requested, response);
 }
 
+function checkoutStatusForStop(stopId: number): 'sale' | 'no_sale' {
+  return resolveCheckoutResultStatus(hasSyncedSaleForStop(
+    stopId,
+    useSyncStore.getState().queue,
+    useSalesStore.getState().orders,
+  ));
+}
+
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
   const meta = item.meta ?? null;
@@ -1610,21 +1636,43 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
     }
 
     case 'checkout': {
+      const operationId = payload.operation_id as string | undefined,
+        status = checkoutStatusForStop(typeof payload.stop_id === 'number' ? payload.stop_id : 0);
       const { capturedInstantIso } = await import('../services/visitCapturePayload');
-      await checkOut(
-        payload.stop_id as number,
-        payload.latitude as number,
-        payload.longitude as number,
-        payload.result_status as CheckoutResultStatus,
-        {
-          no_sale_reason_code: payload.no_sale_reason_code as string | undefined,
-          no_sale_notes: payload.no_sale_notes as string | undefined,
-          no_sale_competitor: payload.no_sale_competitor as string | undefined,
-        },
-        meta,
-        payload.operation_id as string | undefined,
-        capturedInstantIso(payload),
-      );
+      const capturedAt = capturedInstantIso(payload);
+      const noSaleDetail = {
+        no_sale_reason_code: payload.no_sale_reason_code as string | undefined,
+        no_sale_notes: payload.no_sale_notes as string | undefined,
+        no_sale_competitor: payload.no_sale_competitor as string | undefined,
+      };
+      try {
+        await checkOut(
+          payload.stop_id as number,
+          payload.latitude as number,
+          payload.longitude as number,
+          status,
+          noSaleDetail,
+          meta,
+          operationId,
+          capturedAt,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (status === 'sale' && isMissingDeliveryLinesCheckoutError(message)) {
+          await checkOut(
+            payload.stop_id as number,
+            payload.latitude as number,
+            payload.longitude as number,
+            'no_sale',
+            noSaleDetail,
+            meta,
+            operationId,
+            capturedAt,
+          );
+          break;
+        }
+        throw error;
+      }
       break;
     }
 
@@ -1892,6 +1940,14 @@ function markConsignmentPhysicalDeliveryReviewRequired(id: string): void {
   );
   useSyncStore.setState({ queue, ...computeCounts(queue) });
   persistQueueInBackground('consignment_physical_delivery_review');
+}
+
+function discardCartForRejectedSale(item: Pick<SyncQueueItem, 'id' | 'type' | 'payload'>): void {
+  if (item.type !== 'sale_order') return;
+  const payload = item.payload && typeof item.payload === 'object'
+    ? item.payload as Record<string, unknown>
+    : undefined;
+  useVisitStore.getState().discardRejectedSaleCart(item.id, readStopId(payload));
 }
 
 function rollbackFailedOperation(item: SyncQueueItem): void {

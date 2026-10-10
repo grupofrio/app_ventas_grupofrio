@@ -27,6 +27,7 @@ import {
   type SaleRecoveryIntentV1,
 } from '../services/saleRecoveryIntent';
 import { createUuidV4 } from '../utils/clientEvent';
+import { shouldDiscardRejectedSaleCart } from '../services/checkoutSaleEvidence';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -133,6 +134,7 @@ interface VisitState {
     options?: { clearOperationId?: boolean },
   ) => Promise<boolean>;
   clearSaleConfirmationLock: (operationId: string) => Promise<boolean>;
+  discardRejectedSaleCart: (operationId: string, stopId: number | null) => boolean;
 }
 
 const initialState = createInitialVisitState();
@@ -356,6 +358,34 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   markSaleReadyToContinue: (operationId, options) =>
     visitStatePersistence.markSaleReadyToContinue(operationId, options),
 
-  clearSaleConfirmationLock: (operationId) =>
-    visitStatePersistence.clearSaleConfirmationLock(operationId),
+  clearSaleConfirmationLock: async (operationId) => {
+    const matches = get().saleOperationId === operationId;
+    const cleared = await visitStatePersistence.clearSaleConfirmationLock(operationId);
+    if (matches) {
+      set({ saleLines: [] });
+      persistVisitStateInBackground('discard_rejected_sale_lines');
+    }
+    return cleared;
+  },
+
+  discardRejectedSaleCart: (operationId, stopId) => {
+    const state = get();
+    if (!shouldDiscardRejectedSaleCart({
+      saleOperationId: state.saleOperationId,
+      currentStopId: state.currentStopId,
+      saleLineCount: state.saleLines.length,
+      rejectedOperationId: operationId,
+      rejectedStopId: stopId,
+    })) return false;
+    set({
+      saleLines: [],
+      saleConfirmed: false,
+      saleOperationId: null,
+      saleReadyToContinue: false,
+      saleRecoveryPersistenceFailed: false,
+      saleRecoveryIntent: null,
+    });
+    persistVisitStateInBackground('discard_rejected_sale_cart');
+    return true;
+  },
 }));

@@ -17,8 +17,16 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
+import {
+  checkoutResultSaleTotal,
+  describeCheckoutSalePresentation,
+  hasSyncedSaleForStop,
+  retryCheckoutAsNoSale,
+  syncedSaleAmountForStop,
+} from '../../src/services/checkoutSaleEvidence';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import {
   enqueueGpsPoint,
@@ -76,6 +84,7 @@ function CheckoutScreenInner() {
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const queue = useSyncStore((s) => s.queue);
+  const orders = useSalesStore((s) => s.orders);
   const processQueue = useSyncStore((s) => s.processQueue);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
@@ -164,6 +173,14 @@ function CheckoutScreenInner() {
 
   const total = saleTotal();
   const totalKg = saleTotalKg();
+  const hasSyncedSale = hasSyncedSaleForStop(stop.id, queue, orders);
+  const checkoutSaleTotal = checkoutResultSaleTotal(hasSyncedSale, total);
+  const salePresentation = describeCheckoutSalePresentation({
+    hasSyncedSale,
+    saleSyncStatus: liveSaleSyncState.status,
+    cartTotal: total,
+    syncedAmount: syncedSaleAmountForStop(stop.id, queue, orders),
+  });
 
   function finalizeCheckout(shouldNavigateToNextStop: boolean) {
     setGpsMode('in_transit');
@@ -270,11 +287,19 @@ function CheckoutScreenInner() {
 
     const lat = position.latitude;
     const lon = position.longitude;
+    // processQueue may have just accepted the sale. Re-read evidence so a
+    // rejected cart cannot keep result_status=sale, and a sale that synced
+    // in this attempt is not closed as no_sale.
+    const syncedNow = hasSyncedSaleForStop(
+      stop.id,
+      useSyncStore.getState().queue,
+      useSalesStore.getState().orders,
+    );
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
       latitude: lat,
       longitude: lon,
-      saleTotal: total,
+      saleTotal: checkoutResultSaleTotal(syncedNow, useVisitStore.getState().saleTotal()),
       noSaleReasonId,
     });
 
@@ -328,6 +353,12 @@ function CheckoutScreenInner() {
       return;
     }
 
+    const capturedAt = new Date().toISOString();
+    const noSaleDetail = {
+      no_sale_reason_code: checkoutPayload.no_sale_reason_code,
+      no_sale_notes: checkoutPayload.no_sale_notes,
+      no_sale_competitor: checkoutPayload.no_sale_competitor,
+    };
     try {
       await publishGpsPointNow(position);
       await checkOut(
@@ -335,17 +366,38 @@ function CheckoutScreenInner() {
         checkoutPayload.latitude,
         checkoutPayload.longitude,
         checkoutPayload.result_status,
-        {
-          no_sale_reason_code: checkoutPayload.no_sale_reason_code,
-          no_sale_notes: checkoutPayload.no_sale_notes,
-          no_sale_competitor: checkoutPayload.no_sale_competitor,
-        },
+        noSaleDetail,
         undefined,
         checkoutOperationId,
-        new Date().toISOString(),
+        capturedAt,
       );
       finalizeCheckout(shouldNavigateToNextStop);
     } catch (error) {
+      try {
+        const recovered = await retryCheckoutAsNoSale(
+          error,
+          checkoutPayload.result_status,
+          () => checkOut(
+            checkoutPayload.stop_id,
+            checkoutPayload.latitude,
+            checkoutPayload.longitude,
+            'no_sale',
+            noSaleDetail,
+            undefined,
+            checkoutOperationId,
+            capturedAt,
+          ),
+        );
+        if (recovered) {
+          finalizeCheckout(shouldNavigateToNextStop);
+          return;
+        }
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : 'No se pudo completar el check-out.';
+        Alert.alert('Check-out rechazado', retryMessage);
+        setCheckingOut(false);
+        return;
+      }
       const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
       if (isRetryableSyncErrorMessage(message)) {
         enqueueCheckout();
@@ -394,7 +446,7 @@ function CheckoutScreenInner() {
         stopId: stop.id,
         latitude: lat,
         longitude: lon,
-        saleTotal: total,
+        saleTotal: checkoutSaleTotal,
         noSaleReasonId,
       });
 
@@ -495,12 +547,22 @@ function CheckoutScreenInner() {
         {/* Visit summary card */}
         <Card>
           <View style={styles.metricRow}>
-            <Text style={typography.dim}>Venta realizada</Text>
-            <Text style={[typography.metricValue, { color: total > 0 ? colors.success : colors.textDim }]}>
-              {total > 0 ? formatCurrency(total) : 'Sin venta'}
+            <Text style={typography.dim}>
+              {salePresentation.kind === 'synced'
+                ? 'Venta realizada'
+                : salePresentation.kind === 'pending'
+                  ? 'Venta pendiente'
+                  : 'Sin venta'}
+            </Text>
+            <Text style={[typography.metricValue, {
+              color: salePresentation.kind === 'synced' ? colors.success : colors.textDim,
+            }]}>
+              {salePresentation.kind === 'none'
+                ? 'Sin venta'
+                : formatCurrency(salePresentation.amount)}
             </Text>
           </View>
-          {totalKg > 0 && (
+          {salePresentation.kind === 'synced' && totalKg > 0 && (
             <View style={styles.metricRow}>
               <Text style={typography.dim}>kg entregados</Text>
               <Text style={typography.metricValue}>{totalKg.toFixed(1)} kg</Text>

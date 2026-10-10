@@ -113,7 +113,7 @@ function main() {
   assert.match(liquidation, /body\.arrival_km = payload\.arrival_km/);
   assert.match(liquidation, /body\.acknowledge_open_stops = true/);
   assert.match(checkout, /stuckVisitSaleTotal/);
-  assert.match(checkout, /hasSyncedSaleForStop/);
+  assert.match(checkout, /readHasSyncedSale/);
   assert.match(checkout, /retryCheckoutAsNoSale/);
 
   console.log('route close preconditions: ok');

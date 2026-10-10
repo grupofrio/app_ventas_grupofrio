@@ -14,10 +14,13 @@ import {
   describeCheckoutSalePresentation,
   hasSyncedSaleForStop,
   isMissingDeliveryLinesCheckoutError,
+  mergeSalesOrderRows,
   resolveCheckoutResultStatus,
+  resolveSyncedSaleForStop,
   retryCheckoutAsNoSale,
   shouldDiscardRejectedSaleCart,
   syncedSaleAmountForStop,
+  type AcceptedLocalSale,
 } from '../src/services/checkoutSaleEvidence.ts';
 import { stuckVisitSaleTotal } from '../src/services/stuckVisitClose.ts';
 
@@ -188,6 +191,162 @@ test('a rejected sale cart is discarded for that operation or the same stop', ()
   }), false);
 });
 
+const onlineSale: AcceptedLocalSale = {
+  stopId: STOP_ID,
+  orderId: 33596,
+  partnerId: 90,
+  amount: 38,
+  operationId: 'sale-online',
+  name: 'S33596',
+  partnerName: 'Cliente',
+};
+
+test('an online createSale is a sale and is presented as realized', () => {
+  assert.equal(hasSyncedSaleForStop(STOP_ID, [], [], [onlineSale]), true);
+  assert.equal(syncedSaleAmountForStop(STOP_ID, [], [], [onlineSale]), 38);
+  assert.equal(resolveCheckoutResultStatus(true), 'sale');
+  assert.equal(
+    getCheckoutResultStatus({
+      saleTotal: checkoutResultSaleTotal(true, 38),
+      noSaleReasonId: null,
+    }),
+    'sale',
+  );
+  assert.deepEqual(describeCheckoutSalePresentation({
+    hasSyncedSale: true,
+    saleSyncStatus: 'none',
+    cartTotal: 38,
+    syncedAmount: 38,
+  }), { kind: 'synced', amount: 38 });
+});
+
+test('an offline synced sale stays sale and a rejected one stays no_sale', () => {
+  const done = {
+    id: 'sale-done',
+    type: 'sale_order',
+    status: 'done',
+    payload: { stop_id: STOP_ID, _clientTotal: 342 },
+  };
+  const rejected = {
+    id: 'sale-rejected',
+    type: 'sale_order',
+    status: 'dead',
+    payload: { stop_id: STOP_ID, _clientTotal: 342 },
+  };
+  assert.equal(hasSyncedSaleForStop(STOP_ID, [done], [], []), true);
+  assert.equal(resolveCheckoutResultStatus(hasSyncedSaleForStop(STOP_ID, [done], [], [])), 'sale');
+  assert.equal(hasSyncedSaleForStop(STOP_ID, [rejected], [], []), false);
+  assert.equal(resolveCheckoutResultStatus(false), 'no_sale');
+  assert.deepEqual(describeCheckoutSalePresentation({
+    hasSyncedSale: false,
+    saleSyncStatus: 'failed',
+    cartTotal: 342,
+  }), { kind: 'none' });
+});
+
+test('a gift-only stop is no_sale even when the server list is fetched', async () => {
+  const gift = {
+    stop_id: STOP_ID,
+    is_gift: true,
+    amount_total: 0,
+    lines: [{ discount: 100, price_subtotal: 0 }],
+  };
+  assert.equal(hasSyncedSaleForStop(STOP_ID, [], [gift], []), false);
+  let fetches = 0;
+  const resolved = await resolveSyncedSaleForStop({
+    stopId: STOP_ID,
+    queue: [],
+    orders: [],
+    acceptedSales: [],
+    isOnline: true,
+    fetchRemoteOrders: async () => {
+      fetches += 1;
+      return [gift];
+    },
+  });
+  assert.equal(fetches, 1);
+  assert.equal(resolved.hasSyncedSale, false);
+  assert.equal(resolveCheckoutResultStatus(resolved.hasSyncedSale), 'no_sale');
+});
+
+test('missing local evidence fetches once when online and skips the fetch when a sale is already known', async () => {
+  let fetches = 0;
+  const fetched = await resolveSyncedSaleForStop({
+    stopId: STOP_ID,
+    queue: [{
+      id: 'sale-rejected',
+      type: 'sale_order',
+      status: 'dead',
+      payload: { stop_id: STOP_ID, _clientTotal: 342 },
+    }],
+    orders: [],
+    isOnline: true,
+    fetchRemoteOrders: async () => {
+      fetches += 1;
+      return [{
+        stop_id: STOP_ID,
+        is_gift: false,
+        amount_total: 38,
+        lines: [{ product_id: 5, qty: 1 }],
+      }];
+    },
+  });
+  assert.equal(fetches, 1);
+  assert.equal(fetched.hasSyncedSale, true);
+  assert.equal(resolveCheckoutResultStatus(fetched.hasSyncedSale), 'sale');
+
+  const known = await resolveSyncedSaleForStop({
+    stopId: STOP_ID,
+    queue: [],
+    orders: [],
+    acceptedSales: [onlineSale],
+    isOnline: true,
+    fetchRemoteOrders: async () => {
+      fetches += 1;
+      return [];
+    },
+  });
+  assert.equal(fetches, 1);
+  assert.equal(known.hasSyncedSale, true);
+
+  const offline = await resolveSyncedSaleForStop({
+    stopId: STOP_ID,
+    queue: [],
+    orders: [],
+    isOnline: false,
+    fetchRemoteOrders: async () => {
+      fetches += 1;
+      return [];
+    },
+  });
+  assert.equal(fetches, 1);
+  assert.equal(offline.hasSyncedSale, false);
+});
+
+test('a sales refresh keeps an online order the server list has not returned', () => {
+  const local = [{
+    id: 33596,
+    stop_id: STOP_ID as number | null,
+    is_gift: false,
+    amount_total: 38,
+    name: 'S33596',
+    lines: [{ product_id: 5 }],
+  }];
+  const merged = mergeSalesOrderRows([], local);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].stop_id, STOP_ID);
+  const withEmptyStop = mergeSalesOrderRows([{
+    id: 33596,
+    stop_id: null,
+    is_gift: false,
+    amount_total: 0,
+    lines: [] as { product_id: number }[],
+    name: 'S33596',
+  }], local);
+  assert.equal(withEmptyStop[0].stop_id, STOP_ID);
+  assert.equal(withEmptyStop[0].amount_total, 38);
+});
+
 test('checkout, stuck close, and liquidation only send sale with synced evidence', () => {
   const root = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
   const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
@@ -198,15 +357,20 @@ test('checkout, stuck close, and liquidation only send sale with synced evidence
   const visit = read('src/stores/useVisitStore.ts');
 
   for (const source of [checkout, stop, liquidation]) {
-    assert.match(source, /hasSyncedSaleForStop/);
+    assert.match(source, /readHasSyncedSale/);
     assert.match(source, /retryCheckoutAsNoSale/);
     assert.match(source, /checkoutResultSaleTotal/);
   }
+  assert.match(checkout, /hasSyncedSaleForStop/);
   assert.match(checkout, /salePresentation\.kind === 'synced'/);
   assert.match(checkout, /Venta pendiente/);
-  assert.match(sync, /resolveCheckoutResultStatus\(hasSyncedSaleForStop/);
+  assert.match(sync, /resolveSyncedSaleForStop/);
   assert.match(sync, /discardRejectedSaleCart/);
   assert.match(visit, /saleLines: \[\]/);
+  assert.match(visit, /recordAcceptedSale/);
+  const sale = read('app/sale/[stopId].tsx');
+  assert.match(sale, /recordAcceptedSale/);
+  assert.match(sale, /rememberAcceptedOrder/);
   const realizedAt = checkout.indexOf("'Venta realizada'");
   const syncedGuardAt = checkout.indexOf("salePresentation.kind === 'synced'");
   assert.ok(syncedGuardAt >= 0 && realizedAt > syncedGuardAt);

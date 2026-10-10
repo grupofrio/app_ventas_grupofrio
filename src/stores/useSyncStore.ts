@@ -55,6 +55,7 @@ import {
   reportIncident,
   uploadStopImage,
   createSale,
+  fetchSalesList,
   createPayment,
   createFieldLeadData,
   upsertLeadData,
@@ -90,9 +91,9 @@ import {
   retryCeilingForItem,
 } from '../services/evidencePhotoSync.ts';
 import {
-  hasSyncedSaleForStop,
   isMissingDeliveryLinesCheckoutError,
   resolveCheckoutResultStatus,
+  resolveSyncedSaleForStop,
 } from '../services/checkoutSaleEvidence';
 import { useProductStore } from './useProductStore';
 import { createUuidV4, makeClientEventMeta } from '../utils/clientEvent';
@@ -1576,12 +1577,20 @@ async function adoptSyncedStop(item: SyncQueueItem, response: unknown): Promise<
   await adoptServerStopFromResponse(requested, response);
 }
 
-function checkoutStatusForStop(stopId: number): 'sale' | 'no_sale' {
-  return resolveCheckoutResultStatus(hasSyncedSaleForStop(
+async function checkoutStatusForStop(stopId: number): Promise<'sale' | 'no_sale'> {
+  const result = await resolveSyncedSaleForStop({
     stopId,
-    useSyncStore.getState().queue,
-    useSalesStore.getState().orders,
-  ));
+    queue: useSyncStore.getState().queue,
+    orders: useSalesStore.getState().orders,
+    acceptedSales: useVisitStore.getState().acceptedSales,
+    isOnline: true,
+    fetchRemoteOrders: async () => {
+      const list = await fetchSalesList();
+      useSalesStore.getState().mergeRemoteOrders(list.orders);
+      return list.orders;
+    },
+  });
+  return resolveCheckoutResultStatus(result.hasSyncedSale);
 }
 
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
@@ -1637,7 +1646,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
     case 'checkout': {
       const operationId = payload.operation_id as string | undefined,
-        status = checkoutStatusForStop(typeof payload.stop_id === 'number' ? payload.stop_id : 0);
+        status = await checkoutStatusForStop(typeof payload.stop_id === 'number' ? payload.stop_id : 0);
       const { capturedInstantIso } = await import('../services/visitCapturePayload');
       const capturedAt = capturedInstantIso(payload);
       const noSaleDetail = {

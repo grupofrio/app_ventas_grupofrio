@@ -12,14 +12,12 @@ import { buildCheckoutPayload } from './checkoutResult';
 import { stuckVisitSaleTotal } from './stuckVisitClose';
 import {
   checkoutResultSaleTotal,
-  hasSyncedSaleForStop,
   retryCheckoutAsNoSale,
 } from './checkoutSaleEvidence';
+import { readHasSyncedSale } from './checkoutSaleLookup';
 import { shouldSkipStopCheckout } from './virtualStops';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useVisitStore } from '../stores/useVisitStore';
-import { useSalesStore } from '../stores/useSalesStore';
-import { useSyncStore } from '../stores/useSyncStore';
 import { useLocationStore } from '../stores/useLocationStore';
 import { createUuidV4 } from '../utils/clientEvent';
 import type { CloseStopRef } from './routeClosePreconditions';
@@ -64,11 +62,7 @@ export async function checkoutInProgressStops(
     }
 
     const currentStopId = useVisitStore.getState().currentStopId;
-    const hasSyncedSale = hasSyncedSaleForStop(
-      stop.id,
-      useSyncStore.getState().queue,
-      useSalesStore.getState().orders,
-    );
+    const hasSyncedSale = await readHasSyncedSale(stop.id);
     const saleTotal = checkoutResultSaleTotal(
       hasSyncedSale,
       stuckVisitSaleTotal({

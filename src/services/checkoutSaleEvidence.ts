@@ -1,8 +1,8 @@
 /**
- * F41 — checkout may say "sale" only when Odoo already accepted a delivery
- * for that stop. A rejected offline sale, a gift, or a cart that was never
- * confirmed does not create delivery lines, and action_checkout rejects
- * result_status=sale in that case.
+ * F41 / F42 — checkout may say "sale" only when Odoo already accepted a
+ * delivery for that stop. That evidence is a done queued sale_order, an
+ * online createSale recorded on the visit, or a remote order. A rejected
+ * offline sale, a gift, or a cart that was never confirmed does not count.
  */
 
 import { recognizeGift } from './giftRecognition.ts';
@@ -21,6 +21,17 @@ export interface CheckoutRemoteOrder {
   origin?: unknown;
   amount_total?: number | null;
   lines?: unknown[] | null;
+}
+
+/** Server-accepted sale recorded on the phone when createSale succeeds online. */
+export interface AcceptedLocalSale {
+  stopId: number;
+  orderId: number;
+  partnerId: number | null;
+  amount: number;
+  operationId: string;
+  name: string;
+  partnerName?: string;
 }
 
 export type CheckoutSaleSyncStatus = 'none' | 'pending' | 'done' | 'failed';
@@ -61,12 +72,51 @@ export function isAcceptedRemoteSale(order: CheckoutRemoteOrder): boolean {
   return lineCount > 0 || positiveAmount(order.amount_total) != null;
 }
 
+export function normalizeAcceptedLocalSale(value: unknown): AcceptedLocalSale | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sale = value as Record<string, unknown>;
+  const stopId = positiveStopId(sale.stopId);
+  const orderId = positiveStopId(sale.orderId);
+  if (stopId == null || orderId == null) return null;
+  if (recognizeGift(sale) || sale.isGift === true || sale.is_gift === true) return null;
+  const amount = positiveAmount(sale.amount) ?? 0;
+  const partnerId = positiveStopId(sale.partnerId);
+  return {
+    stopId,
+    orderId,
+    partnerId,
+    amount,
+    operationId: typeof sale.operationId === 'string' ? sale.operationId : '',
+    name: typeof sale.name === 'string' ? sale.name : '',
+    ...(typeof sale.partnerName === 'string' ? { partnerName: sale.partnerName } : {}),
+  };
+}
+
+export function normalizeAcceptedLocalSales(value: unknown): AcceptedLocalSale[] {
+  if (!Array.isArray(value)) return [];
+  const sales: AcceptedLocalSale[] = [];
+  for (const candidate of value) {
+    const sale = normalizeAcceptedLocalSale(candidate);
+    if (sale) sales.push(sale);
+  }
+  return sales;
+}
+
+/** An online createSale left an order id. A gift never qualifies. */
+export function isAcceptedLocalSale(sale: AcceptedLocalSale): boolean {
+  return normalizeAcceptedLocalSale(sale) != null;
+}
+
 export function hasSyncedSaleForStop(
   stopId: number,
   queue: readonly CheckoutSaleQueueItem[],
   orders: readonly CheckoutRemoteOrder[] = [],
+  acceptedSales: readonly AcceptedLocalSale[] = [],
 ): boolean {
   if (!(stopId > 0)) return false;
+  for (const sale of acceptedSales) {
+    if (isAcceptedLocalSale(sale) && sale.stopId === stopId) return true;
+  }
   for (const item of queue) {
     if (isAcceptedQueuedSale(item) && queueStopId(item) === stopId) return true;
   }
@@ -80,10 +130,16 @@ export function syncedSaleAmountForStop(
   stopId: number,
   queue: readonly CheckoutSaleQueueItem[],
   orders: readonly CheckoutRemoteOrder[] = [],
+  acceptedSales: readonly AcceptedLocalSale[] = [],
 ): number | null {
   for (const order of orders) {
     if (!isAcceptedRemoteSale(order) || positiveStopId(order.stop_id) !== stopId) continue;
     const amount = positiveAmount(order.amount_total);
+    if (amount != null) return amount;
+  }
+  for (const sale of acceptedSales) {
+    if (!isAcceptedLocalSale(sale) || sale.stopId !== stopId) continue;
+    const amount = positiveAmount(sale.amount);
     if (amount != null) return amount;
   }
   for (const item of queue) {
@@ -92,6 +148,86 @@ export function syncedSaleAmountForStop(
     if (amount != null) return amount;
   }
   return null;
+}
+
+export interface SalesOrderMergeRow extends CheckoutRemoteOrder {
+  id?: number;
+  name?: string;
+  partner_id?: number | null;
+  operation_id?: string;
+}
+
+/**
+ * A sales-list refresh must not drop an online sale the list has not returned
+ * yet, and must not erase a known stop_id when the server row omits it.
+ */
+export function mergeSalesOrderRows<T extends SalesOrderMergeRow>(
+  remote: readonly T[],
+  local: readonly T[],
+): T[] {
+  const localById = new Map<number, T>();
+  for (const order of local) {
+    if (typeof order.id === 'number' && order.id > 0) localById.set(order.id, order);
+  }
+  const merged = remote.map((order) => {
+    const previous = typeof order.id === 'number' && order.id > 0
+      ? localById.get(order.id)
+      : undefined;
+    if (previous && typeof order.id === 'number') localById.delete(order.id);
+    if (!previous) return order;
+    const remoteAmount = positiveAmount(order.amount_total);
+    const remoteLines = Array.isArray(order.lines) ? order.lines : [];
+    const previousLines = Array.isArray(previous.lines) ? previous.lines : [];
+    return {
+      ...previous,
+      ...order,
+      stop_id: positiveStopId(order.stop_id) ?? previous.stop_id ?? null,
+      partner_id: positiveStopId(order.partner_id) ?? previous.partner_id ?? null,
+      amount_total: remoteAmount ?? positiveAmount(previous.amount_total) ?? order.amount_total ?? 0,
+      lines: remoteLines.length > 0 ? remoteLines : previousLines,
+      is_gift: order.is_gift === true ? true : order.is_gift === false ? false : previous.is_gift,
+      name: typeof order.name === 'string' && order.name.trim() ? order.name : previous.name,
+      operation_id: typeof order.operation_id === 'string' && order.operation_id
+        ? order.operation_id
+        : previous.operation_id,
+    };
+  });
+  return [...merged, ...localById.values()];
+}
+
+/**
+ * Local evidence first. When the phone is online and nothing local proves a
+ * sale, ask the server once before deciding no_sale.
+ */
+export async function resolveSyncedSaleForStop(input: {
+  stopId: number;
+  queue: readonly CheckoutSaleQueueItem[];
+  orders: readonly CheckoutRemoteOrder[];
+  acceptedSales?: readonly AcceptedLocalSale[];
+  isOnline: boolean;
+  fetchRemoteOrders?: () => Promise<readonly CheckoutRemoteOrder[]>;
+}): Promise<{ hasSyncedSale: boolean; fetchedOrders: CheckoutRemoteOrder[] }> {
+  const acceptedSales = input.acceptedSales ?? [];
+  if (hasSyncedSaleForStop(input.stopId, input.queue, input.orders, acceptedSales)) {
+    return { hasSyncedSale: true, fetchedOrders: [] };
+  }
+  if (!input.isOnline || !input.fetchRemoteOrders) {
+    return { hasSyncedSale: false, fetchedOrders: [] };
+  }
+  try {
+    const fetchedOrders = [...await input.fetchRemoteOrders()];
+    return {
+      hasSyncedSale: hasSyncedSaleForStop(
+        input.stopId,
+        input.queue,
+        [...input.orders, ...fetchedOrders],
+        acceptedSales,
+      ),
+      fetchedOrders,
+    };
+  } catch {
+    return { hasSyncedSale: false, fetchedOrders: [] };
+  }
 }
 
 /**

@@ -27,7 +27,12 @@ import {
   type SaleRecoveryIntentV1,
 } from '../services/saleRecoveryIntent';
 import { createUuidV4 } from '../utils/clientEvent';
-import { shouldDiscardRejectedSaleCart } from '../services/checkoutSaleEvidence';
+import {
+  normalizeAcceptedLocalSale,
+  normalizeAcceptedLocalSales,
+  shouldDiscardRejectedSaleCart,
+  type AcceptedLocalSale,
+} from '../services/checkoutSaleEvidence';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -110,6 +115,7 @@ interface VisitState {
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
   saleRecoveryIntent: SaleRecoveryIntentV1 | null;
+  acceptedSales: AcceptedLocalSale[];
 
   // Computed
   saleSubtotal: () => number;
@@ -135,6 +141,7 @@ interface VisitState {
   ) => Promise<boolean>;
   clearSaleConfirmationLock: (operationId: string) => Promise<boolean>;
   discardRejectedSaleCart: (operationId: string, stopId: number | null) => boolean;
+  recordAcceptedSale: (sale: AcceptedLocalSale) => void;
 }
 
 const initialState = createInitialVisitState();
@@ -184,6 +191,9 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       currentStop: currentStop && currentStop.id === fromId
         ? { ...currentStop, id: toId }
         : currentStop,
+      acceptedSales: get().acceptedSales.map((sale) => (
+        sale.stopId === fromId ? { ...sale, stopId: toId } : sale
+      )),
     });
     persistVisitStateInBackground('adopt_server_stop');
   },
@@ -282,6 +292,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       checkInLon: snapshot.checkInLon,
       elapsedSeconds: snapshot.elapsedSeconds,
       saleLines: restoreVisitSaleLines(snapshot),
+      acceptedSales: normalizeAcceptedLocalSales(snapshot.acceptedSales),
       // P0-2: restore sale confirmation + idempotency key (back-compat: old
       // snapshots without these fields default to not-confirmed).
       ...saleRecoveryState,
@@ -387,5 +398,13 @@ export const useVisitStore = create<VisitState>((set, get) => ({
     });
     persistVisitStateInBackground('discard_rejected_sale_cart');
     return true;
+  },
+
+  recordAcceptedSale: (sale) => {
+    const normalized = normalizeAcceptedLocalSale(sale);
+    if (!normalized) return;
+    const acceptedSales = get().acceptedSales.filter((item) => item.orderId !== normalized.orderId);
+    set({ acceptedSales: [...acceptedSales, normalized] });
+    persistVisitStateInBackground('record_accepted_sale');
   },
 }));

@@ -27,6 +27,7 @@ import {
   retryCheckoutAsNoSale,
   syncedSaleAmountForStop,
 } from '../../src/services/checkoutSaleEvidence';
+import { readHasSyncedSale } from '../../src/services/checkoutSaleLookup';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import {
   enqueueGpsPoint,
@@ -76,6 +77,7 @@ function CheckoutScreenInner() {
   const salePhotoUris = useVisitStore((s) => s.salePhotoUris);
   const noSaleReasonId = useVisitStore((s) => s.noSaleReasonId);
   const saleOperationId = useVisitStore((s) => s.saleOperationId);
+  const acceptedSales = useVisitStore((s) => s.acceptedSales);
   const resetVisit = useVisitStore((s) => s.resetVisit);
 
   const latitude = useLocationStore((s) => s.latitude);
@@ -86,6 +88,21 @@ function CheckoutScreenInner() {
   const queue = useSyncStore((s) => s.queue);
   const orders = useSalesStore((s) => s.orders);
   const processQueue = useSyncStore((s) => s.processQueue);
+
+  const checkoutStopId = typeof stop?.id === 'number' ? stop.id : 0;
+  const probedSaleStopId = React.useRef(0);
+  React.useEffect(() => {
+    if (!(checkoutStopId > 0) || !isOnline) return;
+    if (probedSaleStopId.current === checkoutStopId) return;
+    probedSaleStopId.current = checkoutStopId;
+    if (hasSyncedSaleForStop(
+      checkoutStopId,
+      useSyncStore.getState().queue,
+      useSalesStore.getState().orders,
+      useVisitStore.getState().acceptedSales,
+    )) return;
+    void readHasSyncedSale(checkoutStopId);
+  }, [checkoutStopId, isOnline]);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
@@ -173,13 +190,13 @@ function CheckoutScreenInner() {
 
   const total = saleTotal();
   const totalKg = saleTotalKg();
-  const hasSyncedSale = hasSyncedSaleForStop(stop.id, queue, orders);
+  const hasSyncedSale = hasSyncedSaleForStop(stop.id, queue, orders, acceptedSales);
   const checkoutSaleTotal = checkoutResultSaleTotal(hasSyncedSale, total);
   const salePresentation = describeCheckoutSalePresentation({
     hasSyncedSale,
     saleSyncStatus: liveSaleSyncState.status,
     cartTotal: total,
-    syncedAmount: syncedSaleAmountForStop(stop.id, queue, orders),
+    syncedAmount: syncedSaleAmountForStop(stop.id, queue, orders, acceptedSales),
   });
 
   function finalizeCheckout(shouldNavigateToNextStop: boolean) {
@@ -287,14 +304,9 @@ function CheckoutScreenInner() {
 
     const lat = position.latitude;
     const lon = position.longitude;
-    // processQueue may have just accepted the sale. Re-read evidence so a
-    // rejected cart cannot keep result_status=sale, and a sale that synced
-    // in this attempt is not closed as no_sale.
-    const syncedNow = hasSyncedSaleForStop(
-      stop.id,
-      useSyncStore.getState().queue,
-      useSalesStore.getState().orders,
-    );
+    // Online createSale does not sit in the queue. Re-read local evidence
+    // and, if the phone is online and nothing local proves a sale, the server.
+    const syncedNow = await readHasSyncedSale(stop.id);
     const checkoutPayload = buildCheckoutPayload({
       stopId: stop.id,
       latitude: lat,

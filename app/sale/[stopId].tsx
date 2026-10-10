@@ -26,6 +26,7 @@ import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundle
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useSalesStore } from '../../src/stores/useSalesStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { formatCatalogPrice, formatCurrency } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
@@ -633,6 +634,17 @@ function SaleScreenInner() {
     try {
       const saleResult = await createSale(buildSalesCreatePayload(payload));
       adoptedSaleResponse = saleResult;
+      const acceptedSale = {
+        stopId: stop.id,
+        orderId: saleResult.order_id,
+        partnerId: salePartnerId > 0 ? salePartnerId : null,
+        amount: useVisitStore.getState().saleTotal(),
+        operationId: saleResult.operation_id,
+        name: saleResult.name,
+        partnerName: stop.customer_name,
+      };
+      useVisitStore.getState().recordAcceptedSale(acceptedSale);
+      useSalesStore.getState().rememberAcceptedOrder(acceptedSale);
       confirmedTicketSnapshot = withSaleTicketServerPayment(
         withSaleTicketOdooFolio(recoveryIntent.ticketSnapshot, saleResult.name),
         {
@@ -791,6 +803,19 @@ function SaleScreenInner() {
       const evidenceStopId = stop.id < 0 && adoptedSaleResponse
         ? await adoptServerStopFromResponse(stop.id, adoptedSaleResponse)
         : stop.id;
+      if (evidenceStopId !== stop.id && evidenceStopId > 0 && adoptedSaleResponse) {
+        const adoptedSale = {
+          stopId: evidenceStopId,
+          orderId: adoptedSaleResponse.order_id,
+          partnerId: salePartnerId > 0 ? salePartnerId : null,
+          amount: useVisitStore.getState().saleTotal(),
+          operationId: adoptedSaleResponse.operation_id,
+          name: adoptedSaleResponse.name,
+          partnerName: stop.customer_name,
+        };
+        useVisitStore.getState().recordAcceptedSale(adoptedSale);
+        useSalesStore.getState().rememberAcceptedOrder(adoptedSale);
+      }
       enqueueVisitPhotos({
         stopId: evidenceStopId,
         photoUris: salePhotoUris,

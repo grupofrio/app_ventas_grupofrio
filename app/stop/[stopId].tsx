@@ -29,15 +29,14 @@ import { useLocationStore, GEO_FENCE_RADIUS_M } from '../../src/stores/useLocati
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
-import { useSalesStore } from '../../src/stores/useSalesStore';
 import { describeEvidencePhotoWarning, readStopId } from '../../src/services/evidencePhotoSync';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { shouldOfferStuckVisitClose, stuckVisitSaleTotal } from '../../src/services/stuckVisitClose';
 import {
   checkoutResultSaleTotal,
-  hasSyncedSaleForStop,
   retryCheckoutAsNoSale,
 } from '../../src/services/checkoutSaleEvidence';
+import { readHasSyncedSale } from '../../src/services/checkoutSaleLookup';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { checkOut } from '../../src/services/gfLogistics';
 import { getCurrentPosition, setGpsMode } from '../../src/services/gps';
@@ -208,11 +207,7 @@ export default function StopDetailScreen() {
     if (!stop || closingStuckVisit.current) return;
     closingStuckVisit.current = true;
     try {
-      const hasSyncedSale = hasSyncedSaleForStop(
-        stop.id,
-        useSyncStore.getState().queue,
-        useSalesStore.getState().orders,
-      );
+      const hasSyncedSale = await readHasSyncedSale(stop.id);
       const saleTotal = checkoutResultSaleTotal(
         hasSyncedSale,
         stuckVisitSaleTotal({

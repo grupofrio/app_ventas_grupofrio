@@ -1,6 +1,10 @@
 import type { GFStop } from '../types/plan';
 import type { VisitPhase } from '../stores/useVisitStore';
 import {
+  normalizeAcceptedLocalSales,
+  type AcceptedLocalSale,
+} from './checkoutSaleEvidence.ts';
+import {
   restoreSaleRecoveryIntent,
   type SaleRecoveryIntentV1,
 } from './saleRecoveryIntent.ts';
@@ -33,6 +37,7 @@ export interface PersistedVisitSnapshot {
   saleReadyToContinue: boolean;
   saleRecoveryPersistenceFailed: boolean;
   saleRecoveryIntent: SaleRecoveryIntentV1 | null;
+  acceptedSales: AcceptedLocalSale[];
 }
 
 export interface BuildVisitSnapshotInput {
@@ -50,6 +55,7 @@ export interface BuildVisitSnapshotInput {
   saleReadyToContinue?: boolean;
   saleRecoveryPersistenceFailed?: boolean;
   saleRecoveryIntent?: unknown;
+  acceptedSales?: unknown;
 }
 
 function normalizePersistedSaleLines(value: unknown): PersistedVisitSaleLine[] | null {
@@ -130,6 +136,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     saleReadyToContinue = false,
     saleRecoveryPersistenceFailed = false,
     saleRecoveryIntent = null,
+    acceptedSales = [],
   } = input;
 
   if (!['checked_in', 'selling', 'no_selling'].includes(phase)) return null;
@@ -165,6 +172,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     saleRecoveryPersistenceFailed:
       hasManualReviewLock || (persistConfirmed && saleRecoveryPersistenceFailed),
     saleRecoveryIntent: hasRecoverablePendingSale ? restoredIntent : null,
+    acceptedSales: normalizeAcceptedLocalSales(acceptedSales),
   };
 }
 
